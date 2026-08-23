@@ -1,0 +1,19 @@
+[package]
+name = "popglot-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+popglot-core = { path = "../popglot-core" }
+popglot-domain = { path = "../popglot-domain" }
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

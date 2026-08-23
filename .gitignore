@@ -1,0 +1,16 @@
+.alma-snapshots/
+.vs/
+.vscode/
+.idea/
+target/
+**/bin/
+**/obj/
+*.user
+*.suo
+*.cache
+*.log
+artifacts/
+
+# Local secrets and provider overrides must never be committed.
+appsettings.local.json
+*.secrets.json

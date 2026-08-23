@@ -1,0 +1,110 @@
+<Window x:Class="PopGlot.Windows.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PopGlot 设置" Width="720" Height="720"
+        MinWidth="640" MinHeight="620"
+        Background="{StaticResource PageBackground}"
+        Foreground="{StaticResource PrimaryText}"
+        WindowStartupLocation="CenterScreen">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <Grid Margin="40">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <StackPanel>
+                <TextBlock Text="PopGlot" FontSize="32" FontWeight="SemiBold" />
+                <TextBlock Margin="0,6,0,0" Foreground="{StaticResource SecondaryText}"
+                           Text="弹出即译的 Windows AI 翻译助手" FontSize="15" />
+            </StackPanel>
+
+            <Border Grid.Row="1" Margin="0,28,0,0" Padding="24"
+                    CornerRadius="16" Background="{StaticResource CardBackground}">
+                <StackPanel>
+                    <TextBlock Text="翻译管线" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Margin="0,6,0,18" Foreground="{StaticResource SecondaryText}"
+                               Text="自动模式会解释选择原因；本地 OCR 模式永不上传截图。" />
+
+                    <TextBlock Text="模式" Margin="0,0,0,6" />
+                    <ComboBox x:Name="ModeComboBox" Height="36" SelectedIndex="0">
+                        <ComboBoxItem Tag="Auto">自动</ComboBoxItem>
+                        <ComboBoxItem Tag="LocalOcr">本地 OCR + 文本模型</ComboBoxItem>
+                        <ComboBoxItem Tag="VisionDirect">视觉模型直译</ComboBoxItem>
+                    </ComboBox>
+
+                    <CheckBox x:Name="AllowImageUploadCheckBox" Margin="0,16,0,0"
+                              Content="允许自动模式在必要时上传截图" />
+                    <CheckBox x:Name="SafeDevModeCheckBox" Margin="0,10,0,0" IsChecked="True"
+                              Content="安全开发模式（禁止真实 API 请求）" />
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="2" Margin="0,16,0,0" Padding="24"
+                    CornerRadius="16" Background="{StaticResource CardBackground}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.ColumnSpan="2">
+                        <TextBlock Text="OpenAI-compatible Provider" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Margin="0,6,0,18" Foreground="{StaticResource SecondaryText}"
+                                   Text="密钥保存于 Windows 凭据管理器，不写入项目或普通配置文件。" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="1" Grid.ColumnSpan="2">
+                        <TextBlock Text="API Base URL" Margin="0,0,0,6" />
+                        <TextBox x:Name="BaseUrlTextBox" Height="36" Padding="10,7" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="2" Margin="0,14,8,0">
+                        <TextBlock Text="文本模型" Margin="0,0,0,6" />
+                        <TextBox x:Name="TextModelTextBox" Height="36" Padding="10,7" />
+                    </StackPanel>
+                    <StackPanel Grid.Row="2" Grid.Column="1" Margin="8,14,0,0">
+                        <TextBlock Text="视觉模型" Margin="0,0,0,6" />
+                        <TextBox x:Name="VisionModelTextBox" Height="36" Padding="10,7" />
+                    </StackPanel>
+
+                    <Grid Grid.Row="3" Grid.ColumnSpan="2" Margin="0,14,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="API Key" Margin="0,0,0,6" />
+                            <PasswordBox x:Name="ApiKeyPasswordBox" Height="36" Padding="10,7" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Margin="10,22,0,0" Click="ClearApiKey_Click" Content="清除密钥" />
+                    </Grid>
+                </Grid>
+            </Border>
+
+            <Border Grid.Row="3" Margin="0,16,0,28" Padding="24"
+                    CornerRadius="16" Background="{StaticResource CardBackground}">
+                <StackPanel>
+                    <TextBlock Text="Windows 快捷键" FontSize="18" FontWeight="SemiBold" />
+                    <ComboBox x:Name="ShortcutComboBox" Margin="0,14,0,0" Height="36"
+                              DisplayMemberPath="DisplayName" />
+
+                    <DockPanel Margin="0,22,0,0">
+                        <TextBlock x:Name="StatusTextBlock" DockPanel.Dock="Left" VerticalAlignment="Center"
+                                   Foreground="{StaticResource SecondaryText}" Text="当前版本不会发送网络请求。" />
+                        <Button DockPanel.Dock="Right" Background="{StaticResource AccentBrush}" Foreground="#07110E"
+                                Click="SaveButton_Click" Content="保存设置" />
+                    </DockPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </ScrollViewer>
+</Window>
