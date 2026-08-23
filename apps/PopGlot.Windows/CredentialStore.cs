@@ -70,6 +70,48 @@ internal static partial class CredentialStore
         return true;
     }
 
+    public static string? LoadApiKey()
+    {
+        if (!CredRead(TargetName, CredTypeGeneric, 0, out var credentialPointer))
+        {
+            const int ErrorNotFound = 1168;
+            var error = Marshal.GetLastWin32Error();
+            if (error == ErrorNotFound)
+            {
+                return null;
+            }
+            throw new Win32Exception(error, "无法读取 API Key。");
+        }
+
+        try
+        {
+            var credential = Marshal.PtrToStructure<NativeCredential>(credentialPointer);
+            if (credential.CredentialBlob == 0 || credential.CredentialBlobSize == 0)
+            {
+                return null;
+            }
+            if (credential.CredentialBlobSize > MaxKeyCharacters * sizeof(char))
+            {
+                throw new InvalidOperationException("凭据管理器中的 API Key 超过安全大小上限。");
+            }
+
+            var secretBytes = new byte[credential.CredentialBlobSize];
+            try
+            {
+                Marshal.Copy(credential.CredentialBlob, secretBytes, 0, secretBytes.Length);
+                return Encoding.Unicode.GetString(secretBytes).TrimEnd('\0');
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(secretBytes);
+            }
+        }
+        finally
+        {
+            CredFree(credentialPointer);
+        }
+    }
+
     private static void DeleteApiKey()
     {
         if (!CredDelete(TargetName, CredTypeGeneric, 0))

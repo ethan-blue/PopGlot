@@ -3,6 +3,9 @@
 // Raw pointers and exported symbols are inherent to this narrow FFI boundary.
 // Unsafe code remains denied by convention in every other workspace crate.
 #![allow(unsafe_code)]
+// MSVC link.exe reports the generated import library on stdout; Rust 1.98
+// surfaces that informational localized line as `linker_messages`.
+#![allow(linker_messages)]
 
 use popglot_core::{AppCore, PreviewRequest};
 use popglot_domain::ProviderSettings;
@@ -11,8 +14,11 @@ use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 use std::sync::{Mutex, OnceLock};
+use tokio::runtime::Runtime;
+use tokio_util::sync::CancellationToken;
 
 static CORE: OnceLock<Mutex<AppCore>> = OnceLock::new();
+static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
 #[derive(Serialize)]
 struct Envelope<T: Serialize> {
@@ -119,6 +125,27 @@ pub unsafe extern "C" fn popglot_preview(json: *const c_char) -> *mut c_char {
     })
 }
 
+/// Sends a user-initiated, text-only Provider connection test.
+///
+/// # Safety
+///
+/// `api_key` must point to a valid NUL-terminated UTF-8 string for the duration
+/// of the call. The returned pointer must be released with [`popglot_free_string`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_test_connection(api_key: *const c_char) -> *mut c_char {
+    ffi_guard(|| {
+        // SAFETY: Forwarding the ABI caller contract to the validated helper.
+        let api_key = unsafe { read_utf8(api_key) }?;
+        let core = core_lock()?;
+        let runtime = provider_runtime()?;
+        let cancellation = CancellationToken::new();
+        let response = runtime
+            .block_on(core.test_connection(api_key, &cancellation))
+            .map_err(|error| error.to_string())?;
+        Ok(success(response))
+    })
+}
+
 /// Releases strings returned by this library.
 ///
 /// # Safety
@@ -138,6 +165,18 @@ fn core_lock() -> Result<std::sync::MutexGuard<'static, AppCore>, String> {
         .ok_or_else(|| "PopGlot Core is not initialized".to_owned())?
         .lock()
         .map_err(|_| "PopGlot Core lock is poisoned".to_owned())
+}
+
+fn provider_runtime() -> Result<&'static Runtime, String> {
+    if let Some(runtime) = RUNTIME.get() {
+        return Ok(runtime);
+    }
+    let runtime =
+        Runtime::new().map_err(|error| format!("无法启动异步 Provider Runtime：{error}"))?;
+    let _ = RUNTIME.set(runtime);
+    RUNTIME
+        .get()
+        .ok_or_else(|| "异步 Provider Runtime 初始化失败".to_owned())
 }
 
 fn ffi_guard(operation: impl FnOnce() -> Result<*mut c_char, String>) -> *mut c_char {

@@ -9,7 +9,7 @@ PopGlot 首发使用 WPF 获得可靠的 Windows 桌面交互，但 Rust Core �
 ```text
 apps/PopGlot.Windows       WPF Shell、托盘、快捷键、选区、浮窗、凭据
 crates/popglot-domain      领域 DTO、自动路由、受保护 Token
-crates/popglot-core        配置、应用编排、Provider 请求构造、安全预览
+crates/popglot-core        配置、应用编排、统一 Provider 与有界 HTTP、安全预览
 crates/popglot-ffi         窄 C ABI；唯一允许裸指针的 Rust crate
 scripts                    构建和验证入口
 ```
@@ -28,7 +28,7 @@ scripts                    构建和验证入口
 }
 ```
 
-所有 Rust 返回字符串均由 `popglot_free_string` 释放。C# `CoreBridge.Invoke` 在 `finally` 中完成释放，不把原生指针暴露给 UI。新增字段应保持向后兼容，并在引入流式 RPC 前加入显式 `schema_version`。
+所有 Rust 返回字符串均由 `popglot_free_string` 释放。C# `CoreBridge.Invoke` 在 `finally` 中完成释放，不把原生指针暴露给 UI。Provider 配置当前为 `schema_version=2`；新增字段使用 Rust `serde(default)` 保持旧配置可读。
 
 当独立 Core 进程成为真实需求时，同一领域操作可以映射到 Named Pipe/Unix Domain Socket；在此之前不引入后台守护进程、RPC 框架或共享内存。
 
@@ -63,20 +63,35 @@ CaptureFrame → image limits/redaction → vision model
 → structured transcription/translation → local token verification → result
 ```
 
-视觉请求使用 OpenAI-compatible `image_url` 内容块。视觉失败、不支持图片、限流、超时、坏 JSON 或 Token 校验失败时回退 Local OCR + Text。代码截图在 OCR 置信度可用时优先本地路线。
+视觉请求由统一 Provider 契约映射为各家原生图片内容。视觉失败、不支持图片、限流、超时、坏 JSON、安全拦截或 Token 校验失败时回退 Local OCR + Text。代码截图在 OCR 置信度可用时优先本地路线。
 
 ### 自动路由
 
 路由只使用可解释输入：视觉模型是否配置、上传授权、代码概率、复杂布局、图片质量和 OCR 置信度。`RoutingDecision` 返回稳定原因码和中文解释。用户强制选择 `LocalOcr` 时，任何错误都不得触发图片上传。
 
+## Provider 与 HTTP 边界
+
+`TranslationProvider` 只负责能力、请求构造和结构化响应解析；`ProviderClient` 统一负责网络许可、凭据门禁、URL/请求头校验、鉴权、超时、取消、响应上限、有限重试、错误分类和脱敏诊断。
+
+| 类型 | 默认路径 | 图片结构 | 鉴权 |
+| --- | --- | --- | --- |
+| OpenAI-compatible | `/chat/completions` | `image_url` | `Authorization: Bearer` |
+| OpenAI Responses | `/responses` | `input_image.image_url` | `Authorization: Bearer` |
+| Anthropic Messages | `/v1/messages` | `image.source` base64 | `x-api-key` + `anthropic-version` |
+| Gemini GenerateContent | `/v1beta/models/{model}:generateContent` | `inline_data` | `x-goog-api-key` |
+
+兼容接口并不假设完全兼容：文本与视觉 endpoint、Base URL 和最多 16 个非敏感请求头可配置。普通配置明确拒绝 `Authorization`、Cookie 和各家 API Key 头，秘密只由凭据端口在发送时注入。所有 Provider 返回同一结构化结果 DTO；模型必须保留代码、标识符、路径、命令、URL 和错误码。
+
+当前 Transport 不实现 SSE，因为垂直切片没有消费流式增量的 UI；避免为尚不存在的消费方保留复杂状态。后续接入流式浮窗时在同一契约增加有界事件流。
+
 ## 资源、限制与故障策略
 
-当前垂直切片不持有截图位图或 HTTP 资源。加入真实实现时必须遵守：
+当前 Provider 实现持有一个可复用、无 Cookie 的 `reqwest::Client`。请求与响应由异步作用域拥有，取消或超时会释放 future 和连接资源。截图位图尚未接入。规则如下：
 
 - 单次截图最多 16,000,000 像素，编码后最多 12 MiB；超过时提示重新框选或在不损害代码可读性的前提下分块。
 - 同时最多处理 2 个翻译请求；新请求可以取消最旧的非固定请求。
-- HTTP 连接超时 5 秒、首字节 15 秒、总请求 45 秒；仅对可安全重放的瞬时错误重试一次。
-- 响应正文最多 4 MiB，单个 SSE 事件最多 256 KiB。
+- 图片最多 8 MiB、序列化请求最多 12 MiB、响应正文最多 4 MiB。
+- HTTP 连接超时 5 秒、总请求 45 秒；仅对连接/超时以及 408、429、500、502、503、504 重试一次，`Retry-After` 最多等待 2 秒。
 - 内存结果缓存最多 32 MiB 或 100 项，取先达到者；不得建立无界列表。
 - 历史记录默认关闭；启用后默认最多 500 项、90 天，截图默认不入库。
 - 截图位图、编码流、HTTP Request/Response、取消源和计时器使用词法作用域或 `Dispose`/`await using`。
@@ -96,3 +111,12 @@ CaptureFrame → image limits/redaction → vision model
 - WPF warnings-as-errors 构建
 - 无密钥启动冒烟测试
 - 后续 CI 在 Windows/macOS/Linux 编译纯 Rust Core，Windows 另行构建 WPF Shell
+
+## 依赖与协议依据
+
+网络层使用少量、成熟的 Rust 组件：`reqwest`/`tokio`/`tokio-util`、`serde`、`base64`、`futures-util`、`tracing`。它们采用 MIT 或 MIT/Apache-2.0 等与本项目兼容的许可证；准确版本由 `Cargo.lock` 固定，验证命令使用 `--locked`。协议结构依据各家官方 API 文档，不复制第三方 SDK 源码。
+
+- OpenAI Responses：<https://developers.openai.com/api/reference/cli/resources/responses/methods/create>
+- OpenAI Chat Completions：<https://developers.openai.com/api/reference/cli/resources/chat/subresources/completions>
+- Anthropic Vision/Messages：<https://platform.claude.com/docs/en/build-with-claude/vision>
+- Gemini 图片理解/GenerateContent：<https://ai.google.dev/gemini-api/docs/image-understanding>

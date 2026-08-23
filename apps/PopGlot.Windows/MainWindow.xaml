@@ -1,8 +1,8 @@
 <Window x:Class="PopGlot.Windows.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="PopGlot 设置" Width="720" Height="720"
-        MinWidth="640" MinHeight="620"
+        Title="PopGlot 设置" Width="760" Height="900"
+        MinWidth="660" MinHeight="680"
         Background="{StaticResource PageBackground}"
         Foreground="{StaticResource PrimaryText}"
         WindowStartupLocation="CenterScreen">
@@ -44,39 +44,75 @@
 
             <Border Grid.Row="2" Margin="0,16,0,0" Padding="24"
                     CornerRadius="16" Background="{StaticResource CardBackground}">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
+                <StackPanel>
+                    <TextBlock Text="模型提供商" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Margin="0,6,0,18" Foreground="{StaticResource SecondaryText}"
+                               Text="密钥只保存于 Windows 凭据管理器；切换提供商后可替换当前活动密钥。" />
 
-                    <StackPanel Grid.ColumnSpan="2">
-                        <TextBlock Text="OpenAI-compatible Provider" FontSize="18" FontWeight="SemiBold" />
-                        <TextBlock Margin="0,6,0,18" Foreground="{StaticResource SecondaryText}"
-                                   Text="密钥保存于 Windows 凭据管理器，不写入项目或普通配置文件。" />
-                    </StackPanel>
+                    <TextBlock Text="提供商类型" Margin="0,0,0,6" />
+                    <ComboBox x:Name="ProviderTypeComboBox" Height="36"
+                              SelectionChanged="ProviderTypeComboBox_SelectionChanged">
+                        <ComboBoxItem Tag="OpenAiCompatible">OpenAI-compatible · Chat Completions</ComboBoxItem>
+                        <ComboBoxItem Tag="OpenAiResponses">OpenAI · Responses API</ComboBoxItem>
+                        <ComboBoxItem Tag="AnthropicMessages">Anthropic · Messages API</ComboBoxItem>
+                        <ComboBoxItem Tag="GeminiGenerateContent">Google Gemini · GenerateContent</ComboBoxItem>
+                    </ComboBox>
 
-                    <StackPanel Grid.Row="1" Grid.ColumnSpan="2">
-                        <TextBlock Text="API Base URL" Margin="0,0,0,6" />
-                        <TextBox x:Name="BaseUrlTextBox" Height="36" Padding="10,7" />
-                    </StackPanel>
+                    <TextBlock Text="API Base URL" Margin="0,14,0,6" />
+                    <TextBox x:Name="BaseUrlTextBox" Height="36" Padding="10,7" />
 
-                    <StackPanel Grid.Row="2" Margin="0,14,8,0">
-                        <TextBlock Text="文本模型" Margin="0,0,0,6" />
-                        <TextBox x:Name="TextModelTextBox" Height="36" Padding="10,7" />
-                    </StackPanel>
-                    <StackPanel Grid.Row="2" Grid.Column="1" Margin="8,14,0,0">
-                        <TextBlock Text="视觉模型" Margin="0,0,0,6" />
-                        <TextBox x:Name="VisionModelTextBox" Height="36" Padding="10,7" />
-                    </StackPanel>
+                    <Grid Margin="0,14,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Margin="0,0,8,0">
+                            <TextBlock Text="文本 Endpoint" Margin="0,0,0,6" />
+                            <TextBox x:Name="TextEndpointTextBox" Height="36" Padding="10,7" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                            <TextBlock Text="视觉 Endpoint" Margin="0,0,0,6" />
+                            <TextBox x:Name="VisionEndpointTextBox" Height="36" Padding="10,7" />
+                        </StackPanel>
+                    </Grid>
 
-                    <Grid Grid.Row="3" Grid.ColumnSpan="2" Margin="0,14,0,0">
+                    <Grid Margin="0,14,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Margin="0,0,8,0">
+                            <TextBlock Text="文本模型" Margin="0,0,0,6" />
+                            <TextBox x:Name="TextModelTextBox" Height="36" Padding="10,7" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                            <TextBlock Text="视觉模型" Margin="0,0,0,6" />
+                            <TextBox x:Name="VisionModelTextBox" Height="36" Padding="10,7" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,14,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Margin="0,0,8,0">
+                            <TextBlock Text="自定义请求头（每行 Header: Value）" Margin="0,0,0,6" />
+                            <TextBox x:Name="ExtraHeadersTextBox" Height="70" Padding="10,7"
+                                     AcceptsReturn="True" VerticalScrollBarVisibility="Auto" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                            <TextBlock Text="Anthropic Version（仅 Claude）" Margin="0,0,0,6" />
+                            <TextBox x:Name="AnthropicVersionTextBox" Height="36" Padding="10,7" />
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                <CheckBox x:Name="SupportsTextCheckBox" Content="文本" IsChecked="True" />
+                                <CheckBox x:Name="SupportsVisionCheckBox" Margin="18,0,0,0"
+                                          Content="图片" IsChecked="True" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,14,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
@@ -87,7 +123,13 @@
                         </StackPanel>
                         <Button Grid.Column="1" Margin="10,22,0,0" Click="ClearApiKey_Click" Content="清除密钥" />
                     </Grid>
-                </Grid>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                        <CheckBox x:Name="NetworkEnabledCheckBox" Content="允许模型网络请求" />
+                        <Button x:Name="TestConnectionButton" Margin="18,-7,0,0"
+                                Click="TestConnectionButton_Click" Content="测试连接（仅文本）" />
+                    </StackPanel>
+                </StackPanel>
             </Border>
 
             <Border Grid.Row="3" Margin="0,16,0,28" Padding="24"

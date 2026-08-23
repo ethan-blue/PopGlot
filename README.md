@@ -2,20 +2,22 @@
 
 PopGlot 是一个 Windows-first 的轻量 AI 翻译桌面助手。首要场景是程序员阅读英文报错、代码变量、命令、路径和技术文档；底层同时为普通屏幕翻译和未来 macOS/Linux Shell 保留清晰边界。
 
-当前仓库是可运行的初始垂直切片：它包含托盘、全局快捷键、跨屏选区、无边框状态浮窗、Provider 设置、Windows 凭据存储，以及由 Rust Core 驱动的双管线路由演示。**本版本没有网络传输实现，不会发送 API 请求或用户截图。**
+当前仓库是可运行的初始垂直切片：它包含托盘、全局快捷键、跨屏选区、无边框状态浮窗、Provider 设置、Windows 凭据存储、双管线路由，以及真实但默认关闭的模型 HTTP 层。截图流程目前仍是本地预览，不会上传图片；只有用户同时开启网络、关闭 Safe Dev Mode 并主动点击“测试连接”，才会发送一条最小文本请求。
 
 ## 当前能力
 
 - Windows 托盘常驻；默认 `Ctrl+Alt+Space`，支持三档可持久化快捷键。
 - 多显示器选区遮罩；`Esc` 取消，拖动完成后显示结果浮窗。
 - `Auto / LocalOcr / VisionDirect` 三种翻译模式和可解释路由。
-- OpenAI-compatible Base URL、文本模型、视觉模型配置模型。
+- 统一 Provider 契约：OpenAI-compatible Chat Completions、OpenAI Responses、Anthropic Messages、Gemini GenerateContent。
+- 可配置 Base URL、文本/视觉 Endpoint、模型、非敏感自定义请求头和显式文本/图片能力。
 - API Key 只保存到 Windows Credential Manager，不写普通 JSON。
 - 程序员 Token 保护基础：异常名、标识符、路径、URL、命令参数等。
 - Rust Core 与 WPF Shell 通过小型 C ABI/JSON 契约连接。
-- Safe Dev Mode 预览：即使填写模型，也不会真实联网。
+- Safe Dev Mode 与独立网络许可：任一门禁关闭就不会发起模型请求。
+- 用户主动的纯文本连接测试；绝不以测试功能上传截图。
 
-尚未实现真实截图位图捕获、本地 OCR、HTTP/SSE 传输、视觉请求和翻译历史；这些属于下一阶段，不应把当前演示误认为完整翻译器。
+尚未实现真实截图位图捕获、本地 OCR、把截图流程接到 Provider、流式响应和翻译历史；这些属于下一阶段，不应把当前垂直切片误认为完整翻译器。四种协议的文本与图片请求已经实现，并通过本机 mock 验证；仓库没有使用真实 API Key 做云端调用。
 
 ## 开发环境
 
@@ -49,13 +51,16 @@ WPF 项目构建时会自动构建 `popglot-ffi` 并将 `popglot_ffi.dll` 复制
 
 ## 配置与隐私
 
-非秘密设置位于 `%LOCALAPPDATA%\PopGlot`。API Key 使用 Windows Credential Manager 的通用凭据项 `PopGlot/OpenAICompatibleApiKey`。
+非秘密设置位于 `%LOCALAPPDATA%\PopGlot`。API Key 使用 Windows Credential Manager 的通用凭据项 `PopGlot/OpenAICompatibleApiKey`；为兼容初始版本保留了该名称，它代表“当前活动 Provider 的 Key”，而非写死 OpenAI。
 
 - `LocalOcr` 模式的产品契约是永不上传截图。
 - `Auto` 只有在用户明确允许、视觉模型已配置且路由认为必要时才能上传截图。
 - `VisionDirect` 失败后必须安全回退到本地 OCR + 文本模型。
-- 首个垂直切片没有 HTTP Transport，所有预览均为本地确定性结果。
+- 默认 `network_enabled=false` 且 `safe_dev_mode=true`；缺少 Key 时也会在发出 HTTP 前失败。
+- 保存配置不联网；“测试连接”仅在用户主动点击时发送最小文本，不包含截图。
 - 日志、测试夹具和 Git 仓库不得包含 API Key、用户截图或原始私人文本。
+
+Provider 配置、迁移与连接测试见 [配置迁移说明](docs/CONFIGURATION_MIGRATION.md)，数据边界见 [隐私说明](docs/PRIVACY.md)。
 
 ## 工程原则
 

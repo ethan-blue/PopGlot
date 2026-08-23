@@ -42,6 +42,13 @@ internal static partial class CoreBridge
         return EnsureSuccess<PreviewResult>(Invoke(() => NativeMethods.Preview(json)));
     }
 
+    public static Task<TranslationResponse> TestConnectionAsync(string apiKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
+        return Task.Run(() =>
+            EnsureSuccess<TranslationResponse>(Invoke(() => NativeMethods.TestConnection(apiKey))));
+    }
+
     private static string Invoke(Func<nint> nativeCall)
     {
         var pointer = nativeCall();
@@ -88,6 +95,9 @@ internal static partial class CoreBridge
         [LibraryImport(LibraryName, EntryPoint = "popglot_preview", StringMarshalling = StringMarshalling.Utf8)]
         internal static partial nint Preview(string json);
 
+        [LibraryImport(LibraryName, EntryPoint = "popglot_test_connection", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint TestConnection(string apiKey);
+
         [LibraryImport(LibraryName, EntryPoint = "popglot_free_string")]
         internal static partial void FreeString(nint value);
     }
@@ -100,10 +110,27 @@ internal enum TranslationMode
     VisionDirect,
 }
 
+internal enum ProviderType
+{
+    OpenAiCompatible,
+    OpenAiResponses,
+    AnthropicMessages,
+    GeminiGenerateContent,
+}
+
 internal sealed record ProviderSettings(
+    uint SchemaVersion,
+    ProviderType ProviderType,
     string ApiBaseUrl,
+    string TextEndpoint,
+    string VisionEndpoint,
     string TextModel,
     string VisionModel,
+    IReadOnlyDictionary<string, string> ExtraHeaders,
+    string AnthropicVersion,
+    bool SupportsText,
+    bool SupportsVision,
+    bool NetworkEnabled,
     TranslationMode Mode,
     bool AllowImageUploadInAuto,
     bool SafeDevMode,
@@ -131,3 +158,22 @@ internal sealed record PreviewResult(
     IReadOnlyList<string> ProtectedTerms,
     bool RequiresConfiguration,
     bool NetworkRequestSent);
+
+internal sealed record TranslationResult(
+    string TranslatedText,
+    string Transcription,
+    string Explanation,
+    IReadOnlyList<string> ProtectedTerms,
+    IReadOnlyList<string> Warnings);
+
+internal sealed record ProviderDiagnostics(
+    string RequestId,
+    ProviderType ProviderType,
+    string Endpoint,
+    byte Attempts,
+    ushort StatusCode,
+    ulong ElapsedMs);
+
+internal sealed record TranslationResponse(
+    TranslationResult Result,
+    ProviderDiagnostics Diagnostics);

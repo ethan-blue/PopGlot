@@ -4,21 +4,31 @@
 //! This crate never discovers Windows folders, invokes Win32, or performs a
 //! network request implicitly.
 
+pub mod provider;
+
 use popglot_domain::{
     ProviderSettings, RoutingContext, RoutingDecision, TranslationMode, protect_tokens,
     select_route,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio_util::sync::CancellationToken;
+
+use provider::{
+    ProviderClient, ProviderError, TranslationInput, TranslationResponse, TransportLimits,
+    provider_for, validate_provider_settings,
+};
 
 const SETTINGS_FILE: &str = "provider-settings.json";
+static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug)]
 pub struct AppCore {
     settings_path: PathBuf,
     settings: ProviderSettings,
+    provider_client: ProviderClient,
 }
 
 impl AppCore {
@@ -41,6 +51,7 @@ impl AppCore {
         Ok(Self {
             settings_path,
             settings,
+            provider_client: ProviderClient::new(TransportLimits::default())?,
         })
     }
 
@@ -56,6 +67,7 @@ impl AppCore {
     /// Returns [`CoreError`] for invalid endpoints or an unsuccessful file write.
     pub fn save_settings(&mut self, settings: ProviderSettings) -> Result<(), CoreError> {
         validate_settings(&settings)?;
+        validate_provider_settings(&settings)?;
         let json = serde_json::to_string_pretty(&settings)?;
         fs::write(&self.settings_path, json)?;
         self.settings = settings;
@@ -94,8 +106,10 @@ impl AppCore {
                 protected.tokens.len(),
                 if self.settings.safe_dev_mode {
                     "当前 Safe Dev Mode 禁止任何外部 API 请求。"
+                } else if !self.settings.network_enabled {
+                    "当前未启用模型网络请求。"
                 } else {
-                    "网络传输仍未在此初始切片中启用。"
+                    "仅用户主动触发的连接测试可发送最小文本；预览本身不会发送网络请求。"
                 }
             ),
             protected_terms: protected
@@ -107,11 +121,44 @@ impl AppCore {
             network_request_sent: false,
         }
     }
+
+    /// Sends a minimal text-only connection test after every privacy gate passes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderError`] for disabled networking, missing credentials,
+    /// protocol, timeout, cancellation, HTTP, or response parsing errors.
+    pub async fn test_connection(
+        &self,
+        api_key: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<TranslationResponse, ProviderError> {
+        let provider = provider_for(self.settings.provider_type);
+        let request_id = format!(
+            "connection-test-{}",
+            REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        );
+        self.provider_client
+            .execute(
+                provider.as_ref(),
+                &self.settings,
+                api_key,
+                &request_id,
+                &TranslationInput::Text {
+                    source: "Translate the phrase 'Connection test' into Chinese.".to_owned(),
+                },
+                cancellation,
+            )
+            .await
+    }
 }
 
 fn validate_settings(settings: &ProviderSettings) -> Result<(), CoreError> {
     let base = settings.api_base_url.trim();
-    if !(base.starts_with("https://") || base.starts_with("http://localhost")) {
+    if !(base.starts_with("https://")
+        || base.starts_with("http://localhost")
+        || base.starts_with("http://127.0.0.1"))
+    {
         return Err(CoreError::InvalidSettings(
             "API Base URL 必须使用 HTTPS；本地开发仅允许 http://localhost。".to_owned(),
         ));
@@ -140,66 +187,6 @@ pub struct PreviewResult {
     pub network_request_sent: bool,
 }
 
-/// Transport-neutral representation of an OpenAI-compatible request.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PreparedProviderRequest {
-    pub api_path: String,
-    pub body: Value,
-    pub contains_image: bool,
-}
-
-pub trait TranslationProvider {
-    fn prepare_text_request(&self, source: &str) -> PreparedProviderRequest;
-    fn prepare_vision_request(&self, prompt: &str, image_data_url: &str)
-    -> PreparedProviderRequest;
-}
-
-/// Builds compatible request envelopes only; sending is delegated to an audited transport.
-#[derive(Debug, Clone)]
-pub struct OpenAiCompatibleProvider {
-    pub text_model: String,
-    pub vision_model: String,
-}
-
-impl TranslationProvider for OpenAiCompatibleProvider {
-    fn prepare_text_request(&self, source: &str) -> PreparedProviderRequest {
-        PreparedProviderRequest {
-            api_path: "/chat/completions".to_owned(),
-            contains_image: false,
-            body: json!({
-                "model": self.text_model,
-                "stream": true,
-                "messages": [{
-                    "role": "user",
-                    "content": source,
-                }],
-            }),
-        }
-    }
-
-    fn prepare_vision_request(
-        &self,
-        prompt: &str,
-        image_data_url: &str,
-    ) -> PreparedProviderRequest {
-        PreparedProviderRequest {
-            api_path: "/chat/completions".to_owned(),
-            contains_image: true,
-            body: json!({
-                "model": self.vision_model,
-                "stream": true,
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": image_data_url}},
-                    ],
-                }],
-            }),
-        }
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
     #[error("I/O error: {0}")]
@@ -208,25 +195,14 @@ pub enum CoreError {
     Json(#[from] serde_json::Error),
     #[error("invalid settings: {0}")]
     InvalidSettings(String),
+    #[error("provider error: {0}")]
+    Provider(#[from] ProviderError),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    #[test]
-    fn provider_builds_distinct_text_and_vision_envelopes() {
-        let provider = OpenAiCompatibleProvider {
-            text_model: "text-model".to_owned(),
-            vision_model: "vision-model".to_owned(),
-        };
-        let text = provider.prepare_text_request("hello");
-        let vision = provider.prepare_vision_request("translate", "data:image/png;base64,AAAA");
-        assert!(!text.contains_image);
-        assert!(vision.contains_image);
-        assert_eq!(vision.body["model"], "vision-model");
-    }
 
     #[test]
     fn settings_round_trip_without_secret_value() {

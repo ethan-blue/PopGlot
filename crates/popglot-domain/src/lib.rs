@@ -5,6 +5,7 @@
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 /// User-selected translation pipeline.
@@ -20,10 +21,21 @@ pub enum TranslationMode {
 /// Persisted non-secret provider settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+// These are independent user permissions/capabilities, not mutually exclusive states.
+#[allow(clippy::struct_excessive_bools)]
 pub struct ProviderSettings {
+    pub schema_version: u32,
+    pub provider_type: ProviderType,
     pub api_base_url: String,
+    pub text_endpoint: String,
+    pub vision_endpoint: String,
     pub text_model: String,
     pub vision_model: String,
+    pub extra_headers: BTreeMap<String, String>,
+    pub anthropic_version: String,
+    pub supports_text: bool,
+    pub supports_vision: bool,
+    pub network_enabled: bool,
     pub mode: TranslationMode,
     pub allow_image_upload_in_auto: bool,
     pub safe_dev_mode: bool,
@@ -33,9 +45,18 @@ pub struct ProviderSettings {
 impl Default for ProviderSettings {
     fn default() -> Self {
         Self {
+            schema_version: 2,
+            provider_type: ProviderType::OpenAiCompatible,
             api_base_url: "https://api.openai.com/v1".to_owned(),
+            text_endpoint: "/chat/completions".to_owned(),
+            vision_endpoint: "/chat/completions".to_owned(),
             text_model: String::new(),
             vision_model: String::new(),
+            extra_headers: BTreeMap::new(),
+            anthropic_version: "2023-06-01".to_owned(),
+            supports_text: true,
+            supports_vision: true,
+            network_enabled: false,
             mode: TranslationMode::Auto,
             allow_image_upload_in_auto: false,
             safe_dev_mode: true,
@@ -47,12 +68,44 @@ impl Default for ProviderSettings {
 impl ProviderSettings {
     #[must_use]
     pub fn vision_is_configured(&self) -> bool {
-        !self.vision_model.trim().is_empty()
+        self.supports_vision && !self.vision_model.trim().is_empty()
     }
 
     #[must_use]
     pub fn text_is_configured(&self) -> bool {
-        !self.text_model.trim().is_empty()
+        self.supports_text && !self.text_model.trim().is_empty()
+    }
+}
+
+/// Wire protocol used by the active model provider.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum ProviderType {
+    #[default]
+    OpenAiCompatible,
+    OpenAiResponses,
+    AnthropicMessages,
+    GeminiGenerateContent,
+}
+
+impl ProviderType {
+    #[must_use]
+    pub fn default_base_url(self) -> &'static str {
+        match self {
+            Self::OpenAiCompatible | Self::OpenAiResponses => "https://api.openai.com/v1",
+            Self::AnthropicMessages => "https://api.anthropic.com",
+            Self::GeminiGenerateContent => "https://generativelanguage.googleapis.com",
+        }
+    }
+
+    #[must_use]
+    pub fn default_endpoint(self) -> &'static str {
+        match self {
+            Self::OpenAiCompatible => "/chat/completions",
+            Self::OpenAiResponses => "/responses",
+            Self::AnthropicMessages => "/v1/messages",
+            Self::GeminiGenerateContent => "/v1beta/models/{model}:generateContent",
+        }
     }
 }
 

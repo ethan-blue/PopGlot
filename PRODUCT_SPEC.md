@@ -19,13 +19,15 @@ PopGlot 是 Windows-first 的中英 AI 翻译桌面助手。它以全局快捷�
 
 - API Base URL
 - API Key
+- Provider 类型与文本/视觉 Endpoint
 - 文本模型
 - 视觉模型
+- 非敏感自定义请求头、文本/图片能力开关、网络许可
 - `Auto / LocalOcr / VisionDirect`
 - 自动模式是否允许上传截图
 - Safe Dev Mode
 
-能力探测使用程序生成的无隐私测试内容。保存设置本身不发送截图。API Key 进入操作系统安全凭据存储。
+能力探测使用程序生成的无隐私最小文本。保存设置本身不联网；测试连接必须由用户主动点击且绝不带截图。API Key 进入操作系统安全凭据存储。
 
 ## 程序员内容保护
 
@@ -45,9 +47,14 @@ Vision Direct 提示词要求先准确转录，并禁止翻译或改写代码元
 
 ## Provider 契约
 
-P0 支持 OpenAI-compatible Chat Completions 风格文本和 `image_url` 图片内容。Provider 配置包含 Base URL、模型、能力标记、超时和安全凭据引用。真实 Transport 必须支持取消、流式 SSE、响应大小限制和一次有界重试。
+P0 使用统一 `TranslationProvider` 契约支持文本翻译、视觉翻译、能力、诊断和结构化结果，首批原生协议为：
 
-初始版本只构造请求 Envelope 和本地预览，不包含真实 Transport；这是为了在隐私、限制与验收完成前避免意外上传。
+- OpenAI-compatible Chat Completions：Bearer、文本内容与 `image_url`
+- OpenAI Responses API：Bearer、`input_text` 与 `input_image`
+- Anthropic Messages：`x-api-key`、`anthropic-version`、base64 image source
+- Gemini GenerateContent：`x-goog-api-key`、text parts 与 `inline_data`
+
+配置包含类型、Base URL、文本/视觉 Endpoint、模型、非敏感附加请求头与显式能力。Transport 支持取消、总超时、4 MiB 响应上限和最多一次瞬时错误重试。流式输出延后到浮窗存在真实增量消费需求时实现。
 
 ## 隐私与回退
 
@@ -75,7 +82,7 @@ P0 支持 OpenAI-compatible Chat Completions 风格文本和 `image_url` 图片�
 - 托盘、单实例、快捷键、选区与浮窗
 - 本地 OCR、视觉直译、自动路由
 - 程序员 Token 保护
-- OpenAI-compatible 文本/视觉 Provider
+- OpenAI-compatible、OpenAI Responses、Anthropic、Gemini 文本/视觉 Provider
 - 安全配置、取消、超时、回退和性能基准
 
 ### P1
@@ -102,4 +109,5 @@ WPF 仅是 Windows Shell。Rust Core 不依赖 WPF 或 Win32。未来 macOS/Linu
 - 多显示器、混合 DPI、快捷键冲突和 `Esc` 取消正确。
 - 无 Key、断网、超时、429、5xx、坏 JSON 均有可恢复状态。
 - 截图和响应超过大小上限时安全拒绝。
-- 无密钥可正常启动；初始安全版本绝不发出网络请求。
+- 无密钥可正常启动且在 HTTP 前失败；默认网络关闭、Safe Dev Mode 开启。
+- 四种 Provider 的请求 JSON、鉴权、响应解析均由本地 mock 覆盖，不需要真实云端凭据。
