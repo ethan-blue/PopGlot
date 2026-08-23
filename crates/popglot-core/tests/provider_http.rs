@@ -143,6 +143,7 @@ fn client() -> ProviderClient {
         max_response_bytes: 64 * 1024,
         max_retries: 0,
         retry_delay: Duration::from_millis(1),
+        accept_invalid_certs: false,
     })
     .expect("create provider client")
 }

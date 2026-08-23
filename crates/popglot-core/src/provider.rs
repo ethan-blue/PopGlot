@@ -156,6 +156,7 @@ pub struct TransportLimits {
     pub max_response_bytes: usize,
     pub max_retries: u8,
     pub retry_delay: Duration,
+    pub accept_invalid_certs: bool,
 }
 
 impl Default for TransportLimits {
@@ -166,6 +167,7 @@ impl Default for TransportLimits {
             max_response_bytes: MAX_RESPONSE_BYTES,
             max_retries: 1,
             retry_delay: Duration::from_millis(250),
+            accept_invalid_certs: false,
         }
     }
 }
@@ -183,16 +185,20 @@ impl ProviderClient {
     ///
     /// Returns [`ProviderError`] if the TLS/HTTP client cannot be constructed.
     pub fn new(limits: TransportLimits) -> Result<Self, ProviderError> {
-        let client = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .connect_timeout(limits.connect_timeout)
-            .user_agent(concat!("PopGlot/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .map_err(|error| {
-                ProviderError::new(
-                    ProviderErrorKind::Configuration,
-                    format!("无法建立 HTTP 客户端：{error}"),
-                )
-            })?;
+            .user_agent(concat!("PopGlot/", env!("CARGO_PKG_VERSION")));
+        if limits.accept_invalid_certs {
+            // Opt-in for private relays reached by bare IP or self-signed TLS;
+            // the toggle is explicit user consent in provider settings.
+            builder = builder.danger_accept_invalid_certs(true);
+        }
+        let client = builder.build().map_err(|error| {
+            ProviderError::new(
+                ProviderErrorKind::Configuration,
+                format!("无法建立 HTTP 客户端：{error}"),
+            )
+        })?;
         Ok(Self { client, limits })
     }
 
@@ -837,16 +843,22 @@ fn validate_execution(
     api_key: &str,
     request_id: &str,
 ) -> Result<(), ProviderError> {
-    if settings.safe_dev_mode || !settings.network_enabled {
+    if !settings.network_enabled {
         return Err(ProviderError::new(
             ProviderErrorKind::NetworkDisabled,
-            "网络访问未启用；未发送任何 Provider 请求。",
+            "网络访问未启用；未发送任何 Provider 请求。请在设置中勾选「启用大模型网络翻译」。",
         ));
     }
-    if api_key.trim().is_empty() {
+    let is_local = settings.api_base_url.contains("localhost")
+        || settings.api_base_url.contains("127.0.0.1")
+        || settings.api_base_url.contains("192.168.")
+        || settings.api_base_url.contains("10.")
+        || settings.api_base_url.contains("172.");
+
+    if api_key.trim().is_empty() && !is_local {
         return Err(ProviderError::new(
             ProviderErrorKind::MissingCredential,
-            "未配置 API Key；未发送任何 Provider 请求。",
+            "未配置 API Key；请先在设置中填入对应服务的 API Key 或使用本地模型。",
         ));
     }
     if request_id.trim().is_empty() || request_id.len() > 128 {
@@ -881,11 +893,14 @@ fn build_url(base: &str, endpoint: &str) -> Result<reqwest::Url, ProviderError> 
     let base_url = reqwest::Url::parse(base.trim())
         .map_err(|_| ProviderError::new(ProviderErrorKind::Configuration, "API Base URL 无效。"))?;
     let local_http = base_url.scheme() == "http"
-        && matches!(base_url.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
+        && (matches!(base_url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
+            || base_url.host_str().is_some_and(|host| {
+                host.starts_with("192.168.") || host.starts_with("10.") || host.starts_with("172.")
+            }));
     if base_url.scheme() != "https" && !local_http {
         return Err(ProviderError::new(
             ProviderErrorKind::Configuration,
-            "API Base URL 必须使用 HTTPS；仅本机测试允许 HTTP。",
+            "API Base URL 必须使用 HTTPS；本地或局域网服务允许 HTTP。",
         ));
     }
     if !base_url.username().is_empty()
@@ -898,11 +913,28 @@ fn build_url(base: &str, endpoint: &str) -> Result<reqwest::Url, ProviderError> 
             "API Base URL 不得包含凭据、查询参数或片段。",
         ));
     }
-    let joined = format!(
-        "{}/{}",
-        base.trim_end_matches('/'),
-        endpoint.trim_start_matches('/')
-    );
+    // A relay Base URL may already carry the version prefix that the endpoint
+    // template also contains (base ".../v1beta" + endpoint "/v1beta/models/…");
+    // joining verbatim would double it. Treat the endpoint as authoritative in
+    // that case instead of concatenating both prefixes.
+    let base_path = base_url.path().trim_matches('/');
+    let endpoint_path = endpoint.trim_start_matches('/');
+    let full_path = if !base_path.is_empty()
+        && endpoint_path
+            .strip_prefix(&format!("{base_path}/"))
+            .is_some()
+    {
+        format!("/{endpoint_path}")
+    } else if base_path.is_empty() {
+        format!("/{endpoint_path}")
+    } else {
+        format!("/{base_path}/{endpoint_path}")
+    };
+    let host = base_url
+        .host_str()
+        .ok_or_else(|| ProviderError::new(ProviderErrorKind::Configuration, "API Base URL 无效。"))?;
+    let port = base_url.port().map_or_else(String::new, |value| format!(":{value}"));
+    let joined = format!("{}://{host}{port}{full_path}", base_url.scheme());
     reqwest::Url::parse(&joined).map_err(|_| {
         ProviderError::new(ProviderErrorKind::Configuration, "Provider endpoint 无效。")
     })
@@ -1055,12 +1087,37 @@ fn parse_translation_json(model_text: &str) -> Result<TranslationResult, Provide
         .or_else(|| trimmed.strip_prefix("```"))
         .and_then(|without_prefix| without_prefix.strip_suffix("```"))
         .map_or(trimmed, str::trim);
-    let result: TranslationResult = serde_json::from_str(json_text)
-        .map_err(|_| invalid_response("模型输出不是约定的结构化翻译 JSON。"))?;
-    if result.translated_text.trim().is_empty() {
-        return Err(invalid_response("模型输出缺少 translated_text。"));
+
+    // 1. Direct JSON parse
+    if let Ok(result) = serde_json::from_str::<TranslationResult>(json_text) {
+        if !result.translated_text.trim().is_empty() {
+            return Ok(result);
+        }
     }
-    Ok(result)
+
+    // 2. Substring JSON parse if enclosed in other text
+    if let (Some(start), Some(end)) = (json_text.find('{'), json_text.rfind('}')) {
+        if start < end {
+            if let Ok(result) = serde_json::from_str::<TranslationResult>(&json_text[start..=end]) {
+                if !result.translated_text.trim().is_empty() {
+                    return Ok(result);
+                }
+            }
+        }
+    }
+
+    // 3. Fallback: treat entire output as translated text if non-empty
+    if !trimmed.is_empty() {
+        return Ok(TranslationResult {
+            translated_text: trimmed.to_owned(),
+            transcription: String::new(),
+            explanation: String::new(),
+            protected_terms: Vec::new(),
+            warnings: Vec::new(),
+        });
+    }
+
+    Err(invalid_response("模型未返回任何翻译内容。"))
 }
 
 fn invalid_response(message: impl Into<String>) -> ProviderError {
@@ -1333,5 +1390,38 @@ mod tests {
         assert_eq!(error.kind, ProviderErrorKind::RateLimited);
         assert!(error.retryable);
         assert_eq!(error.status_code, Some(429));
+    }
+
+    #[test]
+    fn url_join_deduplicates_shared_version_prefix() {
+        let url = build_url(
+            "https://relay.example/v1beta",
+            "/v1beta/models/gemini-x:generateContent",
+        )
+        .expect("relay url");
+        assert_eq!(
+            url.as_str(),
+            "https://relay.example/v1beta/models/gemini-x:generateContent"
+        );
+    }
+
+    #[test]
+    fn url_join_keeps_distinct_base_path() {
+        let url = build_url("https://api.openai.com/v1", "/chat/completions")
+            .expect("openai url");
+        assert_eq!(url.as_str(), "https://api.openai.com/v1/chat/completions");
+    }
+
+    #[test]
+    fn url_join_without_base_path_is_plain_append() {
+        let url = build_url(
+            "https://generativelanguage.googleapis.com",
+            "/v1beta/models/gemini-x:generateContent",
+        )
+        .expect("gemini url");
+        assert_eq!(
+            url.as_str(),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-x:generateContent"
+        );
     }
 }

@@ -25,7 +25,7 @@ internal interface ISelectionClipboardAdapter
 internal sealed class ClipboardSelectionService
 {
     internal const int MaxSelectedCharacters = 64 * 1024;
-    private static readonly TimeSpan CopyTimeout = TimeSpan.FromMilliseconds(450);
+    private static readonly TimeSpan CopyTimeout = TimeSpan.FromMilliseconds(1000);
     private readonly ISelectionClipboardAdapter _clipboard;
 
     public ClipboardSelectionService(ISelectionClipboardAdapter clipboard)
@@ -100,7 +100,11 @@ internal sealed class ClipboardSelectionService
 internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipboardAdapter
 {
     private const uint KeyeventfKeyup = 0x0002;
+    private const ushort VkShift = 0x10;
     private const ushort VkControl = 0x11;
+    private const ushort VkMenu = 0x12;
+    private const ushort VkLWin = 0x5B;
+    private const ushort VkRWin = 0x5C;
     private const ushort VkC = 0x43;
     private const int ClipboardAttempts = 6;
 
@@ -112,6 +116,7 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
 
     public void SendCopy()
     {
+        WaitForModifiersReleased();
         var inputs = new[]
         {
             KeyboardInput(VkControl, 0),
@@ -126,6 +131,29 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
         if (sent != inputs.Length)
         {
             throw new Win32Exception(Marshal.GetLastWin32Error(), "无法向当前应用发送复制快捷键。");
+        }
+    }
+
+    /// The user may still be physically holding Ctrl/Alt from the hotkey that
+    /// triggered this copy. Sending C while they are held produces Ctrl+Alt+C,
+    /// which most applications ignore, so wait briefly for the modifiers to
+    /// come up before synthesizing Ctrl+C.
+    private static void WaitForModifiersReleased()
+    {
+        var deadline = Environment.TickCount64 + 400;
+        while (Environment.TickCount64 < deadline)
+        {
+            var pressed =
+                (NativeMethods.GetAsyncKeyState(VkShift) & 0x8000) != 0 ||
+                (NativeMethods.GetAsyncKeyState(VkControl) & 0x8000) != 0 ||
+                (NativeMethods.GetAsyncKeyState(VkMenu) & 0x8000) != 0 ||
+                (NativeMethods.GetAsyncKeyState(VkLWin) & 0x8000) != 0 ||
+                (NativeMethods.GetAsyncKeyState(VkRWin) & 0x8000) != 0;
+            if (!pressed)
+            {
+                return;
+            }
+            Thread.Sleep(10);
         }
     }
 
@@ -226,6 +254,9 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
     {
         [LibraryImport("user32.dll")]
         internal static partial uint GetClipboardSequenceNumber();
+
+        [LibraryImport("user32.dll")]
+        internal static partial short GetAsyncKeyState(int virtualKey);
 
         [LibraryImport("user32.dll", SetLastError = true)]
         internal static partial uint SendInput(uint inputCount, NativeInput[] inputs, int inputSize);

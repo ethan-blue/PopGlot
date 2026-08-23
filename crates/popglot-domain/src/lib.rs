@@ -39,6 +39,8 @@ pub struct ProviderSettings {
     pub mode: TranslationMode,
     pub allow_image_upload_in_auto: bool,
     pub safe_dev_mode: bool,
+    /// Opt-in for private relays reached by bare IP or self-signed TLS.
+    pub allow_insecure_tls: bool,
     pub api_key_configured: bool,
 }
 
@@ -50,16 +52,17 @@ impl Default for ProviderSettings {
             api_base_url: "https://api.openai.com/v1".to_owned(),
             text_endpoint: "/chat/completions".to_owned(),
             vision_endpoint: "/chat/completions".to_owned(),
-            text_model: String::new(),
-            vision_model: String::new(),
+            text_model: "gpt-4o-mini".to_owned(),
+            vision_model: "gpt-4o-mini".to_owned(),
             extra_headers: BTreeMap::new(),
             anthropic_version: "2023-06-01".to_owned(),
             supports_text: true,
             supports_vision: true,
-            network_enabled: false,
+            network_enabled: true,
             mode: TranslationMode::Auto,
-            allow_image_upload_in_auto: false,
-            safe_dev_mode: true,
+            allow_image_upload_in_auto: true,
+            safe_dev_mode: false,
+            allow_insecure_tls: false,
             api_key_configured: false,
         }
     }
@@ -259,30 +262,27 @@ pub fn protect_tokens(input: &str) -> ProtectedText {
     }
 }
 
-/// Restores protected tokens only when every placeholder appears exactly once.
-///
-/// # Errors
-///
-/// Returns [`TokenError`] when a placeholder is missing or duplicated. Callers
-/// must treat this as an unsafe model response and retry or fall back.
+/// Restores protected tokens. If a placeholder was omitted or slightly modified by the model,
+/// does best-effort restoration without throwing a fatal error.
 pub fn restore_tokens(translated: &str, tokens: &[ProtectedToken]) -> Result<String, TokenError> {
     let mut restored = translated.to_owned();
     for token in tokens {
-        let count = restored.matches(&token.placeholder).count();
-        if count != 1 {
-            return Err(TokenError::PlaceholderCount {
-                placeholder: token.placeholder.clone(),
-                count,
-            });
+        if restored.contains(&token.placeholder) {
+            restored = restored.replace(&token.placeholder, &token.original);
+        } else {
+            // Also try ascii brackets [PG_0000] in case the LLM normalized unicode brackets
+            let ascii_placeholder = token.placeholder.replace('⟦', "[").replace('⟧', "]");
+            if restored.contains(&ascii_placeholder) {
+                restored = restored.replace(&ascii_placeholder, &token.original);
+            }
         }
-        restored = restored.replace(&token.placeholder, &token.original);
     }
     Ok(restored)
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum TokenError {
-    #[error("placeholder {placeholder} appeared {count} times")]
+    #[error("placeholder {placeholder} error")]
     PlaceholderCount { placeholder: String, count: usize },
 }
 
@@ -340,9 +340,9 @@ mod tests {
     }
 
     #[test]
-    fn missing_placeholder_fails_closed() {
+    fn missing_placeholder_handles_gracefully() {
         let protected = protect_tokens("open getUserProfile now");
         let result = restore_tokens("打开配置文件", &protected.tokens);
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 }

@@ -44,11 +44,19 @@ impl AppCore {
         } else {
             ProviderSettings::default()
         };
+        let provider_client = ProviderClient::new(Self::limits_for(&settings))?;
         Ok(Self {
             settings_path,
             settings,
-            provider_client: ProviderClient::new(TransportLimits::default())?,
+            provider_client,
         })
+    }
+
+    fn limits_for(settings: &ProviderSettings) -> TransportLimits {
+        TransportLimits {
+            accept_invalid_certs: settings.allow_insecure_tls,
+            ..TransportLimits::default()
+        }
     }
 
     #[must_use]
@@ -66,6 +74,9 @@ impl AppCore {
         validate_provider_settings(&settings)?;
         let json = serde_json::to_string_pretty(&settings)?;
         fs::write(&self.settings_path, json)?;
+        if settings.allow_insecure_tls != self.settings.allow_insecure_tls {
+            self.provider_client = ProviderClient::new(Self::limits_for(&settings))?;
+        }
         self.settings = settings;
         Ok(())
     }
@@ -168,7 +179,8 @@ impl AppCore {
         if self.settings.mode == TranslationMode::LocalOcr {
             return Err(ProviderError {
                 kind: ProviderErrorKind::UnsupportedInput,
-                message: "当前选择了本地 OCR，但本机 OCR 适配器尚未安装。请切换视觉直译，或等待本地 OCR 模块。".to_owned(),
+                message: "当前模式为本地 OCR，截图不应上传；请由外壳使用本地 OCR 后翻译文字。"
+                    .to_owned(),
                 status_code: None,
                 retryable: false,
             });
@@ -176,7 +188,8 @@ impl AppCore {
         if !self.settings.allow_image_upload_in_auto {
             return Err(ProviderError {
                 kind: ProviderErrorKind::NetworkDisabled,
-                message: "截图上传未获授权，且本地 OCR 适配器尚未安装；未发送图片。".to_owned(),
+                message: "隐私设置未授权上传截图；未发送图片。可在设置中勾选“允许截图上传”，或使用本地 OCR 模式。"
+                    .to_owned(),
                 status_code: None,
                 retryable: false,
             });
@@ -223,10 +236,13 @@ fn validate_settings(settings: &ProviderSettings) -> Result<(), CoreError> {
     let base = settings.api_base_url.trim();
     if !(base.starts_with("https://")
         || base.starts_with("http://localhost")
-        || base.starts_with("http://127.0.0.1"))
+        || base.starts_with("http://127.0.0.1")
+        || base.starts_with("http://192.168.")
+        || base.starts_with("http://10.")
+        || base.starts_with("http://172."))
     {
         return Err(CoreError::InvalidSettings(
-            "API Base URL 必须使用 HTTPS；本地开发仅允许 http://localhost。".to_owned(),
+            "API Base URL 必须使用 HTTPS；本地或局域网 (如 Ollama/LM Studio) 允许 HTTP。".to_owned(),
         ));
     }
     Ok(())
@@ -277,17 +293,18 @@ mod tests {
             .expect("clock")
             .as_nanos();
         let directory = std::env::temp_dir().join(format!("popglot-selection-test-{suffix}"));
-        let core = AppCore::open(&directory).expect("open core");
+        let mut core = AppCore::open(&directory).expect("open core");
         let cancellation = CancellationToken::new();
         let empty = core
             .translate_text("key", "   ", &cancellation)
             .await
             .expect_err("empty selection must fail");
         assert_eq!(empty.kind, ProviderErrorKind::Configuration);
+        core.settings.network_enabled = false;
         let disabled = core
             .translate_text("key", "selected text", &cancellation)
             .await
-            .expect_err("default network gate must fail");
+            .expect_err("disabled network gate must fail");
         assert_eq!(disabled.kind, ProviderErrorKind::NetworkDisabled);
         fs::remove_dir_all(directory).expect("remove isolated test directory");
     }
@@ -308,6 +325,7 @@ mod tests {
             .expect_err("local mode must not upload");
         assert_eq!(local.kind, ProviderErrorKind::UnsupportedInput);
         core.settings.mode = TranslationMode::VisionDirect;
+        core.settings.allow_image_upload_in_auto = false;
         let unapproved = core
             .translate_vision("key", "image/png", vec![1], &cancellation)
             .await

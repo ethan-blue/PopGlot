@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -7,6 +8,7 @@ using Brush = System.Windows.Media.Brush;
 using Brushes = System.Windows.Media.Brushes;
 using Clipboard = System.Windows.Clipboard;
 using Size = System.Windows.Size;
+using TextBox = System.Windows.Controls.TextBox;
 
 namespace PopGlot.Windows;
 
@@ -43,8 +45,10 @@ public partial class TranslationPanelWindow : Window
     private Func<Task>? _retry;
     private bool _pinned;
     private bool _userMoved;
+    private bool _suspendAutoTranslate;
     private string _translation = string.Empty;
-    private string _routeLabel = "文本模型";
+    private string _currentSource = string.Empty;
+    private string _sourceKind = "划词";
 
     internal TranslationPanelWindow(
         Rect anchor,
@@ -58,44 +62,87 @@ public partial class TranslationPanelWindow : Window
         Loaded += Window_Loaded;
         SizeChanged += (_, _) => PositionNearAnchor();
         Closed += (_, _) => CancelOperation();
+        Deactivated += Window_Deactivated;
     }
+
+    private void Window_Deactivated(object? sender, EventArgs e)
+    {
+        if (!_pinned)
+        {
+            Close();
+        }
+    }
+
+    private string CurrentSourceLang =>
+        ((ComboBoxItem)SourceLangCombo.SelectedItem).Tag?.ToString() ?? "auto";
+
+    private string CurrentTargetLang =>
+        ((ComboBoxItem)TargetLangCombo.SelectedItem).Tag?.ToString() ?? "zh-CN";
 
     internal async Task StartSelectionAsync(ClipboardSelectionService selectionService)
     {
         ArgumentNullException.ThrowIfNull(selectionService);
+        _sourceKind = "划词";
         await BeginOperationAsync(async cancellation =>
         {
             RenderState(TranslationSessionState.ReadingSelection);
             SourceLabel.Text = "所选文字";
-            _routeLabel = "划词 · 文本模型";
-            SourceText.Text = "正在安全读取选区并恢复剪贴板…";
+            SourceInputBox.Text = "正在读取选区…";
             var source = await selectionService.ReadSelectionAsync(cancellation);
-            SourceText.Text = source;
-            _retry = () => TranslateTextAsync(source);
-            await TranslateTextAsync(source);
+            _currentSource = source;
+            SourceInputBox.Text = source;
+            _retry = () => PerformTranslationAsync(source);
+            await PerformTranslationAsync(source);
         });
     }
 
     internal async Task StartScreenshotAsync(byte[] image)
     {
         ArgumentNullException.ThrowIfNull(image);
+        _sourceKind = "截图";
         await BeginOperationAsync(async cancellation =>
         {
             RenderState(TranslationSessionState.Capturing);
-            SourceLabel.Text = "截图";
-            var mode = CoreBridge.GetSettings().Mode;
-            _routeLabel = mode switch
-            {
-                TranslationMode.Auto => "自动 · 本地 OCR 未安装，使用视觉直译",
-                TranslationMode.LocalOcr => "截图 · 本地 OCR",
-                TranslationMode.VisionDirect => "截图 · 视觉直译",
-                _ => throw new ArgumentOutOfRangeException(nameof(mode)),
-            };
-            RouteText.Text = _routeLabel;
-            SourceText.Text = $"已捕获截图 · {image.Length / 1024.0:0.#} KiB";
-            _retry = () => TranslateVisionAsync(image);
-            await TranslateVisionAsync(image, cancellation);
+            SourceLabel.Text = "截图内容";
+            SourceInputBox.Text = $"正在 OCR 识别中… ({image.Length / 1024.0:0.#} KiB)";
+
+            var apiKey = CredentialStore.LoadApiKey();
+            RenderState(TranslationSessionState.Translating);
+            var response = await CoreBridge.TranslateVisionAsync(
+                apiKey,
+                "image/png",
+                image,
+                CurrentSourceLang,
+                CurrentTargetLang);
+
+            var source = !string.IsNullOrWhiteSpace(response.Result.Transcription)
+                ? response.Result.Transcription
+                : "截图内容已识别";
+
+            _currentSource = source;
+            SourceInputBox.Text = source;
+            _retry = () => PerformTranslationAsync(source);
+            RenderResult(_sourceKind, source, response);
         });
+    }
+
+    public async Task StartInputAsync(string initialText = "")
+    {
+        _sourceKind = "输入";
+        SourceLabel.Text = "输入翻译";
+        _currentSource = initialText;
+        SourceInputBox.Text = initialText;
+        if (!string.IsNullOrWhiteSpace(initialText))
+        {
+            _retry = () => PerformTranslationAsync(initialText);
+            await BeginOperationAsync(_ => PerformTranslationAsync(initialText));
+        }
+        else
+        {
+            RenderState(TranslationSessionState.Completed);
+            TranslationTextBox.Text = "请输入要翻译的内容…";
+            SourceInputBox.Focus();
+        }
     }
 
     internal void ShowImmediateFailure(string message) => RenderFailure(message);
@@ -121,36 +168,26 @@ public partial class TranslationPanelWindow : Window
         }
     }
 
-    private async Task TranslateTextAsync(string source)
+    private async Task PerformTranslationAsync(string source)
     {
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return;
+        }
+
         var cancellation = _operation?.Token ?? CancellationToken.None;
         RenderState(TranslationSessionState.Translating);
         cancellation.ThrowIfCancellationRequested();
-        var response = await CoreBridge.TranslateTextAsync(RequireApiKey(), source);
-        cancellation.ThrowIfCancellationRequested();
-        RenderResult("划词", source, response);
-    }
 
-    private async Task TranslateVisionAsync(byte[] image, CancellationToken? cancellation = null)
-    {
-        var token = cancellation ?? _operation?.Token ?? CancellationToken.None;
-        RenderState(TranslationSessionState.Translating);
-        token.ThrowIfCancellationRequested();
-        var response = await CoreBridge.TranslateVisionAsync(RequireApiKey(), "image/png", image);
-        token.ThrowIfCancellationRequested();
-        var source = string.IsNullOrWhiteSpace(response.Result.Transcription)
-            ? "截图内容（模型未返回转录）"
-            : response.Result.Transcription;
-        SourceText.Text = source;
-        RenderResult("截图", source, response);
-    }
-
-    private static string RequireApiKey()
-    {
         var apiKey = CredentialStore.LoadApiKey();
-        return string.IsNullOrWhiteSpace(apiKey)
-            ? throw new InvalidOperationException("尚未配置当前提供商的 API Key。请打开设置完成配置。")
-            : apiKey;
+        var response = await CoreBridge.TranslateTextAsync(
+            apiKey,
+            source,
+            CurrentSourceLang,
+            CurrentTargetLang);
+
+        cancellation.ThrowIfCancellationRequested();
+        RenderResult(_sourceKind, source, response);
     }
 
     private void RenderState(TranslationSessionState state)
@@ -160,35 +197,53 @@ public partial class TranslationPanelWindow : Window
             TranslationSessionState.Failed or TranslationSessionState.Cancelled
             ? Visibility.Collapsed
             : Visibility.Visible;
-        StatusDot.Background = state == TranslationSessionState.Failed
-            ? (Brush)FindResource("DangerBrush")
-            : (Brush)FindResource("AccentBrush");
-        if (state is not TranslationSessionState.Completed)
+
+        StatusDot.Background = state switch
         {
-            CopyButton.IsEnabled = false;
-        }
+            TranslationSessionState.Failed => (Brush)FindResource("DangerBrush"),
+            TranslationSessionState.Translating or TranslationSessionState.ReadingSelection or TranslationSessionState.Capturing => (Brush)FindResource("AccentBrush"),
+            _ => (Brush)FindResource("AccentBrush")
+        };
     }
 
     private void RenderResult(string sourceKind, string source, TranslationResponse response)
     {
         RenderState(TranslationSessionState.Completed);
         _translation = response.Result.TranslatedText;
-        TranslationText.Text = _translation;
+        TranslationTextBox.Text = _translation;
+
+        // Phonetic
+        if (!string.IsNullOrWhiteSpace(response.Result.Transcription))
+        {
+            PhoneticText.Text = $"/{response.Result.Transcription}/";
+            PhoneticText.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            PhoneticText.Visibility = Visibility.Collapsed;
+        }
+
+        // Explanation
         ExplanationText.Text = response.Result.Explanation;
         ExplanationText.Visibility = string.IsNullOrWhiteSpace(response.Result.Explanation)
             ? Visibility.Collapsed
             : Visibility.Visible;
+
+        // Protected Terms
         TermsText.Text = response.Result.ProtectedTerms.Count == 0
             ? string.Empty
-            : $"原样保留 · {string.Join("   ", response.Result.ProtectedTerms)}";
+            : $"原样保留代码元素 · {string.Join("   ", response.Result.ProtectedTerms)}";
         TermsBorder.Visibility = response.Result.ProtectedTerms.Count == 0
             ? Visibility.Collapsed
             : Visibility.Visible;
-        RouteText.Text = $"{_routeLabel} · {response.Diagnostics.ProviderType} · {response.Diagnostics.ElapsedMs} ms";
-        CopyButton.IsEnabled = true;
-        RetryButton.Visibility = Visibility.Visible;
 
-        var historyResult = _history.TryAdd(
+        var isFree = response.Diagnostics.RequestId == "free-web";
+        ResultEngineBadge.Text = isFree ? "🌐 基础翻译" : $"✨ {response.Diagnostics.ProviderType}";
+        RouteText.Text = isFree
+            ? $"免费引擎 · {response.Diagnostics.Endpoint} · {response.Diagnostics.ElapsedMs} ms"
+            : $"{response.Diagnostics.ProviderType} · {response.Diagnostics.ElapsedMs} ms";
+
+        _history.TryAdd(
             new TranslationHistoryEntry(
                 Guid.NewGuid(),
                 DateTimeOffset.UtcNow,
@@ -198,34 +253,45 @@ public partial class TranslationPanelWindow : Window
                 response.Result.Explanation,
                 response.Result.ProtectedTerms),
             _shellSettings().HistoryEnabled);
-        if (historyResult == HistoryAddResult.SkippedSensitiveOrLarge)
-        {
-            StatusText.Text = "翻译完成 · 敏感或过大内容未记历史";
-        }
-        else if (historyResult == HistoryAddResult.Failed)
-        {
-            StatusText.Text = "翻译完成 · 本地历史写入失败";
-        }
     }
 
     private void RenderFailure(string message)
     {
         RenderState(TranslationSessionState.Failed);
-        TranslationText.Text = FriendlyError(message);
+        TranslationTextBox.Text = FriendlyError(message);
         ExplanationText.Text = message;
         ExplanationText.Visibility = Visibility.Visible;
         TermsBorder.Visibility = Visibility.Collapsed;
-        RouteText.Text = "未完成 · 可检查设置后重试";
-        RetryButton.Visibility = _retry is null ? Visibility.Collapsed : Visibility.Visible;
+        RouteText.Text = "翻译失败 · 可检查网络或设置后重试";
     }
 
     internal static string FriendlyError(string message)
     {
+        // Rate-limit messages also mention configuring a key, so match them
+        // before the generic API Key hint.
+        if (message.Contains("429", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("限流", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("受限", StringComparison.OrdinalIgnoreCase))
+        {
+            return "翻译请求被限流，请稍后重试";
+        }
         if (message.Contains("API Key", StringComparison.OrdinalIgnoreCase))
         {
             return "还差一步：配置模型密钥";
         }
-        if (message.Contains("网络", StringComparison.OrdinalIgnoreCase) ||
+        if (message.Contains("鉴权", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("401", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("403", StringComparison.OrdinalIgnoreCase))
+        {
+            return "密钥无效或没有权限";
+        }
+        if (message.Contains("未授权上传", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("上传截图", StringComparison.OrdinalIgnoreCase))
+        {
+            return "截图上传未获授权";
+        }
+        if (message.Contains("网络访问未启用", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("网络", StringComparison.OrdinalIgnoreCase) ||
             message.Contains("Safe", StringComparison.OrdinalIgnoreCase))
         {
             return "模型网络目前未启用";
@@ -246,31 +312,171 @@ public partial class TranslationPanelWindow : Window
     {
         if (_retry is null)
         {
-            return;
+            var text = SourceInputBox.Text.Trim();
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                _retry = () => PerformTranslationAsync(text);
+            }
         }
-        await BeginOperationAsync(_ => _retry());
+        if (_retry is not null)
+        {
+            await BeginOperationAsync(_ => _retry());
+        }
     }
 
     private void CopyButton_Click(object sender, RoutedEventArgs e)
     {
+        if (string.IsNullOrWhiteSpace(_translation))
+        {
+            return;
+        }
         try
         {
             Clipboard.SetText(_translation);
-            StatusText.Text = "译文已复制";
+            StatusText.Text = "已复制译文到剪贴板";
         }
-        catch (Exception exception)
+        catch (Exception ex)
         {
-            RenderFailure($"复制译文失败：{exception.Message}");
+            StatusText.Text = $"复制失败：{ex.Message}";
+        }
+    }
+
+    private void SourceCopyButton_Click(object sender, RoutedEventArgs e)
+    {
+        var text = SourceInputBox.Text;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+        try
+        {
+            Clipboard.SetText(text);
+            StatusText.Text = "已复制原文到剪贴板";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"复制失败：{ex.Message}";
+        }
+    }
+
+    private void SourceClearButton_Click(object sender, RoutedEventArgs e)
+    {
+        SourceInputBox.Clear();
+        TranslationTextBox.Clear();
+        PhoneticText.Visibility = Visibility.Collapsed;
+        ExplanationText.Visibility = Visibility.Collapsed;
+        TermsBorder.Visibility = Visibility.Collapsed;
+        StatusText.Text = "已清空";
+        SourceInputBox.Focus();
+    }
+
+    private void SourceSpeakButton_Click(object sender, RoutedEventArgs e)
+    {
+        var text = SourceInputBox.Text.Trim();
+        if (!string.IsNullOrEmpty(text))
+        {
+            TtsService.Speak(text);
+        }
+    }
+
+    private void ResultSpeakButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(_translation))
+        {
+            TtsService.Speak(_translation);
+        }
+    }
+
+    private async void SourceInputBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Shift) == 0)
+        {
+            e.Handled = true;
+            var text = SourceInputBox.Text.Trim();
+            if (!string.IsNullOrEmpty(text))
+            {
+                _currentSource = text;
+                _retry = () => PerformTranslationAsync(text);
+                await BeginOperationAsync(_ => PerformTranslationAsync(text));
+            }
+        }
+    }
+
+    private async void Language_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suspendAutoTranslate || !IsLoaded)
+        {
+            return;
+        }
+        var text = SourceInputBox.Text.Trim();
+        if (!string.IsNullOrEmpty(text) && text != "正在读取选区…" && !text.StartsWith("正在 OCR"))
+        {
+            _retry = () => PerformTranslationAsync(text);
+            await BeginOperationAsync(_ => PerformTranslationAsync(text));
+        }
+    }
+
+    private async void SwapLangButton_Click(object sender, RoutedEventArgs e)
+    {
+        var currentSourceTag = ((ComboBoxItem)SourceLangCombo.SelectedItem).Tag?.ToString() ?? "zh-CN";
+        var currentTargetTag = ((ComboBoxItem)TargetLangCombo.SelectedItem).Tag?.ToString() ?? "en";
+
+        if (currentSourceTag == "auto")
+        {
+            currentSourceTag = "zh-CN";
+        }
+
+        // Move the previous translation into the source box before the combo
+        // changes fire Language_SelectionChanged, so the re-translation uses
+        // the swapped text instead of the original one.
+        var swappedText = _translation;
+        if (!string.IsNullOrWhiteSpace(swappedText))
+        {
+            SourceInputBox.Text = swappedText;
+            _translation = string.Empty;
+            TranslationTextBox.Clear();
+        }
+
+        _suspendAutoTranslate = true;
+        try
+        {
+            SelectComboByTag(SourceLangCombo, currentTargetTag);
+            SelectComboByTag(TargetLangCombo, currentSourceTag);
+        }
+        finally
+        {
+            _suspendAutoTranslate = false;
+        }
+
+        var text = SourceInputBox.Text.Trim();
+        if (!string.IsNullOrEmpty(text) && text != "正在读取选区…" && !text.StartsWith("正在 OCR"))
+        {
+            _currentSource = text;
+            _retry = () => PerformTranslationAsync(text);
+            await BeginOperationAsync(_ => PerformTranslationAsync(text));
+        }
+    }
+
+    private static void SelectComboByTag(System.Windows.Controls.ComboBox combo, string tag)
+    {
+        foreach (var item in combo.Items)
+        {
+            if (item is ComboBoxItem cbi && string.Equals(cbi.Tag?.ToString(), tag, StringComparison.OrdinalIgnoreCase))
+            {
+                combo.SelectedItem = cbi;
+                return;
+            }
         }
     }
 
     private void PinButton_Click(object sender, RoutedEventArgs e)
     {
         _pinned = !_pinned;
-        PinButton.Content = _pinned ? "已固定" : "固定";
-        PinButton.Background = _pinned
-            ? (Brush)FindResource("AccentMutedBrush")
-            : Brushes.Transparent;
+        Topmost = true;
+        PinButton.Foreground = _pinned
+            ? (Brush)FindResource("AccentBrush")
+            : (Brush)FindResource("SecondaryText");
+        StatusText.Text = _pinned ? "浮窗已置顶固定" : "浮窗已取消固定";
     }
 
     private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)

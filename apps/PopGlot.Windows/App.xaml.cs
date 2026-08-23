@@ -195,22 +195,24 @@ public partial class App : System.Windows.Application
         {
             Renderer = new Forms.ToolStripProfessionalRenderer(),
         };
-        _trayMenu.Items.Add("翻译选中文字", null, (_, _) => _ = BeginSelectionTranslationAsync());
-        _trayMenu.Items.Add("截图翻译", null, (_, _) => BeginCapture());
+        _trayMenu.Items.Add("打开翻译窗口", null, (_, _) => ShowTranslateWindow());
         _trayMenu.Items.Add(new Forms.ToolStripSeparator());
-        _trayMenu.Items.Add("设置与历史", null, (_, _) => ShowSettings());
+        _trayMenu.Items.Add("翻译选中文字 (Ctrl+Alt+W)", null, (_, _) => _ = BeginSelectionTranslationAsync());
+        _trayMenu.Items.Add("截图翻译 (Ctrl+Alt+Space)", null, (_, _) => BeginCapture());
+        _trayMenu.Items.Add(new Forms.ToolStripSeparator());
+        _trayMenu.Items.Add("偏好设置与历史", null, (_, _) => ShowSettings());
         _trayMenu.Items.Add(new Forms.ToolStripSeparator());
         _trayMenu.Items.Add("退出 PopGlot", null, (_, _) => ExitApplication());
 
         _trayIconImage = CreateAppIcon();
         _trayIcon = new Forms.NotifyIcon
         {
-            Text = "PopGlot",
+            Text = "PopGlot - 桌面翻译工具",
             Icon = _trayIconImage,
             ContextMenuStrip = _trayMenu,
             Visible = true,
         };
-        _trayIcon.DoubleClick += (_, _) => _ = BeginSelectionTranslationAsync();
+        _trayIcon.DoubleClick += (_, _) => ShowTranslateWindow();
         UpdateTrayText();
     }
 
@@ -244,6 +246,12 @@ public partial class App : System.Windows.Application
         {
             _trayIcon.Text = $"PopGlot · {_shellSettings.SelectionShortcut.DisplayName} 划词";
         }
+    }
+
+    private void ShowTranslateWindow()
+    {
+        _settingsWindow?.Show();
+        _settingsWindow?.Activate();
     }
 
     private void ShowSettings()

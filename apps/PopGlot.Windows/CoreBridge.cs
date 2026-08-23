@@ -43,29 +43,104 @@ internal static partial class CoreBridge
             EnsureSuccess<TranslationResponse>(Invoke(() => NativeMethods.TestConnection(apiKey))));
     }
 
-    public static Task<TranslationResponse> TranslateTextAsync(string apiKey, string source)
+    public static async Task<TranslationResponse> TranslateTextAsync(
+        string? apiKey,
+        string source,
+        string sourceLang = "auto",
+        string targetLang = "zh-CN")
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(source);
-        return Task.Run(() => EnsureSuccess<TranslationResponse>(
-            Invoke(() => NativeMethods.TranslateText(apiKey, source))));
+
+        var settings = GetSettings();
+        var isLocal = IsLocalBaseUrl(settings.ApiBaseUrl);
+
+        if (!string.IsNullOrWhiteSpace(apiKey) || isLocal)
+        {
+            // A provider is explicitly configured: surface its real error instead
+            // of silently degrading to the free web engine.
+            var effectiveKey = string.IsNullOrWhiteSpace(apiKey) ? "ollama" : apiKey;
+            return await Task.Run(() => EnsureSuccess<TranslationResponse>(
+                Invoke(() => NativeMethods.TranslateText(effectiveKey, source))));
+        }
+
+        // Zero-config free web translation
+        return await FreeTranslateService.TranslateAsync(source, sourceLang, targetLang);
     }
 
-    public static Task<TranslationResponse> TranslateVisionAsync(
-        string apiKey,
+    public static async Task<TranslationResponse> TranslateVisionAsync(
+        string? apiKey,
         string mediaType,
-        byte[] image)
+        byte[] image,
+        string sourceLang = "auto",
+        string targetLang = "zh-CN")
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
         ArgumentNullException.ThrowIfNull(image);
         if (image.Length == 0 || image.Length > 8 * 1024 * 1024)
         {
             throw new ArgumentOutOfRangeException(nameof(image), "截图必须大于 0 且不超过 8 MiB。");
         }
+
+        var settings = GetSettings();
+
+        // Uploading requires the privacy toggle, a configured vision model, a
+        // credential, and enabled networking. Otherwise use local OCR directly
+        // instead of firing a request the core will refuse.
+        var mayUpload = settings.NetworkEnabled
+            && settings.AllowImageUploadInAuto
+            && settings.Mode != TranslationMode.LocalOcr
+            && settings.VisionIsConfigured
+            && !string.IsNullOrWhiteSpace(apiKey);
+
+        if (!mayUpload)
+        {
+            return await TranslateViaLocalOcrAsync(apiKey, image, sourceLang, targetLang);
+        }
+
         var imageBase64 = Convert.ToBase64String(image);
-        return Task.Run(() => EnsureSuccess<TranslationResponse>(
-            Invoke(() => NativeMethods.TranslateVision(apiKey, mediaType, imageBase64))));
+        Exception visionError;
+        try
+        {
+            return await Task.Run(() => EnsureSuccess<TranslationResponse>(
+                Invoke(() => NativeMethods.TranslateVision(apiKey!, mediaType, imageBase64))));
+        }
+        catch (Exception exception)
+        {
+            visionError = exception;
+        }
+
+        // Vision failed (e.g. the model rejected the image); degrade to local
+        // OCR + text translation, but keep the original failure visible if the
+        // fallback also fails.
+        try
+        {
+            return await TranslateViaLocalOcrAsync(apiKey, image, sourceLang, targetLang);
+        }
+        catch (Exception fallbackError)
+        {
+            throw new InvalidOperationException(
+                $"视觉模型翻译失败（{visionError.Message}）；本地 OCR 回退也失败（{fallbackError.Message}）。");
+        }
     }
+
+    private static async Task<TranslationResponse> TranslateViaLocalOcrAsync(
+        string? apiKey,
+        byte[] image,
+        string sourceLang,
+        string targetLang)
+    {
+        var recognizedText = await WindowsOcrService.RecognizeTextAsync(image);
+        if (string.IsNullOrWhiteSpace(recognizedText))
+        {
+            throw new InvalidOperationException("本地 OCR 未能识别到文字，请重新框选，或在设置中开启截图上传使用视觉模型。");
+        }
+        return await TranslateTextAsync(apiKey, recognizedText, sourceLang, targetLang);
+    }
+
+    internal static bool IsLocalBaseUrl(string baseUrl) =>
+        baseUrl.Contains("localhost")
+        || baseUrl.Contains("127.0.0.1")
+        || baseUrl.Contains("192.168.")
+        || baseUrl.Contains("10.");
 
     public static bool CancelActiveRequest() => NativeMethods.CancelActiveRequest() != 0;
 
@@ -160,7 +235,12 @@ internal sealed record ProviderSettings(
     TranslationMode Mode,
     bool AllowImageUploadInAuto,
     bool SafeDevMode,
-    bool ApiKeyConfigured);
+    bool AllowInsecureTls,
+    bool ApiKeyConfigured)
+{
+    public bool VisionIsConfigured => SupportsVision && !string.IsNullOrWhiteSpace(VisionModel);
+    public bool TextIsConfigured => SupportsText && !string.IsNullOrWhiteSpace(TextModel);
+}
 
 internal sealed record TranslationResult(
     string TranslatedText,

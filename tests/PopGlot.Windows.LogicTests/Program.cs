@@ -24,6 +24,10 @@ internal static class Program
         Run("sensitive history is rejected", SensitiveHistoryIsRejected);
         Run("capture rectangle normalizes", CaptureRectangleNormalizes);
         Run("SendInput ABI size is correct", SendInputAbiSizeIsCorrect);
+        if (Environment.GetEnvironmentVariable("POPGLOT_SMOKE_FREE") == "1")
+        {
+            await RunAsync("free web translation smoke (network)", FreeTranslationSmokeAsync);
+        }
         Console.WriteLine($"PopGlot Windows logic tests: {_passed} passed.");
         return 0;
     }
@@ -112,6 +116,10 @@ internal static class Program
         Equal("还差一步：配置模型密钥", TranslationPanelWindow.FriendlyError("API Key missing"));
         Equal("模型响应超时", TranslationPanelWindow.FriendlyError("请求超时"));
         Equal("没有读到选中的文字", TranslationPanelWindow.FriendlyError("未检测到选中文本"));
+        Equal("模型网络目前未启用", TranslationPanelWindow.FriendlyError("网络访问未启用；未发送任何 Provider 请求。"));
+        Equal("翻译请求被限流，请稍后重试", TranslationPanelWindow.FriendlyError("免费翻译接口被限流（HTTP 429，本机 IP 已被暂时限制）"));
+        Equal("密钥无效或没有权限", TranslationPanelWindow.FriendlyError("Provider 鉴权失败（HTTP 401）。"));
+        Equal("截图上传未获授权", TranslationPanelWindow.FriendlyError("隐私设置未授权上传截图；未发送图片。"));
     }
 
     private static void V1ShortcutConfigurationMigrates()
@@ -163,6 +171,14 @@ internal static class Program
     private static void SendInputAbiSizeIsCorrect()
     {
         Equal(IntPtr.Size == 8 ? 40 : 28, WindowsSelectionClipboardAdapter.InputStructureSize);
+    }
+
+    private static async Task FreeTranslationSmokeAsync()
+    {
+        var response = await FreeTranslateService.TranslateAsync("hello world", "auto", "zh-CN");
+        Console.WriteLine($"  -> engine={response.Diagnostics.Endpoint} status={response.Diagnostics.StatusCode} text={response.Result.TranslatedText}");
+        True(response.Result.TranslatedText.Contains("世界") || response.Result.TranslatedText.Contains("你好"),
+            $"unexpected free translation: {response.Result.TranslatedText}");
     }
 
     private static async Task RunAsync(string name, Func<Task> test)
