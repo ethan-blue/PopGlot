@@ -40,3 +40,15 @@ Base URL 必须是 HTTPS；仅为本地开发允许 `http://localhost` 和 `http
 4. 主动点击“测试连接（仅文本）”。
 
 测试只发送内置的最小翻译句，不上传截图或用户选区。仓库测试只使用本机 mock；发布者不能把 mock 通过描述成真实云端连通性验证。
+
+## Windows Shell v1 到 v2
+
+`windows-shell.json` 从单一 `ShortcutId` 升级为三组快捷键、历史开关和主题：
+
+- `SelectionShortcutId`: 默认 `ctrl-alt-w`
+- `ScreenshotShortcutId`: 继承旧 `ShortcutId`，无旧值时为 `ctrl-alt-space`
+- `CloseShortcutId`: 默认 `ctrl-alt-x`
+- `HistoryEnabled`: 默认 `false`
+- `Theme`: 默认 `System`
+
+迁移不会启用历史或网络。重复快捷键在写盘前拒绝；系统注册冲突时回滚到上一组已注册快捷键。

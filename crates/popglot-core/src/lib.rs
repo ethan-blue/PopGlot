@@ -6,19 +6,15 @@
 
 pub mod provider;
 
-use popglot_domain::{
-    ProviderSettings, RoutingContext, RoutingDecision, TranslationMode, protect_tokens,
-    select_route,
-};
-use serde::{Deserialize, Serialize};
+use popglot_domain::{ProviderSettings, TranslationMode, protect_tokens, restore_tokens};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio_util::sync::CancellationToken;
 
 use provider::{
-    ProviderClient, ProviderError, TranslationInput, TranslationResponse, TransportLimits,
-    provider_for, validate_provider_settings,
+    ImageInput, ProviderClient, ProviderError, ProviderErrorKind, TranslationInput,
+    TranslationResponse, TransportLimits, provider_for, validate_provider_settings,
 };
 
 const SETTINGS_FILE: &str = "provider-settings.json";
@@ -74,54 +70,6 @@ impl AppCore {
         Ok(())
     }
 
-    /// Produces a deterministic vertical-slice result without network or image upload.
-    #[must_use]
-    pub fn preview(&self, request: &PreviewRequest) -> PreviewResult {
-        let context = RoutingContext {
-            requested_mode: request.mode,
-            vision_configured: self.settings.vision_is_configured(),
-            image_upload_allowed: self.settings.allow_image_upload_in_auto,
-            looks_like_code: request.looks_like_code,
-            complex_layout: request.complex_layout,
-            image_quality: request.image_quality,
-            ocr_confidence: request.ocr_confidence,
-        };
-        let decision = select_route(&context);
-        let protected = protect_tokens(&request.sample_text);
-        let requires_configuration = !self.settings.text_is_configured()
-            || (decision.selected_mode == TranslationMode::VisionDirect
-                && !self.settings.vision_is_configured());
-
-        PreviewResult {
-            decision,
-            title: "PopGlot 开发模式预览".to_owned(),
-            translated_text: if requires_configuration {
-                "尚未配置可用模型。截图未上传，请在设置中填写 API Base URL、文本模型与视觉模型。"
-                    .to_owned()
-            } else {
-                "安全开发模式已完成路由演示；真实 OCR、视觉请求和翻译尚未发送。".to_owned()
-            },
-            explanation: format!(
-                "检测并保护了 {} 个代码或技术元素。{}",
-                protected.tokens.len(),
-                if self.settings.safe_dev_mode {
-                    "当前 Safe Dev Mode 禁止任何外部 API 请求。"
-                } else if !self.settings.network_enabled {
-                    "当前未启用模型网络请求。"
-                } else {
-                    "仅用户主动触发的连接测试可发送最小文本；预览本身不会发送网络请求。"
-                }
-            ),
-            protected_terms: protected
-                .tokens
-                .into_iter()
-                .map(|token| token.original)
-                .collect(),
-            requires_configuration,
-            network_request_sent: false,
-        }
-    }
-
     /// Sends a minimal text-only connection test after every privacy gate passes.
     ///
     /// # Errors
@@ -151,6 +99,124 @@ impl AppCore {
             )
             .await
     }
+
+    /// Translates user-selected text through the configured Provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified Provider error for invalid text, privacy gates,
+    /// cancellation, transport failures, or invalid model output.
+    pub async fn translate_text(
+        &self,
+        api_key: &str,
+        source: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<TranslationResponse, ProviderError> {
+        let source = source.trim();
+        if source.is_empty() || source.len() > 64 * 1024 {
+            return Err(ProviderError {
+                kind: ProviderErrorKind::Configuration,
+                message: "选中文本必须大于 0 且不超过 64 KiB。".to_owned(),
+                status_code: None,
+                retryable: false,
+            });
+        }
+        let protected = protect_tokens(source);
+        let mut response = self
+            .execute_translation(
+                api_key,
+                TranslationInput::Text {
+                    source: protected.sanitized_text,
+                },
+                cancellation,
+            )
+            .await?;
+        if !protected.tokens.is_empty() {
+            response.result.translated_text = restore_tokens(
+                &response.result.translated_text,
+                &protected.tokens,
+            )
+            .map_err(|_| ProviderError {
+                kind: ProviderErrorKind::InvalidResponse,
+                message: "模型修改或遗漏了受保护的代码元素；为避免展示错误标识符，本次结果已拒绝。"
+                    .to_owned(),
+                status_code: None,
+                retryable: false,
+            })?;
+            response.result.protected_terms = protected
+                .tokens
+                .into_iter()
+                .map(|token| token.original)
+                .collect();
+        }
+        Ok(response)
+    }
+
+    /// Translates one captured screenshot through the configured vision Provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified Provider error for privacy gates, unsupported modes,
+    /// image limits, cancellation, transport failures, or invalid model output.
+    pub async fn translate_vision(
+        &self,
+        api_key: &str,
+        media_type: &str,
+        image: Vec<u8>,
+        cancellation: &CancellationToken,
+    ) -> Result<TranslationResponse, ProviderError> {
+        if self.settings.mode == TranslationMode::LocalOcr {
+            return Err(ProviderError {
+                kind: ProviderErrorKind::UnsupportedInput,
+                message: "当前选择了本地 OCR，但本机 OCR 适配器尚未安装。请切换视觉直译，或等待本地 OCR 模块。".to_owned(),
+                status_code: None,
+                retryable: false,
+            });
+        }
+        if !self.settings.allow_image_upload_in_auto {
+            return Err(ProviderError {
+                kind: ProviderErrorKind::NetworkDisabled,
+                message: "截图上传未获授权，且本地 OCR 适配器尚未安装；未发送图片。".to_owned(),
+                status_code: None,
+                retryable: false,
+            });
+        }
+        self.execute_translation(
+            api_key,
+            TranslationInput::Vision {
+                prompt: "Accurately transcribe and translate this screenshot into Chinese. Preserve every code token, identifier, command, path, URL, version, and error code exactly.".to_owned(),
+                image: ImageInput::Bytes {
+                    media_type: media_type.to_owned(),
+                    data: image,
+                },
+            },
+            cancellation,
+        )
+        .await
+    }
+
+    async fn execute_translation(
+        &self,
+        api_key: &str,
+        input: TranslationInput,
+        cancellation: &CancellationToken,
+    ) -> Result<TranslationResponse, ProviderError> {
+        let provider = provider_for(self.settings.provider_type);
+        let request_id = format!(
+            "translation-{}",
+            REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        );
+        self.provider_client
+            .execute(
+                provider.as_ref(),
+                &self.settings,
+                api_key,
+                &request_id,
+                &input,
+                cancellation,
+            )
+            .await
+    }
 }
 
 fn validate_settings(settings: &ProviderSettings) -> Result<(), CoreError> {
@@ -164,27 +230,6 @@ fn validate_settings(settings: &ProviderSettings) -> Result<(), CoreError> {
         ));
     }
     Ok(())
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PreviewRequest {
-    pub mode: TranslationMode,
-    pub sample_text: String,
-    pub looks_like_code: bool,
-    pub complex_layout: bool,
-    pub image_quality: f32,
-    pub ocr_confidence: f32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PreviewResult {
-    pub decision: RoutingDecision,
-    pub title: String,
-    pub translated_text: String,
-    pub explanation: String,
-    pub protected_terms: Vec<String>,
-    pub requires_configuration: bool,
-    pub network_request_sent: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -225,28 +270,49 @@ mod tests {
         fs::remove_dir_all(directory).expect("remove isolated test directory");
     }
 
-    #[test]
-    fn preview_never_sends_network_request() {
+    #[tokio::test]
+    async fn selected_text_respects_validation_and_network_gate() {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        let directory = std::env::temp_dir().join(format!("popglot-preview-test-{suffix}"));
+        let directory = std::env::temp_dir().join(format!("popglot-selection-test-{suffix}"));
         let core = AppCore::open(&directory).expect("open core");
-        let result = core.preview(&PreviewRequest {
-            mode: TranslationMode::Auto,
-            sample_text: "NullReferenceException in getUserProfile".to_owned(),
-            looks_like_code: true,
-            complex_layout: false,
-            image_quality: 0.9,
-            ocr_confidence: 0.9,
-        });
-        assert!(!result.network_request_sent);
-        assert!(
-            result
-                .protected_terms
-                .contains(&"getUserProfile".to_owned())
-        );
+        let cancellation = CancellationToken::new();
+        let empty = core
+            .translate_text("key", "   ", &cancellation)
+            .await
+            .expect_err("empty selection must fail");
+        assert_eq!(empty.kind, ProviderErrorKind::Configuration);
+        let disabled = core
+            .translate_text("key", "selected text", &cancellation)
+            .await
+            .expect_err("default network gate must fail");
+        assert_eq!(disabled.kind, ProviderErrorKind::NetworkDisabled);
+        fs::remove_dir_all(directory).expect("remove isolated test directory");
+    }
+
+    #[tokio::test]
+    async fn screenshot_route_never_bypasses_local_or_upload_permission() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("popglot-vision-test-{suffix}"));
+        let mut core = AppCore::open(&directory).expect("open core");
+        let cancellation = CancellationToken::new();
+        core.settings.mode = TranslationMode::LocalOcr;
+        let local = core
+            .translate_vision("key", "image/png", vec![1], &cancellation)
+            .await
+            .expect_err("local mode must not upload");
+        assert_eq!(local.kind, ProviderErrorKind::UnsupportedInput);
+        core.settings.mode = TranslationMode::VisionDirect;
+        let unapproved = core
+            .translate_vision("key", "image/png", vec![1], &cancellation)
+            .await
+            .expect_err("unapproved screenshot must not upload");
+        assert_eq!(unapproved.kind, ProviderErrorKind::NetworkDisabled);
         fs::remove_dir_all(directory).expect("remove isolated test directory");
     }
 }

@@ -1,24 +1,41 @@
 <Window x:Class="PopGlot.Windows.CaptureOverlayWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        WindowStyle="None" AllowsTransparency="True" Background="#66000000"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         Topmost="True" ShowInTaskbar="False" Cursor="Cross" ResizeMode="NoResize"
         KeyDown="Window_KeyDown"
         MouseLeftButtonDown="Window_MouseLeftButtonDown"
         MouseMove="Window_MouseMove"
         MouseLeftButtonUp="Window_MouseLeftButtonUp">
-    <Canvas x:Name="SelectionCanvas">
-        <Border x:Name="SelectionBorder" Visibility="Collapsed"
-                BorderBrush="#6EE7C7" BorderThickness="2" Background="#1800D9A7">
+    <Canvas x:Name="SelectionCanvas" ClipToBounds="True">
+        <Border x:Name="InitialShade" Background="#88080B10"
+                Width="{Binding ActualWidth, ElementName=SelectionCanvas}"
+                Height="{Binding ActualHeight, ElementName=SelectionCanvas}" />
+        <Rectangle x:Name="ShadeTop" Fill="#88080B10" Visibility="Collapsed" />
+        <Rectangle x:Name="ShadeLeft" Fill="#88080B10" Visibility="Collapsed" />
+        <Rectangle x:Name="ShadeRight" Fill="#88080B10" Visibility="Collapsed" />
+        <Rectangle x:Name="ShadeBottom" Fill="#88080B10" Visibility="Collapsed" />
+
+        <Border x:Name="SelectionBorder" Visibility="Collapsed" CornerRadius="2"
+                BorderBrush="{DynamicResource AccentBrush}" BorderThickness="2" Background="Transparent">
             <Border.Effect>
-                <DropShadowEffect Color="#6EE7C7" BlurRadius="14" ShadowDepth="0" Opacity="0.45" />
+                <DropShadowEffect Color="#00CDA5" BlurRadius="10" ShadowDepth="0" Opacity="0.4" />
             </Border.Effect>
         </Border>
-        <Border Canvas.Left="24" Canvas.Top="24" Padding="14,9" CornerRadius="9" Background="#E6141B26">
-            <TextBlock Foreground="White" Text="拖动选择翻译区域 · Esc 取消" FontSize="14" />
+
+        <Border Canvas.Left="24" Canvas.Top="24" Padding="14,10" CornerRadius="8"
+                Background="{DynamicResource CardBackground}"
+                BorderBrush="{DynamicResource DividerBrush}" BorderThickness="1">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Foreground="{DynamicResource AccentBrush}" Text="截图翻译" FontWeight="SemiBold" />
+                <TextBlock Margin="12,0,0,0" Foreground="{DynamicResource SecondaryText}"
+                           Text="拖动框选内容 · Esc 取消" />
+            </StackPanel>
         </Border>
-        <Border x:Name="SizeBadge" Visibility="Collapsed" Padding="9,5" CornerRadius="6" Background="#E6141B26">
-            <TextBlock x:Name="SizeText" Foreground="White" FontFamily="Consolas" FontSize="12" />
+        <Border x:Name="SizeBadge" Visibility="Collapsed" Padding="9,5" CornerRadius="6"
+                Background="{DynamicResource CardBackground}">
+            <TextBlock x:Name="SizeText" Foreground="{DynamicResource PrimaryText}"
+                       FontFamily="Cascadia Mono, Consolas" FontSize="12" />
         </Border>
     </Canvas>
 </Window>

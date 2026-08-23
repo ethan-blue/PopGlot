@@ -1,25 +1,44 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using ComboBox = System.Windows.Controls.ComboBox;
+using Button = System.Windows.Controls.Button;
+using Brush = System.Windows.Media.Brush;
+using Brushes = System.Windows.Media.Brushes;
+using MessageBox = System.Windows.MessageBox;
 
 namespace PopGlot.Windows;
 
 public partial class MainWindow : Window
 {
+    private readonly HistoryStore _history;
+    private ShellSettings _shellSettings;
     private bool _loadingSettings;
 
-    public MainWindow()
+    internal MainWindow(ShellSettings shellSettings, HistoryStore history)
     {
+        _shellSettings = shellSettings;
+        _history = history;
         InitializeComponent();
-        ShortcutComboBox.ItemsSource = ShortcutOption.Available;
-        CurrentShortcut = ShellSettingsStore.LoadShortcut();
-        ShortcutComboBox.SelectedItem = CurrentShortcut;
+        ConfigureShortcutCombo(SelectionShortcutComboBox, shellSettings.SelectionShortcut);
+        ConfigureShortcutCombo(ScreenshotShortcutComboBox, shellSettings.ScreenshotShortcut);
+        ConfigureShortcutCombo(CloseShortcutComboBox, shellSettings.CloseShortcut);
+        HistoryEnabledCheckBox.IsChecked = shellSettings.HistoryEnabled;
+        SelectComboBoxItem(ThemeComboBox, shellSettings.Theme.ToString());
         LoadProviderSettings();
+        ShowSection(GeneralPanel, GeneralNavButton);
+        ReloadHistory();
+        UpdateShortcutHint(shellSettings);
     }
 
     internal bool AllowClose { get; set; }
-    internal ShortcutOption CurrentShortcut { get; private set; }
-    internal event EventHandler<ShortcutOption>? ShortcutChanged;
+    internal Func<ShellSettings, bool>? ApplyShellSettings { get; init; }
+
+    private static void ConfigureShortcutCombo(ComboBox comboBox, ShortcutOption selected)
+    {
+        comboBox.ItemsSource = ShortcutOption.Available;
+        comboBox.SelectedItem = selected;
+    }
 
     private void LoadProviderSettings()
     {
@@ -27,7 +46,7 @@ public partial class MainWindow : Window
         try
         {
             var settings = CoreBridge.GetSettings();
-            SelectProviderType(settings.ProviderType);
+            SelectComboBoxItem(ProviderTypeComboBox, settings.ProviderType.ToString());
             BaseUrlTextBox.Text = settings.ApiBaseUrl;
             TextEndpointTextBox.Text = settings.TextEndpoint;
             VisionEndpointTextBox.Text = settings.VisionEndpoint;
@@ -42,10 +61,10 @@ public partial class MainWindow : Window
             NetworkEnabledCheckBox.IsChecked = settings.NetworkEnabled;
             AllowImageUploadCheckBox.IsChecked = settings.AllowImageUploadInAuto;
             SafeDevModeCheckBox.IsChecked = settings.SafeDevMode;
-            SelectMode(settings.Mode);
+            SelectComboBoxItem(ModeComboBox, settings.Mode.ToString());
             StatusTextBlock.Text = CredentialStore.HasApiKey()
-                ? "已在 Windows 凭据管理器中保存当前活动 API Key。"
-                : "尚未配置 API Key；应用不会发起模型网络请求。";
+                ? "当前活动密钥已安全保存在 Windows 凭据管理器。"
+                : "尚未配置模型密钥；应用仍可使用托盘、快捷键和本地界面。";
         }
         catch (Exception exception)
         {
@@ -57,23 +76,14 @@ public partial class MainWindow : Window
         }
     }
 
-    private void SelectMode(TranslationMode mode)
-    {
-        SelectComboBoxItem(ModeComboBox, mode.ToString());
-    }
-
-    private void SelectProviderType(ProviderType providerType)
-    {
-        SelectComboBoxItem(ProviderTypeComboBox, providerType.ToString());
-    }
-
     private static void SelectComboBoxItem(ComboBox comboBox, string tag)
     {
-        foreach (ComboBoxItem item in comboBox.Items)
+        foreach (var item in comboBox.Items)
         {
-            if (string.Equals(item.Tag?.ToString(), tag, StringComparison.Ordinal))
+            if (item is ComboBoxItem comboBoxItem &&
+                string.Equals(comboBoxItem.Tag?.ToString(), tag, StringComparison.Ordinal))
             {
-                comboBox.SelectedItem = item;
+                comboBox.SelectedItem = comboBoxItem;
                 return;
             }
         }
@@ -86,7 +96,6 @@ public partial class MainWindow : Window
         {
             return;
         }
-
         var providerType = Enum.Parse<ProviderType>(selected.Tag.ToString()!, ignoreCase: false);
         var (baseUrl, endpoint) = ProviderDefaults(providerType);
         BaseUrlTextBox.Text = baseUrl;
@@ -95,12 +104,11 @@ public partial class MainWindow : Window
         TextModelTextBox.Clear();
         VisionModelTextBox.Clear();
         AnthropicVersionTextBox.Text = "2023-06-01";
-        StatusTextBlock.Text = "已切换协议；请填写该提供商的模型名称并确认活动 API Key。";
+        StatusTextBlock.Text = "已切换翻译服务，请填写对应模型与密钥。";
     }
 
-    private static (string BaseUrl, string Endpoint) ProviderDefaults(ProviderType providerType)
-    {
-        return providerType switch
+    private static (string BaseUrl, string Endpoint) ProviderDefaults(ProviderType providerType) =>
+        providerType switch
         {
             ProviderType.OpenAiCompatible => ("https://api.openai.com/v1", "/chat/completions"),
             ProviderType.OpenAiResponses => ("https://api.openai.com/v1", "/responses"),
@@ -110,17 +118,40 @@ public partial class MainWindow : Window
                 "/v1beta/models/{model}:generateContent"),
             _ => throw new ArgumentOutOfRangeException(nameof(providerType)),
         };
-    }
 
     private void SaveButton_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            SaveCurrentSettings();
-            CurrentShortcut = (ShortcutOption)ShortcutComboBox.SelectedItem;
-            ShellSettingsStore.SaveShortcut(CurrentShortcut);
-            ShortcutChanged?.Invoke(this, CurrentShortcut);
-            StatusTextBlock.Text = "设置已保存；保存操作本身不会发送网络请求。";
+            SaveProviderSettings();
+            var shellSettings = new ShellSettings(
+                2,
+                ((ShortcutOption)SelectionShortcutComboBox.SelectedItem).Id,
+                ((ShortcutOption)ScreenshotShortcutComboBox.SelectedItem).Id,
+                ((ShortcutOption)CloseShortcutComboBox.SelectedItem).Id,
+                HistoryEnabledCheckBox.IsChecked == true,
+                SelectedEnum<ThemePreference>(ThemeComboBox));
+            var validationError = shellSettings.ValidateHotkeys();
+            if (validationError is not null)
+            {
+                throw new InvalidOperationException(validationError);
+            }
+            if (ApplyShellSettings is not null && !ApplyShellSettings(shellSettings))
+            {
+                throw new InvalidOperationException("快捷键注册失败，原快捷键已保留。请选择其他组合键。");
+            }
+            try
+            {
+                ShellSettingsStore.Save(shellSettings);
+            }
+            catch
+            {
+                _ = ApplyShellSettings?.Invoke(_shellSettings);
+                throw;
+            }
+            _shellSettings = shellSettings;
+            UpdateShortcutHint(shellSettings);
+            StatusTextBlock.Text = "更改已保存。保存设置本身不会发送网络请求。";
         }
         catch (Exception exception)
         {
@@ -128,19 +159,16 @@ public partial class MainWindow : Window
         }
     }
 
-    private ProviderSettings SaveCurrentSettings()
+    private void SaveProviderSettings()
     {
-        var selectedMode = SelectedEnum<TranslationMode>(ModeComboBox);
-        var providerType = SelectedEnum<ProviderType>(ProviderTypeComboBox);
         if (!string.IsNullOrWhiteSpace(ApiKeyPasswordBox.Password))
         {
             CredentialStore.SaveApiKey(ApiKeyPasswordBox.Password.Trim());
             ApiKeyPasswordBox.Clear();
         }
-
         var settings = new ProviderSettings(
             2,
-            providerType,
+            SelectedEnum<ProviderType>(ProviderTypeComboBox),
             BaseUrlTextBox.Text.Trim(),
             TextEndpointTextBox.Text.Trim(),
             VisionEndpointTextBox.Text.Trim(),
@@ -151,12 +179,11 @@ public partial class MainWindow : Window
             SupportsTextCheckBox.IsChecked == true,
             SupportsVisionCheckBox.IsChecked == true,
             NetworkEnabledCheckBox.IsChecked == true,
-            selectedMode,
+            SelectedEnum<TranslationMode>(ModeComboBox),
             AllowImageUploadCheckBox.IsChecked == true,
             SafeDevModeCheckBox.IsChecked == true,
             CredentialStore.HasApiKey());
         CoreBridge.SaveSettings(settings);
-        return settings;
     }
 
     private static T SelectedEnum<T>(ComboBox comboBox) where T : struct, Enum
@@ -190,26 +217,21 @@ public partial class MainWindow : Window
         TestConnectionButton.IsEnabled = false;
         try
         {
-            var settings = SaveCurrentSettings();
-            if (!settings.NetworkEnabled)
+            SaveProviderSettings();
+            var settings = CoreBridge.GetSettings();
+            if (!settings.NetworkEnabled || settings.SafeDevMode)
             {
-                throw new InvalidOperationException("请先启用“允许模型网络请求”。");
+                throw new InvalidOperationException("请启用模型网络，并关闭安全开发模式。此操作只发送内置文本。");
             }
-            if (settings.SafeDevMode)
-            {
-                throw new InvalidOperationException("安全开发模式仍开启，按设计禁止网络请求。");
-            }
-
             var apiKey = CredentialStore.LoadApiKey();
             if (string.IsNullOrWhiteSpace(apiKey))
             {
                 throw new InvalidOperationException("请先保存当前提供商的 API Key。");
             }
-
-            StatusTextBlock.Text = "正在发送最小文本连接测试；不会上传截图……";
+            StatusTextBlock.Text = "正在测试文本连接，不会上传截图…";
             var response = await CoreBridge.TestConnectionAsync(apiKey);
-            StatusTextBlock.Text = $"连接成功：HTTP {response.Diagnostics.StatusCode}，" +
-                $"{response.Diagnostics.Attempts} 次尝试，{response.Diagnostics.ElapsedMs} ms。";
+            StatusTextBlock.Text = $"连接成功 · HTTP {response.Diagnostics.StatusCode} · " +
+                $"{response.Diagnostics.ElapsedMs} ms";
         }
         catch (Exception exception)
         {
@@ -229,7 +251,7 @@ public partial class MainWindow : Window
             var settings = CoreBridge.GetSettings();
             CoreBridge.SaveSettings(settings with { ApiKeyConfigured = false });
             ApiKeyPasswordBox.Clear();
-            StatusTextBlock.Text = "已从 Windows 凭据管理器删除 API Key。";
+            StatusTextBlock.Text = "已从 Windows 凭据管理器删除活动 API Key。";
         }
         catch (Exception exception)
         {
@@ -237,10 +259,73 @@ public partial class MainWindow : Window
         }
     }
 
+    internal void ReloadHistory()
+    {
+        var entries = _history.Load();
+        HistoryListBox.ItemsSource = entries.Select(entry =>
+            $"{entry.CreatedAt.ToLocalTime():MM-dd HH:mm}  ·  {entry.SourceKind}\n" +
+            $"{SingleLine(entry.Source, 70)}  →  {SingleLine(entry.Translation, 70)}");
+        HistoryEmptyText.Visibility = entries.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        HistoryListBox.Visibility = entries.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private static string SingleLine(string value, int limit)
+    {
+        var line = value.ReplaceLineEndings(" ").Trim();
+        return line.Length <= limit ? line : $"{line[..limit]}…";
+    }
+
+    private void ClearHistoryButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (MessageBox.Show(
+                "清除本机上的全部 PopGlot 翻译历史？此操作无法撤销。",
+                "清除历史",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning) != MessageBoxResult.OK)
+        {
+            return;
+        }
+        _history.Clear();
+        ReloadHistory();
+        StatusTextBlock.Text = "本地翻译历史已清除。";
+    }
+
+    private void GeneralNavButton_Click(object sender, RoutedEventArgs e) =>
+        ShowSection(GeneralPanel, GeneralNavButton);
+
+    private void ProviderNavButton_Click(object sender, RoutedEventArgs e) =>
+        ShowSection(ProviderPanel, ProviderNavButton);
+
+    private void PrivacyNavButton_Click(object sender, RoutedEventArgs e)
+    {
+        ReloadHistory();
+        ShowSection(PrivacyPanel, PrivacyNavButton);
+    }
+
+    private void ShowSection(StackPanel panel, Button selectedButton)
+    {
+        GeneralPanel.Visibility = panel == GeneralPanel ? Visibility.Visible : Visibility.Collapsed;
+        ProviderPanel.Visibility = panel == ProviderPanel ? Visibility.Visible : Visibility.Collapsed;
+        PrivacyPanel.Visibility = panel == PrivacyPanel ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var button in new[] { GeneralNavButton, ProviderNavButton, PrivacyNavButton })
+        {
+            button.Background = button == selectedButton
+                ? (Brush)FindResource("AccentMutedBrush")
+                : Brushes.Transparent;
+        }
+    }
+
+    private void UpdateShortcutHint(ShellSettings settings)
+    {
+        ShortcutHintText.Text = $"{settings.SelectionShortcut.DisplayName} 划词\n" +
+            $"{settings.ScreenshotShortcut.DisplayName} 截图";
+    }
+
     internal void ShowShortcutConflict(string shortcut)
     {
         Show();
         Activate();
-        StatusTextBlock.Text = $"无法注册 {shortcut}，它可能已被其他应用占用。请选择其他组合键。";
+        ShowSection(GeneralPanel, GeneralNavButton);
+        StatusTextBlock.Text = $"无法注册：{shortcut}。请选择未被其他应用占用的组合键。";
     }
 }

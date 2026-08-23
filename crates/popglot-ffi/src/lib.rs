@@ -7,7 +7,8 @@
 // surfaces that informational localized line as `linker_messages`.
 #![allow(linker_messages)]
 
-use popglot_core::{AppCore, PreviewRequest};
+use base64::Engine as _;
+use popglot_core::AppCore;
 use popglot_domain::ProviderSettings;
 use serde::Serialize;
 use std::ffi::{CStr, CString, c_char};
@@ -19,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 
 static CORE: OnceLock<Mutex<AppCore>> = OnceLock::new();
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+static ACTIVE_REQUEST: OnceLock<Mutex<Option<CancellationToken>>> = OnceLock::new();
 
 #[derive(Serialize)]
 struct Envelope<T: Serialize> {
@@ -107,24 +109,6 @@ pub unsafe extern "C" fn popglot_save_settings(json: *const c_char) -> *mut c_ch
     })
 }
 
-/// Runs the deterministic, no-network preview workflow.
-///
-/// # Safety
-///
-/// `json` must point to a valid NUL-terminated UTF-8 string for the duration of
-/// the call. The returned pointer must be released with [`popglot_free_string`].
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn popglot_preview(json: *const c_char) -> *mut c_char {
-    ffi_guard(|| {
-        // SAFETY: Forwarding the ABI caller contract to the validated helper.
-        let json = unsafe { read_utf8(json) }?;
-        let request: PreviewRequest =
-            serde_json::from_str(json).map_err(|error| error.to_string())?;
-        let core = core_lock()?;
-        Ok(success(core.preview(&request)))
-    })
-}
-
 /// Sends a user-initiated, text-only Provider connection test.
 ///
 /// # Safety
@@ -144,6 +128,82 @@ pub unsafe extern "C" fn popglot_test_connection(api_key: *const c_char) -> *mut
             .map_err(|error| error.to_string())?;
         Ok(success(response))
     })
+}
+
+/// Translates selected UTF-8 text through the active Provider.
+///
+/// # Safety
+///
+/// Both pointers must remain valid NUL-terminated UTF-8 strings for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_translate_text(
+    api_key: *const c_char,
+    source: *const c_char,
+) -> *mut c_char {
+    ffi_guard(|| {
+        // SAFETY: Forwarding the ABI caller contract to the validated helper.
+        let api_key = unsafe { read_utf8(api_key) }?;
+        // SAFETY: Forwarding the ABI caller contract to the validated helper.
+        let source = unsafe { read_utf8(source) }?;
+        let core = core_lock()?;
+        let runtime = provider_runtime()?;
+        let cancellation = begin_active_request()?;
+        let response = runtime
+            .block_on(core.translate_text(api_key, source, &cancellation))
+            .map_err(|error| error.to_string());
+        finish_active_request()?;
+        Ok(response.map_or_else(failure, success))
+    })
+}
+
+/// Translates one base64-encoded screenshot through the active vision Provider.
+///
+/// # Safety
+///
+/// All pointers must remain valid NUL-terminated UTF-8 strings for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_translate_vision(
+    api_key: *const c_char,
+    media_type: *const c_char,
+    image_base64: *const c_char,
+) -> *mut c_char {
+    ffi_guard(|| {
+        // SAFETY: Forwarding the ABI caller contract to the validated helper.
+        let api_key = unsafe { read_utf8(api_key) }?;
+        // SAFETY: Forwarding the ABI caller contract to the validated helper.
+        let media_type = unsafe { read_utf8(media_type) }?;
+        // SAFETY: Forwarding the ABI caller contract to the validated helper.
+        let image_base64 = unsafe { read_utf8(image_base64) }?;
+        if image_base64.len() > 12 * 1024 * 1024 {
+            return Err("编码后的截图超过 12 MiB FFI 上限。".to_owned());
+        }
+        let image = base64::engine::general_purpose::STANDARD
+            .decode(image_base64)
+            .map_err(|_| "截图不是有效的 base64。".to_owned())?;
+        let core = core_lock()?;
+        let runtime = provider_runtime()?;
+        let cancellation = begin_active_request()?;
+        let response = runtime
+            .block_on(core.translate_vision(api_key, media_type, image, &cancellation))
+            .map_err(|error| error.to_string());
+        finish_active_request()?;
+        Ok(response.map_or_else(failure, success))
+    })
+}
+
+/// Cancels the process-wide active translation, if one exists.
+#[unsafe(no_mangle)]
+pub extern "C" fn popglot_cancel_active_request() -> i32 {
+    i32::from(
+        ACTIVE_REQUEST
+            .get()
+            .and_then(|active| active.lock().ok())
+            .and_then(|active| active.as_ref().cloned())
+            .is_some_and(|cancellation| {
+                cancellation.cancel();
+                true
+            }),
+    )
 }
 
 /// Releases strings returned by this library.
@@ -177,6 +237,24 @@ fn provider_runtime() -> Result<&'static Runtime, String> {
     RUNTIME
         .get()
         .ok_or_else(|| "异步 Provider Runtime 初始化失败".to_owned())
+}
+
+fn begin_active_request() -> Result<CancellationToken, String> {
+    let cancellation = CancellationToken::new();
+    let active = ACTIVE_REQUEST.get_or_init(|| Mutex::new(None));
+    *active
+        .lock()
+        .map_err(|_| "Provider cancellation state is poisoned".to_owned())? =
+        Some(cancellation.clone());
+    Ok(cancellation)
+}
+
+fn finish_active_request() -> Result<(), String> {
+    let active = ACTIVE_REQUEST.get_or_init(|| Mutex::new(None));
+    *active
+        .lock()
+        .map_err(|_| "Provider cancellation state is poisoned".to_owned())? = None;
+    Ok(())
 }
 
 fn ffi_guard(operation: impl FnOnce() -> Result<*mut c_char, String>) -> *mut c_char {

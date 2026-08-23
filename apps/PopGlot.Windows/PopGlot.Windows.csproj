@@ -11,6 +11,10 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="PopGlot.Windows.LogicTests" />
+  </ItemGroup>
+
   <PropertyGroup>
     <RustCargo>$(USERPROFILE)\.cargo\bin\cargo.exe</RustCargo>
     <RustTargetDir>$(MSBuildProjectDirectory)\..\..\target</RustTargetDir>

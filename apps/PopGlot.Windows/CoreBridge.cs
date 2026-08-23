@@ -36,18 +36,38 @@ internal static partial class CoreBridge
         EnsureSuccess<string>(Invoke(() => NativeMethods.SaveSettings(json)));
     }
 
-    public static PreviewResult Preview(PreviewRequest request)
-    {
-        var json = JsonSerializer.Serialize(request, JsonOptions);
-        return EnsureSuccess<PreviewResult>(Invoke(() => NativeMethods.Preview(json)));
-    }
-
     public static Task<TranslationResponse> TestConnectionAsync(string apiKey)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
         return Task.Run(() =>
             EnsureSuccess<TranslationResponse>(Invoke(() => NativeMethods.TestConnection(apiKey))));
     }
+
+    public static Task<TranslationResponse> TranslateTextAsync(string apiKey, string source)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+        return Task.Run(() => EnsureSuccess<TranslationResponse>(
+            Invoke(() => NativeMethods.TranslateText(apiKey, source))));
+    }
+
+    public static Task<TranslationResponse> TranslateVisionAsync(
+        string apiKey,
+        string mediaType,
+        byte[] image)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
+        ArgumentNullException.ThrowIfNull(image);
+        if (image.Length == 0 || image.Length > 8 * 1024 * 1024)
+        {
+            throw new ArgumentOutOfRangeException(nameof(image), "截图必须大于 0 且不超过 8 MiB。");
+        }
+        var imageBase64 = Convert.ToBase64String(image);
+        return Task.Run(() => EnsureSuccess<TranslationResponse>(
+            Invoke(() => NativeMethods.TranslateVision(apiKey, mediaType, imageBase64))));
+    }
+
+    public static bool CancelActiveRequest() => NativeMethods.CancelActiveRequest() != 0;
 
     private static string Invoke(Func<nint> nativeCall)
     {
@@ -92,11 +112,17 @@ internal static partial class CoreBridge
         [LibraryImport(LibraryName, EntryPoint = "popglot_save_settings", StringMarshalling = StringMarshalling.Utf8)]
         internal static partial nint SaveSettings(string json);
 
-        [LibraryImport(LibraryName, EntryPoint = "popglot_preview", StringMarshalling = StringMarshalling.Utf8)]
-        internal static partial nint Preview(string json);
-
         [LibraryImport(LibraryName, EntryPoint = "popglot_test_connection", StringMarshalling = StringMarshalling.Utf8)]
         internal static partial nint TestConnection(string apiKey);
+
+        [LibraryImport(LibraryName, EntryPoint = "popglot_translate_text", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint TranslateText(string apiKey, string source);
+
+        [LibraryImport(LibraryName, EntryPoint = "popglot_translate_vision", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint TranslateVision(string apiKey, string mediaType, string imageBase64);
+
+        [LibraryImport(LibraryName, EntryPoint = "popglot_cancel_active_request")]
+        internal static partial int CancelActiveRequest();
 
         [LibraryImport(LibraryName, EntryPoint = "popglot_free_string")]
         internal static partial void FreeString(nint value);
@@ -135,29 +161,6 @@ internal sealed record ProviderSettings(
     bool AllowImageUploadInAuto,
     bool SafeDevMode,
     bool ApiKeyConfigured);
-
-internal sealed record PreviewRequest(
-    TranslationMode Mode,
-    string SampleText,
-    bool LooksLikeCode,
-    bool ComplexLayout,
-    float ImageQuality,
-    float OcrConfidence);
-
-internal sealed record RoutingDecision(
-    TranslationMode SelectedMode,
-    string ReasonCode,
-    string ExplanationZh,
-    bool MayUploadImage);
-
-internal sealed record PreviewResult(
-    RoutingDecision Decision,
-    string Title,
-    string TranslatedText,
-    string Explanation,
-    IReadOnlyList<string> ProtectedTerms,
-    bool RequiresConfiguration,
-    bool NetworkRequestSent);
 
 internal sealed record TranslationResult(
     string TranslatedText,

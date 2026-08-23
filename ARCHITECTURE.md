@@ -7,9 +7,9 @@ PopGlot 首发使用 WPF 获得可靠的 Windows 桌面交互，但 Rust Core �
 ## 当前结构
 
 ```text
-apps/PopGlot.Windows       WPF Shell、托盘、快捷键、选区、浮窗、凭据
+apps/PopGlot.Windows       WPF Shell、托盘、三快捷键、剪贴板事务、截图、浮窗、历史、凭据
 crates/popglot-domain      领域 DTO、自动路由、受保护 Token
-crates/popglot-core        配置、应用编排、统一 Provider 与有界 HTTP、安全预览
+crates/popglot-core        配置、应用编排、统一 Provider 与有界 HTTP
 crates/popglot-ffi         窄 C ABI；唯一允许裸指针的 Rust crate
 scripts                    构建和验证入口
 ```
@@ -34,7 +34,7 @@ scripts                    构建和验证入口
 
 ## 平台端口
 
-后续真实实现按需要引入以下小型接口，而不是预先建立空框架：
+Windows Shell 当前已实现剪贴板、截图、快捷键和凭据适配；本地 OCR 与文本注入仍是后续端口：
 
 - `ScreenCapturePort`
 - `PlatformOcrPort`
@@ -44,6 +44,29 @@ scripts                    构建和验证入口
 - `TextInjectionPort`
 
 Windows WPF/Win32 实现这些接口；未来 macOS、Linux 重写截图、热键、托盘、浮窗、注入和安全存储。Rust Core 继续复用。
+
+## 统一翻译会话
+
+划词与截图都创建一个 `TranslationPanelWindow` 会话。会话状态固定为读取选区/截图、翻译、完成、失败、取消，不建立事件总线或通用工作流框架。新会话关闭并取消旧会话；全局关闭快捷键和浮窗 `Esc` 走同一释放路径。
+
+划词顺序如下：
+
+```text
+capture clipboard snapshot → SendInput(Ctrl+C) → wait ≤ 450 ms
+→ validate Unicode text ≤ 64 KiB → restore snapshot if sequence still belongs to PopGlot
+→ text Provider → shared result panel
+```
+
+若事务期间用户或其他应用产生更新的剪贴板序列号，PopGlot 不覆盖新内容。无法深拷贝某个原始剪贴板格式时，在发送 `Ctrl+C` 前安全拒绝。UIA/hover 不作为 P0 主路径，因为跨浏览器、终端、自绘控件和不同权限窗口的文本模式并不一致。
+
+截图顺序如下：
+
+```text
+overlay selection → CopyFromScreen → bounded in-memory PNG
+→ configured vision Provider → shared result panel
+```
+
+截图不落盘。当前 Windows 本地 OCR 端口尚未实现；Local OCR 选择会返回明确错误，而不是静默上传或显示假结果。
 
 ## 双翻译管线
 
@@ -86,14 +109,13 @@ CaptureFrame → image limits/redaction → vision model
 
 ## 资源、限制与故障策略
 
-当前 Provider 实现持有一个可复用、无 Cookie 的 `reqwest::Client`。请求与响应由异步作用域拥有，取消或超时会释放 future 和连接资源。截图位图尚未接入。规则如下：
+当前 Provider 实现持有一个可复用、无 Cookie 的 `reqwest::Client`。请求与响应由异步作用域拥有，取消或超时会释放 future 和连接资源。WPF 位图、Graphics 和编码流使用词法作用域释放。规则如下：
 
-- 单次截图最多 16,000,000 像素，编码后最多 12 MiB；超过时提示重新框选或在不损害代码可读性的前提下分块。
-- 同时最多处理 2 个翻译请求；新请求可以取消最旧的非固定请求。
+- 单次截图最多 16,000,000 像素，PNG 编码后最多 8 MiB；超过时提示重新框选。
+- 同时最多一个前台翻译请求；新会话先取消并关闭旧会话。
 - 图片最多 8 MiB、序列化请求最多 12 MiB、响应正文最多 4 MiB。
 - HTTP 连接超时 5 秒、总请求 45 秒；仅对连接/超时以及 408、429、500、502、503、504 重试一次，`Retry-After` 最多等待 2 秒。
-- 内存结果缓存最多 32 MiB 或 100 项，取先达到者；不得建立无界列表。
-- 历史记录默认关闭；启用后默认最多 500 项、90 天，截图默认不入库。
+- 不建立结果内存缓存；本地历史默认关闭，启用后最多 100 项、90 天、2 MiB，截图位图不入库。
 - 截图位图、编码流、HTTP Request/Response、取消源和计时器使用词法作用域或 `Dispose`/`await using`。
 - WPF `App` 拥有并释放托盘与热键；浮窗拥有并取消自身生命周期令牌。
 - 剪贴板恢复只在序列号仍属于 PopGlot 时执行，不能覆盖用户后续内容。
@@ -111,6 +133,7 @@ CaptureFrame → image limits/redaction → vision model
 - WPF warnings-as-errors 构建
 - 无密钥启动冒烟测试
 - 后续 CI 在 Windows/macOS/Linux 编译纯 Rust Core，Windows 另行构建 WPF Shell
+- 零依赖 Windows 逻辑测试：剪贴板事务、边界定位、状态、快捷键迁移与历史过滤
 
 ## 依赖与协议依据
 

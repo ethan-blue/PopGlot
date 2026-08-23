@@ -509,6 +509,7 @@ dependencies = [
 name = "popglot-ffi"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "popglot-core",
  "popglot-domain",
  "serde",

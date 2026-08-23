@@ -10,6 +10,7 @@ repository.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+base64.workspace = true
 popglot-core = { path = "../popglot-core" }
 popglot-domain = { path = "../popglot-domain" }
 serde.workspace = true

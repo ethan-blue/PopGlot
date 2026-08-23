@@ -6,10 +6,12 @@ namespace PopGlot.Windows;
 
 internal sealed partial class HotkeyService : IDisposable
 {
-    private const int HotkeyId = 0x5047;
+    private const int FirstHotkeyId = 0x5047;
     private const int WmHotkey = 0x0312;
     private readonly HwndSource _source;
-    private bool _registered;
+    private readonly Dictionary<int, HotkeyAction> _registered = [];
+    private IReadOnlyDictionary<HotkeyAction, ShortcutOption> _current =
+        new Dictionary<HotkeyAction, ShortcutOption>();
     private bool _disposed;
 
     public HotkeyService(Window owner)
@@ -20,33 +22,68 @@ internal sealed partial class HotkeyService : IDisposable
         _source.AddHook(WindowMessageHook);
     }
 
-    public event EventHandler? Pressed;
+    public event EventHandler<HotkeyAction>? Pressed;
 
-    public bool Register(ShortcutOption shortcut)
+    public bool TryRegisterAll(
+        IReadOnlyDictionary<HotkeyAction, ShortcutOption> hotkeys,
+        out string? conflict)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_registered)
+        conflict = null;
+        var previous = _current;
+        UnregisterAll();
+        if (RegisterSet(hotkeys, out conflict))
         {
-            NativeMethods.UnregisterHotKey(_source.Handle, HotkeyId);
-            _registered = false;
+            _current = new Dictionary<HotkeyAction, ShortcutOption>(hotkeys);
+            return true;
         }
 
-        _registered = NativeMethods.RegisterHotKey(
-            _source.Handle,
-            HotkeyId,
-            shortcut.Modifiers | NativeMethods.ModNoRepeat,
-            shortcut.VirtualKey);
-        return _registered;
+        UnregisterAll();
+        _ = RegisterSet(previous, out _);
+        _current = previous;
+        return false;
+    }
+
+    private bool RegisterSet(
+        IReadOnlyDictionary<HotkeyAction, ShortcutOption> hotkeys,
+        out string? conflict)
+    {
+        var id = FirstHotkeyId;
+        foreach (var (action, shortcut) in hotkeys)
+        {
+            if (!NativeMethods.RegisterHotKey(
+                    _source.Handle,
+                    id,
+                    shortcut.Modifiers | NativeMethods.ModNoRepeat,
+                    shortcut.VirtualKey))
+            {
+                conflict = shortcut.DisplayName;
+                return false;
+            }
+            _registered[id] = action;
+            id++;
+        }
+        conflict = null;
+        return true;
     }
 
     private nint WindowMessageHook(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
     {
-        if (message == WmHotkey && wParam == HotkeyId)
+        if (message == WmHotkey && _registered.TryGetValue(wParam.ToInt32(), out var action))
         {
             handled = true;
-            Pressed?.Invoke(this, EventArgs.Empty);
+            Pressed?.Invoke(this, action);
         }
         return 0;
+    }
+
+    private void UnregisterAll()
+    {
+        foreach (var id in _registered.Keys)
+        {
+            NativeMethods.UnregisterHotKey(_source.Handle, id);
+        }
+        _registered.Clear();
     }
 
     public void Dispose()
@@ -55,12 +92,8 @@ internal sealed partial class HotkeyService : IDisposable
         {
             return;
         }
-        if (_registered)
-        {
-            NativeMethods.UnregisterHotKey(_source.Handle, HotkeyId);
-        }
+        UnregisterAll();
         _source.RemoveHook(WindowMessageHook);
-        _registered = false;
         _disposed = true;
     }
 
