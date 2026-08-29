@@ -1,0 +1,1747 @@
+using System.Net.Http;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using PopGlot.Windows.Services;
+
+namespace PopGlot.Windows.Sections;
+
+/// <summary>One row in the service list, shaped for display.</summary>
+internal sealed record ProfilesRow(
+    string Id,
+    string Name,
+    string Summary,
+    string StateText,
+    Brush StateBrush,
+    Brush StateTextBrush,
+    System.Windows.Visibility IsDefaultBadge);
+
+/// <summary>An entry of the default text/vision service pickers.</summary>
+internal sealed record ProviderComboOption(string Id, string Label, bool IsCompatible = true)
+{
+    public override string ToString() => Label;
+}
+
+/// <summary>
+/// Service settings as a master–detail surface: profile list on the left,
+/// editor on the right. Key, connection test, and models are on the first
+/// screen; protocol and base URL appear only for custom or local services.
+/// </summary>
+public partial class ServicesSection : System.Windows.Controls.UserControl
+{
+    private static readonly string[] PresetCloudHosts =
+    {
+        "api.openai.com",
+        "api.deepseek.com",
+        "generativelanguage.googleapis.com",
+        "api.anthropic.com",
+        "open.bigmodel.cn",
+    };
+
+    private bool _loading;
+    private bool _isAdding;
+    private bool _suppressListEvents;
+    private bool _suppressComboEvents;
+    private bool _editorDirty;
+    private string _editorBaseline = string.Empty;
+    private string? _editingProfileId;
+
+    /// <summary>Session-scoped connection-test outcomes by profile id ("ok"/"auth"/…).</summary>
+    private readonly Dictionary<string, string> _testOutcomes = new();
+
+    /// <summary>Action queued behind an unresolved editor draft.</summary>
+    private Action? _pendingAfterDraft;
+    private ConfirmButton? _deleteConfirm;
+    private ConfirmButton? _clearKeyConfirm;
+    private bool _compactEditor;
+
+    /// <summary>Raised when the section needs to show a status message.</summary>
+    internal event Action<string, StatusTone>? StatusChanged;
+
+    /// <summary>Raised after a profile is saved, activated, or deleted.</summary>
+    internal event Action? ProfileChanged;
+
+    /// <summary>Raised when the editor draft becomes dirty or clean.</summary>
+    internal event Action? EditorDirtyChanged;
+
+    /// <summary>True while the editor holds unsaved changes.</summary>
+    internal bool IsEditorDirty => _editorDirty;
+
+    public ServicesSection()
+    {
+        InitializeComponent();
+        HookEditorDirtyTracking();
+        _deleteConfirm = ConfirmButton.Attach(DeleteServiceButton, "确认删除？", DeleteSelectedProfile);
+        _clearKeyConfirm = ConfirmButton.Attach(ClearKeyButton, "确认清除？", ClearKeyForCurrentProfile);
+    }
+
+    internal bool IsLoading { get => _loading; set => _loading = value; }
+
+    // ================= Adaptive layout =================
+
+    /// <summary>
+    /// Field pairs use the same 14 DIP gutter on wide layouts and stack at the
+    /// settings window's narrowest supported width. No field is ever restored
+    /// into the gutter column.
+    /// </summary>
+    private void DetailGrid_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var compact = e.NewSize.Width < 680;
+        if (compact == _compactEditor)
+        {
+            return;
+        }
+        _compactEditor = compact;
+        ApplyEditorLayout();
+    }
+
+    private void ApplyEditorLayout()
+    {
+        var compact = _compactEditor;
+        var hasProtocol = CustomProtocolGroup.Visibility == Visibility.Visible;
+        PlacePair(IdentityFieldsGrid, ServiceNamePanel, CustomProtocolGroup, compact && hasProtocol);
+        Grid.SetColumnSpan(ServiceNamePanel, hasProtocol && !compact ? 1 : 3);
+
+        var hasVisionModel = VisionModelPanel.Visibility == Visibility.Visible;
+        PlacePair(ModelFieldsGrid, TextModelPanel, VisionModelPanel, compact && hasVisionModel);
+        Grid.SetColumnSpan(TextModelPanel, hasVisionModel && !compact ? 1 : 3);
+
+        PlacePair(EndpointFieldsGrid, TextEndpointPanel, VisionEndpointPanel, compact);
+        PlacePair(AdvancedDetailsGrid, HeadersPanel, CapabilitiesPanel, compact);
+
+        if (compact)
+        {
+            Grid.SetColumn(KeyActionsPanel, 0);
+            Grid.SetColumnSpan(KeyActionsPanel, 3);
+            Grid.SetRow(KeyActionsPanel, 1);
+            KeyActionsPanel.HorizontalAlignment = HorizontalAlignment.Right;
+            KeyActionsPanel.Margin = new Thickness(0, 10, 0, 0);
+        }
+        else
+        {
+            Grid.SetColumn(KeyActionsPanel, 2);
+            Grid.SetColumnSpan(KeyActionsPanel, 1);
+            Grid.SetRow(KeyActionsPanel, 0);
+            KeyActionsPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
+            KeyActionsPanel.Margin = new Thickness(0);
+        }
+    }
+
+    /// <summary>Places a field pair without changing the declared gutter columns.</summary>
+    private static void PlacePair(Grid grid, FrameworkElement first, FrameworkElement second, bool stacked)
+    {
+        Grid.SetColumn(first, 0);
+        Grid.SetRow(first, 0);
+        first.Margin = new Thickness(0);
+        first.HorizontalAlignment = HorizontalAlignment.Stretch;
+
+        if (stacked)
+        {
+            Grid.SetColumn(second, 0);
+            Grid.SetColumnSpan(second, 3);
+            Grid.SetRow(second, 1);
+            second.Margin = new Thickness(0, 14, 0, 0);
+        }
+        else
+        {
+            Grid.SetColumn(second, 2);
+            Grid.SetColumnSpan(second, 1);
+            Grid.SetRow(second, 0);
+            second.Margin = new Thickness(0);
+        }
+        second.HorizontalAlignment = HorizontalAlignment.Stretch;
+    }
+
+    // ================= Editor dirty state =================
+
+    /// <summary>
+    /// Every editor field marks the draft dirty, and the badge plus the
+    /// navigation guards make sure a draft can never be silently dropped.
+    /// </summary>
+    private void HookEditorDirtyTracking()
+    {
+        void WatchText(TextBox box) => box.TextChanged += (_, _) => MarkEditorDirty();
+        // Editable ComboBoxes surface their inner TextBox via this routed event.
+        void WatchCombo(ComboBox combo) => combo.AddHandler(
+            System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
+            new TextChangedEventHandler((_, _) => MarkEditorDirty()));
+        void WatchToggle(System.Windows.Controls.Primitives.ToggleButton toggle)
+        {
+            toggle.Checked += (_, _) => MarkEditorDirty();
+            toggle.Unchecked += (_, _) => MarkEditorDirty();
+        }
+
+        WatchText(ServiceNameTextBox);
+        WatchText(BaseUrlTextBox);
+        WatchText(TextEndpointTextBox);
+        WatchText(VisionEndpointTextBox);
+        WatchText(ExtraHeadersTextBox);
+        WatchText(AnthropicVersionTextBox);
+        WatchCombo(TextModelCombo);
+        WatchCombo(VisionModelCombo);
+        WatchToggle(SupportsTextCheckBox);
+        WatchToggle(SupportsVisionCheckBox);
+        WatchToggle(AllowInsecureTlsCheckBox);
+        ApiKeyPasswordBox.PasswordChanged += (_, _) => MarkEditorDirty();
+        ProviderTypeComboBox.SelectionChanged += (_, _) => MarkEditorDirty();
+    }
+
+    private void MarkEditorDirty()
+    {
+        if (_loading || EditorForm.Visibility != Visibility.Visible)
+        {
+            return;
+        }
+        var dirty = HasEditorChanges(CaptureEditorState(), _editorBaseline);
+        if (_editorDirty == dirty)
+        {
+            return;
+        }
+        _editorDirty = dirty;
+        UpdateEditorDirtyBadge();
+        EditorDirtyChanged?.Invoke();
+    }
+
+    internal void ClearEditorDirty()
+    {
+        _editorBaseline = CaptureEditorState();
+        _editorDirty = false;
+        UpdateEditorDirtyBadge();
+        EditorDirtyChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Event-only dirty tracking is unreliable for editable ComboBoxes: WPF
+    /// may deliver their inner TextBox change after a programmatic profile
+    /// load. Compare the actual form to a saved baseline instead, so merely
+    /// opening or switching an existing service never creates a fake draft.
+    /// </summary>
+    private string CaptureEditorState()
+    {
+        var providerTag = (ProviderTypeComboBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? string.Empty;
+        return string.Join('\u001f',
+            ServiceNameTextBox.Text,
+            providerTag,
+            BaseUrlTextBox.Text,
+            TextEndpointTextBox.Text,
+            VisionEndpointTextBox.Text,
+            TextModelCombo.Text,
+            VisionModelCombo.Text,
+            ExtraHeadersTextBox.Text,
+            AnthropicVersionTextBox.Text,
+            SupportsTextCheckBox.IsChecked == true ? "1" : "0",
+            SupportsVisionCheckBox.IsChecked == true ? "1" : "0",
+            AllowInsecureTlsCheckBox.IsChecked == true ? "1" : "0",
+            ApiKeyPasswordBox.Password ?? string.Empty);
+    }
+
+    internal static bool HasEditorChanges(string current, string baseline) =>
+        !string.Equals(current, baseline, StringComparison.Ordinal);
+
+    private void UpdateEditorDirtyBadge() =>
+        EditorDirtyBadge.Visibility = _editorDirty ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>
+    /// Resolves an unsaved editor draft INLINE (bar above the action bar)
+    /// before a pending action proceeds — switching service, page, adding, or
+    /// closing. No system dialog: the bar offers save/discard/cancel and the
+    /// pending action runs only after a save or discard.
+    /// </summary>
+    internal void BeginDraftGuard(string message, Action? proceed = null)
+    {
+        if (!_editorDirty)
+        {
+            proceed?.Invoke();
+            return;
+        }
+        _pendingAfterDraft = proceed;
+        DraftGuardText.Text = message;
+        DraftGuardBar.Visibility = Visibility.Visible;
+    }
+
+    private void HideDraftGuard()
+    {
+        DraftGuardBar.Visibility = Visibility.Collapsed;
+        _pendingAfterDraft = null;
+    }
+
+    private void DraftSave_Click(object sender, RoutedEventArgs e)
+    {
+        if (TrySaveService())
+        {
+            var proceed = _pendingAfterDraft;
+            HideDraftGuard();
+            proceed?.Invoke();
+        }
+        // Save failed: keep the bar so the user can retry or discard.
+    }
+
+    private void DraftDiscard_Click(object sender, RoutedEventArgs e)
+    {
+        ReloadEditorFromSaved();
+        var proceed = _pendingAfterDraft;
+        HideDraftGuard();
+        proceed?.Invoke();
+    }
+
+    private void DraftCancel_Click(object sender, RoutedEventArgs e) => HideDraftGuard();
+
+    // ================= Profile loading =================
+
+    internal void LoadActiveProfileIntoForm()
+    {
+        var config = ProfileManager.Load();
+        if (config.Profiles.Count > 0)
+        {
+            var profile = config.GetActiveProfile();
+            _editingProfileId = profile.Id;
+            LoadProfileIntoForm(profile);
+            RefreshApiKeyState();
+        }
+        ShowOverview();
+    }
+
+    /// <summary>Discards editor drafts by reloading the selected profile.</summary>
+    internal void ReloadEditorFromSaved()
+    {
+        var config = ProfileManager.Load();
+        var profile = SelectedProfile() ?? config.GetActiveProfile();
+        _editingProfileId = profile.Id;
+        _isAdding = false;
+        LoadProfileIntoForm(profile);
+        ShowEditorForm(addMode: false);
+        RefreshApiKeyState();
+        ClearEditorDirty();
+        _suppressListEvents = true;
+        try
+        {
+            SelectProfileInList(profile.Id);
+        }
+        finally
+        {
+            _suppressListEvents = false;
+        }
+    }
+
+    internal void LoadProfileIntoForm(ProviderProfile profile)
+    {
+        var wasLoading = _loading;
+        _loading = true;
+        try
+        {
+            ServiceNameTextBox.Text = profile.Name;
+            Helpers.SelectComboByTag(ProviderTypeComboBox, profile.ProviderType.ToString());
+            BaseUrlTextBox.Text = profile.ApiBaseUrl;
+            TextEndpointTextBox.Text = profile.TextEndpoint;
+            VisionEndpointTextBox.Text = profile.VisionEndpoint;
+            TextModelCombo.Text = profile.TextModel;
+            VisionModelCombo.Text = profile.VisionModel;
+            UpdateModelSuggestions(profile.ProviderType);
+            ExtraHeadersTextBox.Text = string.Join(
+                Environment.NewLine,
+                profile.ExtraHeaders.Select(pair => $"{pair.Key}: {pair.Value}"));
+            AnthropicVersionTextBox.Text = profile.AnthropicVersion;
+            SupportsTextCheckBox.IsChecked = profile.SupportsText;
+            SupportsVisionCheckBox.IsChecked = profile.SupportsVision;
+            AllowInsecureTlsCheckBox.IsChecked = profile.AllowInsecureTls;
+            var presetHost = IsPresetCloudHost(profile.ApiBaseUrl);
+            UpdateEditorIdentity(profile.Name, profile.ProviderType, profile.ApiBaseUrl, profile.IsLocal);
+            CustomProtocolGroup.Visibility = presetHost
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            BaseUrlPanel.Visibility = presetHost
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            // Built-in cloud providers expose key, models and the test only;
+            // endpoints, headers and TLS belong to custom or local services.
+            AdvancedGroup.Visibility = presetHost
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            ApplyEditorLayout();
+            ApiKeyPasswordBox.Clear();
+            SetTestResult(StatusTone.Info, string.Empty, null);
+            ResetModelCatalogStatus();
+        }
+        finally
+        {
+            _loading = wasLoading;
+        }
+        ClearEditorDirty();
+    }
+
+    internal string CurrentCredentialTarget()
+    {
+        if (_editingProfileId is not null)
+        {
+            var profile = ProfileManager.Load().Profiles.FirstOrDefault(p => p.Id == _editingProfileId);
+            if (profile is not null && !string.IsNullOrWhiteSpace(profile.CredentialTarget))
+            {
+                if (CredentialStore.HasApiKey(profile.CredentialTarget))
+                {
+                    return profile.CredentialTarget;
+                }
+                if (CredentialStore.HasApiKey(CredentialStore.DefaultTargetName))
+                {
+                    return CredentialStore.DefaultTargetName;
+                }
+                return profile.CredentialTarget;
+            }
+        }
+        return CredentialStore.DefaultTargetName;
+    }
+
+    internal void RefreshApiKeyState()
+    {
+        try
+        {
+            var target = CurrentCredentialTarget();
+            ApiKeyStateText.Text = CredentialStore.HasApiKey(target)
+                ? "密钥已保存在 Windows 凭据管理器。输入框留空即保持不变。"
+                : "尚未配置密钥。本地模型（Ollama 等）无需密钥；未配置且未允许免费引擎时不会出网。";
+        }
+        catch (Exception exception)
+        {
+            ApiKeyStateText.Text = $"无法读取密钥状态：{exception.Message}";
+        }
+    }
+
+    // ================= List & default routes =================
+
+    internal void RefreshProfilesList()
+    {
+        // One config read for the whole refresh: rows, brushes and the route
+        // pickers all draw from this instance.
+        var config = ProfileManager.Load();
+        ProfilesListBox.ItemsSource = config.Profiles.Select(profile =>
+        {
+            var (stateText, stateTone) = DescribeProfileState(
+                profile.IsLocal,
+                HasStoredKey(profile),
+                _testOutcomes.TryGetValue(profile.Id, out var outcome) ? outcome : null);
+            return new ProfilesRow(
+                profile.Id,
+                profile.Name,
+                string.IsNullOrWhiteSpace(profile.TextModel) ? "未填模型" : profile.TextModel,
+                stateText,
+                ToneBrush(stateTone),
+                ToneTextBrush(stateTone),
+                profile.Id == config.ActiveProfileId
+                    ? Visibility.Visible
+                    : Visibility.Collapsed);
+        }).ToList();
+        ProfilesEmptyText.Visibility = config.Profiles.Count == 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        RefreshDefaultCombos(config);
+
+        if (config.Profiles.Count == 0)
+        {
+            _editingProfileId = null;
+            _isAdding = false;
+            EditorForm.Visibility = Visibility.Collapsed;
+            EditorEmpty.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            if (EditorForm.Visibility != Visibility.Visible)
+            {
+                EditorEmpty.Visibility = Visibility.Visible;
+            }
+            // Keep the editor's service selected when the list rebuilds, so a
+            // refresh never orphans the visible draft.
+            if (EditorForm.Visibility == Visibility.Visible && !_isAdding && _editingProfileId is not null)
+            {
+                _suppressListEvents = true;
+                try
+                {
+                    SelectProfileInList(_editingProfileId);
+                }
+                finally
+                {
+                    _suppressListEvents = false;
+                }
+            }
+        }
+    }
+
+    private static bool HasStoredKey(ProviderProfile profile)
+    {
+        try
+        {
+            if (CredentialStore.HasApiKey(profile.CredentialTarget))
+            {
+                return true;
+            }
+            var activeId = ProfileManager.Load().ActiveProfileId;
+            // A key saved before profiles existed stays at the legacy target
+            // until edited; it still counts for the active profile.
+            return profile.Id == activeId &&
+                CredentialStore.HasApiKey(CredentialStore.DefaultTargetName);
+        }
+        catch (Exception)
+        {
+            // The credential vault may be unavailable; report no key honestly.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Health state for one service. Brand colour never appears here — states
+    /// are success / warning / danger / neutral only. Session test outcomes
+    /// are labelled as such and never presented as permanent health.
+    /// outcome: null = not tested this session; else a ClassifyTestFailure code.
+    /// </summary>
+    internal static (string Text, StatusTone Tone) DescribeProfileState(
+        bool isLocal, bool hasKey, string? outcome)
+    {
+        if (isLocal && outcome is null or "ok")
+        {
+            return ("本地服务", StatusTone.Info);
+        }
+        if (!isLocal && !hasKey)
+        {
+            return ("缺少 Key", StatusTone.Warning);
+        }
+        return outcome switch
+        {
+            "ok" => ("可用", StatusTone.Success),
+            "auth" => ("鉴权失败", StatusTone.Error),
+            "rate" => ("限流", StatusTone.Warning),
+            "endpoint" => ("接口不存在", StatusTone.Error),
+            "unreachable" => isLocal ? ("本地不可达", StatusTone.Error) : ("服务不可达", StatusTone.Error),
+            null => ("未测试", StatusTone.Info),
+            _ => ("测试失败", StatusTone.Error),
+        };
+    }
+
+    /// <summary>Maps a raw test error to a session outcome code.</summary>
+    internal static string ClassifyTestFailure(Exception exception)
+    {
+        var message = exception.Message ?? string.Empty;
+        if (message.Contains("401", StringComparison.Ordinal) ||
+            message.Contains("鉴权失败", StringComparison.Ordinal))
+        {
+            return "auth";
+        }
+        if (message.Contains("429", StringComparison.Ordinal))
+        {
+            return "rate";
+        }
+        if (message.Contains("404", StringComparison.Ordinal))
+        {
+            return "endpoint";
+        }
+        if (message.Contains("超时", StringComparison.Ordinal) ||
+            message.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("未知的主机", StringComparison.Ordinal) ||
+            message.Contains("No such host", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("SSL", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("TLS", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("网络访问未启用", StringComparison.Ordinal))
+        {
+            return "unreachable";
+        }
+        return "fail";
+    }
+
+    /// <summary>
+    /// Readiness gate for becoming the default text service. Returns null
+    /// when ready, otherwise the reason the service is not ready.
+    /// </summary>
+    internal static string? CheckReadiness(bool isLocal, bool hasKey, string textModel, string baseUrl)
+    {
+        if (!isLocal && !hasKey)
+        {
+            return "缺少 API Key";
+        }
+        if (string.IsNullOrWhiteSpace(textModel))
+        {
+            return "缺少文字模型";
+        }
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            return "缺少 Base URL";
+        }
+        return null;
+    }
+
+    private void SetDefault_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isAdding || _editingProfileId is null)
+        {
+            StatusChanged?.Invoke("请先保存服务，再设为默认。", StatusTone.Info);
+            return;
+        }
+        try
+        {
+            var config = ProfileManager.Load();
+            var profile = config.Profiles.FirstOrDefault(p => p.Id == _editingProfileId);
+            if (profile is null)
+            {
+                return;
+            }
+            var notReady = CheckReadiness(profile.IsLocal, HasStoredKey(profile), profile.TextModel, profile.ApiBaseUrl);
+            if (notReady is not null)
+            {
+                StatusChanged?.Invoke($"无法设为默认：{notReady}。请补全后保存。", StatusTone.Warning);
+                return;
+            }
+            config.ActiveProfileId = profile.Id;
+            // A vision default on a different protocol no longer composes.
+            if (config.VisionProfileId is { Length: > 0 } visionId)
+            {
+                var vision = config.Profiles.FirstOrDefault(p => p.Id == visionId);
+                if (vision is not null && vision.ProviderType != profile.ProviderType)
+                {
+                    config.VisionProfileId = null;
+                }
+            }
+            ProfileManager.Save(config);
+            ApplyToCore(config);
+            RefreshProfilesList();
+            ProfileChanged?.Invoke();
+            StatusChanged?.Invoke($"已将「{profile.Name}」设为默认文字服务，立即生效。", StatusTone.Success);
+        }
+        catch (Exception exception)
+        {
+            StatusChanged?.Invoke($"设置默认服务失败：{exception.Message}", StatusTone.Error);
+        }
+    }
+
+    private Brush ToneBrush(StatusTone tone) => (Brush)FindResource(tone switch
+    {
+        StatusTone.Success => "SuccessBrush",
+        StatusTone.Warning => "WarningBrush",
+        StatusTone.Error => "DangerBrush",
+        _ => "TextTertiaryBrush",
+    });
+
+    private Brush ToneTextBrush(StatusTone tone) => (Brush)FindResource(tone switch
+    {
+        StatusTone.Success => "SuccessBrush",
+        StatusTone.Warning => "WarningBrush",
+        StatusTone.Error => "DangerBrush",
+        _ => "TextTertiaryBrush",
+    });
+
+    private void RefreshDefaultCombos(CoreProductConfig config)
+    {
+        _suppressComboEvents = true;
+        try
+        {
+            DefaultTextCombo.ItemsSource = config.Profiles
+                .Where(profile => profile.SupportsText)
+                .Select(profile =>
+                {
+                    // Unready profiles stay visible but disabled, with the
+                    // blocking reason inline.
+                    var notReady = CheckReadiness(
+                        profile.IsLocal, HasStoredKey(profile), profile.TextModel, profile.ApiBaseUrl);
+                    return new ProviderComboOption(
+                        profile.Id,
+                        notReady is null ? profile.Name : $"{profile.Name}（{notReady}）",
+                        notReady is null);
+                })
+                .ToList();
+            DefaultTextCombo.SelectedItem = (DefaultTextCombo.ItemsSource as List<ProviderComboOption>)?
+                .FirstOrDefault(option => option.Id == config.ActiveProfileId);
+
+            // Vision profiles on a different protocol stay visible but disabled,
+            // with the reason inline — they never silently disappear.
+            var textProfile = config.GetActiveProfile();
+            var visionOptions = new List<ProviderComboOption> { new("", "跟随默认文字服务") };
+            visionOptions.AddRange(config.Profiles
+                .Where(profile => profile.SupportsVision)
+                .Select(profile => new ProviderComboOption(
+                    profile.Id,
+                    profile.ProviderType == textProfile.ProviderType
+                        ? profile.Name
+                        : $"{profile.Name}（协议不同）",
+                    profile.ProviderType == textProfile.ProviderType)));
+            DefaultVisionCombo.ItemsSource = visionOptions;
+            var visionId = config.VisionProfileId ?? "";
+            DefaultVisionCombo.SelectedItem = visionOptions.FirstOrDefault(option => option.Id == visionId);
+
+            var incompatibleCount = visionOptions.Count(option => option.Id != "" && !option.IsCompatible);
+            var hasIncompatible = incompatibleCount > 0;
+            VisionIncompatHint.Text = hasIncompatible
+                ? $"{incompatibleCount} 个支持图片的服务因协议与默认文字服务（{textProfile.Name}）不同而被禁用。"
+                : string.Empty;
+            VisionIncompatHint.Visibility = hasIncompatible
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+        finally
+        {
+            _suppressComboEvents = false;
+        }
+    }
+
+    private void DefaultTextCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressComboEvents || _loading ||
+            DefaultTextCombo.SelectedItem is not ProviderComboOption option ||
+            string.IsNullOrEmpty(option.Id))
+        {
+            return;
+        }
+        try
+        {
+            var config = ProfileManager.Load();
+            config.ActiveProfileId = option.Id;
+            ProfileManager.Save(config);
+            ApplyToCore(config);
+            RefreshProfilesList();
+            ProfileChanged?.Invoke();
+            StatusChanged?.Invoke($"默认文字服务已切换为「{option.Label}」，立即生效。", StatusTone.Success);
+        }
+        catch (Exception exception)
+        {
+            StatusChanged?.Invoke($"切换默认服务失败：{exception.Message}", StatusTone.Error);
+        }
+    }
+
+    private void DefaultVisionCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressComboEvents || _loading ||
+            DefaultVisionCombo.SelectedItem is not ProviderComboOption option)
+        {
+            return;
+        }
+        try
+        {
+            var config = ProfileManager.Load();
+            config.VisionProfileId = string.IsNullOrEmpty(option.Id) ? null : option.Id;
+            ProfileManager.Save(config);
+            ApplyToCore(config);
+            ProfileChanged?.Invoke();
+            StatusChanged?.Invoke(string.IsNullOrEmpty(option.Id)
+                ? "默认视觉服务将跟随默认文字服务。"
+                : $"默认视觉服务已切换为「{option.Label}」，立即生效。", StatusTone.Info);
+        }
+        catch (Exception exception)
+        {
+            StatusChanged?.Invoke($"切换默认视觉服务失败：{exception.Message}", StatusTone.Error);
+        }
+    }
+
+    /// <summary>
+    /// Mirrors the default text profile (plus an optional same-protocol vision
+    /// profile) into the core so the running app uses it now.
+    /// </summary>
+    private static void ApplyToCore(CoreProductConfig config)
+    {
+        var textProfile = config.GetActiveProfile();
+        var current = CoreBridge.GetSettings();
+        var settings = textProfile.ToProviderSettings(current);
+        if (!string.IsNullOrEmpty(config.VisionProfileId))
+        {
+            var vision = config.Profiles.FirstOrDefault(profile => profile.Id == config.VisionProfileId);
+            if (vision is not null && vision.ProviderType == textProfile.ProviderType)
+            {
+                settings = settings with
+                {
+                    VisionModel = vision.VisionModel,
+                    VisionEndpoint = vision.VisionEndpoint,
+                    SupportsVision = vision.SupportsVision,
+                };
+            }
+        }
+        CoreBridge.SaveSettings(settings);
+    }
+
+    internal void SelectProfileInList(string profileId)
+    {
+        var items = ProfilesListBox.ItemsSource as IEnumerable<ProfilesRow> ?? [];
+        var index = items.ToList().FindIndex(row => row.Id == profileId);
+        ProfilesListBox.SelectedIndex = index >= 0 ? index : -1;
+    }
+
+    // ================= Editor state =================
+
+    private void ShowEditorForm(bool addMode)
+    {
+        EditorEmpty.Visibility = Visibility.Collapsed;
+        EditorForm.Visibility = Visibility.Visible;
+        RoutingPanel.Visibility = Visibility.Collapsed;
+        PresetsPanel.Visibility = addMode ? Visibility.Visible : Visibility.Collapsed;
+        ConfigFormPanel.Visibility = addMode ? Visibility.Collapsed : Visibility.Visible;
+        EditorActionBar.Visibility = addMode ? Visibility.Collapsed : Visibility.Visible;
+        ChooseAnotherProviderButton.Visibility = Visibility.Collapsed;
+        SetDefaultButton.Visibility = addMode ? Visibility.Collapsed : Visibility.Visible;
+        DeleteServiceButton.Visibility = addMode ? Visibility.Collapsed : Visibility.Visible;
+        _isAdding = addMode;
+        UpdateSaveButtonLabel();
+        UpdateDeleteTooltip();
+    }
+
+    private void ShowOverview()
+    {
+        HideDraftGuard();
+        EditorForm.Visibility = Visibility.Collapsed;
+        EditorEmpty.Visibility = Visibility.Visible;
+        RoutingPanel.Visibility = Visibility.Visible;
+        _isAdding = false;
+        ClearEditorDirty();
+        RefreshProfilesList();
+    }
+
+    /// <summary>
+    /// Save never silently changes the live route: the first configured
+    /// service "保存并使用", later ones just "保存服务", edits say "保存修改".
+    /// </summary>
+    private void UpdateSaveButtonLabel()
+    {
+        if (_isAdding)
+        {
+            SaveServiceButton.Content = ProfileManager.Load().Profiles.Count == 0
+                ? "保存并使用"
+                : "保存服务";
+        }
+        else
+        {
+            SaveServiceButton.Content = "保存修改";
+        }
+    }
+
+    private void UpdateDeleteTooltip()
+    {
+        if (_isAdding || _editingProfileId is null)
+        {
+            DeleteServiceButton.ToolTip = null;
+            return;
+        }
+        var config = ProfileManager.Load();
+        var profile = config.Profiles.FirstOrDefault(p => p.Id == _editingProfileId);
+        if (profile is null)
+        {
+            DeleteServiceButton.ToolTip = null;
+            return;
+        }
+        var isTextDefault = profile.Id == config.ActiveProfileId;
+        var isVisionDefault = profile.Id == config.VisionProfileId;
+        var nextDefault = config.Profiles.FirstOrDefault(p => p.Id != profile.Id);
+        DeleteServiceButton.ToolTip = isTextDefault
+            ? (nextDefault is null
+                ? "它是当前默认文字服务；删除后没有其他可用服务，翻译将回退到已授权的内置免费引擎。"
+                : $"它是当前默认文字服务；删除后默认路由将切换为「{nextDefault.Name}」。")
+            : isVisionDefault
+                ? "它是当前默认视觉服务；删除后视觉翻译将跟随默认文字服务。"
+                : "默认路由不受影响。该服务保存的 API Key 也会一并删除。";
+    }
+
+    private ProviderProfile? SelectedProfile()
+    {
+        if (ProfilesListBox.SelectedItem is not ProfilesRow row)
+        {
+            return null;
+        }
+        return ProfileManager.Load().Profiles.FirstOrDefault(profile => profile.Id == row.Id);
+    }
+
+    private static ProviderProfile NewProfileDraft() => new()
+    {
+        Name = string.Empty,
+        ProviderType = ProviderType.OpenAiCompatible,
+        ApiBaseUrl = "https://api.openai.com/v1",
+        TextEndpoint = "/chat/completions",
+        VisionEndpoint = "/chat/completions",
+        TextModel = string.Empty,
+        VisionModel = string.Empty,
+        SupportsText = true,
+        SupportsVision = false,
+    };
+
+    // ================= Presets =================
+
+    private void UpdateEditorIdentity(
+        string? name, ProviderType providerType, string? baseUrl, bool isLocal)
+    {
+        var title = string.IsNullOrWhiteSpace(name) ? "新服务" : name.Trim();
+        EditorProviderTitle.Text = title;
+        EditorProviderBadge.Text = title[..1].ToUpperInvariant();
+        var protocol = providerType switch
+        {
+            ProviderType.AnthropicMessages => "Anthropic Messages",
+            ProviderType.GeminiGenerateContent => "Gemini generateContent",
+            ProviderType.OpenAiResponses => "OpenAI Responses",
+            _ => "OpenAI 兼容",
+        };
+        var host = Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri)
+            ? uri.Host
+            : (string.IsNullOrWhiteSpace(baseUrl) ? "等待填写地址" : baseUrl.Trim());
+        EditorProviderMeta.Text = isLocal
+            ? $"本地服务 · {host}"
+            : $"{protocol} · {host}";
+    }
+
+    private void Preset_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as Button)?.Tag is not string preset)
+        {
+            return;
+        }
+
+        var isCustom = preset == "custom";
+        var (type, baseUrl, endpoint, textModel, visionModel, note) = preset switch
+        {
+            "openai" => (ProviderType.OpenAiCompatible, "https://api.openai.com/v1",
+                "/chat/completions", "gpt-4o-mini", "gpt-4o-mini", "已应用 OpenAI 预设，填入 API Key 即可。"),
+            "deepseek" => (ProviderType.OpenAiCompatible, "https://api.deepseek.com/v1",
+                "/chat/completions", "deepseek-chat", "", "已应用 DeepSeek 预设（无视觉模型）。"),
+            "gemini" => (ProviderType.GeminiGenerateContent, "https://generativelanguage.googleapis.com",
+                "/v1beta/models/{model}:generateContent", "gemini-3.6-flash", "gemini-3.6-flash",
+                "已应用 Google Gemini 预设。"),
+            "claude" => (ProviderType.AnthropicMessages, "https://api.anthropic.com",
+                "/v1/messages", "claude-sonnet-4-5", "claude-sonnet-4-5", "已应用 Anthropic Claude 预设。"),
+            "zhipu" => (ProviderType.OpenAiCompatible, "https://open.bigmodel.cn/api/paas/v4",
+                "/chat/completions", "glm-4-flash", "glm-4v-flash", "已应用智谱 GLM 预设。"),
+            "ollama" => (ProviderType.OpenAiCompatible, "http://localhost:11434/v1",
+                "/chat/completions", "qwen2.5:7b", "llava", "已应用本地 Ollama 预设，无需 API Key。"),
+            _ => (ProviderType.OpenAiCompatible, string.Empty,
+                "/chat/completions", string.Empty, string.Empty, "自定义服务：请填写协议、Base URL 与模型。"),
+        };
+
+        _loading = true;
+        try
+        {
+            if (string.IsNullOrWhiteSpace(ServiceNameTextBox.Text) ||
+                ServiceNameTextBox.Text.StartsWith("新服务") ||
+                ServiceNameTextBox.Text is "OpenAI" or "DeepSeek" or "Google Gemini" or "Anthropic Claude" or "智谱 GLM" or "Ollama（本地）" or "自定义服务")
+            {
+                ServiceNameTextBox.Text = preset switch
+                {
+                    "openai" => "OpenAI",
+                    "deepseek" => "DeepSeek",
+                    "gemini" => "Google Gemini",
+                    "claude" => "Anthropic Claude",
+                    "zhipu" => "智谱 GLM",
+                    "ollama" => "Ollama（本地）",
+                    _ => "自定义服务",
+                };
+            }
+
+            Helpers.SelectComboByTag(ProviderTypeComboBox, type.ToString());
+            BaseUrlTextBox.Text = baseUrl;
+            TextEndpointTextBox.Text = endpoint;
+            VisionEndpointTextBox.Text = endpoint;
+            UpdateModelSuggestions(type);
+            TextModelCombo.Text = textModel;
+            VisionModelCombo.Text = visionModel;
+            AnthropicVersionTextBox.Text = "2023-06-01";
+            SupportsTextCheckBox.IsChecked = true;
+            SupportsVisionCheckBox.IsChecked = !string.IsNullOrEmpty(visionModel);
+            CustomProtocolGroup.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
+            BaseUrlPanel.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
+            // Preset cloud hosts hide the protocol surface entirely; custom and
+            // local services keep the advanced fields available.
+            AdvancedGroup.Visibility = isCustom || !IsPresetCloudHost(baseUrl)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            ApplyEditorLayout();
+            ResetModelCatalogStatus();
+        }
+        finally
+        {
+            _loading = false;
+        }
+
+        // Provider selection is its own step. Once chosen, remove the
+        // catalogue from view so credentials and models get the whole panel.
+        PresetsPanel.Visibility = Visibility.Collapsed;
+        ConfigFormPanel.Visibility = Visibility.Visible;
+        EditorActionBar.Visibility = Visibility.Visible;
+        ChooseAnotherProviderButton.Visibility = Visibility.Visible;
+        SetDefaultButton.Visibility = Visibility.Collapsed;
+        DeleteServiceButton.Visibility = Visibility.Collapsed;
+        UpdateEditorIdentity(ServiceNameTextBox.Text, type, baseUrl, preset == "ollama");
+        MarkEditorDirty();
+
+        StatusChanged?.Invoke(note, StatusTone.Info);
+        if (isCustom)
+        {
+            BaseUrlTextBox.Focus();
+        }
+        else
+        {
+            ApiKeyPasswordBox.Focus();
+        }
+    }
+
+    private void ChooseAnotherProvider_Click(object sender, RoutedEventArgs e)
+    {
+        // This is still the same unsaved add draft, so returning to the
+        // catalogue is reversible and does not need a confirmation surface.
+        PresetsPanel.Visibility = Visibility.Visible;
+        ConfigFormPanel.Visibility = Visibility.Collapsed;
+        EditorActionBar.Visibility = Visibility.Collapsed;
+        ChooseAnotherProviderButton.Visibility = Visibility.Collapsed;
+        ClearEditorDirty();
+        StatusChanged?.Invoke("选择一个服务商继续。", StatusTone.Info);
+    }
+
+    private void BackToServices_Click(object sender, RoutedEventArgs e) =>
+        BeginDraftGuard("返回服务列表前请先处理当前修改。", ShowOverview);
+
+    private void ProviderTypeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || ProviderTypeComboBox.SelectedItem is not ComboBoxItem selected)
+        {
+            return;
+        }
+        var providerType = Enum.Parse<ProviderType>(selected.Tag.ToString()!);
+        var (baseUrl, endpoint) = ProviderDefaults(providerType);
+
+        if (IsKnownDefaultUrl(BaseUrlTextBox.Text))
+        {
+            BaseUrlTextBox.Text = baseUrl;
+        }
+        if (IsKnownDefaultEndpoint(TextEndpointTextBox.Text))
+        {
+            TextEndpointTextBox.Text = endpoint;
+        }
+        if (IsKnownDefaultEndpoint(VisionEndpointTextBox.Text))
+        {
+            VisionEndpointTextBox.Text = endpoint;
+        }
+        UpdateModelSuggestions(providerType);
+        ResetModelCatalogStatus();
+    }
+
+    private void UpdateModelSuggestions(ProviderType providerType)
+    {
+        var suggestions = providerType switch
+        {
+            ProviderType.OpenAiCompatible => new[]
+            {
+                "gpt-4o-mini", "deepseek-chat", "deepseek-reasoner", "glm-4-flash", "qwen2.5:7b",
+            },
+            ProviderType.OpenAiResponses => new[] { "gpt-4o-mini", "o4-mini" },
+            ProviderType.AnthropicMessages => new[]
+            {
+                "claude-sonnet-4-5", "claude-3-5-haiku-latest",
+            },
+            ProviderType.GeminiGenerateContent => new[]
+            {
+                "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+            },
+            _ => Array.Empty<string>(),
+        };
+        // Keep the typed value; only the suggestion list changes.
+        var currentText = TextModelCombo.Text;
+        var currentVision = VisionModelCombo.Text;
+        TextModelCombo.ItemsSource = suggestions;
+        VisionModelCombo.ItemsSource = suggestions;
+        TextModelCombo.Text = currentText;
+        VisionModelCombo.Text = currentVision;
+    }
+
+    private async void FetchModels_Click(object sender, RoutedEventArgs e)
+    {
+        FetchModelsButton.IsEnabled = false;
+        FetchModelsButton.Content = "获取中…";
+        SetModelCatalogStatus("正在读取服务提供的模型列表…", StatusTone.Info);
+        try
+        {
+            var draft = BuildDraftSettings();
+            var typedKey = string.IsNullOrWhiteSpace(ApiKeyPasswordBox.Password)
+                ? CredentialStore.LoadApiKey(CurrentCredentialTarget())
+                : ApiKeyPasswordBox.Password.Trim();
+            var result = await ModelCatalogService.FetchAsync(draft, typedKey ?? string.Empty);
+
+            var wasLoading = _loading;
+            _loading = true;
+            try
+            {
+                ApplyModelSuggestions(result.Models);
+            }
+            finally
+            {
+                _loading = wasLoading;
+            }
+            SetModelCatalogStatus(
+                $"已获取 {result.Models.Count} 个模型 · {result.Endpoint.Host}{result.Endpoint.AbsolutePath} · {result.ElapsedMs} ms",
+                StatusTone.Success);
+        }
+        catch (Exception exception)
+        {
+            SetModelCatalogStatus(DescribeModelCatalogFailure(exception), StatusTone.Error);
+        }
+        finally
+        {
+            FetchModelsButton.IsEnabled = true;
+            FetchModelsButton.Content = "获取模型";
+        }
+    }
+
+    private void ApplyModelSuggestions(IReadOnlyList<string> models)
+    {
+        var currentText = TextModelCombo.Text;
+        var currentVision = VisionModelCombo.Text;
+        TextModelCombo.ItemsSource = models;
+        VisionModelCombo.ItemsSource = models;
+        TextModelCombo.Text = currentText;
+        VisionModelCombo.Text = currentVision;
+    }
+
+    private void ResetModelCatalogStatus()
+    {
+        ModelCatalogStatusText.Text = string.Empty;
+        ModelCatalogStatusText.Visibility = Visibility.Collapsed;
+    }
+
+    private void SetModelCatalogStatus(string message, StatusTone tone)
+    {
+        ModelCatalogStatusText.Text = message;
+        ModelCatalogStatusText.Foreground = tone switch
+        {
+            StatusTone.Success => (Brush)FindResource("SuccessBrush"),
+            StatusTone.Error => (Brush)FindResource("DangerBrush"),
+            _ => (Brush)FindResource("TextTertiaryBrush"),
+        };
+        ModelCatalogStatusText.Visibility = Visibility.Visible;
+    }
+
+    internal static string DescribeModelCatalogFailure(Exception exception)
+    {
+        var message = exception.Message ?? string.Empty;
+        if (exception is TaskCanceledException || message.Contains("timed out", StringComparison.OrdinalIgnoreCase))
+        {
+            return "获取模型超时，请检查 Base URL 和网络连接。";
+        }
+        if (exception is OperationCanceledException)
+        {
+            return "已取消获取模型。";
+        }
+        if (exception is HttpRequestException)
+        {
+            return $"无法连接模型列表接口：{message}";
+        }
+        return message;
+    }
+
+    private static bool IsKnownDefaultUrl(string value) =>
+        string.IsNullOrWhiteSpace(value) ||
+        Enum.GetValues<ProviderType>().Any(type =>
+            string.Equals(ProviderDefaults(type).BaseUrl, value.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsKnownDefaultEndpoint(string value) =>
+        string.IsNullOrWhiteSpace(value) ||
+        Enum.GetValues<ProviderType>().Any(type =>
+            string.Equals(ProviderDefaults(type).Endpoint, value.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    internal static (string BaseUrl, string Endpoint) ProviderDefaults(ProviderType providerType) =>
+        providerType switch
+        {
+            ProviderType.OpenAiCompatible => ("https://api.openai.com/v1", "/chat/completions"),
+            ProviderType.OpenAiResponses => ("https://api.openai.com/v1", "/responses"),
+            ProviderType.AnthropicMessages => ("https://api.anthropic.com", "/v1/messages"),
+            ProviderType.GeminiGenerateContent => (
+                "https://generativelanguage.googleapis.com",
+                "/v1beta/models/{model}:generateContent"),
+            _ => ("https://api.openai.com/v1", "/chat/completions"),
+        };
+
+    /// <summary>Known cloud preset hosts keep protocol/base URL out of sight.</summary>
+    internal static bool IsPresetCloudHost(string? baseUrl)
+    {
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            return false;
+        }
+        return Uri.TryCreate(baseUrl.Trim(), UriKind.Absolute, out var uri) &&
+            PresetCloudHosts.Any(host =>
+                string.Equals(uri.Host, host, StringComparison.OrdinalIgnoreCase));
+    }
+
+    internal static IReadOnlyDictionary<string, string> ParseExtraHeaders(string text)
+    {
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var rawLine in text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0)
+            {
+                continue;
+            }
+            var separator = line.IndexOf(':', StringComparison.Ordinal);
+            if (separator <= 0 || separator == line.Length - 1)
+            {
+                throw new InvalidOperationException($"自定义请求头格式无效：{line}（应为 Header: Value）");
+            }
+            headers[line[..separator].Trim()] = line[(separator + 1)..].Trim();
+        }
+        return headers;
+    }
+
+    // ================= Draft connection test =================
+
+    /// <summary>Builds the core settings a draft test would use; nothing is saved.</summary>
+    private ProviderSettings BuildDraftSettings()
+    {
+        var current = CoreBridge.GetSettings();
+        return current with
+        {
+            SchemaVersion = current.SchemaVersion,
+            ProviderType = Helpers.SelectedEnum(ProviderTypeComboBox, ProviderType.OpenAiCompatible),
+            ApiBaseUrl = BaseUrlTextBox.Text.Trim(),
+            TextEndpoint = TextEndpointTextBox.Text.Trim(),
+            VisionEndpoint = VisionEndpointTextBox.Text.Trim(),
+            TextModel = TextModelCombo.Text.Trim(),
+            VisionModel = VisionModelCombo.Text.Trim(),
+            ExtraHeaders = ParseExtraHeaders(ExtraHeadersTextBox.Text),
+            AnthropicVersion = AnthropicVersionTextBox.Text.Trim(),
+            SupportsText = SupportsTextCheckBox.IsChecked == true,
+            SupportsVision = SupportsVisionCheckBox.IsChecked == true,
+            AllowInsecureTls = AllowInsecureTlsCheckBox.IsChecked == true,
+            ApiKeyConfigured = CredentialStore.HasApiKey(CurrentCredentialTarget()),
+        };
+    }
+
+    private async void TestConnection_Click(object sender, RoutedEventArgs e)
+    {
+        TestConnectionButton.IsEnabled = false;
+        SetTestResult(StatusTone.Info, "正在测试连接…", "仅发送一小段文本，不含截图。");
+        try
+        {
+            var draft = BuildDraftSettings();
+            var typedKey = string.IsNullOrWhiteSpace(ApiKeyPasswordBox.Password)
+                ? CredentialStore.LoadApiKey(CurrentCredentialTarget())
+                : ApiKeyPasswordBox.Password.Trim();
+            if (string.IsNullOrWhiteSpace(typedKey) && !draft.TargetsLocalRuntime)
+            {
+                throw new InvalidOperationException("请先填写 API Key（不会被保存），或改用本地模型地址。");
+            }
+            var response = await CoreBridge.TestConnectionDraftAsync(
+                draft, string.IsNullOrWhiteSpace(typedKey) ? "local" : typedKey);
+            var host = Uri.TryCreate(draft.ApiBaseUrl, UriKind.Absolute, out var endpointUri)
+                ? endpointUri.Host
+                : draft.ApiBaseUrl;
+            SetTestResult(StatusTone.Success,
+                $"连接成功 · {host} · HTTP {response.Diagnostics.StatusCode} · {response.Diagnostics.ElapsedMs} ms" +
+                (string.IsNullOrWhiteSpace(draft.TextModel) ? "" : $" · {draft.TextModel}"),
+                "草稿未保存；点「保存并启用」生效。");
+            if (_editingProfileId is not null)
+            {
+                _testOutcomes[_editingProfileId] = "ok";
+                RefreshProfilesList();
+            }
+        }
+        catch (Exception exception)
+        {
+            SetTestResult(StatusTone.Error, "连接失败", DescribeTestFailure(exception) + "（设置未被修改）");
+            if (_editingProfileId is not null)
+            {
+                _testOutcomes[_editingProfileId] = ClassifyTestFailure(exception);
+                RefreshProfilesList();
+            }
+        }
+        finally
+        {
+            TestConnectionButton.IsEnabled = true;
+        }
+    }
+
+    /// <summary>Structured two-line test result: state dot + summary, bounded detail.</summary>
+    private void SetTestResult(StatusTone tone, string summary, string? detail)
+    {
+        TestStatusPanel.Visibility = string.IsNullOrWhiteSpace(summary)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        TestStateDot.Fill = ToneBrush(tone);
+        TestSummaryText.Text = summary;
+        TestSummaryText.Foreground = tone switch
+        {
+            StatusTone.Success => (Brush)FindResource("SuccessBrush"),
+            StatusTone.Error => (Brush)FindResource("DangerBrush"),
+            _ => (Brush)FindResource("TextSecondaryBrush"),
+        };
+        TestDetailText.Text = detail ?? string.Empty;
+        TestDetailText.Visibility = string.IsNullOrEmpty(detail) ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>
+    /// Turns a raw connection-test error into the next action the user can
+    /// actually take; unmatched errors keep their original message.
+    /// </summary>
+    internal static string DescribeTestFailure(Exception exception)
+    {
+        var message = exception.Message ?? string.Empty;
+        if (message.Contains("网络访问未启用", StringComparison.Ordinal) ||
+            message.Contains("安全离线模式", StringComparison.Ordinal))
+        {
+            return "当前不允许出网。请在「设置 → 隐私与数据」中开启网络翻译，或配置本地模型。";
+        }
+        if (message.Contains("401", StringComparison.Ordinal) ||
+            message.Contains("鉴权失败", StringComparison.Ordinal))
+        {
+            return "密钥无效或没有权限。请确认 API Key 正确且属于该服务商，然后重新粘贴。";
+        }
+        if (message.Contains("403", StringComparison.Ordinal))
+        {
+            return "服务拒绝了请求。请确认账号状态、密钥权限或所在地区是否可用。";
+        }
+        if (message.Contains("404", StringComparison.Ordinal))
+        {
+            return "接口路径不存在。请检查 Endpoint 与 Base URL 是否匹配该服务商的文档。";
+        }
+        if (message.Contains("429", StringComparison.Ordinal))
+        {
+            return "请求被限流。请稍后重试，或检查该账号的用量配额。";
+        }
+        if (message.Contains("500", StringComparison.Ordinal) ||
+            message.Contains("502", StringComparison.Ordinal) ||
+            message.Contains("503", StringComparison.Ordinal))
+        {
+            return "服务商暂时不可用。请稍后重试；若持续失败，检查服务商状态页。";
+        }
+        if (message.Contains("超时", StringComparison.Ordinal) ||
+            message.Contains("timeout", StringComparison.OrdinalIgnoreCase))
+        {
+            return "连接超时。请检查网络、代理或防火墙设置。";
+        }
+        if (message.Contains("SSL", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("TLS", StringComparison.OrdinalIgnoreCase))
+        {
+            return "TLS 握手失败。自签名证书需在「高级设置」中允许；否则请检查网络环境。";
+        }
+        if (message.Contains("未知的主机", StringComparison.Ordinal) ||
+            message.Contains("No such host", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("getaddrinfo", StringComparison.OrdinalIgnoreCase))
+        {
+            return "无法解析服务域名。请检查 Base URL 拼写与网络连接。";
+        }
+        return $"{message}。请检查网络连接与服务地址。";
+    }
+
+    private void ClearApiKey_Click(object sender, RoutedEventArgs e)
+    {
+        // In add mode nothing has been persisted yet; clearing must only
+        // reset the input, never the vault (the legacy default target may
+        // still hold the active profile's key).
+        if (_isAdding || _editingProfileId is null)
+        {
+            ApiKeyPasswordBox.Clear();
+            SetTestResult(StatusTone.Info, string.Empty, null);
+            StatusChanged?.Invoke("已清空输入框。新增服务保存后密钥才会写入本机凭据管理器。", StatusTone.Info);
+            return;
+        }
+        // Edit mode: the ConfirmButton wrapper asks the second click inline.
+        ClearKeyForCurrentProfile();
+    }
+
+    private void ClearKeyForCurrentProfile()
+    {
+        try
+        {
+            var config = ProfileManager.Load();
+            var profile = config.Profiles.FirstOrDefault(p => p.Id == _editingProfileId);
+            var target = profile is not null && !string.IsNullOrWhiteSpace(profile.CredentialTarget)
+                ? profile.CredentialTarget
+                : CredentialStore.DefaultTargetName;
+            CredentialStore.SaveApiKey(string.Empty, target);
+            ApiKeyPasswordBox.Clear();
+            RefreshApiKeyState();
+            RefreshProfilesList();
+            ProfileChanged?.Invoke();
+            StatusChanged?.Invoke("该服务的 API Key 已清除；未配置密钥且未允许免费引擎时不会出网。", StatusTone.Info);
+        }
+        catch (Exception exception)
+        {
+            StatusChanged?.Invoke($"清除 API Key 失败：{exception.Message}", StatusTone.Error);
+        }
+    }
+
+    // ================= Profile CRUD =================
+
+    private void AddProfile_Click(object sender, RoutedEventArgs e)
+    {
+        // Starting a new service must not wipe an unsaved draft; the inline
+        // guard bar resolves it first and then re-runs this action.
+        BeginDraftGuard("新增服务前请先处理当前草稿。", StartAddMode);
+    }
+
+    private void StartAddMode()
+    {
+        _editingProfileId = null;
+        _testOutcomes.Clear();
+        _suppressListEvents = true;
+        try
+        {
+            ProfilesListBox.SelectedIndex = -1;
+        }
+        finally
+        {
+            _suppressListEvents = false;
+        }
+        LoadProfileIntoForm(NewProfileDraft());
+        CustomProtocolGroup.Visibility = Visibility.Collapsed;
+        AdvancedGroup.Visibility = Visibility.Visible;
+        ApplyEditorLayout();
+        SetTestResult(StatusTone.Info, string.Empty, null);
+        ShowEditorForm(addMode: true);
+        RefreshApiKeyState();
+        ClearEditorDirty();
+        StatusChanged?.Invoke("先选择服务商；下一步只填写连接所需内容。", StatusTone.Info);
+    }
+
+    private void ProfilesListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressListEvents)
+        {
+            return;
+        }
+        if (ProfilesListBox.SelectedItem is not ProfilesRow row)
+        {
+            if (ProfileManager.Load().Profiles.Count == 0)
+            {
+                EditorForm.Visibility = Visibility.Collapsed;
+                EditorEmpty.Visibility = Visibility.Visible;
+            }
+            return;
+        }
+        // An unsaved draft must be handled before another service is opened;
+        // the inline guard bar resolves it, and cancelling snaps the
+        // selection back to what was being edited.
+        if (_editorDirty && EditorForm.Visibility == Visibility.Visible)
+        {
+            var previousId = _editingProfileId;
+            _suppressListEvents = true;
+            try
+            {
+                SelectProfileInList(previousId ?? string.Empty);
+            }
+            finally
+            {
+                _suppressListEvents = false;
+            }
+            BeginDraftGuard(
+                "切换服务前请先处理当前草稿。",
+                () => OpenProfileInEditor(row.Id));
+            return;
+        }
+        OpenProfileInEditor(row.Id);
+    }
+
+    private void EditProfile_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as Button)?.Tag is not string profileId)
+        {
+            return;
+        }
+        _suppressListEvents = true;
+        try
+        {
+            SelectProfileInList(profileId);
+        }
+        finally
+        {
+            _suppressListEvents = false;
+        }
+        OpenProfileInEditor(profileId);
+    }
+
+    private void OpenProfileInEditor(string profileId)
+    {
+        var profile = ProfileManager.Load().Profiles.FirstOrDefault(p => p.Id == profileId);
+        if (profile is null)
+        {
+            return;
+        }
+        _editingProfileId = profile.Id;
+        _isAdding = false;
+        LoadProfileIntoForm(profile);
+        ShowEditorForm(addMode: false);
+        RefreshApiKeyState();
+        ClearEditorDirty();
+    }
+
+    private void ProfilesListBox_DoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        // Single click already opens the editor in the master–detail layout.
+    }
+
+    private void DeleteProfile_Click(object sender, RoutedEventArgs e)
+    {
+        var profile = SelectedProfile();
+        if (profile is null)
+        {
+            StatusChanged?.Invoke("请先在列表中选择要删除的服务。", StatusTone.Info);
+            return;
+        }
+        // ConfirmButton has already asked inline (two-step click); the route
+        // consequence is explained on the button's tooltip, not a dialog.
+        DeleteSelectedProfile();
+    }
+
+    private void DeleteSelectedProfile()
+    {
+        var profile = SelectedProfile();
+        if (profile is null)
+        {
+            return;
+        }
+        try
+        {
+            var config = ProfileManager.Load();
+            var isTextDefault = profile.Id == config.ActiveProfileId;
+            var isVisionDefault = profile.Id == config.VisionProfileId;
+            var nextDefault = config.Profiles.FirstOrDefault(p => p.Id != profile.Id);
+
+            config.Profiles.Remove(profile);
+            CredentialStore.DeleteApiKey(profile.CredentialTarget);
+
+            if (isTextDefault)
+            {
+                config.ActiveProfileId = nextDefault?.Id ?? string.Empty;
+            }
+            if (isVisionDefault)
+            {
+                config.VisionProfileId = null;
+            }
+            ProfileManager.Save(config);
+
+            if (isTextDefault && config.ActiveProfileId is { Length: > 0 })
+            {
+                ApplyToCore(config);
+            }
+
+            _editingProfileId = null;
+            _isAdding = false;
+            _testOutcomes.Remove(profile.Id);
+            _editorDirty = false;
+            UpdateEditorDirtyBadge();
+            EditorForm.Visibility = Visibility.Collapsed;
+            EditorEmpty.Visibility = Visibility.Visible;
+            RefreshProfilesList();
+            ProfileChanged?.Invoke();
+            if (config.Profiles.Count == 0)
+            {
+                StatusChanged?.Invoke("服务已删除。未配置模型服务时，翻译将使用已授权的内置免费引擎。", StatusTone.Info);
+            }
+            else
+            {
+                StatusChanged?.Invoke($"服务已删除，默认服务切换为「{config.GetActiveProfile().Name}」。", StatusTone.Info);
+            }
+        }
+        catch (Exception exception)
+        {
+            StatusChanged?.Invoke($"删除服务失败：{exception.Message}", StatusTone.Error);
+        }
+    }
+
+    private void SaveService_Click(object sender, RoutedEventArgs e) => TrySaveService();
+
+    /// <summary>
+    /// Validates and persists the editor draft. Returns false when nothing
+    /// was saved (validation failed or the credential write failed), leaving
+    /// the draft and the saved state untouched.
+    /// </summary>
+    internal bool TrySaveService()
+    {
+        try
+        {
+            var name = ServiceNameTextBox.Text.Trim();
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                throw new InvalidOperationException("请先填写服务名称。");
+            }
+            var draft = BuildProfileFromForm(name);
+            var config = ProfileManager.Load();
+
+            // The final profile id and credential target are decided FIRST.
+            // Only then is the key written — to this profile's own target, so
+            // a DeepSeek/Gemini/Claude key can never end up in the OpenAI
+            // default slot.
+            var (profileId, credentialTarget) = ProfileManager.ResolveSaveTarget(config, _editingProfileId);
+
+            // Capture the previous key so a failed profile write can restore
+            // the credential vault exactly as it was.
+            string? previousKey = null;
+            var hadPreviousKey = false;
+            try
+            {
+                previousKey = CredentialStore.LoadApiKey(credentialTarget);
+                hadPreviousKey = !string.IsNullOrEmpty(previousKey);
+            }
+            catch (Exception)
+            {
+                // Vault read failed; a rollback attempt would fail the same way.
+            }
+
+            var typedKey = ApiKeyPasswordBox.Password?.Trim();
+            var keyWritten = false;
+            if (!string.IsNullOrEmpty(typedKey))
+            {
+                CredentialStore.SaveApiKey(typedKey, credentialTarget);
+                keyWritten = true;
+                ApiKeyPasswordBox.Clear();
+            }
+
+            draft.Id = profileId;
+            draft.CredentialTarget = credentialTarget;
+            var isFirstService = config.Profiles.Count == 0;
+            var existingIndex = config.Profiles.FindIndex(p => p.Id == profileId);
+            var wasActive = existingIndex >= 0 && config.Profiles[existingIndex].Id == config.ActiveProfileId;
+            if (existingIndex >= 0)
+            {
+                config.Profiles[existingIndex] = draft;
+            }
+            else
+            {
+                config.Profiles.Add(draft);
+            }
+            _editingProfileId = profileId;
+
+            // Saving never silently reroutes the app: only the very first
+            // configured service activates, and editing the currently active
+            // service keeps it active. Everything else needs an explicit
+            // "设为文字默认".
+            if (isFirstService || wasActive)
+            {
+                var previousVision = config.Profiles.FirstOrDefault(p => p.Id == config.VisionProfileId);
+                config.ActiveProfileId = draft.Id;
+                if (previousVision is not null && previousVision.ProviderType != draft.ProviderType)
+                {
+                    config.VisionProfileId = null;
+                }
+            }
+
+            try
+            {
+                ProfileManager.Save(config);
+            }
+            catch
+            {
+                // Roll back the credential so vault and config never disagree.
+                if (keyWritten)
+                {
+                    TryRestoreCredential(credentialTarget, previousKey, hadPreviousKey);
+                }
+                _editingProfileId = null;
+                throw;
+            }
+
+            try
+            {
+                ApplyToCore(config);
+            }
+            catch (Exception applyException)
+            {
+                // Files and vault are consistent; only the running engine is
+                // stale. Say so instead of pretending the save failed.
+                SetTestResult(StatusTone.Info, string.Empty, null);
+                RefreshProfilesList();
+                _suppressListEvents = true;
+                try
+                {
+                    SelectProfileInList(draft.Id);
+                }
+                finally
+                {
+                    _suppressListEvents = false;
+                }
+                ShowEditorForm(addMode: false);
+                RefreshApiKeyState();
+                ClearEditorDirty();
+                ProfileChanged?.Invoke();
+                StatusChanged?.Invoke(
+                    $"服务「{draft.Name}」已保存到本机配置，但应用到运行中的引擎失败（{applyException.Message}）。重启 PopGlot 后生效。",
+                    StatusTone.Warning);
+                return true;
+            }
+
+            RefreshProfilesList();
+            _suppressListEvents = true;
+            try
+            {
+                SelectProfileInList(draft.Id);
+            }
+            finally
+            {
+                _suppressListEvents = false;
+            }
+            ShowEditorForm(addMode: false);
+            RefreshApiKeyState();
+            ClearEditorDirty();
+            ProfileChanged?.Invoke();
+            StatusChanged?.Invoke(config.ActiveProfileId == draft.Id
+                ? $"服务「{draft.Name}」已保存并作为默认文字服务生效。"
+                : $"服务「{draft.Name}」已保存。用「设为文字默认」启用它。",
+                StatusTone.Success);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            StatusChanged?.Invoke($"保存服务失败：{exception.Message}", StatusTone.Error);
+            return false;
+        }
+    }
+
+    private void CancelEdit_Click(object sender, RoutedEventArgs e)
+    {
+        ReloadEditorFromSaved();
+        ShowOverview();
+        StatusChanged?.Invoke("已放弃修改。", StatusTone.Info);
+    }
+
+    /// <summary>
+    /// Best-effort credential rollback after a failed profile write: restore
+    /// the previous key, or delete the one just written if there was none.
+    /// </summary>
+    private static void TryRestoreCredential(string credentialTarget, string? previousKey, bool hadPreviousKey)
+    {
+        try
+        {
+            if (hadPreviousKey && !string.IsNullOrEmpty(previousKey))
+            {
+                CredentialStore.SaveApiKey(previousKey, credentialTarget);
+            }
+            else
+            {
+                CredentialStore.DeleteApiKey(credentialTarget);
+            }
+        }
+        catch (Exception)
+        {
+            // The vault is failing; nothing further can be done here. The
+            // save error the user sees already reports the write failure.
+        }
+    }
+
+    internal ProviderProfile BuildProfileFromForm(string name)
+    {
+        var baseUrl = BaseUrlTextBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            throw new InvalidOperationException("API Base URL 不能为空。");
+        }
+        var isLocal = ProviderSettings.IsLocalBaseUrl(baseUrl);
+        if (!baseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase) && !isLocal)
+        {
+            throw new InvalidOperationException("API Base URL 必须使用 HTTPS；仅本机或局域网服务允许 HTTP。");
+        }
+        return new ProviderProfile
+        {
+            Name = name,
+            ProviderType = Helpers.SelectedEnum(ProviderTypeComboBox, ProviderType.OpenAiCompatible),
+            ApiBaseUrl = baseUrl,
+            TextEndpoint = string.IsNullOrWhiteSpace(TextEndpointTextBox.Text)
+                ? "/chat/completions" : TextEndpointTextBox.Text.Trim(),
+            VisionEndpoint = string.IsNullOrWhiteSpace(VisionEndpointTextBox.Text)
+                ? "/chat/completions" : VisionEndpointTextBox.Text.Trim(),
+            TextModel = TextModelCombo.Text.Trim(),
+            VisionModel = VisionModelCombo.Text.Trim(),
+            ExtraHeaders = new Dictionary<string, string>(
+                ParseExtraHeaders(ExtraHeadersTextBox.Text),
+                StringComparer.OrdinalIgnoreCase),
+            AnthropicVersion = string.IsNullOrWhiteSpace(AnthropicVersionTextBox.Text)
+                ? "2023-06-01" : AnthropicVersionTextBox.Text.Trim(),
+            SupportsText = SupportsTextCheckBox.IsChecked == true,
+            SupportsVision = SupportsVisionCheckBox.IsChecked == true,
+            AllowInsecureTls = AllowInsecureTlsCheckBox.IsChecked == true,
+            IsLocal = isLocal,
+        };
+    }
+}

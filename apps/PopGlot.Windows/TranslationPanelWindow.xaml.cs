@@ -1,10 +1,11 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Media.Animation;
 using PopGlot.Windows.Services;
 
 namespace PopGlot.Windows;
@@ -57,6 +58,7 @@ public partial class TranslationPanelWindow : Window
     private bool _readyForKeyboard;
     private bool _closing;
     private int _openDropDowns;
+    private long _inputAcquisitionMs;
 
     internal TranslationPanelWindow(
         Rect anchorPixels,
@@ -86,6 +88,10 @@ public partial class TranslationPanelWindow : Window
         TrackDropDown(TargetLangCombo);
 
         TtsService.SpeakingStateChanged += OnTtsSpeakingStateChanged;
+
+        // Opaque window now: DWM rounds the corners and draws the shadow,
+        // and the immersive-dark attribute keeps the frame theme-correct.
+        ThemeService.ApplyWindowChrome(this);
 
         Loaded += OnLoaded;
         SizeChanged += (_, _) => PositionNearAnchor();
@@ -125,7 +131,10 @@ public partial class TranslationPanelWindow : Window
         {
             RenderState(TranslationSessionState.ReadingSelection);
             SourceLabel.Text = "所选文字";
+            var inputTimer = Stopwatch.StartNew();
             var source = await selectionService.ReadSelectionAsync(cancellation);
+            inputTimer.Stop();
+            _inputAcquisitionMs = inputTimer.ElapsedMilliseconds;
             SourceInputBox.Text = source;
 
             // Only now take focus: activating earlier would have moved the
@@ -190,6 +199,7 @@ public partial class TranslationPanelWindow : Window
 
     internal async Task StartTextAsync(string text)
     {
+        _inputAcquisitionMs = 0;
         _sourceKind = "输入";
         SourceKindLabel.Text = "· 输入";
         SourceLabel.Text = "原文";
@@ -335,6 +345,17 @@ public partial class TranslationPanelWindow : Window
             or TranslationSessionState.Recognizing
             or TranslationSessionState.Translating;
         Progress.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+        // The result area shows a skeleton instead of an empty promise while
+        // the request is in flight.
+        ResultSkeleton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+        if (busy)
+        {
+            // Never layer placeholder text or a previous result under the
+            // skeleton bars; that caused the visible strike-through/covered
+            // glyphs in the selection popup.
+            TranslationTextBox.Visibility = Visibility.Collapsed;
+            TranslationRichBox.Visibility = Visibility.Collapsed;
+        }
 
         StatusDot.Background = state switch
         {
@@ -399,7 +420,10 @@ public partial class TranslationPanelWindow : Window
 
         EngineBadge.Text = partial ? "部分成功" : session.PipelineLabel ?? "翻译完成";
         SetResultTone(failed: false, partial: partial);
-        RouteText.Text = $"{session.PipelineLabel} · {session.Timing.NetworkElapsedMs} ms";
+        var totalMs = session.Timing.TotalElapsedMs + (ulong)Math.Max(0, _inputAcquisitionMs);
+        RouteText.Text = _inputAcquisitionMs > 0
+            ? $"{session.PipelineLabel} · 取词 {_inputAcquisitionMs} ms · 模型 {session.Timing.NetworkElapsedMs} ms · 总计 {totalMs} ms"
+            : $"{session.PipelineLabel} · 模型 {session.Timing.NetworkElapsedMs} ms · 总计 {totalMs} ms";
         StatusText.Text = partial
             ? "部分成功 · 见下方提醒"
             : (string.IsNullOrWhiteSpace(pipelineNote)
@@ -465,11 +489,9 @@ public partial class TranslationPanelWindow : Window
     /// </summary>
     private void SetResultTone(bool failed, bool partial)
     {
-        var soft = failed ? "DangerSoftBrush" : partial ? "WarningSoftBrush" : "AccentSoftBrush";
-        var border = failed ? "DangerBrush" : partial ? "WarningBrush" : "AccentBorderBrush";
-        var strong = failed ? "DangerBrush" : partial ? "WarningBrush" : "AccentBrush";
-        EngineBadgeHost.Background = (Brush)FindResource(soft);
-        EngineBadgeHost.BorderBrush = (Brush)FindResource(border);
+        // The engine label is plain metadata text now; tone comes from the
+        // foreground colour alone.
+        var strong = failed ? "DangerBrush" : partial ? "WarningBrush" : "TextTertiaryBrush";
         EngineBadge.Foreground = (Brush)FindResource(strong);
     }
 
@@ -637,6 +659,82 @@ public partial class TranslationPanelWindow : Window
         SourceInputBox.Focus();
     }
 
+    private void MergeLines_Click(object sender, RoutedEventArgs e)
+    {
+        var merged = MergeHardLineBreaks(SourceInputBox.Text);
+        if (merged == SourceInputBox.Text)
+        {
+            return;
+        }
+        SourceInputBox.Text = merged;
+        StatusText.Text = "已合并断行，按 Enter 重新翻译";
+        SourceInputBox.CaretIndex = merged.Length;
+        SourceInputBox.Focus();
+    }
+
+    /// <summary>
+    /// Joins the hard line breaks that PDF and e-book copies leave behind:
+    /// blank lines stay paragraph breaks, a CJK line fuses directly to the
+    /// next one, and anything else joins with a single space so Latin words
+    /// never stick together. Trailing hyphens undo when the next line starts
+    /// with a lowercase word.
+    /// </summary>
+    internal static string MergeHardLineBreaks(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text) || !text.Contains('\n'))
+        {
+            return text ?? string.Empty;
+        }
+
+        var normalized = text.Replace("\r\n", "\n").Replace("\r", "\n").Trim();
+        var paragraphs = normalized.Split(new[] { "\n\n" }, StringSplitOptions.None);
+        var merged = new StringBuilder(normalized.Length);
+
+        for (var paragraphIndex = 0; paragraphIndex < paragraphs.Length; paragraphIndex++)
+        {
+            if (paragraphIndex > 0)
+            {
+                merged.Append("\n\n");
+            }
+            var lines = paragraphs[paragraphIndex].Split('\n');
+            for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+            {
+                var line = lines[lineIndex].Trim();
+                if (line.Length == 0)
+                {
+                    continue;
+                }
+                if (merged.Length == 0 || merged[^1] == '\n')
+                {
+                    merged.Append(line);
+                    continue;
+                }
+
+                var last = merged[^1];
+                if (last is '-' or '–' && line[0] is >= 'a' and <= 'z')
+                {
+                    // "transla-\ntion" was one word before the page broke it.
+                    merged.Length--;
+                    merged.Append(line);
+                }
+                else if (JoinsTight(last) || JoinsTight(line[0]))
+                {
+                    merged.Append(line);
+                }
+                else
+                {
+                    merged.Append(' ').Append(line);
+                }
+            }
+        }
+        return merged.ToString();
+    }
+
+    private static bool JoinsTight(char c) =>
+        (c >= '\u2E80' && c <= '\u9FFF') ||  // CJK radicals, kana, punctuation, ideographs
+        (c >= '\uF900' && c <= '\uFAFF') ||  // CJK compatibility ideographs
+        (c >= '\uFF00' && c <= '\uFFEF');    // fullwidth forms
+
     private void SourceSpeak_Click(object sender, RoutedEventArgs e) =>
         SpeakOrStop(SourceInputBox.Text);
 
@@ -679,9 +777,9 @@ public partial class TranslationPanelWindow : Window
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e)
     {
-        // Opening settings takes the foreground, which would auto-close this
-        // panel; pin it so the user can compare the two.
-        PinToggle.IsChecked = true;
+        // Settings is a destination, not a second layer over the transient
+        // translation result. App.ShowSettings closes transient surfaces and
+        // establishes the main/settings ownership relationship.
         _openSettings?.Invoke();
     }
 
@@ -816,11 +914,9 @@ public partial class TranslationPanelWindow : Window
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        // No window-level fade: animating the whole window's opacity breaks
+        // ClearType on every glyph and makes text blur-then-sharpen.
         PositionNearAnchor();
-        BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(140))
-        {
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut },
-        });
     }
 
     /// <summary>

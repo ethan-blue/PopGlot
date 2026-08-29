@@ -103,6 +103,34 @@ impl TranslationRequest {
     }
 }
 
+/// Short selection translations should not reserve a long-form 1,200-token
+/// answer. Several gateways use the output ceiling when scheduling work, so a
+/// source-sized bound reduces latency while keeping enough room for the JSON
+/// envelope. Screenshot transcription retains the full ceiling.
+fn output_token_limit(request: &TranslationRequest) -> u32 {
+    match &request.input {
+        TranslationInput::Text { source } => (source.chars().count() as u32)
+            .saturating_mul(2)
+            .saturating_add(256)
+            .clamp(384, MAX_MODEL_OUTPUT_TOKENS),
+        TranslationInput::Vision { .. } => MAX_MODEL_OUTPUT_TOKENS,
+    }
+}
+
+fn gemini_thinking_config(model: &str) -> Option<Value> {
+    let normalized = model.to_ascii_lowercase();
+    if normalized.starts_with("gemini-3") {
+        // Translation is direct instruction following. Gemini 3 defaults to
+        // medium/high thinking on several variants, which adds seconds before
+        // the first answer token without improving ordinary translation.
+        Some(json!({"thinkingLevel": "low"}))
+    } else if normalized.starts_with("gemini-2.5-flash") {
+        Some(json!({"thinkingBudget": 0}))
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImageInput {
     Bytes { media_type: String, data: Vec<u8> },
@@ -549,7 +577,7 @@ impl TranslationProvider for OpenAiChatProvider {
                 "model": model,
                 "stream": false,
                 "temperature": 0.1,
-                "max_tokens": MAX_MODEL_OUTPUT_TOKENS,
+                "max_tokens": output_token_limit(request),
                 "messages": [
                     {"role": "system", "content": request.system_instructions()},
                     {"role": "user", "content": user_content},
@@ -609,7 +637,7 @@ impl TranslationProvider for OpenAiResponsesProvider {
             body: json!({
                 "model": model,
                 "store": false,
-                "max_output_tokens": MAX_MODEL_OUTPUT_TOKENS,
+                "max_output_tokens": output_token_limit(request),
                 "instructions": request.system_instructions(),
                 "input": [{"role": "user", "content": content}],
             }),
@@ -701,7 +729,7 @@ impl TranslationProvider for AnthropicMessagesProvider {
             extra_headers: headers,
             body: json!({
                 "model": model,
-                "max_tokens": MAX_MODEL_OUTPUT_TOKENS,
+                "max_tokens": output_token_limit(request),
                 "system": request.system_instructions(),
                 "messages": [{"role": "user", "content": content}],
             }),
@@ -772,6 +800,14 @@ impl TranslationProvider for GeminiGenerateContentProvider {
         };
         validate_model_path_segment(model)?;
         let endpoint = endpoint_template.replace("{model}", model);
+        let mut generation_config = json!({
+            "temperature": 0.1,
+            "maxOutputTokens": output_token_limit(request),
+            "responseMimeType": "application/json",
+        });
+        if let Some(thinking_config) = gemini_thinking_config(model) {
+            generation_config["thinkingConfig"] = thinking_config;
+        }
         Ok(PreparedProviderRequest {
             provider_type: self.provider_type(),
             endpoint,
@@ -780,11 +816,7 @@ impl TranslationProvider for GeminiGenerateContentProvider {
             body: json!({
                 "system_instruction": {"parts": [{"text": request.system_instructions()}]},
                 "contents": [{"role": "user", "parts": parts}],
-                "generationConfig": {
-                    "temperature": 0.1,
-                    "maxOutputTokens": MAX_MODEL_OUTPUT_TOKENS,
-                    "responseMimeType": "application/json",
-                },
+                "generationConfig": generation_config,
             }),
         })
     }
@@ -1243,6 +1275,31 @@ mod tests {
 
     fn vision_request() -> TranslationRequest {
         TranslationRequest::vision(image(), LanguagePair::new("auto", "zh-CN"))
+    }
+
+    #[test]
+    fn translation_output_budget_stays_small_but_scales_with_source() {
+        assert_eq!(output_token_limit(&text_request("hello")), 384);
+        assert_eq!(output_token_limit(&text_request(&"a".repeat(300))), 856);
+        assert_eq!(output_token_limit(&text_request(&"a".repeat(2_000))), 1_200);
+        assert_eq!(output_token_limit(&vision_request()), 1_200);
+    }
+
+    #[test]
+    fn gemini_translation_uses_low_or_disabled_thinking_when_supported() {
+        assert_eq!(
+            gemini_thinking_config("gemini-3-flash-preview"),
+            Some(json!({"thinkingLevel": "low"}))
+        );
+        assert_eq!(
+            gemini_thinking_config("gemini-3.7-flash-high"),
+            Some(json!({"thinkingLevel": "low"}))
+        );
+        assert_eq!(
+            gemini_thinking_config("gemini-2.5-flash"),
+            Some(json!({"thinkingBudget": 0}))
+        );
+        assert_eq!(gemini_thinking_config("gemini-2.0-flash"), None);
     }
 
     #[test]

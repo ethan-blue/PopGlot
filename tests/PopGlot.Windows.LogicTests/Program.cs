@@ -1,4 +1,5 @@
 using PopGlot.Windows.Services;
+using PopGlot.Windows.Sections;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Sockets;
@@ -66,6 +67,27 @@ internal static class Program
         Run("main window includes window chrome and unified caption bar", MainWindowChromeAndCaptionBarPresent);
         Run("theme tokens dark and light palettes are symmetric", ThemeTokensSymmetric);
         Run("provider profiles support multi-config, independent keys and round-trip", ProviderProfilesSupportMultiConfigAndIndependentKeys);
+        Run("service save resolves credential targets per profile", ServiceSaveResolvesCredentialTargets);
+        Run("service save writes the key after resolving its target", ServiceSaveKeyOrderGuard);
+        Run("settings save validates hotkeys before persisting", SettingsSaveValidatesBeforePersisting);
+        Run("connection test failures map to actionable hints", ConnectionTestFailuresAreActionable);
+        Run("service health states are explicit and hue-safe", ServiceHealthStatesAreExplicit);
+        Run("loaded service does not become a false draft", LoadedServiceDoesNotBecomeFalseDraft);
+        Run("shortcut recording suspends global shortcuts", ShortcutRecordingSuspendsGlobalShortcuts);
+        Run("capture drag avoids forced layout", CaptureDragAvoidsForcedLayout);
+        Run("settings closes transient translation surfaces", SettingsClosesTransientSurfaces);
+        Run("screenshot draft route is visible", ScreenshotDraftRouteIsVisible);
+        Run("service editor fields share a stable responsive grid", ServiceEditorUsesStableResponsiveGrid);
+        Run("model catalog endpoints follow provider protocols", ModelCatalogEndpointsFollowProtocols);
+        Run("model catalog parses OpenAI and Gemini responses", ModelCatalogParsesProviderResponses);
+        await RunAsync("model catalog uses draft credentials without saving", ModelCatalogUsesDraftCredentialsAsync);
+        Run("caption buttons really render their icons", CaptionButtonsRenderTheirIcons);
+        Run("page transitions have no text-damaging animations", NoTextDamagingPageTransitions);
+        Run("text windows are opaque for ClearType", TextWindowsAreOpaque);
+        Run("daily flows never open system dialogs", DailyFlowsUseInlineConfirmations);
+        Run("unready services cannot become the default", UnreadyServicesCannotBecomeDefault);
+        Run("schema v4 factory profiles migrate out of configured services", SchemaV4MigratesPristineTemplates);
+        Run("a failed profile save does not poison the cache", FailedSaveDoesNotPoisonCache);
         Run("information architecture surfaces workbench, library and control center", InformationArchitectureSurfacesPresent);
         RunSta("render screenshots and measure performance baseline", RenderScreenshotsAndMeasureBaseline);
 
@@ -565,11 +587,18 @@ internal static class Program
                 NetworkEnabled = true,
             };
 
-            // Unset consent and no prompt (headless) must fail closed.
+            // Unset consent and no prompt (headless / in-window-only flows)
+            // must fail closed AND must not record a denial the user never
+            // gave — authorization lives in the privacy settings page.
             File.Delete(path);
             OutboundPolicy.ConsentPrompt = null;
             Equal(false, OutboundPolicy.AllowsFreeEngine(settings, out var denial));
             True(denial is not null, "a denial must explain itself");
+            True(denial!.ActionableSuggestion?.Contains("隐私与数据") == true,
+                "the denial must point at the privacy settings page");
+            True(!File.Exists(path) ||
+                ShellSettingsStore.Load(path).FreeEngineConsent == FreeEngineConsent.Unset,
+                "a missing prompt must never persist a denial");
 
             // Answering the prompt with "allow and remember" persists Allowed.
             File.Delete(path);
@@ -788,26 +817,39 @@ internal static class Program
         True(mainXaml.Contains("CloseBtn"), "CloseBtn must be declared");
     }
 
+    /// <summary>
+    /// Configured services start EMPTY; provider templates live in a separate
+    /// catalog that never appears as a configured service. Pristine factory
+    /// entries (a legacy-schema artifact) are recognisable for migration.
+    /// </summary>
     private static void ProviderProfilesSupportMultiConfigAndIndependentKeys()
     {
-        CoreBridge.Initialize();
         var config = new CoreProductConfig();
-        Equal("openai-default", config.ActiveProfileId);
-        True(config.Profiles.Count >= 5, "default config must include standard profiles");
+        Equal(0, config.Profiles.Count, "a fresh install must have zero configured services");
 
-        var openAi = config.GetActiveProfile();
-        Equal("OpenAI", openAi.Name);
+        var templates = ProviderCatalog.Templates;
+        True(templates.Count >= 6, "the catalog must offer the standard provider templates");
+        True(templates.Any(t => t.Id == "openai-default"), "OpenAI template exists");
+        True(templates.Any(t => t.Id == "deepseek"), "DeepSeek template exists");
+        True(templates.Any(t => t.Id == "zhipu"), "GLM template exists");
+
+        // Pristine templates are exactly what migration looks for.
+        var deepseek = templates.First(t => t.Id == "deepseek");
+        True(ProviderCatalog.IsPristineTemplate(deepseek), "an untouched template is pristine");
+        True(ProviderCatalog.IsPristineTemplate(
+            ProviderCatalog.Templates.First(t => t.Id == "openai-default")), "openai template is pristine");
+
+        // Any user edit breaks pristineness: renamed, re-modelled, or re-keyed.
+        var renamed = new ProviderProfile(deepseek) { Name = "我的 DeepSeek" };
+        True(!ProviderCatalog.IsPristineTemplate(renamed), "a renamed service is user-configured");
+        var remodelled = new ProviderProfile(deepseek) { TextModel = "deepseek-reasoner" };
+        True(!ProviderCatalog.IsPristineTemplate(remodelled), "a re-modelled service is user-configured");
+        True(!ProviderCatalog.IsPristineTemplate(
+            new ProviderProfile { Id = "custom-1", Name = "x", ApiBaseUrl = "https://x" }),
+            "an unknown profile is never pristine");
+
+        var openAi = templates.First(t => t.Id == "openai-default");
         Equal("PopGlot/provider/openai-default", openAi.CredentialTarget);
-
-        var deepseek = config.Profiles.First(p => p.Id == "deepseek");
-        Equal("https://api.deepseek.com/v1", deepseek.ApiBaseUrl);
-        Equal("deepseek-chat", deepseek.TextModel);
-        Equal("PopGlot/provider/deepseek", deepseek.CredentialTarget);
-
-        var ollama = config.Profiles.First(p => p.Id == "ollama-local");
-        True(ollama.IsLocal, "ollama must be marked as local runtime");
-        Equal("http://localhost:11434/v1", ollama.ApiBaseUrl);
-
         var key1Target = openAi.CredentialTarget;
         var key2Target = deepseek.CredentialTarget;
         True(key1Target != key2Target, "Credential targets for different profiles must be distinct");
@@ -820,25 +862,527 @@ internal static class Program
         True(!dsSettings.SupportsVision, "deepseek has no vision model");
     }
 
-    private static void InformationArchitectureSurfacesPresent()
+    /// <summary>
+    /// The save flow must decide the final profile id and credential target
+    /// BEFORE the key is written, and editing must keep a profile's own
+    /// target — otherwise a DeepSeek/Gemini/Claude key lands in the OpenAI
+    /// default slot and every service shares one credential.
+    /// </summary>
+    private static void ServiceSaveResolvesCredentialTargets()
     {
-        var mainXaml = File.ReadAllText(Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows", "MainWindow.xaml"));
-        // Control-center navigation: workbench, library, and the five settings
-        // surfaces share one sidebar; history/vocabulary are no longer settings.
-        foreach (var surface in new[]
+        var config = new CoreProductConfig();
+        foreach (var template in ProviderCatalog.Templates)
+        {
+            config.Profiles.Add(new ProviderProfile(template));
+        }
+
+        // Adding a profile mints a fresh per-profile target, never the legacy
+        // OpenAI default slot.
+        var (newId, newTarget) = ProfileManager.ResolveSaveTarget(config, null);
+        True(newId.StartsWith("p-", StringComparison.Ordinal), "a new profile gets a generated id");
+        True(newTarget.StartsWith("PopGlot/provider/p-", StringComparison.Ordinal),
+            "a new profile gets its own credential target");
+        True(newTarget != CredentialStore.DefaultTargetName,
+            "a new profile's key must not go to the legacy default target");
+
+        // Editing an existing service keeps that service's own target.
+        var deepseek = config.Profiles.First(p => p.Id == "deepseek");
+        var (editId, editTarget) = ProfileManager.ResolveSaveTarget(config, deepseek.Id);
+        Equal("deepseek", editId);
+        Equal("PopGlot/provider/deepseek", editTarget);
+
+        var openAi = config.Profiles.First(p => p.Id == "openai-default");
+        var (openAiId, openAiTarget) = ProfileManager.ResolveSaveTarget(config, openAi.Id);
+        Equal("openai-default", openAiId);
+        Equal("PopGlot/provider/openai-default", openAiTarget);
+
+        // A legacy profile with a blank target still derives a per-profile slot.
+        config.Profiles.Add(new ProviderProfile { Id = "blank-target", CredentialTarget = "" });
+        var (_, blankTarget) = ProfileManager.ResolveSaveTarget(config, "blank-target");
+        Equal("PopGlot/provider/blank-target", blankTarget);
+
+        // An unknown editing id (crash mid-save) still gets its own slot.
+        var (recoveredId, recoveredTarget) = ProfileManager.ResolveSaveTarget(config, "p-recovered");
+        Equal("p-recovered", recoveredId);
+        Equal("PopGlot/provider/p-recovered", recoveredTarget);
+    }
+
+    /// <summary>
+    /// Source-order guard for the credential bug this suite exists to catch:
+    /// the key write must textually follow the target resolution.
+    /// </summary>
+    private static void ServiceSaveKeyOrderGuard()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            FindProjectRoot(), "apps", "PopGlot.Windows", "Sections", "ServicesSection.xaml.cs"));
+        var resolve = source.IndexOf("ResolveSaveTarget(config, _editingProfileId)", StringComparison.Ordinal);
+        var writeKey = source.IndexOf("CredentialStore.SaveApiKey(typedKey, credentialTarget)", StringComparison.Ordinal);
+        True(resolve >= 0, "the save flow must resolve the credential target first");
+        True(writeKey > resolve, "the API key must be written only after the profile's own target is resolved");
+    }
+
+    /// <summary>
+    /// The settings window must finish ALL validation (hotkey shape, hotkey
+    /// registration) before the first write, and a failed commit must roll
+    /// back what earlier steps already wrote.
+    /// </summary>
+    private static void SettingsSaveValidatesBeforePersisting()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            FindProjectRoot(), "apps", "PopGlot.Windows", "SettingsWindow.xaml.cs"));
+        var validate = source.IndexOf("shellSettings.ValidateHotkeys()", StringComparison.Ordinal);
+        var register = source.IndexOf("ApplyShellSettings(shellSettings)", StringComparison.Ordinal);
+        var coreSave = source.IndexOf("CoreBridge.SaveSettings(policySettings)", StringComparison.Ordinal);
+        var shellSave = source.IndexOf("ShellSettingsStore.Save(shellSettings)", StringComparison.Ordinal);
+        True(validate >= 0, "hotkey validation must exist in the save flow");
+        True(register > validate, "hotkey registration must follow validation");
+        True(coreSave > register, "the core policy must be committed only after full validation");
+        True(shellSave > coreSave, "shell settings must be committed after the core policy");
+        True(source.Contains("previousCoreSettings", StringComparison.Ordinal),
+            "a failed shell write must roll back the core policy via the captured snapshot");
+        True(source.Contains("已回滚本次全部修改", StringComparison.Ordinal),
+            "a failed commit must tell the user the rollback happened");
+        True(source.Contains("未保存任何修改", StringComparison.Ordinal),
+            "validation failures must state that nothing was saved");
+    }
+
+    /// <summary>Connection-test failures must name the next action to take.</summary>
+    private static void ConnectionTestFailuresAreActionable()
+    {
+        var auth = ServicesSection.DescribeTestFailure(new InvalidOperationException("Provider 鉴权失败（HTTP 401）。"));
+        True(auth.Contains("API Key", StringComparison.Ordinal), "auth failures must point at the key");
+        var notFound = ServicesSection.DescribeTestFailure(new InvalidOperationException("HTTP 404"));
+        True(notFound.Contains("Endpoint", StringComparison.Ordinal), "404 must point at the endpoint");
+        var rate = ServicesSection.DescribeTestFailure(new InvalidOperationException("HTTP 429"));
+        True(rate.Contains("限流", StringComparison.Ordinal), "429 must explain rate limiting");
+        var offline = ServicesSection.DescribeTestFailure(
+            new InvalidOperationException("网络访问未启用；未发送任何 Provider 请求"));
+        True(offline.Contains("隐私与数据", StringComparison.Ordinal), "offline must point at the privacy switch");
+        var timeout = ServicesSection.DescribeTestFailure(new InvalidOperationException("请求超时"));
+        True(timeout.Contains("超时", StringComparison.Ordinal), "timeouts must be recognized");
+        var unknown = ServicesSection.DescribeTestFailure(new InvalidOperationException("奇怪错误"));
+        True(unknown.Contains("奇怪错误", StringComparison.Ordinal), "unknown errors keep their original message");
+    }
+
+    /// <summary>
+    /// Service rows must expose an explicit health state, and "missing key"
+    /// must read as a warning while "usable" reads as success — the brand
+    /// accent never stands in for health.
+    /// </summary>
+    private static void ServiceHealthStatesAreExplicit()
+    {
+        var (localText, _) = ServicesSection.DescribeProfileState(isLocal: true, hasKey: false, outcome: null);
+        Equal("本地服务", localText);
+
+        var (noKeyText, noKeyTone) = ServicesSection.DescribeProfileState(isLocal: false, hasKey: false, outcome: null);
+        Equal("缺少 Key", noKeyText);
+        Equal(StatusTone.Warning, noKeyTone);
+
+        var (untestedText, untestedTone) = ServicesSection.DescribeProfileState(isLocal: false, hasKey: true, outcome: null);
+        Equal("未测试", untestedText);
+        Equal(StatusTone.Info, untestedTone);
+
+        var (okText, okTone) = ServicesSection.DescribeProfileState(isLocal: false, hasKey: true, outcome: "ok");
+        Equal("可用", okText);
+        Equal(StatusTone.Success, okTone);
+
+        var (failText, failTone) = ServicesSection.DescribeProfileState(isLocal: false, hasKey: true, outcome: "fail");
+        Equal("测试失败", failText);
+        Equal(StatusTone.Error, failTone);
+    }
+
+    // ================= Fourth round: product-defect structural guards =================
+
+    /// <summary>
+    /// The caption template must render the Ui.Icon geometry itself — the old
+    /// ContentPresenter-only template made min/max/close invisible.
+    /// </summary>
+    private static void CaptionButtonsRenderTheirIcons()
+    {
+        var controlsXaml = File.ReadAllText(Path.Combine(
+            FindProjectRoot(), "apps", "PopGlot.Windows", "Themes", "Controls.xaml"));
+        var captionTemplateStart = controlsXaml.IndexOf(
+            "<Style x:Key=\"CaptionButton\"", StringComparison.Ordinal);
+        var captionTemplateEnd = controlsXaml.IndexOf(
+            "<Style x:Key=\"CaptionCloseButton\"", StringComparison.Ordinal);
+        True(captionTemplateStart >= 0 && captionTemplateEnd > captionTemplateStart,
+            "CaptionButton style must exist before CaptionCloseButton");
+        var template = controlsXaml[captionTemplateStart..captionTemplateEnd];
+        True(template.Contains("<Path", StringComparison.Ordinal),
+            "the caption template must render a Path");
+        True(template.Contains("local:Ui.Icon", StringComparison.Ordinal),
+            "the caption Path must bind the Ui.Icon attached property");
+        True(template.Contains("Stroke=", StringComparison.Ordinal),
+            "caption line-art must be stroked, not filled");
+
+        foreach (var window in new[] { "MainWindow.xaml", "SettingsWindow.xaml" })
+        {
+            var xaml = File.ReadAllText(Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows", window));
+            var closeIdx = xaml.IndexOf("x:Name=\"CloseBtn\"", StringComparison.Ordinal);
+            True(closeIdx >= 0, $"{window} must declare CloseBtn");
+            var closeRegion = xaml[closeIdx..(Math.Min(xaml.Length, closeIdx + 400))];
+            True(closeRegion.Contains("IconCaptionClose", StringComparison.Ordinal),
+                $"{window} CloseBtn must use the IconCaptionClose geometry");
+        }
+    }
+
+    /// <summary>Fading or translating whole pages blurs every glyph mid-flight.</summary>
+    private static void NoTextDamagingPageTransitions()
+    {
+        var mainCs = File.ReadAllText(Path.Combine(
+            FindProjectRoot(), "apps", "PopGlot.Windows", "MainWindow.xaml.cs"));
+        True(!mainCs.Contains("PlaySectionEntrance", StringComparison.Ordinal),
+            "PlaySectionEntrance must be gone");
+        True(!mainCs.Contains("BeginAnimation", StringComparison.Ordinal),
+            "the main window must not animate page-level properties");
+        var panelCs = File.ReadAllText(Path.Combine(
+            FindProjectRoot(), "apps", "PopGlot.Windows", "TranslationPanelWindow.xaml.cs"));
+        True(!panelCs.Contains("BeginAnimation(OpacityProperty", StringComparison.Ordinal),
+            "the floating panel must not fade the whole window");
+    }
+
+    /// <summary>AllowsTransparency windows lose ClearType; text windows are opaque now.</summary>
+    private static void TextWindowsAreOpaque()
+    {
+        foreach (var window in new[] { "TranslationPanelWindow.xaml", "QuickSearchWindow.xaml" })
+        {
+            var xaml = File.ReadAllText(Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows", window));
+            True(!xaml.Contains("AllowsTransparency=\"True\"", StringComparison.Ordinal),
+                $"{window} must not use a layered transparent window");
+            // Only the Window element's own background matters; inner controls
+            // legitimately use transparent backgrounds.
+            var windowTagEnd = xaml.IndexOf('>');
+            var windowTag = xaml[..windowTagEnd];
+            True(!windowTag.Contains("Background=\"Transparent\"", StringComparison.Ordinal),
+                $"{window} must paint an opaque surface");
+            True(!xaml.Contains("DropShadowEffect", StringComparison.Ordinal),
+                $"{window} must rely on DWM shadow instead of a transparent padding border");
+        }
+    }
+
+    /// <summary>Only fatal startup errors may use system MessageBoxes.</summary>
+    private static void DailyFlowsUseInlineConfirmations()
+    {
+        foreach (var file in new[]
                  {
-                     "TranslateSection", "LibrarySection", "GeneralSection", "ShortcutsSection",
-                     "ProviderSection", "CaptureSection", "DataSection",
+                     "SettingsWindow.xaml.cs", "Sections/ServicesSection.xaml.cs",
+                     "Sections/DataSection.xaml.cs", "Sections/LibrarySection.xaml.cs",
+                     "Sections/PrivacySection.xaml.cs", "TranslationPanelWindow.xaml.cs",
+                     "MainWindow.xaml.cs", "QuickSearchWindow.xaml.cs",
                  })
         {
-            True(mainXaml.Contains(surface), $"the {surface} surface must exist");
+            var source = File.ReadAllText(Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows",
+                file.Replace('/', Path.DirectorySeparatorChar)));
+            True(!source.Contains("MessageBox.Show", StringComparison.Ordinal),
+                $"{file} must resolve confirmations inline, not via system MessageBox");
         }
+    }
+
+    /// <summary>The readiness gate keeps half-configured services off the live route.</summary>
+    private static void UnreadyServicesCannotBecomeDefault()
+    {
+        Equal("缺少 API Key",
+            ServicesSection.CheckReadiness(isLocal: false, hasKey: false, textModel: "m", baseUrl: "https://x"));
+        Equal("缺少文字模型",
+            ServicesSection.CheckReadiness(isLocal: false, hasKey: true, textModel: "", baseUrl: "https://x"));
+        Equal("缺少 Base URL",
+            ServicesSection.CheckReadiness(isLocal: false, hasKey: true, textModel: "m", baseUrl: ""));
+        var ready = ServicesSection.CheckReadiness(isLocal: false, hasKey: true, textModel: "m", baseUrl: "https://x");
+        True(ready is null, "a keyed cloud service with a model is ready");
+        var localReady = ServicesSection.CheckReadiness(isLocal: true, hasKey: false, textModel: "m", baseUrl: "http://localhost:11434/v1");
+        True(localReady is null, "a local service needs no key");
+    }
+
+    /// <summary>
+    /// Schema v4 seeded factory templates as fake configured services. The
+    /// migration drops only pristine+keyless entries and keeps user data.
+    /// </summary>
+    private static void SchemaV4MigratesPristineTemplates()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-migrate-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "product-config.json");
+        var openAi = ProviderCatalog.Templates.First(t => t.Id == "openai-default");
+        var deepseek = ProviderCatalog.Templates.First(t => t.Id == "deepseek");
+        var userService = new ProviderProfile(deepseek) { Name = "我的 DeepSeek", TextModel = "deepseek-reasoner" };
+
+        var v4 = new CoreProductConfig
+        {
+            SchemaVersion = 4,
+            ActiveProfileId = "deepseek",
+            Profiles = [openAi, deepseek, userService],
+        };
+        File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(v4));
+
+        ProfileManager.ResetForTests();
+        ProfileManager.ConfigPathOverride = path;
+        try
+        {
+            var migrated = ProfileManager.Load();
+            Equal(5, migrated.SchemaVersion, "migration bumps the schema version");
+            Equal(1, migrated.Profiles.Count, "only the user-configured service survives");
+            Equal("我的 DeepSeek", migrated.Profiles[0].Name);
+            Equal("我的 DeepSeek", migrated.GetActiveProfile().Name,
+                "a migrated-away default re-points at the surviving service");
+            Equal(5, System.Text.Json.JsonSerializer.Deserialize<CoreProductConfig>(
+                File.ReadAllText(path))?.SchemaVersion ?? -1,
+                "the migrated schema is persisted");
+        }
+        finally
+        {
+            ProfileManager.ResetForTests();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>A failed disk write must leave the in-memory cache matching disk.</summary>
+    private static void FailedSaveDoesNotPoisonCache()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-cache-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "product-config.json");
+
+        ProfileManager.ResetForTests();
+        ProfileManager.ConfigPathOverride = path;
+        try
+        {
+            var original = new CoreProductConfig();
+            original.Profiles.Add(new ProviderProfile
+            {
+                Id = "p-one",
+                Name = "第一个",
+                CredentialTarget = "PopGlot/provider/p-one",
+            });
+            ProfileManager.Save(original);
+
+            // Mutate a copy and force the write to fail: the target path is a
+            // directory, so the atomic replace throws before the cache swap.
+            var mutated = new CoreProductConfig
+            {
+                SchemaVersion = 5,
+                ActiveProfileId = "p-two",
+                Profiles = [new ProviderProfile { Id = "p-two", Name = "第二个" }],
+            };
+            ProfileManager.ConfigPathOverride = Path.Combine(dir, "blocked-dir");
+            Directory.CreateDirectory(ProfileManager.ConfigPathOverride);
+            var threw = false;
+            try
+            {
+                ProfileManager.Save(mutated);
+            }
+            catch (Exception)
+            {
+                threw = true;
+            }
+            True(threw, "saving onto a directory path must throw");
+
+            ProfileManager.ConfigPathOverride = path;
+            var reloaded = ProfileManager.Load();
+            Equal(1, reloaded.Profiles.Count, "the cache still holds the last successfully saved config");
+            Equal("第一个", reloaded.Profiles[0].Name);
+            True(reloaded.Profiles.All(p => p.Id != "p-two"),
+                "a failed save must not leak unsaved profiles into the cache");
+        }
+        finally
+        {
+            ProfileManager.ResetForTests();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    private static void LoadedServiceDoesNotBecomeFalseDraft()
+    {
+        True(!ServicesSection.HasEditorChanges("saved-fields", "saved-fields"),
+            "an unchanged loaded service must remain clean");
+        True(ServicesSection.HasEditorChanges("changed-fields", "saved-fields"),
+            "a real field change must create a draft");
+    }
+
+    private static void ShortcutRecordingSuspendsGlobalShortcuts()
+    {
+        var appDir = Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows");
+        var recorder = File.ReadAllText(Path.Combine(appDir, "HotkeyRecorder.cs"));
+        var service = File.ReadAllText(Path.Combine(appDir, "HotkeyService.cs"));
+        var settings = File.ReadAllText(Path.Combine(appDir, "SettingsWindow.xaml.cs"));
+        True(recorder.Contains("RecordingStateChanged"), "the recorder must expose its active state");
+        True(service.Contains("SetSuspended"), "global hotkeys must support temporary suspension");
+        True(settings.Contains("SetHotkeysSuspended"), "settings must connect recording to suspension");
+    }
+
+    private static void CaptureDragAvoidsForcedLayout()
+    {
+        var code = File.ReadAllText(Path.Combine(
+            FindProjectRoot(), "apps", "PopGlot.Windows", "CaptureOverlayWindow.xaml.cs"));
+        var start = code.IndexOf("private void UpdateSelection", StringComparison.Ordinal);
+        var end = code.IndexOf("private void PositionHintNearCursor", start, StringComparison.Ordinal);
+        True(start >= 0 && end > start, "capture selection method must exist");
+        var hotPath = code[start..end];
+        True(!hotPath.Contains("UpdateLayout()"), "pointer-move selection must not force synchronous layout");
+        True(hotPath.Contains("FromMilliseconds(16)"), "size-label work must be frame bounded");
+    }
+
+    private static void SettingsClosesTransientSurfaces()
+    {
+        var source = File.ReadAllText(Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows", "App.xaml.cs"));
+        var start = source.IndexOf("private void ShowSettings()", StringComparison.Ordinal);
+        var end = source.IndexOf("// ================= Single instance", start, StringComparison.Ordinal);
+        var method = source[start..end];
+        True(method.Contains("CloseActivePanel()"), "settings must close the transient translation panel");
+        True(method.Contains("ShowMainWindow()"), "settings must establish the main-window context");
+        True(method.Contains("window.Owner = _mainWindow"), "settings must be owned by the main window");
+    }
+
+    private static void ScreenshotDraftRouteIsVisible()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            FindProjectRoot(), "apps", "PopGlot.Windows", "Sections", "PrivacySection.xaml.cs"));
+        True(source.Contains("RefreshDraftRoutePreview"), "unsaved screenshot settings need a route preview");
+        True(source.Contains("保存后预计线路"), "the preview must distinguish draft from actual routing");
+        True(source.Contains("RouteBadgeText.Text = pipeline"), "the route badge must follow the calculated route");
+    }
+
+    private static void ServiceEditorUsesStableResponsiveGrid()
+    {
+        var appDir = Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows");
+        var xaml = File.ReadAllText(Path.Combine(appDir, "Sections", "ServicesSection.xaml"));
+        var code = File.ReadAllText(Path.Combine(appDir, "Sections", "ServicesSection.xaml.cs"));
+
+        foreach (var grid in new[]
+                 {
+                     "IdentityFieldsGrid", "ApiKeyInputGrid", "ModelFieldsGrid",
+                     "EndpointFieldsGrid", "AdvancedDetailsGrid",
+                 })
+        {
+            True(xaml.Contains($"x:Name=\"{grid}\""), $"service editor must define {grid}");
+        }
+        True(xaml.Contains("x:Key=\"EditorTextField\""), "text fields need a shared editor size");
+        True(xaml.Contains("x:Key=\"EditorComboField\""), "model fields need a shared editor size");
+        True(xaml.Contains("x:Key=\"EditorPasswordField\""), "credential fields need a shared editor size");
+        True(code.Contains("Grid.SetColumn(second, 2)"), "wide field pairs must restore into column 2");
+        True(!code.Contains("Grid.SetColumn(second, 1)"), "field controls must never occupy the gutter column");
+        True(code.Contains("Grid.SetColumnSpan(KeyActionsPanel, 3)"),
+            "credential actions must stack without squeezing the key field");
+        True(xaml.Contains("Click=\"FetchModels_Click\""), "the model section needs an explicit fetch action");
+        True(xaml.Contains("ModelCatalogStatusText"), "model fetch feedback must stay next to the model fields");
+        True(xaml.Contains("接口路径") && xaml.Contains("请求定制"),
+            "advanced settings must be split into understandable groups");
+    }
+
+    private static void ModelCatalogEndpointsFollowProtocols()
+    {
+        Equal("https://relay.example/v1/models",
+            ModelCatalogService.BuildModelsUri(
+                "https://relay.example/v1", ProviderType.OpenAiCompatible).AbsoluteUri);
+        Equal("https://api.anthropic.com/v1/models?limit=1000",
+            ModelCatalogService.BuildModelsUri(
+                "https://api.anthropic.com", ProviderType.AnthropicMessages).AbsoluteUri);
+        Equal("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000",
+            ModelCatalogService.BuildModelsUri(
+                "https://generativelanguage.googleapis.com", ProviderType.GeminiGenerateContent).AbsoluteUri);
+        Equal("https://relay.example/v1beta/models?pageSize=1000",
+            ModelCatalogService.BuildModelsUri(
+                "https://relay.example/v1beta", ProviderType.GeminiGenerateContent).AbsoluteUri);
+        Equal("http://127.0.0.1:11434/v1/models",
+            ModelCatalogService.BuildModelsUri(
+                "http://127.0.0.1:11434/v1", ProviderType.OpenAiCompatible).AbsoluteUri);
+        Throws<InvalidOperationException>(() => ModelCatalogService.BuildModelsUri(
+            "http://public.example/v1", ProviderType.OpenAiCompatible));
+    }
+
+    private static void ModelCatalogParsesProviderResponses()
+    {
+        var openAi = ModelCatalogService.ParseModels(
+            """{"data":[{"id":"gpt-z"},{"id":"gpt-a"},{"id":"gpt-a"}]}""",
+            ProviderType.OpenAiCompatible);
+        Equal(2, openAi.Count);
+        Equal("gpt-a", openAi[0]);
+
+        var gemini = ModelCatalogService.ParseModels(
+            """{"models":[{"name":"models/gemini-flash","supportedGenerationMethods":["generateContent"]},{"name":"models/gemini-embedding","supportedGenerationMethods":["embedContent"]}]}""",
+            ProviderType.GeminiGenerateContent);
+        Equal(1, gemini.Count);
+        Equal("gemini-flash", gemini[0]);
+    }
+
+    private static async Task ModelCatalogUsesDraftCredentialsAsync()
+    {
+        CoreBridge.Initialize();
+        var draft = CoreBridge.GetSettings() with
+        {
+            ProviderType = ProviderType.GeminiGenerateContent,
+            ApiBaseUrl = "https://generativelanguage.googleapis.com",
+            NetworkEnabled = true,
+            SafeDevMode = false,
+            ExtraHeaders = new Dictionary<string, string>(),
+        };
+        var handler = new RecordingHttpHandler(
+            """{"models":[{"name":"models/gemini-flash","supportedGenerationMethods":["generateContent"]}]}""");
+        var result = await ModelCatalogService.FetchAsync(draft, "draft-secret", testHandler: handler);
+
+        Equal("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000", handler.RequestUri);
+        Equal("draft-secret", handler.Headers["x-goog-api-key"]);
+        Equal(1, result.Models.Count);
+        Equal("gemini-flash", result.Models[0]);
+    }
+
+    private static void InformationArchitectureSurfacesPresent()
+    {
+        var appDir = Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows");
+        var mainXaml = File.ReadAllText(Path.Combine(appDir, "MainWindow.xaml"));
+        var settingsXaml = File.ReadAllText(Path.Combine(appDir, "SettingsWindow.xaml"));
+        var servicesXaml = File.ReadAllText(Path.Combine(appDir, "Sections", "ServicesSection.xaml"));
+
+        // The main window is a work surface only: translate + library, plus a
+        // quiet footer with the settings entry. No control center, no save bar.
+        foreach (var surface in new[] { "TranslateSection", "LibrarySection" })
+        {
+            True(mainXaml.Contains(surface), $"the main window must host {surface}");
+        }
+        True(mainXaml.Contains("NavTranslate"), "translate navigation must exist");
         True(mainXaml.Contains("NavLibrary"), "library navigation must exist");
-        True(mainXaml.Contains("ProfilesListBox"), "the service profile list must exist");
-        True(!mainXaml.Contains("NavVocabulary") && !mainXaml.Contains("NavHistory"),
-            "vocabulary and history must not be top-level settings items");
-        True(mainXaml.Contains("TranslateInput"), "Translate input must exist");
-        True(mainXaml.Contains("TranslateResult"), "Translate result must exist");
+        True(mainXaml.Contains("SettingsButton"), "the settings entry must exist");
+        True(!mainXaml.Contains("ControlCenterHost"), "the control center host must be gone");
+        True(!mainXaml.Contains("NavControl"), "the control center nav must be gone");
+        True(!mainXaml.Contains("保存设置"), "the main window must not carry the global save bar");
+        True(!mainXaml.Contains("放弃修改"), "the main window must not carry the revert action");
+
+        // Settings are a dedicated window with a single nav level and the
+        // save bar that only appears with an unsaved draft.
+        foreach (var surface in new[]
+                 {
+                     "GeneralSection", "ShortcutsSection", "ProviderSection",
+                     "CaptureSection", "DataSection", "SaveButton",
+                 })
+        {
+            True(settingsXaml.Contains(surface), $"the settings window must host {surface}");
+        }
+        True(settingsXaml.Contains("NavGeneral"), "settings general nav must exist");
+        True(settingsXaml.Contains("NavProvider"), "settings services nav must exist");
+        True(settingsXaml.Contains("NavPrivacy"), "settings privacy nav must exist");
+        True(settingsXaml.Contains("SaveActionsPanel"), "the draft-only save bar must exist");
+
+        // Services use master–detail: profile list beside the editor.
+        True(servicesXaml.Contains("ProfilesListBox"), "the service profile list must exist");
+        True(servicesXaml.Contains("DefaultTextCombo"), "the default text service picker must exist");
+        True(servicesXaml.Contains("DefaultVisionCombo"), "the default vision service picker must exist");
+        True(servicesXaml.Contains("PresetsPanel"), "adding a service must start in a provider catalogue");
+        True(servicesXaml.Contains("ConfigFormPanel"), "provider setup must be a separate focused step");
+        True(servicesXaml.Contains("ChooseAnotherProviderButton"), "the setup step must return to the catalogue");
+        True(!servicesXaml.Contains("<UniformGrid"), "provider choices must not look like a chip dashboard");
+        True(servicesXaml.Contains("EditorProviderTitle"), "configured services need an identity-led detail header");
+        True(servicesXaml.Contains("Click=\"EditProfile_Click\""), "each configured service needs an explicit edit action");
+        True(servicesXaml.Contains("Click=\"BackToServices_Click\""), "the focused editor must return to the service overview");
+        True(servicesXaml.Contains("RoutingPanel"), "default routing must stay separate from provider editing");
+        True(!servicesXaml.Contains("ColumnDefinition x:Name=\"DetailColumn\""),
+            "the narrow permanent master-detail rail must be removed");
+
+        var serviceCode = File.ReadAllText(Path.Combine(appDir, "Sections", "ServicesSection.xaml.cs"));
+        True(serviceCode.Contains("CaptureEditorState()"), "service drafts must use value-based dirty tracking");
+        True(serviceCode.Contains("_editorBaseline"), "loaded services must retain a clean editor baseline");
+
+        var projectXaml = File.ReadAllText(Path.Combine(appDir, "PopGlot.Windows.csproj"));
+        True(projectXaml.Contains("PopGlot-v3.ico"), "the selected v3 app icon must be packaged");
+        True(projectXaml.Contains("popglot-app-avatar-v3.png"), "the selected v3 sidebar mark must be packaged");
     }
 
     private static void ThemeTokensSymmetric()
@@ -946,6 +1490,12 @@ internal static class Program
 
         RenderAndSave(new MainWindow(ShellSettings.Default, history, vocab), 960, 640, Path.Combine(outDir, "main_window_dark.png"), ThemePreference.Dark);
         RenderAndSave(new MainWindow(ShellSettings.Default, history, vocab), 960, 640, Path.Combine(outDir, "main_window_light.png"), ThemePreference.Light);
+        RenderAndSave(new SettingsWindow(ShellSettings.Default, history, vocab), 960, 680, Path.Combine(outDir, "settings_dark.png"), ThemePreference.Dark);
+        RenderAndSave(new SettingsWindow(ShellSettings.Default, history, vocab), 960, 680, Path.Combine(outDir, "settings_light.png"), ThemePreference.Light);
+        RenderAndSave(CreateServiceEditorPreview(), 760, 620, Path.Combine(outDir, "service_editor_dark.png"), ThemePreference.Dark);
+        RenderAndSave(CreateServiceEditorPreview(), 760, 620, Path.Combine(outDir, "service_editor_light.png"), ThemePreference.Light);
+        RenderAndSave(CreateServiceEditorPreview(), 620, 720, Path.Combine(outDir, "service_editor_compact_light.png"), ThemePreference.Light);
+        RenderAndSave(CreateAdvancedServiceEditorPreview(), 760, 920, Path.Combine(outDir, "service_editor_advanced_light.png"), ThemePreference.Light);
         RenderAndSave(new QuickSearchWindow(history, vocab), 560, 360, Path.Combine(outDir, "quick_search_dark.png"), ThemePreference.Dark);
         RenderAndSave(new QuickSearchWindow(history, vocab), 560, 360, Path.Combine(outDir, "quick_search_light.png"), ThemePreference.Light);
         RenderAndSave(new TranslationPanelWindow(new Rect(100, 100, 20, 20), history, () => ShellSettings.Default, null, null, vocab), 420, 520, Path.Combine(outDir, "translation_panel_dark.png"), ThemePreference.Dark);
@@ -971,6 +1521,10 @@ internal static class Program
 
         True(File.Exists(Path.Combine(outDir, "main_window_dark.png")), "main_window_dark.png must be created");
         True(File.Exists(Path.Combine(outDir, "main_window_light.png")), "main_window_light.png must be created");
+        True(File.Exists(Path.Combine(outDir, "settings_dark.png")), "settings_dark.png must be created");
+        True(File.Exists(Path.Combine(outDir, "service_editor_dark.png")), "service_editor_dark.png must be created");
+        True(File.Exists(Path.Combine(outDir, "service_editor_compact_light.png")), "compact service editor must be created");
+        True(File.Exists(Path.Combine(outDir, "service_editor_advanced_light.png")), "advanced service editor must be created");
         True(File.Exists(Path.Combine(outDir, "quick_search_dark.png")), "quick_search_dark.png must be created");
         True(File.Exists(Path.Combine(outDir, "translation_panel_dark.png")), "translation_panel_dark.png must be created");
         True(File.Exists(Path.Combine(outDir, "main_window_light_200pct.png")), "the 200% DPI matrix must be produced");
@@ -982,22 +1536,67 @@ internal static class Program
     private static void RenderAndSaveAtDpi(Window window, int width, int height, string filePath, ThemePreference theme, double dpiScale)
     {
         ThemeService.Apply(theme);
-        window.Width = width / dpiScale;
-        window.Height = height / dpiScale;
-        window.Measure(new Size(width / dpiScale, height / dpiScale));
-        window.Arrange(new Rect(0, 0, width / dpiScale, height / dpiScale));
-        window.UpdateLayout();
+        var logicalWidth = width / dpiScale;
+        var logicalHeight = height / dpiScale;
+        window.Width = logicalWidth;
+        window.Height = logicalHeight;
+
+        // An unshown WPF Window renders as a black native surface. Render its
+        // managed content root instead so headless screenshots actually catch
+        // spacing, clipping and theme regressions without opening a window.
+        var visual = window.Content as FrameworkElement ?? window;
+        visual.Width = logicalWidth;
+        visual.Height = logicalHeight;
+        visual.Measure(new Size(logicalWidth, logicalHeight));
+        visual.Arrange(new Rect(0, 0, logicalWidth, logicalHeight));
+        visual.UpdateLayout();
 
         var dpi = 96 * dpiScale;
         var rtb = new RenderTargetBitmap(
             (int)Math.Ceiling(width * dpiScale), (int)Math.Ceiling(height * dpiScale),
             dpi, dpi, PixelFormats.Pbgra32);
-        rtb.Render(window);
+        rtb.Render(visual);
 
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(rtb));
         using var stream = File.Create(filePath);
         encoder.Save(stream);
+    }
+
+    private static Window CreateServiceEditorPreview()
+    {
+        var section = new ServicesSection();
+        section.LoadProfileIntoForm(ProviderProfile.CreateGemini());
+        typeof(ServicesSection)
+            .GetMethod("ShowEditorForm", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(section, new object[] { false });
+        var host = new System.Windows.Controls.Border
+        {
+            Child = section,
+            Padding = new Thickness(24),
+        };
+        host.SetResourceReference(System.Windows.Controls.Border.BackgroundProperty, "CanvasBrush");
+        return new Window
+        {
+            Content = host,
+        };
+    }
+
+    private static Window CreateAdvancedServiceEditorPreview()
+    {
+        var section = new ServicesSection();
+        section.LoadProfileIntoForm(ProviderProfile.CreateOllama());
+        typeof(ServicesSection)
+            .GetMethod("ShowEditorForm", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(section, new object[] { false });
+        section.AdvancedExpander.IsExpanded = true;
+        var host = new System.Windows.Controls.Border
+        {
+            Child = section,
+            Padding = new Thickness(24),
+        };
+        host.SetResourceReference(System.Windows.Controls.Border.BackgroundProperty, "CanvasBrush");
+        return new Window { Content = host };
     }
 
     // ================= Harness =================
@@ -1062,6 +1661,14 @@ internal static class Program
         }
     }
 
+    private static void Equal<T>(T expected, T actual, string message)
+    {
+        if (!EqualityComparer<T>.Default.Equals(expected, actual))
+        {
+            throw new InvalidOperationException($"{message}: expected <{expected}>, got <{actual}>.");
+        }
+    }
+
     private static void Equal<T>(T expected, T actual)
     {
         if (!EqualityComparer<T>.Default.Equals(expected, actual))
@@ -1090,6 +1697,41 @@ internal static class Program
             return exception;
         }
         throw new InvalidOperationException($"Expected {typeof(TException).Name}.");
+    }
+
+    private static TException Throws<TException>(Action operation)
+        where TException : Exception
+    {
+        try
+        {
+            operation();
+        }
+        catch (TException exception)
+        {
+            return exception;
+        }
+        throw new InvalidOperationException($"Expected {typeof(TException).Name}.");
+    }
+
+    private sealed class RecordingHttpHandler(string responseJson) : System.Net.Http.HttpMessageHandler
+    {
+        public string RequestUri { get; private set; } = string.Empty;
+        public Dictionary<string, string> Headers { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(
+            System.Net.Http.HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            RequestUri = request.RequestUri?.AbsoluteUri ?? string.Empty;
+            foreach (var header in request.Headers)
+            {
+                Headers[header.Key] = string.Join(",", header.Value);
+            }
+            return Task.FromResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new System.Net.Http.StringContent(responseJson),
+            });
+        }
     }
 
     private sealed class FakeClipboardAdapter : ISelectionClipboardAdapter

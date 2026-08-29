@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Diagnostics;
 using System.Windows.Threading;
 
 namespace PopGlot.Windows;
@@ -17,6 +18,9 @@ public partial class CaptureOverlayWindow : Window
     private bool _completed;
     private bool _closing;
     private bool _forceOcrMode;
+    private long _lastBadgeUpdate;
+    private int _lastPixelWidth = -1;
+    private int _lastPixelHeight = -1;
 
     public CaptureOverlayWindow()
     {
@@ -64,6 +68,8 @@ public partial class CaptureOverlayWindow : Window
         CaptureMouse();
         ShadeFull.Visibility = Visibility.Collapsed;
         HintChip.Visibility = Visibility.Collapsed;
+        CrossHorizontal.Visibility = Visibility.Collapsed;
+        CrossVertical.Visibility = Visibility.Collapsed;
         SetShadeVisibility(Visibility.Visible);
         SelectionBorder.Visibility = Visibility.Visible;
         SizeBadge.Visibility = Visibility.Visible;
@@ -152,10 +158,11 @@ public partial class CaptureOverlayWindow : Window
         Hide();
         try
         {
-            // Yield until the compositor has actually presented a frame without
-            // this window, so the grab cannot include our own dimming layer.
-            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
-            await Task.Delay(60);
+            // Yield through render priority so the hidden overlay is committed
+            // before capture. The old fixed 60 ms delay made every screenshot
+            // feel sticky even on a fast compositor.
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Render);
+            await Task.Delay(16);
 
             var png = ScreenCaptureService.CapturePng(pixelRect);
             Close();
@@ -198,13 +205,25 @@ public partial class CaptureOverlayWindow : Window
         PlaceHandle(HandleBottomLeft, rect.Left, rect.Bottom);
         PlaceHandle(HandleBottomRight, rect.Right, rect.Bottom);
 
-        // Report physical pixels: that is what actually gets captured, and it is
-        // what the user compares against when sizing a region.
+        // Geometry follows every pointer event. Text/layout is capped to one
+        // update per display frame; forcing UpdateLayout on every MouseMove was
+        // the primary source of marquee lag.
+        var now = Stopwatch.GetTimestamp();
+        var elapsed = Stopwatch.GetElapsedTime(_lastBadgeUpdate, now);
         var scale = ScreenGeometry.ScaleOf(this);
-        SizeText.Text =
-            $"{rect.Width * scale.X:0} × {rect.Height * scale.Y:0} px";
+        var pixelWidth = (int)Math.Round(rect.Width * scale.X);
+        var pixelHeight = (int)Math.Round(rect.Height * scale.Y);
+        if (_lastBadgeUpdate == 0 || elapsed >= TimeSpan.FromMilliseconds(16))
+        {
+            _lastBadgeUpdate = now;
+            if (pixelWidth != _lastPixelWidth || pixelHeight != _lastPixelHeight)
+            {
+                _lastPixelWidth = pixelWidth;
+                _lastPixelHeight = pixelHeight;
+                SizeText.Text = $"{pixelWidth} × {pixelHeight} px";
+            }
+        }
 
-        SizeBadge.UpdateLayout();
         var badgeWidth = SizeBadge.ActualWidth;
         var badgeHeight = SizeBadge.ActualHeight;
         Canvas.SetLeft(SizeBadge, Math.Clamp(rect.X, 0, Math.Max(0, ActualWidth - badgeWidth)));

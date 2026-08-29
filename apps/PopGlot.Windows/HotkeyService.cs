@@ -17,6 +17,7 @@ internal sealed partial class HotkeyService : IDisposable
     private readonly Dictionary<int, HotkeyAction> _registered = [];
     private IReadOnlyDictionary<HotkeyAction, HotkeyBinding> _current =
         new Dictionary<HotkeyAction, HotkeyBinding>();
+    private bool _suspended;
     private bool _disposed;
 
     public HotkeyService(Window owner)
@@ -55,6 +56,28 @@ internal sealed partial class HotkeyService : IDisposable
         return false;
     }
 
+    /// <summary>
+    /// Temporarily releases process-wide shortcuts while a recorder is
+    /// listening. Otherwise pressing the old shortcut also dispatches its
+    /// action (selection translation synthesizes Ctrl+C) before the recorder
+    /// can accept the same combination.
+    /// </summary>
+    public void SetSuspended(bool suspended)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_suspended == suspended)
+        {
+            return;
+        }
+        _suspended = suspended;
+        if (suspended)
+        {
+            UnregisterAll();
+            return;
+        }
+        _ = RegisterSet(_current, out _);
+    }
+
     private bool RegisterSet(
         IReadOnlyDictionary<HotkeyAction, HotkeyBinding> hotkeys,
         out string? conflict)
@@ -81,7 +104,7 @@ internal sealed partial class HotkeyService : IDisposable
 
     private nint WindowMessageHook(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
     {
-        if (message == WmHotkey && _registered.TryGetValue(wParam.ToInt32(), out var action))
+        if (!_suspended && message == WmHotkey && _registered.TryGetValue(wParam.ToInt32(), out var action))
         {
             handled = true;
             Pressed?.Invoke(this, action);

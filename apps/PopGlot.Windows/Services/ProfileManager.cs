@@ -6,6 +6,30 @@ namespace PopGlot.Windows.Services;
 
 internal sealed class ProviderProfile
 {
+    public ProviderProfile()
+    {
+    }
+
+    /// <summary>Full copy, used by tests and migrations to derive variants.</summary>
+    public ProviderProfile(ProviderProfile source)
+    {
+        Id = source.Id;
+        Name = source.Name;
+        ProviderType = source.ProviderType;
+        ApiBaseUrl = source.ApiBaseUrl;
+        TextEndpoint = source.TextEndpoint;
+        VisionEndpoint = source.VisionEndpoint;
+        TextModel = source.TextModel;
+        VisionModel = source.VisionModel;
+        ExtraHeaders = new Dictionary<string, string>(source.ExtraHeaders, StringComparer.OrdinalIgnoreCase);
+        AnthropicVersion = source.AnthropicVersion;
+        SupportsText = source.SupportsText;
+        SupportsVision = source.SupportsVision;
+        AllowInsecureTls = source.AllowInsecureTls;
+        CredentialTarget = source.CredentialTarget;
+        IsLocal = source.IsLocal;
+    }
+
     public string Id { get; set; } = "openai-default";
     public string Name { get; set; } = "OpenAI";
     public ProviderType ProviderType { get; set; } = ProviderType.OpenAiCompatible;
@@ -71,8 +95,8 @@ internal sealed class ProviderProfile
         ApiBaseUrl = "https://generativelanguage.googleapis.com",
         TextEndpoint = "/v1beta/models/{model}:generateContent",
         VisionEndpoint = "/v1beta/models/{model}:generateContent",
-        TextModel = "gemini-2.0-flash",
-        VisionModel = "gemini-2.0-flash",
+        TextModel = "gemini-3.6-flash",
+        VisionModel = "gemini-3.6-flash",
         CredentialTarget = "PopGlot/provider/gemini",
     };
 
@@ -87,6 +111,19 @@ internal sealed class ProviderProfile
         TextModel = "claude-3-5-sonnet-latest",
         VisionModel = "claude-3-5-sonnet-latest",
         CredentialTarget = "PopGlot/provider/claude",
+    };
+
+    public static ProviderProfile CreateZhipu() => new()
+    {
+        Id = "zhipu",
+        Name = "智谱 GLM",
+        ProviderType = ProviderType.OpenAiCompatible,
+        ApiBaseUrl = "https://open.bigmodel.cn/api/paas/v4",
+        TextEndpoint = "/chat/completions",
+        VisionEndpoint = "/chat/completions",
+        TextModel = "glm-4-flash",
+        VisionModel = "glm-4v-flash",
+        CredentialTarget = "PopGlot/provider/zhipu",
     };
 
     public ProviderSettings ToProviderSettings(ProviderSettings baseSettings) =>
@@ -108,18 +145,60 @@ internal sealed class ProviderProfile
 
 internal sealed class CoreProductConfig
 {
-    public int SchemaVersion { get; set; } = 4;
-    public string ActiveProfileId { get; set; } = "openai-default";
-    public List<ProviderProfile> Profiles { get; set; } = [
+    public int SchemaVersion { get; set; } = 5;
+    public string ActiveProfileId { get; set; } = string.Empty;
+    public string? VisionProfileId { get; set; }
+    public List<ProviderProfile> Profiles { get; set; } = [];
+
+    public ProviderProfile GetActiveProfile() =>
+        Profiles.FirstOrDefault(p => p.Id == ActiveProfileId)
+        ?? Profiles.FirstOrDefault()
+        ?? ProviderProfile.CreateOpenAi();
+}
+
+/// <summary>
+/// Factory provider templates. These are NOT user services: they only seed
+/// the add-service flow and never appear in the configured list. A fresh
+/// install has an empty ConfiguredServices list.
+/// </summary>
+internal static class ProviderCatalog
+{
+    public static IReadOnlyList<ProviderProfile> Templates =>
+    [
         ProviderProfile.CreateOpenAi(),
         ProviderProfile.CreateDeepSeek(),
         ProviderProfile.CreateOllama(),
         ProviderProfile.CreateGemini(),
         ProviderProfile.CreateClaude(),
+        ProviderProfile.CreateZhipu(),
     ];
 
-    public ProviderProfile GetActiveProfile() =>
-        Profiles.FirstOrDefault(p => p.Id == ActiveProfileId) ?? Profiles[0];
+    public static ProviderProfile? Find(string id) =>
+        Templates.FirstOrDefault(t => t.Id == id);
+
+    /// <summary>
+    /// True when the profile is byte-for-byte a factory template: same id and
+    /// the same visible fields. Such entries only existed because older
+    /// builds seeded them; user-configured ones (renamed, re-modelled, with a
+    /// key, or edited) never match.
+    /// </summary>
+    public static bool IsPristineTemplate(ProviderProfile profile)
+    {
+        var template = Find(profile.Id);
+        if (template is null)
+        {
+            return false;
+        }
+        return string.Equals(profile.Name, template.Name, StringComparison.Ordinal) &&
+            profile.ProviderType == template.ProviderType &&
+            string.Equals(profile.ApiBaseUrl, template.ApiBaseUrl, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(profile.TextEndpoint, template.TextEndpoint, StringComparison.Ordinal) &&
+            string.Equals(profile.VisionEndpoint, template.VisionEndpoint, StringComparison.Ordinal) &&
+            string.Equals(profile.TextModel, template.TextModel, StringComparison.Ordinal) &&
+            string.Equals(profile.VisionModel, template.VisionModel, StringComparison.Ordinal) &&
+            profile.SupportsText == template.SupportsText &&
+            profile.SupportsVision == template.SupportsVision;
+    }
 }
 
 internal static class ProfileManager
@@ -129,7 +208,20 @@ internal static class ProfileManager
         "PopGlot",
         "product-config.json");
 
+    /// <summary>Test seam: redirects the config file (also disables seeding).</summary>
+    internal static string? ConfigPathOverride;
+
+    /// <summary>Test seam: clears the process-wide cache between scenarios.</summary>
+    internal static void ResetForTests()
+    {
+        _cached = null;
+        ConfigPathOverride = null;
+    }
+
     private static CoreProductConfig? _cached;
+
+    private static string EffectivePath =>
+        ConfigPathOverride ?? ConfigPath;
 
     public static CoreProductConfig Load()
     {
@@ -137,12 +229,23 @@ internal static class ProfileManager
         {
             return _cached;
         }
+        var path = EffectivePath;
         try
         {
-            if (File.Exists(ConfigPath))
+            if (File.Exists(path))
             {
-                var json = File.ReadAllText(ConfigPath);
-                _cached = JsonSerializer.Deserialize<CoreProductConfig>(json);
+                var json = File.ReadAllText(path);
+                var config = JsonSerializer.Deserialize<CoreProductConfig>(json);
+                if (config is not null)
+                {
+                    // Schema v4 and older seeded factory templates as if the
+                    // user had configured them; migrate them away once.
+                    if (config.SchemaVersion < 5)
+                    {
+                        config = MigrateToV5(config, path);
+                    }
+                    _cached = config;
+                }
             }
         }
         catch
@@ -152,10 +255,69 @@ internal static class ProfileManager
 
         // First run with profiles: adopt the live provider settings as the
         // active profile so the service list reflects what actually runs
-        // instead of masking it with factory presets.
-        _cached ??= SeedFromLiveSettings();
+        // instead of masking it with factory presets. Never runs for tests
+        // using the override path.
+        if (_cached is null && ConfigPathOverride is null)
+        {
+            _cached = SeedFromLiveSettings();
+        }
         _cached ??= new CoreProductConfig();
         return _cached;
+    }
+
+    /// <summary>
+    /// Schema v4 → v5: factory templates that the user never touched stop
+    /// posing as configured services. Anything the user customised — renamed,
+    /// re-modelled, holding a key, or an adopted live setting — is preserved.
+    /// The pre-migration file is kept as .bak by the normal save path.
+    /// </summary>
+    private static CoreProductConfig MigrateToV5(CoreProductConfig config, string path)
+    {
+        var kept = new List<ProviderProfile>();
+        foreach (var profile in config.Profiles)
+        {
+            var hasKey = false;
+            try
+            {
+                hasKey = !string.IsNullOrWhiteSpace(profile.CredentialTarget) &&
+                    CredentialStore.HasApiKey(profile.CredentialTarget);
+            }
+            catch (Exception exception) when (
+                exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                // Vault unavailable: keep the profile rather than risk loss.
+                hasKey = true;
+            }
+
+            if (!ProviderCatalog.IsPristineTemplate(profile) || hasKey)
+            {
+                kept.Add(profile);
+            }
+        }
+
+        var migrated = new CoreProductConfig
+        {
+            SchemaVersion = 5,
+            Profiles = kept,
+            ActiveProfileId = kept.Any(p => p.Id == config.ActiveProfileId)
+                ? config.ActiveProfileId
+                : (kept.FirstOrDefault()?.Id ?? string.Empty),
+            VisionProfileId = kept.Any(p => p.Id == config.VisionProfileId)
+                ? config.VisionProfileId
+                : null,
+        };
+        try
+        {
+            // Writes the migrated schema and rotates the old file into .bak.
+            _cached = null;
+            Save(migrated);
+        }
+        catch (Exception)
+        {
+            // Disk write failed: still return the migrated view so the UI
+            // reflects reality; the original file stays untouched on disk.
+        }
+        return migrated;
     }
 
     private static CoreProductConfig? SeedFromLiveSettings()
@@ -209,8 +371,7 @@ internal static class ProfileManager
 
     public static void Save(CoreProductConfig config)
     {
-        _cached = config;
-        var dir = Path.GetDirectoryName(ConfigPath);
+        var dir = Path.GetDirectoryName(EffectivePath);
         if (!string.IsNullOrEmpty(dir))
         {
             Directory.CreateDirectory(dir);
@@ -218,20 +379,49 @@ internal static class ProfileManager
         var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
 
         // Same durability contract as the core settings: temp file, flush,
-        // atomic replace, previous copy kept as .bak.
-        var tempPath = ConfigPath + ".tmp";
-        var bakPath = ConfigPath + ".bak";
+        // atomic replace, previous copy kept as .bak. The in-memory cache is
+        // updated only AFTER the file replace succeeds, so a failed save can
+        // never leave memory and disk disagreeing.
+        var tempPath = EffectivePath + ".tmp";
+        var bakPath = EffectivePath + ".bak";
         var bytes = System.Text.Encoding.UTF8.GetBytes(json);
         using (var stream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
         {
             stream.Write(bytes);
             stream.Flush(true);
         }
-        if (File.Exists(ConfigPath))
+        if (File.Exists(EffectivePath))
         {
-            File.Copy(ConfigPath, bakPath, overwrite: true);
+            File.Copy(EffectivePath, bakPath, overwrite: true);
         }
-        File.Move(tempPath, ConfigPath, overwrite: true);
+        File.Move(tempPath, EffectivePath, overwrite: true);
+        _cached = config;
+    }
+
+    /// <summary>
+    /// Decides the final profile id and the credential target for a save
+    /// BEFORE any key is written. A new profile mints its own per-profile
+    /// target; editing keeps the existing profile's own target — so a
+    /// DeepSeek/Gemini/Claude key can never land in the OpenAI default slot.
+    /// </summary>
+    public static (string ProfileId, string CredentialTarget) ResolveSaveTarget(
+        CoreProductConfig config, string? editingProfileId)
+    {
+        if (editingProfileId is null)
+        {
+            var mintedId = $"p-{Guid.NewGuid().ToString("N")[..10]}";
+            return (mintedId, $"PopGlot/provider/{mintedId}");
+        }
+
+        var existing = config.Profiles.FirstOrDefault(profile => profile.Id == editingProfileId);
+        if (existing is null)
+        {
+            return (editingProfileId, $"PopGlot/provider/{editingProfileId}");
+        }
+        return (existing.Id,
+            string.IsNullOrWhiteSpace(existing.CredentialTarget)
+                ? $"PopGlot/provider/{existing.Id}"
+                : existing.CredentialTarget);
     }
 
     /// <summary>

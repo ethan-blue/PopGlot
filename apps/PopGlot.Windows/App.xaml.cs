@@ -43,6 +43,8 @@ public partial class App : Application
 
     private MainWindow? _mainWindow;
 
+    private SettingsWindow? _settingsWindow;
+
     private TranslationPanelWindow? _activePanel;
 
     private CaptureOverlayWindow? _activeOverlay;
@@ -70,7 +72,9 @@ public partial class App : Application
             ThemeService.Apply(_shellSettings.Theme);
             CoreBridge.Initialize();
             AnnounceStartupNotice();
-            Services.OutboundPolicy.ConsentPrompt = PromptFreeEngineConsent;
+            // Free-engine first-use authorization lives in
+            // 「设置 → 隐私与数据」— no runtime popup interrupts translation.
+            // OutboundPolicy fails closed until the user allows it there.
 
             // Startup only creates the tray, theme, and a hidden message
             // window for the hotkeys; the heavy MainWindow is built on first
@@ -88,14 +92,14 @@ public partial class App : Application
                 // window is hidden at this point.
                 Notify(
                     "快捷键注册失败",
-                    "有快捷键被其他程序占用。请在「快捷键与外观」中改成别的组合。",
+                    "有快捷键被其他程序占用。请在「设置 → 快捷键」中改成别的组合。",
                     Forms.ToolTipIcon.Warning);
                 ShowMainWindow();
             }
 
             if (e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase))
             {
-                ShowMainWindow();
+                ShowSettings();
             }
         }
         catch (Exception exception)
@@ -133,9 +137,59 @@ public partial class App : Application
         }
         _mainWindow = new MainWindow(_shellSettings, _history, _vocabulary)
         {
-            ApplyShellSettings = TryApplyShellSettings,
+            OpenSettings = ShowSettings,
+            NotifyTray = (title, message) => Notify(title, message, Forms.ToolTipIcon.Info),
         };
         return _mainWindow;
+    }
+
+    /// <summary>
+    /// The settings window exists at most once; reopening activates the
+    /// existing instance so drafts are never silently duplicated.
+    /// </summary>
+    private SettingsWindow EnsureSettingsWindow()
+    {
+        if (_settingsWindow is { IsLoaded: true })
+        {
+            return _settingsWindow;
+        }
+        var window = new SettingsWindow(_shellSettings, _history, _vocabulary)
+        {
+            ApplyShellSettings = TryApplyShellSettings,
+            SetHotkeysSuspended = suspended => _hotkeys?.SetSuspended(suspended),
+        };
+        window.LocalDataCleared += () => _mainWindow?.ReloadHistory();
+        window.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_settingsWindow, window))
+            {
+                _settingsWindow = null;
+            }
+        };
+        _settingsWindow = window;
+        return window;
+    }
+
+    private void ShowSettings()
+    {
+        // A transient translation/capture surface must not remain behind a
+        // newly opened settings window. Settings belongs to the main window,
+        // so taskbar, activation and closing behaviour stay coherent.
+        CloseActivePanel();
+        CloseActiveOverlay();
+        ShowMainWindow();
+        var window = EnsureSettingsWindow();
+        if (window.Owner is null && _mainWindow is not null)
+        {
+            window.Owner = _mainWindow;
+        }
+        window.Show();
+        if (window.WindowState == WindowState.Minimized)
+        {
+            window.WindowState = WindowState.Normal;
+        }
+        window.Activate();
+        window.Focus();
     }
 
     // ================= Single instance =================
@@ -342,7 +396,7 @@ public partial class App : Application
 
             () => _shellSettings,
 
-            ShowMainWindow,
+            ShowSettings,
 
             OpenInMainWindow,
 
@@ -437,32 +491,6 @@ public partial class App : Application
         Notify("配置已重置", notice, Forms.ToolTipIcon.Warning);
     }
 
-    /// <summary>
-    /// The first-use consent dialog for the free web engine. Cancel remembers a
-    /// refusal; No sends nothing this time and asks again on the next use.
-    /// </summary>
-    private FreeEngineDecision PromptFreeEngineConsent(string destination)
-    {
-        return Dispatcher.Invoke(() =>
-        {
-            var result = MessageBox.Show(
-                "首次使用内置免费引擎。\n\n" +
-                $"待翻译的文本将发送到{destination}，" +
-                "不会发送截图、API Key 或其他凭据。\n\n" +
-                "「是」= 允许并记住　「否」= 仅本次允许　「取消」= 不允许",
-                "允许使用内置免费引擎？",
-                MessageBoxButton.YesNoCancel,
-                MessageBoxImage.Question,
-                MessageBoxResult.Cancel);
-            return result switch
-            {
-                MessageBoxResult.Yes => FreeEngineDecision.AlwaysAllow,
-                MessageBoxResult.No => FreeEngineDecision.AllowOnce,
-                _ => FreeEngineDecision.Deny,
-            };
-        });
-    }
-
     /// <summary>Where the popup should appear, in physical pixels.</summary>
     /// <remarks>
     /// The text caret is a better anchor than the mouse when the user selected
@@ -510,6 +538,8 @@ public partial class App : Application
         _shellSettings = settings;
         ThemeService.Apply(settings.Theme);
         UpdateTrayTooltip();
+        // The workbench footer always shows what actually runs right now.
+        _mainWindow?.RefreshEngineStatus();
         return true;
     }
 
@@ -543,7 +573,7 @@ public partial class App : Application
 
         _trayMenu.Items.Add(new Forms.ToolStripSeparator());
 
-        _trayMenu.Items.Add("设置", null, (_, _) => ShowMainWindow());
+        _trayMenu.Items.Add("设置", null, (_, _) => ShowSettings());
 
         _trayMenu.Items.Add("退出", null, (_, _) => ExitApplication());
 
@@ -563,7 +593,7 @@ public partial class App : Application
 
 
 
-        _trayIconImage = CreateAppIcon();
+        _trayIconImage = LoadAppIconFromResource();
 
         _trayIcon = new Forms.NotifyIcon
 
@@ -585,52 +615,21 @@ public partial class App : Application
 
     }
 
-    private static Drawing.Icon CreateAppIcon()
+    /// <summary>
+    /// Loads the shipped multi-size icon from the embedded resources instead
+    /// of drawing a placeholder at runtime.
+    /// </summary>
+    private static Drawing.Icon LoadAppIconFromResource()
     {
-        using var bitmap = new Drawing.Bitmap(32, 32);
-        using (var graphics = Drawing.Graphics.FromImage(bitmap))
+        var resource = Application.GetResourceStream(
+            new Uri("pack://application:,,,/Assets/PopGlot-v3.ico"));
+        if (resource is not null)
         {
-            graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-            graphics.Clear(Drawing.Color.Transparent);
-
-            using var background = new Drawing.SolidBrush(Drawing.Color.FromArgb(53, 208, 165));
-            using var path = RoundedRectangle(new Drawing.Rectangle(1, 1, 30, 30), 8);
-            graphics.FillPath(background, path);
-
-            using var font = new Drawing.Font(
-                "Segoe UI", 17, Drawing.FontStyle.Bold, Drawing.GraphicsUnit.Pixel);
-            using var textBrush = new Drawing.SolidBrush(Drawing.Color.FromArgb(4, 33, 26));
-            using var format = new Drawing.StringFormat
-            {
-                Alignment = Drawing.StringAlignment.Center,
-                LineAlignment = Drawing.StringAlignment.Center,
-            };
-            graphics.DrawString("P", font, textBrush, new Drawing.RectangleF(1, 1, 30, 30), format);
+            using var stream = resource.Stream;
+            return new Drawing.Icon(stream);
         }
-
-        var handle = bitmap.GetHicon();
-        try
-        {
-            // Clone so the icon survives DestroyIcon on the temporary handle.
-            return (Drawing.Icon)Drawing.Icon.FromHandle(handle).Clone();
-        }
-        finally
-        {
-            NativeMethods.DestroyIcon(handle);
-        }
-    }
-
-    private static GraphicsPath RoundedRectangle(Drawing.Rectangle bounds, int radius)
-    {
-        var diameter = radius * 2;
-        var path = new GraphicsPath();
-        path.AddArc(bounds.X, bounds.Y, diameter, diameter, 180, 90);
-        path.AddArc(bounds.Right - diameter, bounds.Y, diameter, diameter, 270, 90);
-        path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
-        path.AddArc(bounds.X, bounds.Bottom - diameter, diameter, diameter, 90, 90);
-        path.CloseFigure();
-        return path;
+        // Resource missing must not crash the tray; fall back to the Forms default.
+        return System.Drawing.SystemIcons.Application;
     }
 
     private void UpdateTrayTooltip()
@@ -682,6 +681,10 @@ public partial class App : Application
         {
             _mainWindow.AllowClose = true;
             _mainWindow.Close();
+        }
+        if (_settingsWindow is not null)
+        {
+            _settingsWindow.Close();
         }
         Shutdown();
     }

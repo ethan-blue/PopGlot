@@ -11,6 +11,11 @@ namespace PopGlot.Windows;
 /// </summary>
 public partial class FloatingTriggerWindow : Window
 {
+    /// <summary>Placement offsets: the trigger floats just above-right of the cursor.</summary>
+    private const double CursorOffsetX = 10;
+    private const double CursorOffsetY = 36;
+    private const double MinScreenMargin = 10;
+
     private readonly Action _onTrigger;
     private readonly DispatcherTimer _autoHideTimer;
     private bool _isHovered;
@@ -22,8 +27,8 @@ public partial class FloatingTriggerWindow : Window
         InitializeComponent();
 
         // Position slightly above and to the right of the cursor
-        Left = screenPos.X + 10;
-        Top = Math.Max(10, screenPos.Y - 36);
+        Left = screenPos.X + CursorOffsetX;
+        Top = Math.Max(MinScreenMargin, screenPos.Y - CursorOffsetY);
 
         _autoHideTimer = new DispatcherTimer
         {

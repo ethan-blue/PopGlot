@@ -1,0 +1,139 @@
+<UserControl x:Class="PopGlot.Windows.Sections.PrivacySection"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:PopGlot.Windows">
+
+    <StackPanel>
+        <TextBlock Text="隐私与数据" Style="{StaticResource PageTitle}" />
+        <TextBlock Style="{StaticResource PageSubtitle}"
+                   Text="截图默认完全在本地识别；这里也是所有出网权限的唯一入口。" />
+
+        <TextBlock Text="出网策略" Style="{StaticResource SectionTitle}" Margin="0,20,0,14" />
+
+        <Grid Style="{StaticResource SettingsRow}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="安全离线模式" Style="{StaticResource RowTitle}" />
+                <TextBlock Style="{StaticResource RowHint}"
+                           Text="总开关：开启后无论其他设置如何，都不会有任何外发请求" />
+            </StackPanel>
+            <ToggleButton x:Name="SafeModeToggle"
+                          AutomationProperties.Name="安全离线模式" Grid.Column="1"
+                          Style="{StaticResource ToggleSwitch}"
+                          Checked="ProviderGate_Changed" Unchecked="ProviderGate_Changed" />
+        </Grid>
+
+        <!-- Shown while safe mode is on: the outbound options below are inert. -->
+        <TextBlock x:Name="SafeModeGateNote" Style="{StaticResource Caption}"
+                   Foreground="{DynamicResource WarningBrush}"
+                   Margin="0,0,0,14" Visibility="Collapsed"
+                   Text="安全离线模式开启期间，下方出网设置保持禁用；关闭后才会按所选策略请求。" />
+
+        <Border Style="{StaticResource SettingsDivider}" />
+
+        <Grid Style="{StaticResource SettingsRow}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="启用大模型网络翻译" Style="{StaticResource RowTitle}" />
+                <TextBlock Style="{StaticResource RowHint}"
+                           Text="关闭后所有模型请求会在发出前被拒绝（本地模型不受影响）" />
+            </StackPanel>
+            <ToggleButton x:Name="NetworkEnabledToggle"
+                          AutomationProperties.Name="启用大模型网络翻译" Grid.Column="1"
+                          Style="{StaticResource ToggleSwitch}"
+                          Checked="ProviderGate_Changed" Unchecked="ProviderGate_Changed" />
+        </Grid>
+
+        <Border Style="{StaticResource SettingsDivider}" />
+
+        <Grid Style="{StaticResource SettingsRow}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="内置免费引擎" Style="{StaticResource RowTitle}" />
+                <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap"
+                           Text="无需配置的备选引擎：会把待翻译文本发送到 Google 公共翻译服务（translate.googleapis.com），不含截图与凭据。" />
+                <TextBlock x:Name="FreeEngineConsentState" Style="{StaticResource Caption}"
+                           Margin="0,5,0,0" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
+                <Button Content="允许" Style="{StaticResource GhostButton}"
+                        Click="AllowFreeEngine_Click" />
+                <Button Content="拒绝" Margin="6,0,0,0" Style="{StaticResource GhostButton}"
+                        Click="DenyFreeEngine_Click" />
+                <Button Content="恢复询问" Margin="6,0,0,0" Style="{StaticResource GhostButton}"
+                        Click="ResetFreeEngineConsent_Click" />
+            </StackPanel>
+        </Grid>
+
+        <TextBlock Text="截图处理方式" Style="{StaticResource SectionTitle}" Margin="0,20,0,14" />
+
+        <ComboBox x:Name="ModeComboBox" HorizontalAlignment="Stretch"
+                  AutomationProperties.Name="截图处理方式"
+                  SelectionChanged="ModeComboBox_SelectionChanged">
+            <ComboBoxItem Tag="LocalOcr">本地 OCR + 文本模型（推荐，最快、最省 Token、零截图上传）</ComboBoxItem>
+            <ComboBoxItem Tag="Auto">本地优先自动（默认本地 OCR，仅在授权后需要时走视觉模型）</ComboBoxItem>
+            <ComboBoxItem Tag="VisionDirect">视觉模型直译（端到端多模态理解）</ComboBoxItem>
+        </ComboBox>
+
+        <Grid Style="{StaticResource SettingsRow}" Margin="0,18,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="允许在自动模式下上传截图" Style="{StaticResource RowTitle}" />
+                <TextBlock Style="{StaticResource RowHint}"
+                           Text="关闭后即使切换到视觉模型也不会上传图片" />
+            </StackPanel>
+            <ToggleButton x:Name="AllowImageUploadToggle"
+                          AutomationProperties.Name="允许在自动模式下上传截图" Grid.Column="1"
+                          Style="{StaticResource ToggleSwitch}"
+                          Checked="ProviderGate_Changed" Unchecked="ProviderGate_Changed" />
+        </Grid>
+
+        <!-- The one allowed card: it states the route the core takes right now,
+             and flags that unsaved form changes may change it. -->
+        <Border x:Name="RouteCard" Style="{StaticResource InlineCard}" Margin="0,10,0,0">
+            <StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <TextBlock x:Name="RouteCardTitle" Text="当前实际线路" Style="{StaticResource FieldLabel}"
+                               Margin="0,0,10,0" VerticalAlignment="Center" />
+                    <Border x:Name="RouteBadge" Style="{StaticResource StatusPill}"
+                            Padding="8,2" Background="{DynamicResource AccentSoftBrush}"
+                            BorderBrush="{DynamicResource AccentBorderBrush}">
+                        <TextBlock x:Name="RouteBadgeText" FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource AccentBrush}" Text="本地 OCR" />
+                    </Border>
+                </StackPanel>
+                <TextBlock x:Name="RoutePreviewText" TextWrapping="Wrap"
+                           FontSize="12.5" LineHeight="20"
+                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                <TextBlock x:Name="RouteDraftNote" Style="{StaticResource Caption}"
+                           Margin="0,6,0,0" Visibility="Collapsed"
+                           Text="有未保存的修改；保存后线路会按新设置重新评估。" />
+            </StackPanel>
+        </Border>
+
+        <TextBlock Text="Windows 本地 OCR" Style="{StaticResource SectionTitle}" Margin="0,20,0,14" />
+        <TextBlock x:Name="OcrStatusText" Margin="0,0,0,10" TextWrapping="Wrap"
+                   Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12.5" />
+        <Border Background="{DynamicResource InputBrush}" CornerRadius="10"
+                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
+                Padding="6">
+            <ListBox x:Name="OcrLanguagesListBox" MaxHeight="180"
+                     IsHitTestVisible="False" />
+        </Border>
+        <TextBlock Style="{StaticResource Caption}" Margin="0,10,0,0">
+            <Run Text='缺少语言包时：Windows 设置 → 时间和语言 → 语言和区域 → 对应语言的"语言选项" → 添加"光学字符识别"。' />
+        </TextBlock>
+    </StackPanel>
+</UserControl>

@@ -59,7 +59,7 @@ internal static class OutboundPolicy
             denial = new TranslationError(
                 TranslationErrorKind.Configuration,
                 "未允许使用内置免费引擎；没有发送任何请求。",
-                "可在「翻译服务」设置中重新允许，或配置自己的模型服务。");
+                "可在「设置 → 隐私与数据」中重新允许，或配置自己的模型服务。");
             return false;
         }
 
@@ -69,7 +69,11 @@ internal static class OutboundPolicy
             return true;
         }
 
-        // First use: ask. No prompt installed (tests, headless) fails closed.
+        // First use: fail closed WITHOUT recording a denial — the user has
+        // not answered anything, and authorization lives in
+        // 「设置 → 隐私与数据」, not in a popup that interrupts translation.
+        // A host may still install ConsentPrompt (future in-window prompts);
+        // headless callers leave it null.
         var decision = ConsentPrompt?.Invoke(FreeEngineDestination) ?? FreeEngineDecision.Deny;
         if (decision == FreeEngineDecision.AlwaysAllow)
         {
@@ -82,12 +86,20 @@ internal static class OutboundPolicy
             denial = null;
             return true;
         }
+        if (ConsentPrompt is null)
+        {
+            denial = new TranslationError(
+                TranslationErrorKind.Configuration,
+                "首次使用内置免费引擎需要先授权；没有发送任何请求。",
+                "打开「设置 → 隐私与数据」，在内置免费引擎一行选择「允许」；或在服务页配置自己的模型服务。");
+            return false;
+        }
 
         PersistConsent(FreeEngineConsent.Denied);
         denial = new TranslationError(
             TranslationErrorKind.Configuration,
             "你选择了不使用内置免费引擎；没有发送任何请求。",
-            "可在「翻译服务」设置中配置模型服务，或重新允许免费引擎。");
+            "可在「设置 → 隐私与数据」中重新允许，或配置自己的模型服务。");
         return false;
     }
 

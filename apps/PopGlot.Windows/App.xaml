@@ -14,32 +14,33 @@
                 designer and the very first layout pass have something to bind
                 to instead of falling back to transparent.
             -->
-            <SolidColorBrush x:Key="CanvasBrush" Color="#0B0E14" />
-            <SolidColorBrush x:Key="SidebarBrush" Color="#0F131B" />
-            <SolidColorBrush x:Key="SurfaceBrush" Color="#151A23" />
-            <SolidColorBrush x:Key="SurfaceAltBrush" Color="#1B2130" />
-            <SolidColorBrush x:Key="SurfaceHoverBrush" Color="#232C3C" />
-            <SolidColorBrush x:Key="SurfacePressedBrush" Color="#2B3547" />
-            <SolidColorBrush x:Key="InputBrush" Color="#111722" />
-            <SolidColorBrush x:Key="BorderSubtleBrush" Color="#222B39" />
-            <SolidColorBrush x:Key="BorderStrongBrush" Color="#334054" />
-            <SolidColorBrush x:Key="AccentBrush" Color="#35D0A5" />
-            <SolidColorBrush x:Key="AccentHoverBrush" Color="#4FE0B8" />
-            <SolidColorBrush x:Key="AccentPressedBrush" Color="#23B48C" />
-            <SolidColorBrush x:Key="AccentTextBrush" Color="#04211A" />
-            <SolidColorBrush x:Key="AccentSoftBrush" Color="#123328" />
-            <SolidColorBrush x:Key="AccentBorderBrush" Color="#1E6B55" />
-            <SolidColorBrush x:Key="TextPrimaryBrush" Color="#E9EEF6" />
-            <SolidColorBrush x:Key="TextSecondaryBrush" Color="#98A5B8" />
-            <SolidColorBrush x:Key="TextTertiaryBrush" Color="#6A7688" />
-            <SolidColorBrush x:Key="TextInverseBrush" Color="#0B0E14" />
-            <SolidColorBrush x:Key="DangerBrush" Color="#FF7A7A" />
-            <SolidColorBrush x:Key="DangerSoftBrush" Color="#3A1D22" />
-            <SolidColorBrush x:Key="WarningBrush" Color="#F4B860" />
-            <SolidColorBrush x:Key="WarningSoftBrush" Color="#3A2E1A" />
-            <SolidColorBrush x:Key="SuccessBrush" Color="#35D0A5" />
-            <SolidColorBrush x:Key="SuccessSoftBrush" Color="#123328" />
-            <SolidColorBrush x:Key="OverlayScrimBrush" Color="#B3070A10" />
+            <SolidColorBrush x:Key="CanvasBrush" Color="#0E0F12" />
+            <SolidColorBrush x:Key="SidebarBrush" Color="#121419" />
+            <SolidColorBrush x:Key="SurfaceBrush" Color="#191C22" />
+            <SolidColorBrush x:Key="SurfaceMutedBrush" Color="#15181E" />
+            <SolidColorBrush x:Key="SurfaceRaisedBrush" Color="#20242C" />
+            <SolidColorBrush x:Key="SurfaceHoverBrush" Color="#222730" />
+            <SolidColorBrush x:Key="SurfacePressedBrush" Color="#2A303B" />
+            <SolidColorBrush x:Key="InputBrush" Color="#111318" />
+            <SolidColorBrush x:Key="BorderSubtleBrush" Color="#2A2F38" />
+            <SolidColorBrush x:Key="BorderStrongBrush" Color="#3B424F" />
+            <SolidColorBrush x:Key="AccentBrush" Color="#8B8FF7" />
+            <SolidColorBrush x:Key="AccentHoverBrush" Color="#A0A3FF" />
+            <SolidColorBrush x:Key="AccentPressedBrush" Color="#777BE3" />
+            <SolidColorBrush x:Key="AccentTextBrush" Color="#101124" />
+            <SolidColorBrush x:Key="AccentSoftBrush" Color="#27294C" />
+            <SolidColorBrush x:Key="AccentBorderBrush" Color="#45497B" />
+            <SolidColorBrush x:Key="TextPrimaryBrush" Color="#F2F3F5" />
+            <SolidColorBrush x:Key="TextSecondaryBrush" Color="#A8ADB7" />
+            <SolidColorBrush x:Key="TextTertiaryBrush" Color="#747B87" />
+            <SolidColorBrush x:Key="TextDisabledBrush" Color="#555C67" />
+            <SolidColorBrush x:Key="DangerBrush" Color="#FF7180" />
+            <SolidColorBrush x:Key="DangerSoftBrush" Color="#421D24" />
+            <SolidColorBrush x:Key="WarningBrush" Color="#F0B35A" />
+            <SolidColorBrush x:Key="WarningSoftBrush" Color="#3B2B15" />
+            <SolidColorBrush x:Key="SuccessBrush" Color="#45C18A" />
+            <SolidColorBrush x:Key="SuccessSoftBrush" Color="#15392B" />
+            <SolidColorBrush x:Key="OverlayScrimBrush" Color="#C80E0F12" />
 
             <Style TargetType="Window">
                 <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />

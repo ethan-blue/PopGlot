@@ -3,16 +3,18 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:PopGlot.Windows"
         Width="580" MinHeight="180" MaxHeight="780" SizeToContent="Height"
-        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
-        Topmost="True" ShowActivated="False" ShowInTaskbar="False" ResizeMode="NoResize"
-        WindowStartupLocation="Manual" Opacity="0" UseLayoutRounding="True">
+        WindowStyle="None" ResizeMode="NoResize"
+        Background="{DynamicResource SurfaceBrush}"
+        Topmost="True" ShowActivated="False" ShowInTaskbar="False"
+        WindowStartupLocation="Manual" UseLayoutRounding="True" SnapsToDevicePixels="True">
 
-    <!-- Outer margin leaves room for the smooth ambient drop shadow. -->
-    <Border Margin="16" Background="{DynamicResource SurfaceBrush}" CornerRadius="16"
+    <!--
+        Deliberately NOT AllowsTransparency: layered windows lose ClearType,
+        and this window is text-first. Rounded corners and the shadow come
+        from DWM instead of a transparent padding border.
+    -->
+    <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="12"
             BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
-        <Border.Effect>
-            <DropShadowEffect BlurRadius="32" ShadowDepth="6" Opacity="0.45" Color="#000000" />
-        </Border.Effect>
 
         <Grid>
             <Grid.RowDefinitions>
@@ -21,10 +23,11 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <!-- ==================== 1. Header Toolbar ==================== -->
-            <Border x:Name="HeaderBar" Grid.Row="0" Padding="14,10,12,10"
-                    Background="{DynamicResource SurfaceAltBrush}"
-                    CornerRadius="15,15,0,0" MouseLeftButtonDown="Header_MouseLeftButtonDown">
+            <!-- ==================== 1. Title Bar ==================== -->
+            <Border x:Name="HeaderBar" Grid.Row="0" Padding="10,8,10,8"
+                    Background="Transparent"
+                    BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,0,0,1"
+                    CornerRadius="11,11,0,0" MouseLeftButtonDown="Header_MouseLeftButtonDown">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
@@ -32,75 +35,9 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
-                    <!-- Language Selector Group -->
                     <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Border x:Name="StatusDot" Width="7" Height="7" CornerRadius="4"
-                                Background="{DynamicResource AccentBrush}" Margin="2,0,8,0"
-                                VerticalAlignment="Center" />
-                        <ComboBox x:Name="SourceLangCombo" Style="{StaticResource CompactComboBox}"
-                                  Width="112" ToolTip="原文语言"
-                                  SelectionChanged="Language_SelectionChanged" />
-                        <Button x:Name="SwapLangButton" Style="{StaticResource IconButton}"
- AutomationProperties.Name="交换语言方向"
-                                Width="26" Height="26" Margin="3,0"
-                                ToolTip="交换语言方向" Click="SwapLangButton_Click">
-                            <Path Width="12" Height="12" Stretch="Uniform"
-                                  Fill="{DynamicResource TextSecondaryBrush}"
-                                  Data="{StaticResource IconSwap}" />
-                        </Button>
-                        <ComboBox x:Name="TargetLangCombo" Style="{StaticResource CompactComboBox}"
-                                  Width="112" ToolTip="译文语言"
-                                  SelectionChanged="Language_SelectionChanged" />
-                    </StackPanel>
-
-                    <!-- Window Actions & Tools -->
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                        <ToggleButton x:Name="StarToggle" Width="26" Height="26" Margin="0,0,2,0"
-                                      AutomationProperties.Name="收藏到生词本"
-                                      ToolTip="收藏到生词本" Click="StarToggle_Click">
-                            <ToggleButton.Template>
-                                <ControlTemplate TargetType="ToggleButton">
-                                    <Border x:Name="Surface" Background="Transparent" CornerRadius="6">
-                                        <Path x:Name="Glyph" Width="13" Height="13" Stretch="Uniform"
-                                              Fill="{DynamicResource TextSecondaryBrush}"
-                                              Data="{StaticResource IconHistory}"
-                                              HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                    </Border>
-                                    <ControlTemplate.Triggers>
-                                        <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="Surface" Property="Background"
-                                                    Value="{DynamicResource SurfaceHoverBrush}" />
-                                        </Trigger>
-                                        <Trigger Property="IsChecked" Value="True">
-                                            <Setter TargetName="Surface" Property="Background"
-                                                    Value="{DynamicResource AccentSoftBrush}" />
-                                            <Setter TargetName="Glyph" Property="Fill"
-                                                    Value="{DynamicResource AccentBrush}" />
-                                        </Trigger>
-                                    </ControlTemplate.Triggers>
-                                </ControlTemplate>
-                            </ToggleButton.Template>
-                        </ToggleButton>
-
-                        <Button x:Name="ExpandButton" Style="{StaticResource IconButton}"
- AutomationProperties.Name="在主窗口中打开"
-                                Width="26" Height="26" ToolTip="在主窗口中打开"
-                                Click="ExpandButton_Click">
-                            <Path Width="11" Height="11" Stretch="Uniform"
-                                  Fill="{DynamicResource TextSecondaryBrush}"
-                                  Data="{StaticResource IconOpenExternal}" />
-                        </Button>
-
-                        <Button x:Name="SettingsButton" Style="{StaticResource IconButton}"
- AutomationProperties.Name="打开设置"
-                                Width="26" Height="26" Margin="2,0,0,0" ToolTip="设置"
-                                Click="SettingsButton_Click">
-                            <Path Width="12" Height="12" Stretch="Uniform"
-                                  Fill="{DynamicResource TextSecondaryBrush}"
-                                  Data="{StaticResource IconSettings}" />
-                        </Button>
-
-                        <ToggleButton x:Name="PinToggle" Width="26" Height="26" Margin="2,0,0,0"
+                        <!-- Pin: grey = closes on focus loss, lit = stays on top. -->
+                        <ToggleButton x:Name="PinToggle" Width="26" Height="26"
                                       AutomationProperties.Name="固定浮窗"
                                       Cursor="Hand" ToolTip="固定浮窗（不随失焦关闭）"
                                       Checked="PinToggle_Changed" Unchecked="PinToggle_Changed">
@@ -130,8 +67,32 @@
                             </ToggleButton.Template>
                         </ToggleButton>
 
+                        <TextBlock Text="PopGlot 翻译" Margin="8,0,0,0" FontSize="12" FontWeight="SemiBold"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="ExpandButton" Style="{StaticResource IconButton}"
+                                AutomationProperties.Name="在主窗口中打开"
+                                Width="26" Height="26" ToolTip="在主窗口中打开"
+                                Click="ExpandButton_Click">
+                            <Path Width="11" Height="11" Stretch="Uniform"
+                                  Fill="{DynamicResource TextSecondaryBrush}"
+                                  Data="{StaticResource IconOpenExternal}" />
+                        </Button>
+
+                        <Button x:Name="SettingsButton" Style="{StaticResource IconButton}"
+                                AutomationProperties.Name="打开设置"
+                                Width="26" Height="26" Margin="2,0,0,0" ToolTip="设置"
+                                Click="SettingsButton_Click">
+                            <Path Width="12" Height="12" Stretch="Uniform"
+                                  Fill="{DynamicResource TextSecondaryBrush}"
+                                  Data="{StaticResource IconSettings}" />
+                        </Button>
+
                         <Button x:Name="CloseButton" Style="{StaticResource IconButton}"
- AutomationProperties.Name="关闭浮窗"
+                                AutomationProperties.Name="关闭浮窗"
                                 Width="26" Height="26" Margin="2,0,0,0"
                                 ToolTip="关闭 (Esc)" Click="CloseButton_Click">
                             <Path Width="10" Height="10" Stretch="Uniform"
@@ -149,29 +110,35 @@
             <!-- ==================== 2. Body Workspace ==================== -->
             <StackPanel Grid.Row="2" Margin="14,12,14,12">
 
-                <!-- Source Card -->
+                <!-- ── Segment 1: Source ── -->
                 <Border Background="{DynamicResource InputBrush}" CornerRadius="10"
                         BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
                         Padding="12,10">
-                    <StackPanel>
-                        <Grid Margin="0,0,0,6">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <TextBox x:Name="SourceInputBox" Grid.Row="0" Style="{StaticResource FlatTextBox}"
+                                 FontSize="13.5" TextWrapping="Wrap" AcceptsReturn="True"
+                                 MinHeight="40" MaxHeight="96" VerticalScrollBarVisibility="Auto"
+                                 local:Ui.Placeholder="输入或粘贴内容，Enter 翻译，Shift+Enter 换行"
+                                 KeyDown="SourceInputBox_KeyDown" />
+
+                        <!-- Source action bar: speak / copy / clear / merge breaks, then the
+                             input kind and the retry shortcut on the far right. -->
+                        <Grid Grid.Row="1" Margin="0,8,0,0">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock x:Name="SourceLabel" Text="原文" FontSize="11"
-                                           FontWeight="SemiBold"
-                                           Foreground="{DynamicResource TextTertiaryBrush}" />
-                                <TextBlock x:Name="SourceKindLabel" FontSize="11" Margin="6,0,0,0"
-                                           Foreground="{DynamicResource TextTertiaryBrush}" />
-                            </StackPanel>
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                 <Button x:Name="SourceSpeakBtn" Style="{StaticResource IconButton}" Width="24" Height="22"
- AutomationProperties.Name="朗读原文"
+                                        AutomationProperties.Name="朗读原文"
                                         ToolTip="朗读原文" Click="SourceSpeak_Click">
                                     <Path x:Name="SourceSpeakIcon" Width="11" Height="11" Stretch="Uniform"
                                           Fill="{DynamicResource TextSecondaryBrush}"
                                           Data="{StaticResource IconSpeaker}" />
                                 </Button>
                                 <Button x:Name="SourceCopyBtn" Style="{StaticResource IconButton}" Width="24" Height="22"
- AutomationProperties.Name="复制原文"
+                                        AutomationProperties.Name="复制原文"
                                         ToolTip="复制原文" Click="SourceCopy_Click">
                                     <Path x:Name="SourceCopyIcon" Width="11" Height="11" Stretch="Uniform"
                                           Fill="{DynamicResource TextSecondaryBrush}"
@@ -184,30 +151,74 @@
                                           Fill="{DynamicResource TextSecondaryBrush}"
                                           Data="{StaticResource IconClear}" />
                                 </Button>
-                            </StackPanel>
-                        </Grid>
+                                <Button Style="{StaticResource IconButton}" Width="24" Height="22" Margin="2,0,0,0"
+                                        AutomationProperties.Name="合并断行"
+                                        ToolTip="合并换行（修复 PDF 复制的断行）" Click="MergeLines_Click">
+                                    <Path Width="11" Height="11" Stretch="Uniform"
+                                          Fill="{DynamicResource TextSecondaryBrush}"
+                                          Data="{StaticResource IconMergeLines}" />
+                                </Button>
 
-                        <TextBox x:Name="SourceInputBox" Style="{StaticResource FlatTextBox}"
-                                 FontSize="13.5" TextWrapping="Wrap" AcceptsReturn="True"
-                                 MaxHeight="120" VerticalScrollBarVisibility="Auto"
-                                 local:Ui.Placeholder="输入或粘贴内容，Enter 翻译，Shift+Enter 换行"
-                                 KeyDown="SourceInputBox_KeyDown" />
-                    </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="8,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock x:Name="SourceLabel" Text="原文" FontSize="11"
+                                               FontWeight="SemiBold"
+                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                    <TextBlock x:Name="SourceKindLabel" FontSize="11" Margin="5,0,0,0"
+                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                </StackPanel>
+                            </StackPanel>
+
+                            <Button x:Name="RetryButton" AutomationProperties.Name="重试翻译"
+                                    Style="{StaticResource IconButton}" Width="24" Height="22"
+                                    HorizontalAlignment="Right" ToolTip="重新翻译 (Ctrl+R)"
+                                    Click="Retry_Click">
+                                <Path Width="11" Height="11" Stretch="Uniform"
+                                      Fill="{DynamicResource TextSecondaryBrush}"
+                                      Data="{StaticResource IconRetry}" />
+                            </Button>
+                        </Grid>
+                    </Grid>
                 </Border>
 
-                <!-- Translation Result Card -->
-                <Border Margin="0,10,0,0" Background="{DynamicResource SurfaceAltBrush}"
+                <!-- ── Segment 2: Language bar ── -->
+                <Grid Margin="2,11,2,11">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <ComboBox x:Name="SourceLangCombo" Grid.Column="0" Style="{StaticResource CompactComboBox}"
+                              Width="128" ToolTip="原文语言"
+                              SelectionChanged="Language_SelectionChanged" />
+                    <Border Grid.Column="1" Height="1" Margin="12,0,12,0" VerticalAlignment="Center"
+                            Background="{DynamicResource BorderSubtleBrush}" />
+                    <Button x:Name="SwapLangButton" Grid.Column="2" Style="{StaticResource IconButton}"
+                            AutomationProperties.Name="交换语言方向"
+                            Width="26" Height="26" ToolTip="交换语言方向" Click="SwapLangButton_Click">
+                        <Path Width="12" Height="12" Stretch="Uniform"
+                              Fill="{DynamicResource TextSecondaryBrush}"
+                              Data="{StaticResource IconSwap}" />
+                    </Button>
+                    <Border Grid.Column="3" Height="1" Margin="12,0,12,0" VerticalAlignment="Center"
+                            Background="{DynamicResource BorderSubtleBrush}" />
+                    <ComboBox x:Name="TargetLangCombo" Grid.Column="4" Style="{StaticResource CompactComboBox}"
+                              Width="128" ToolTip="译文语言"
+                              SelectionChanged="Language_SelectionChanged" />
+                </Grid>
+
+                <!-- ── Segment 3: Result card ── -->
+                <Border Background="{DynamicResource SurfaceMutedBrush}"
                         CornerRadius="10" BorderBrush="{DynamicResource BorderSubtleBrush}"
                         BorderThickness="1" Padding="14,12">
                     <StackPanel>
                         <Grid Margin="0,0,0,8">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <Border x:Name="EngineBadgeHost" Style="{StaticResource StatusPill}" Padding="8,3"
-                                        Background="{DynamicResource AccentSoftBrush}"
-                                        BorderBrush="{DynamicResource AccentBorderBrush}">
-                                    <TextBlock x:Name="EngineBadge" FontSize="11" FontWeight="SemiBold"
-                                               Foreground="{DynamicResource AccentBrush}" Text="译文" />
-                                </Border>
+                                <!-- Engine name as metadata text, not a coloured badge. -->
+                                <TextBlock x:Name="EngineBadge" FontSize="11" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextTertiaryBrush}" Text="译文" />
                                 <TextBlock x:Name="PhoneticText" FontSize="11.5" Margin="8,0,0,0"
                                            Foreground="{DynamicResource TextTertiaryBrush}"
                                            FontFamily="{StaticResource MonoFontFamily}"
@@ -228,70 +239,101 @@
                                           Fill="{DynamicResource TextSecondaryBrush}"
                                           Data="{StaticResource IconCopy}" />
                                 </Button>
-                                <Button x:Name="RetryButton" AutomationProperties.Name="重试翻译" Style="{StaticResource IconButton}"
-                                        Width="24" Height="22" ToolTip="重新翻译 (Ctrl+R)"
-                                        Click="Retry_Click">
-                                    <Path Width="11" Height="11" Stretch="Uniform"
-                                          Fill="{DynamicResource TextSecondaryBrush}"
-                                          Data="{StaticResource IconRetry}" />
-                                </Button>
+                                <ToggleButton x:Name="StarToggle" Width="24" Height="22" Margin="2,0,0,0"
+                                              AutomationProperties.Name="收藏到生词本"
+                                              ToolTip="收藏到生词本" Click="StarToggle_Click">
+                                    <ToggleButton.Template>
+                                        <ControlTemplate TargetType="ToggleButton">
+                                            <Border x:Name="Surface" Background="Transparent" CornerRadius="6">
+                                                <Path x:Name="Glyph" Width="12" Height="12" Stretch="Uniform"
+                                                      Fill="{DynamicResource TextSecondaryBrush}"
+                                                      Data="{StaticResource IconStar}"
+                                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Surface" Property="Background"
+                                                            Value="{DynamicResource SurfaceHoverBrush}" />
+                                                </Trigger>
+                                                <Trigger Property="IsChecked" Value="True">
+                                                    <Setter TargetName="Surface" Property="Background"
+                                                            Value="{DynamicResource AccentSoftBrush}" />
+                                                    <Setter TargetName="Glyph" Property="Fill"
+                                                            Value="{DynamicResource AccentBrush}" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </ToggleButton.Template>
+                                </ToggleButton>
                             </StackPanel>
                         </Grid>
 
                         <Grid>
                             <TextBox x:Name="TranslationTextBox" Style="{StaticResource FlatTextBox}"
                                      FontSize="15" TextWrapping="Wrap" IsReadOnly="True"
-                                     MaxHeight="260" VerticalScrollBarVisibility="Auto"
+                                     MaxHeight="340" VerticalScrollBarVisibility="Auto"
                                      local:Ui.Placeholder="译文将显示在这里…"
                                      Foreground="{DynamicResource TextPrimaryBrush}" />
                             <RichTextBox x:Name="TranslationRichBox" Style="{StaticResource FlatRichTextBox}"
-                                         MaxHeight="260" VerticalScrollBarVisibility="Auto"
+                                         MaxHeight="340" VerticalScrollBarVisibility="Auto"
                                          Visibility="Collapsed" />
+                            <!-- Skeleton shown while a request is in flight. -->
+                            <StackPanel x:Name="ResultSkeleton" Margin="2,6,0,0"
+                                        Visibility="Collapsed" IsHitTestVisible="False">
+                                <Border Height="12" Width="230" HorizontalAlignment="Left"
+                                        Background="{DynamicResource SurfacePressedBrush}" CornerRadius="6" />
+                                <Border Height="12" Width="170" HorizontalAlignment="Left" Margin="0,10,0,0"
+                                        Background="{DynamicResource SurfacePressedBrush}" CornerRadius="6" Opacity="0.75" />
+                                <Border Height="12" Width="200" HorizontalAlignment="Left" Margin="0,10,0,0"
+                                        Background="{DynamicResource SurfacePressedBrush}" CornerRadius="6" Opacity="0.5" />
+                            </StackPanel>
                         </Grid>
-
-                        <!-- Semantic Context / Technical Insight Callout -->
-                        <Border x:Name="ExplanationBox" Margin="0,10,0,0" Padding="12,9" CornerRadius="8"
-                                Background="{DynamicResource SurfaceBrush}"
-                                BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1"
-                                Visibility="Collapsed">
-                            <TextBlock x:Name="ExplanationText" FontSize="12.5"
-                                       Foreground="{DynamicResource TextSecondaryBrush}" LineHeight="19"
-                                       TextWrapping="Wrap" />
-                        </Border>
-
-                        <!-- Protected Token Chips -->
-                        <ItemsControl x:Name="TermsList" Margin="0,9,0,0" Visibility="Collapsed">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <WrapPanel />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Button Style="{StaticResource TokenChipButton}"
-                                            Content="{Binding}"
-                                            Click="TermChip_Click" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-
-                        <!-- Warning Box -->
-                        <Border x:Name="WarningBox" Margin="0,9,0,0" Padding="10,7" CornerRadius="7"
-                                Background="{DynamicResource WarningSoftBrush}"
-                                BorderBrush="{DynamicResource WarningBrush}" BorderThickness="1"
-                                Visibility="Collapsed">
-                            <TextBlock x:Name="WarningText" FontSize="11.5" TextWrapping="Wrap"
-                                       Foreground="{DynamicResource WarningBrush}" />
-                        </Border>
                     </StackPanel>
+                </Border>
+
+                <!-- Explanation: hairline + text, same pattern as the workbench. -->
+                <StackPanel x:Name="ExplanationBox" Margin="2,10,2,0" Visibility="Collapsed">
+                    <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" />
+                    <TextBlock x:Name="ExplanationText" FontSize="12.5"
+                               Foreground="{DynamicResource TextSecondaryBrush}" LineHeight="19"
+                               TextWrapping="Wrap" Margin="0,8,0,0" />
+                </StackPanel>
+
+                <!-- Protected Token Chips -->
+                <ItemsControl x:Name="TermsList" Margin="0,9,0,0" Visibility="Collapsed">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Button Style="{StaticResource TokenChipButton}"
+                                    Content="{Binding}"
+                                    Click="TermChip_Click" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- Warning Box -->
+                <Border x:Name="WarningBox" Margin="0,9,0,0" Padding="10,7" CornerRadius="7"
+                        Background="{DynamicResource WarningSoftBrush}"
+                        BorderBrush="{DynamicResource WarningBrush}" BorderThickness="1"
+                        Visibility="Collapsed">
+                    <TextBlock x:Name="WarningText" FontSize="11.5" TextWrapping="Wrap"
+                               Foreground="{DynamicResource WarningBrush}" />
                 </Border>
 
                 <!-- Footer Status Bar -->
                 <Grid Margin="3,10,3,0">
-                    <TextBlock x:Name="StatusText" FontSize="11.5" VerticalAlignment="Center"
-                               Foreground="{DynamicResource TextTertiaryBrush}"
-                               TextTrimming="CharacterEllipsis" MaxWidth="360"
-                               HorizontalAlignment="Left" />
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Left">
+                        <Border x:Name="StatusDot" Width="7" Height="7" CornerRadius="4"
+                                Background="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center" />
+                        <TextBlock x:Name="StatusText" FontSize="11.5" VerticalAlignment="Center"
+                                   Margin="7,0,0,0"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   TextTrimming="CharacterEllipsis" MaxWidth="360" />
+                    </StackPanel>
                     <TextBlock x:Name="RouteText" FontSize="11.5" VerticalAlignment="Center"
                                HorizontalAlignment="Right"
                                Foreground="{DynamicResource TextTertiaryBrush}" />

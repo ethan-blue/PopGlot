@@ -1,0 +1,382 @@
+<UserControl x:Class="PopGlot.Windows.Sections.ServicesSection"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:PopGlot.Windows">
+    <UserControl.Resources>
+        <Style x:Key="ProviderPresetButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Padding" Value="13,11" />
+            <Setter Property="MinHeight" Value="62" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+            <Setter Property="FontWeight" Value="Normal" />
+        </Style>
+        <Style x:Key="ServiceListItem" TargetType="ListBoxItem">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <ContentPresenter />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="EditorSectionCard" TargetType="Border">
+            <Setter Property="Padding" Value="16" />
+            <Setter Property="Margin" Value="0,0,0,14" />
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="Background" Value="{DynamicResource SurfaceMutedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+        <Style x:Key="EditorTextField" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+            <Setter Property="Height" Value="40" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="Padding" Value="12,0" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="EditorComboField" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+            <Setter Property="Height" Value="40" />
+            <Setter Property="MinWidth" Value="0" />
+        </Style>
+        <Style x:Key="EditorPasswordField" TargetType="PasswordBox" BasedOn="{StaticResource {x:Type PasswordBox}}">
+            <Setter Property="Height" Value="40" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="Padding" Value="12,0" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="EditorSectionTitle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="FontSize" Value="13.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0">
+            <StackPanel>
+                <TextBlock Text="模型服务" Style="{StaticResource PageTitle}" />
+                <TextBlock Text="管理翻译使用的模型连接。服务配置和默认路由分开保存。"
+                           Style="{StaticResource PageSubtitle}" />
+            </StackPanel>
+            <Button Content="添加服务" HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Style="{StaticResource PrimaryButton}" Padding="16,8" Click="AddProfile_Click" />
+        </Grid>
+
+        <Border x:Name="RoutingPanel" Grid.Row="1" Margin="0,14,0,14" Padding="14,10" CornerRadius="10"
+                Background="{DynamicResource InputBrush}"
+                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" /><ColumnDefinition Width="18" />
+                    <ColumnDefinition Width="*" /><ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Width="96" VerticalAlignment="Center">
+                    <TextBlock Text="默认路由" FontSize="12.5" FontWeight="SemiBold" />
+                    <TextBlock Text="修改后立即生效" Style="{StaticResource Caption}" Margin="0,2,0,0" />
+                </StackPanel>
+                <StackPanel Grid.Column="2">
+                    <TextBlock Text="文字" Style="{StaticResource Metadata}" Margin="2,0,0,5" />
+                    <ComboBox x:Name="DefaultTextCombo" MinHeight="34"
+                              AutomationProperties.Name="默认文字服务"
+                              SelectionChanged="DefaultTextCombo_SelectionChanged">
+                        <ComboBox.ItemContainerStyle>
+                            <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
+                                <Setter Property="IsEnabled" Value="{Binding IsCompatible}" />
+                            </Style>
+                        </ComboBox.ItemContainerStyle>
+                    </ComboBox>
+                </StackPanel>
+                <StackPanel Grid.Column="4">
+                    <TextBlock Text="图片" Style="{StaticResource Metadata}" Margin="2,0,0,5" />
+                    <ComboBox x:Name="DefaultVisionCombo" MinHeight="34"
+                              AutomationProperties.Name="默认视觉服务"
+                              SelectionChanged="DefaultVisionCombo_SelectionChanged">
+                        <ComboBox.ItemContainerStyle>
+                            <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
+                                <Setter Property="IsEnabled" Value="{Binding IsCompatible}" />
+                            </Style>
+                        </ComboBox.ItemContainerStyle>
+                    </ComboBox>
+                    <TextBlock x:Name="VisionIncompatHint" Visibility="Collapsed" Margin="2,5,0,0"
+                               Style="{StaticResource Caption}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid x:Name="DetailGrid" Grid.Row="2" SizeChanged="DetailGrid_SizeChanged">
+            <!-- Service overview. Editing is explicit and replaces this list. -->
+            <Border x:Name="EditorEmpty" Padding="16,14" CornerRadius="10"
+                    Background="{DynamicResource SurfaceBrush}"
+                    BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <StackPanel Margin="2,0,0,13">
+                        <TextBlock Text="已连接服务" FontSize="15" FontWeight="SemiBold" />
+                        <TextBlock Text="点击“编辑”修改连接；切换默认路由不需要重新保存服务。"
+                                   Style="{StaticResource Caption}" Margin="0,4,0,0" />
+                    </StackPanel>
+                    <Grid Grid.Row="1">
+                        <StackPanel x:Name="ProfilesEmptyText" Visibility="Collapsed"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center" Margin="30">
+                            <Border Width="44" Height="44" CornerRadius="13" Margin="0,0,0,12"
+                                    Background="{DynamicResource AccentSoftBrush}">
+                                <Path Data="{StaticResource IconProvider}" Width="20" Height="20" Stretch="Uniform"
+                                      Fill="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <TextBlock Text="还没有模型服务" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                            <TextBlock Text="添加一个服务，验证连接后即可开始翻译。" Style="{StaticResource Caption}"
+                                       Margin="0,6,0,14" HorizontalAlignment="Center" />
+                            <Button Content="添加第一个服务" Style="{StaticResource PrimaryButton}"
+                                    Padding="16,7" Click="AddProfile_Click" />
+                        </StackPanel>
+                        <ListBox x:Name="ProfilesListBox" ItemContainerStyle="{StaticResource ServiceListItem}"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Padding="13,11" CornerRadius="9" Background="{DynamicResource InputBrush}"
+                                            BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="36"/><ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="150"/><ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Border Width="30" Height="30" CornerRadius="9" Background="{DynamicResource AccentSoftBrush}">
+                                                <Path Data="{StaticResource IconProvider}" Width="15" Height="15" Stretch="Uniform"
+                                                      Fill="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+                                            <StackPanel Grid.Column="1" Margin="9,0,10,0" VerticalAlignment="Center">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding Name}" FontSize="13.5" FontWeight="SemiBold"
+                                                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                                    <Border Visibility="{Binding IsDefaultBadge}" Style="{StaticResource StatusPill}"
+                                                            Margin="8,0,0,0" Padding="6,1"><TextBlock Text="文字默认" FontSize="10" /></Border>
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding Summary}" Style="{StaticResource Caption}"
+                                                           Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                                <Ellipse Width="7" Height="7" Fill="{Binding StateBrush}" />
+                                                <TextBlock Text="{Binding StateText}" Margin="7,0,0,0"
+                                                           Foreground="{Binding StateTextBrush}" FontSize="12" />
+                                            </StackPanel>
+                                            <Button Grid.Column="3" Content="编辑" Padding="14,6" Tag="{Binding Id}"
+                                                    Style="{StaticResource GhostButton}" AutomationProperties.Name="编辑服务"
+                                                    Click="EditProfile_Click" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+                </Grid>
+            </Border>
+
+            <!-- Full-width focused editor. -->
+            <Border x:Name="EditorForm" Visibility="Collapsed" Padding="16,14" CornerRadius="10"
+                    Background="{DynamicResource SurfaceBrush}"
+                    BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/><RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid Grid.Row="0" Margin="0,0,0,12">
+                        <Button Content="← 返回服务列表" Style="{StaticResource GhostButton}"
+                                Padding="8,5" HorizontalAlignment="Left" Click="BackToServices_Click" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button x:Name="ChooseAnotherProviderButton" Content="更换服务商" Visibility="Collapsed"
+                                    Style="{StaticResource GhostButton}" Padding="10,5" Click="ChooseAnotherProvider_Click" />
+                            <Button x:Name="SetDefaultButton" Content="设为文字默认" Margin="8,0,0,0"
+                                    Style="{StaticResource GhostButton}" Padding="11,5" Click="SetDefault_Click" />
+                        </StackPanel>
+                    </Grid>
+
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="0,0,8,0">
+                        <StackPanel>
+                            <StackPanel x:Name="PresetsPanel" Visibility="Collapsed">
+                                <TextBlock Text="选择服务商" FontSize="18" FontWeight="SemiBold" />
+                                <TextBlock Text="内置服务已经准备好接口；自建中转或本地服务请选择自定义。"
+                                           Style="{StaticResource Caption}" Margin="0,5,0,16" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="openai" Click="Preset_Click"><StackPanel><TextBlock Text="OpenAI" FontWeight="SemiBold"/><TextBlock Text="GPT · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="gemini" Click="Preset_Click"><StackPanel><TextBlock Text="Google Gemini" FontWeight="SemiBold"/><TextBlock Text="Gemini · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="zhipu" Click="Preset_Click"><StackPanel><TextBlock Text="智谱 GLM" FontWeight="SemiBold"/><TextBlock Text="国内服务 · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="deepseek" Click="Preset_Click"><StackPanel><TextBlock Text="DeepSeek" FontWeight="SemiBold"/><TextBlock Text="文字翻译 · 官方接口" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="claude" Click="Preset_Click"><StackPanel><TextBlock Text="Anthropic Claude" FontWeight="SemiBold"/><TextBlock Text="Messages · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="ollama" Click="Preset_Click"><StackPanel><TextBlock Text="Ollama（本地）" FontWeight="SemiBold"/><TextBlock Text="本机运行 · 无需 Key" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="custom" Click="Preset_Click"><StackPanel><TextBlock Text="自定义兼容服务" FontWeight="SemiBold"/><TextBlock Text="中转、代理或私有端点" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+
+                            <StackPanel x:Name="ConfigFormPanel" MaxWidth="760" HorizontalAlignment="Stretch">
+                                <Grid Margin="2,0,2,18">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Border Width="44" Height="44" CornerRadius="12" Background="{DynamicResource AccentSoftBrush}"
+                                                BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1">
+                                            <TextBlock x:Name="EditorProviderBadge" Text="S" FontSize="16" FontWeight="Bold"
+                                                       Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        </Border>
+                                        <StackPanel Margin="13,0,0,0" VerticalAlignment="Center">
+                                            <TextBlock x:Name="EditorProviderTitle" Text="连接服务" FontSize="18" FontWeight="SemiBold" />
+                                            <TextBlock x:Name="EditorProviderMeta" Style="{StaticResource Caption}" Margin="0,3,0,0" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Grid>
+
+                                <Border Style="{StaticResource EditorSectionCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="连接信息" Style="{StaticResource EditorSectionTitle}" />
+                                        <TextBlock Text="名称只用于本机识别；内置服务已预设协议和接口地址。"
+                                                   Style="{StaticResource Caption}" Margin="0,4,0,14" />
+                                        <Grid x:Name="IdentityFieldsGrid" Margin="0,0,0,14">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                            <StackPanel x:Name="ServiceNamePanel">
+                                                <TextBlock Text="显示名称" Style="{StaticResource FieldLabel}"/>
+                                                <TextBox x:Name="ServiceNameTextBox" Style="{StaticResource EditorTextField}" local:Ui.Placeholder="例如：公司 Gemini"/>
+                                            </StackPanel>
+                                            <StackPanel x:Name="CustomProtocolGroup" Grid.Column="2" Visibility="Collapsed">
+                                                <TextBlock Text="接口协议" Style="{StaticResource FieldLabel}" />
+                                                <ComboBox x:Name="ProviderTypeComboBox" Style="{StaticResource EditorComboField}" SelectionChanged="ProviderTypeComboBox_SelectionChanged">
+                                                    <ComboBoxItem Tag="OpenAiCompatible">OpenAI 兼容</ComboBoxItem><ComboBoxItem Tag="OpenAiResponses">OpenAI Responses</ComboBoxItem>
+                                                    <ComboBoxItem Tag="AnthropicMessages">Anthropic Messages</ComboBoxItem><ComboBoxItem Tag="GeminiGenerateContent">Gemini generateContent</ComboBoxItem>
+                                                </ComboBox>
+                                            </StackPanel>
+                                        </Grid>
+                                        <StackPanel x:Name="BaseUrlPanel" Visibility="Collapsed" Margin="0,0,0,14">
+                                            <TextBlock Text="请求地址" Style="{StaticResource FieldLabel}"/>
+                                            <TextBox x:Name="BaseUrlTextBox" Style="{StaticResource EditorTextField}" FontFamily="{StaticResource MonoFontFamily}" local:Ui.Placeholder="https://api.example.com/v1"/>
+                                        </StackPanel>
+                                        <TextBlock Text="API Key" Style="{StaticResource FieldLabel}" />
+                                        <Grid x:Name="ApiKeyInputGrid">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                            <PasswordBox x:Name="ApiKeyPasswordBox" Style="{StaticResource EditorPasswordField}" local:Ui.Placeholder="留空表示保持现有密钥" />
+                                            <StackPanel x:Name="KeyActionsPanel" Grid.Column="2" Orientation="Horizontal">
+                                                <Button x:Name="ClearKeyButton" Content="清除" Style="{StaticResource GhostButton}" Height="40" Padding="12,7" Click="ClearApiKey_Click" />
+                                                <Button x:Name="TestConnectionButton" Content="验证连接" Margin="7,0,0,0" Style="{StaticResource PrimaryButton}" Height="40" Padding="16,7" Click="TestConnection_Click" />
+                                            </StackPanel>
+                                        </Grid>
+                                        <TextBlock x:Name="ApiKeyStateText" Style="{StaticResource Caption}" Margin="2,7,0,0" />
+                                        <StackPanel x:Name="TestStatusPanel" Orientation="Horizontal" Margin="2,8,0,0" Visibility="Collapsed">
+                                            <Ellipse x:Name="TestStateDot" Width="7" Height="7" VerticalAlignment="Center" Fill="{DynamicResource TextTertiaryBrush}"/>
+                                            <TextBlock x:Name="TestSummaryText" Margin="7,0,0,0" FontSize="12" TextTrimming="CharacterEllipsis"/>
+                                        </StackPanel>
+                                        <TextBlock x:Name="TestDetailText" Style="{StaticResource Caption}" Margin="16,3,0,0" TextWrapping="Wrap" Visibility="Collapsed" />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource EditorSectionCard}">
+                                    <StackPanel>
+                                        <Grid>
+                                            <StackPanel>
+                                                <TextBlock Text="使用模型" Style="{StaticResource EditorSectionTitle}" />
+                                                <TextBlock Text="文字模型用于划词、输入翻译；图片模型用于视觉直译。"
+                                                           Style="{StaticResource Caption}" Margin="0,4,0,0" />
+                                            </StackPanel>
+                                            <Button x:Name="FetchModelsButton" Content="获取模型" HorizontalAlignment="Right" VerticalAlignment="Top"
+                                                    Style="{StaticResource GhostButton}" Height="34" Padding="12,6" Click="FetchModels_Click" />
+                                        </Grid>
+                                        <Grid x:Name="ModelFieldsGrid">
+                                            <Grid.Margin>0,14,0,0</Grid.Margin>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                            <StackPanel x:Name="TextModelPanel">
+                                                <TextBlock Text="文字模型" Style="{StaticResource FieldLabel}"/>
+                                                <ComboBox x:Name="TextModelCombo" Style="{StaticResource EditorComboField}" IsEditable="True" FontFamily="{StaticResource MonoFontFamily}"/>
+                                            </StackPanel>
+                                            <StackPanel x:Name="VisionModelPanel" Grid.Column="2">
+                                                <TextBlock Text="图片模型（可选）" Style="{StaticResource FieldLabel}"/>
+                                                <ComboBox x:Name="VisionModelCombo" Style="{StaticResource EditorComboField}" IsEditable="True" FontFamily="{StaticResource MonoFontFamily}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                        <TextBlock x:Name="ModelCatalogStatusText" Visibility="Collapsed" Style="{StaticResource Caption}"
+                                                   Margin="2,9,0,0" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border x:Name="AdvancedGroup" Style="{StaticResource EditorSectionCard}">
+                                    <Expander x:Name="AdvancedExpander" Header="高级设置">
+                                        <StackPanel Margin="0,14,0,0">
+                                            <TextBlock Text="接口路径" Style="{StaticResource EditorSectionTitle}" />
+                                            <TextBlock Text="通常无需修改；仅在中转服务使用不同接口路径时调整。"
+                                                       Style="{StaticResource Caption}" Margin="0,4,0,12" />
+                                            <Grid x:Name="EndpointFieldsGrid">
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                                <StackPanel x:Name="TextEndpointPanel">
+                                                    <TextBlock Text="文字请求路径" Style="{StaticResource FieldLabel}"/>
+                                                    <TextBox x:Name="TextEndpointTextBox" Style="{StaticResource EditorTextField}" FontFamily="{StaticResource MonoFontFamily}"/>
+                                                </StackPanel>
+                                                <StackPanel x:Name="VisionEndpointPanel" Grid.Column="2">
+                                                    <TextBlock Text="图片请求路径" Style="{StaticResource FieldLabel}"/>
+                                                    <TextBox x:Name="VisionEndpointTextBox" Style="{StaticResource EditorTextField}" FontFamily="{StaticResource MonoFontFamily}"/>
+                                                </StackPanel>
+                                            </Grid>
+
+                                            <Border Height="1" Margin="0,17,0,16" Background="{DynamicResource BorderSubtleBrush}" />
+                                            <TextBlock Text="请求定制" Style="{StaticResource EditorSectionTitle}" />
+                                            <TextBlock Text="请求头每行填写一项“名称: 值”；认证头由 PopGlot 安全管理。"
+                                                       Style="{StaticResource Caption}" Margin="0,4,0,12" />
+                                            <Grid x:Name="AdvancedDetailsGrid">
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                                <StackPanel x:Name="HeadersPanel">
+                                                    <TextBlock Text="自定义请求头" Style="{StaticResource FieldLabel}"/>
+                                                    <TextBox x:Name="ExtraHeadersTextBox" Height="104" AcceptsReturn="True" VerticalContentAlignment="Top"
+                                                             VerticalScrollBarVisibility="Auto" FontFamily="{StaticResource MonoFontFamily}"
+                                                             local:Ui.Placeholder="例如：X-Organization: team-a"/>
+                                                </StackPanel>
+                                                <StackPanel x:Name="CapabilitiesPanel" Grid.Column="2">
+                                                    <TextBlock Text="Anthropic API 版本" Style="{StaticResource FieldLabel}"/>
+                                                    <TextBox x:Name="AnthropicVersionTextBox" Style="{StaticResource EditorTextField}" FontFamily="{StaticResource MonoFontFamily}"/>
+                                                    <TextBlock Text="服务能力" Style="{StaticResource FieldLabel}" Margin="0,15,0,8"/>
+                                                    <WrapPanel>
+                                                        <CheckBox x:Name="SupportsTextCheckBox" Content="文字" Margin="0,0,20,10"/>
+                                                        <CheckBox x:Name="SupportsVisionCheckBox" Content="图片" Margin="0,0,20,10"/>
+                                                    </WrapPanel>
+                                                    <CheckBox x:Name="AllowInsecureTlsCheckBox" Content="信任自签名 TLS 证书" Margin="0,2,0,0"/>
+                                                    <TextBlock Text="仅用于你信任的本地或私有服务。" Style="{StaticResource Caption}" Margin="24,4,0,0"/>
+                                                </StackPanel>
+                                            </Grid>
+                                        </StackPanel>
+                                    </Expander>
+                                </Border>
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <Border x:Name="DraftGuardBar" Grid.Row="2" Visibility="Collapsed" Margin="0,10,0,0" Padding="11,8" CornerRadius="7"
+                            Background="{DynamicResource WarningSoftBrush}" BorderBrush="{DynamicResource WarningBrush}" BorderThickness="1">
+                        <Grid><TextBlock x:Name="DraftGuardText" VerticalAlignment="Center" Style="{StaticResource Caption}"/><StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button x:Name="DraftSaveButton" Content="保存并继续" Style="{StaticResource PrimaryButton}" Padding="11,5" Click="DraftSave_Click"/><Button x:Name="DraftDiscardButton" Content="放弃" Style="{StaticResource GhostButton}" Padding="9,5" Margin="6,0,0,0" Click="DraftDiscard_Click"/><Button x:Name="DraftCancelButton" Content="取消" Style="{StaticResource GhostButton}" Padding="9,5" Margin="6,0,0,0" Click="DraftCancel_Click"/>
+                        </StackPanel></Grid>
+                    </Border>
+
+                    <Border x:Name="EditorActionBar" Grid.Row="3" Margin="0,10,0,0" Padding="0,10,0,0" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0">
+                        <Grid><Button x:Name="DeleteServiceButton" Content="删除服务" HorizontalAlignment="Left" Style="{StaticResource DangerButton}" Padding="11,7" Click="DeleteProfile_Click"/><StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Border x:Name="EditorDirtyBadge" Visibility="Collapsed" Style="{StaticResource StatusPill}" Padding="7,2" Margin="0,0,8,0" VerticalAlignment="Center"><TextBlock Text="未保存" FontSize="10.5"/></Border>
+                            <Button x:Name="CancelEditButton" Content="取消" Style="{StaticResource GhostButton}" Padding="13,7" Click="CancelEdit_Click"/><Button x:Name="SaveServiceButton" Content="保存修改" Margin="7,0,0,0" Style="{StaticResource PrimaryButton}" Padding="17,7" Click="SaveService_Click"/>
+                        </StackPanel></Grid>
+                    </Border>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

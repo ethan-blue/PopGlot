@@ -7,12 +7,18 @@
     <AssemblyName>PopGlot</AssemblyName>
     <RootNamespace>PopGlot.Windows</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets/PopGlot-v3.ico</ApplicationIcon>
+    <Version>0.0.1</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
   </PropertyGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="PopGlot.Windows.LogicTests" />
+    <Resource Include="Assets/PopGlot-v3.ico" />
+    <Resource Include="Assets/popglot-app-avatar-v3.png" />
+    <None Include="Assets/popglot-mark-selected-source.png" />
+    <None Include="Assets/popglot-mark-v2.svg" />
   </ItemGroup>
 
   <PropertyGroup>

@@ -3,16 +3,16 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:PopGlot.Windows"
         Title="PopGlot 极速查词" Width="680" SizeToContent="Height" MaxHeight="600"
-        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
-        Topmost="True" ShowInTaskbar="False" ResizeMode="NoResize"
-        WindowStartupLocation="CenterScreen" UseLayoutRounding="True"
+        WindowStyle="None" ResizeMode="NoResize"
+        Background="{DynamicResource SurfaceBrush}"
+        Topmost="True" ShowInTaskbar="False"
+        WindowStartupLocation="CenterScreen" UseLayoutRounding="True" SnapsToDevicePixels="True"
         KeyDown="Window_KeyDown" Deactivated="Window_Deactivated">
 
-    <Border Margin="18" Background="{DynamicResource SurfaceBrush}" CornerRadius="18"
+    <!-- Not AllowsTransparency: text-first window keeps ClearType via an
+         opaque surface; DWM provides rounding and shadow. -->
+    <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="12"
             BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1">
-        <Border.Effect>
-            <DropShadowEffect BlurRadius="36" ShadowDepth="10" Opacity="0.45" Color="#000000" />
-        </Border.Effect>
 
         <Grid>
             <Grid.RowDefinitions>
@@ -23,8 +23,8 @@
             </Grid.RowDefinitions>
 
             <!-- Search input bar -->
-            <Border Grid.Row="0" Padding="18,14" Background="{DynamicResource SurfaceAltBrush}"
-                    CornerRadius="17,17,0,0" MouseLeftButtonDown="Header_MouseLeftButtonDown">
+            <Border Grid.Row="0" Padding="18,14" Background="{DynamicResource SurfaceMutedBrush}"
+                    CornerRadius="11,11,0,0" MouseLeftButtonDown="Header_MouseLeftButtonDown">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
@@ -45,6 +45,7 @@
                     <TextBox x:Name="SearchBox" Grid.Column="1" Style="{StaticResource FlatTextBox}"
                              FontSize="16" FontWeight="Medium" TextWrapping="Wrap" AcceptsReturn="True"
                              MaxHeight="80" VerticalScrollBarVisibility="Auto"
+                             AutomationProperties.Name="查词输入框"
                              local:Ui.Placeholder="输入任意单词、长句、代码报错，回车立即翻译…"
                              TextChanged="SearchBox_TextChanged"
                              KeyDown="SearchBox_KeyDown" />
@@ -70,61 +71,66 @@
             <ProgressBar x:Name="SearchProgress" Grid.Row="1" Height="2" IsIndeterminate="True"
                          Visibility="Collapsed" />
 
-            <!-- Live Result Container -->
+            <!-- Live Result Container: the result sits on the raised surface. -->
             <Border x:Name="ResultContainer" Grid.Row="2" Padding="20,16" Visibility="Collapsed">
                 <StackPanel>
-                    <Grid Margin="0,0,0,8">
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Text="翻译结果" FontSize="12" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextTertiaryBrush}" />
-                            <TextBlock x:Name="PhoneticLabel" FontSize="11.5" Margin="10,0,0,0"
-                                       Foreground="{DynamicResource TextSecondaryBrush}"
-                                       FontFamily="{StaticResource MonoFontFamily}"
-                                       Visibility="Collapsed" />
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                            <Button x:Name="SpeakButton" Style="{StaticResource IconButton}" Width="26" Height="24"
- AutomationProperties.Name="朗读译文"
-                                    ToolTip="朗读译文 (Edge TTS)" Click="Speak_Click">
-                                <Path x:Name="SpeakIcon" Width="12" Height="12" Stretch="Uniform"
-                                      Fill="{DynamicResource TextSecondaryBrush}"
-                                      Data="{StaticResource IconSpeaker}" />
-                            </Button>
-                            <Button x:Name="CopyButton" Style="{StaticResource IconButton}" Width="26" Height="24"
- AutomationProperties.Name="复制译文"
-                                    ToolTip="复制译文" Click="Copy_Click">
-                                <Path x:Name="CopyIcon" Width="12" Height="12" Stretch="Uniform"
-                                      Fill="{DynamicResource TextSecondaryBrush}"
-                                      Data="{StaticResource IconCopy}" />
-                            </Button>
-                            <Button x:Name="StarButton" Style="{StaticResource IconButton}" Width="26" Height="24"
- AutomationProperties.Name="加入生词本"
-                                    ToolTip="加入生词本 / 收藏" Click="Star_Click">
-                                <Path x:Name="StarIcon" Width="12" Height="12" Stretch="Uniform"
-                                      Fill="{DynamicResource TextSecondaryBrush}"
-                                      Data="{StaticResource IconStar}" />
-                            </Button>
-                        </StackPanel>
-                    </Grid>
-
-                    <RichTextBox x:Name="ResultRichBox" Style="{StaticResource FlatRichTextBox}"
-                                 FontSize="15" MaxHeight="220" VerticalScrollBarVisibility="Auto" />
-
-                    <Border x:Name="ExplanationCard" Margin="0,10,0,0" Padding="10,8" CornerRadius="8"
-                            Background="{DynamicResource SurfaceAltBrush}"
+                    <Border Background="{DynamicResource SurfaceRaisedBrush}" CornerRadius="10"
                             BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                            Visibility="Collapsed">
-                        <TextBlock x:Name="ExplanationLabel" FontSize="12"
-                                   Foreground="{DynamicResource TextSecondaryBrush}" LineHeight="18"
-                                   TextWrapping="Wrap" />
+                            Padding="14,12">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,8">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock x:Name="PhoneticLabel" FontSize="11.5"
+                                               Foreground="{DynamicResource TextTertiaryBrush}"
+                                               FontFamily="{StaticResource MonoFontFamily}"
+                                               VerticalAlignment="Center" Visibility="Collapsed"
+                                               TextTrimming="CharacterEllipsis" MaxWidth="240" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <Button x:Name="SpeakButton" Style="{StaticResource IconButton}" Width="24" Height="22"
+                                            AutomationProperties.Name="朗读译文"
+                                            ToolTip="朗读译文 (Edge TTS)" Click="Speak_Click">
+                                        <Path x:Name="SpeakIcon" Width="11" Height="11" Stretch="Uniform"
+                                              Fill="{DynamicResource TextSecondaryBrush}"
+                                              Data="{StaticResource IconSpeaker}" />
+                                    </Button>
+                                    <Button x:Name="CopyButton" Style="{StaticResource IconButton}" Width="24" Height="22"
+                                            AutomationProperties.Name="复制译文"
+                                            ToolTip="复制译文" Click="Copy_Click">
+                                        <Path x:Name="CopyIcon" Width="11" Height="11" Stretch="Uniform"
+                                              Fill="{DynamicResource TextSecondaryBrush}"
+                                              Data="{StaticResource IconCopy}" />
+                                    </Button>
+                                    <Button x:Name="StarButton" Style="{StaticResource IconButton}" Width="24" Height="22"
+                                            Margin="2,0,0,0"
+                                            AutomationProperties.Name="加入生词本"
+                                            ToolTip="加入生词本 / 收藏" Click="Star_Click">
+                                        <Path x:Name="StarIcon" Width="11" Height="11" Stretch="Uniform"
+                                              Fill="{DynamicResource TextSecondaryBrush}"
+                                              Data="{StaticResource IconStar}" />
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
+
+                            <RichTextBox x:Name="ResultRichBox" Style="{StaticResource FlatRichTextBox}"
+                                         FontSize="15" MaxHeight="220" VerticalScrollBarVisibility="Auto" />
+                        </StackPanel>
                     </Border>
+
+                    <!-- Explanation: hairline + text, consistent with the floating panel. -->
+                    <StackPanel x:Name="ExplanationCard" Margin="2,10,2,0" Visibility="Collapsed">
+                        <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" />
+                        <TextBlock x:Name="ExplanationLabel" FontSize="12.5"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" LineHeight="19"
+                                   TextWrapping="Wrap" Margin="0,8,0,0" />
+                    </StackPanel>
                 </StackPanel>
             </Border>
 
             <!-- Bottom Shortcuts footer -->
             <Border Grid.Row="3" Padding="18,8" Background="{DynamicResource SidebarBrush}"
                     BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
-                    CornerRadius="0,0,17,17">
+                    CornerRadius="0,0,11,11">
                 <Grid>
                     <TextBlock x:Name="FooterStatus" FontSize="11" Foreground="{DynamicResource TextTertiaryBrush}"
                                VerticalAlignment="Center" Text="输入文字后按 Enter 翻译" />

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="PopGlot">
+  <!-- Full-bleed background avoids dark/black corner matting in Windows icon surfaces. -->
+  <rect width="1024" height="1024" fill="#5B5BD6"/>
+  <!-- Two offset conversation corners form a translation portal. No arrows,
+       letters, globe, sparkle, or robot motif. -->
+  <path fill="#FFFFFF" d="M176 222c0-31 25-56 56-56h440c31 0 56 25 56 56v190c0 31-25 56-56 56H448L294 586v-118h-62c-31 0-56-25-56-56V222zm128 54v82h310v-82H304z"/>
+  <path fill="#58D6E8" d="M848 802c0 31-25 56-56 56H352c-31 0-56-25-56-56V612c0-31 25-56 56-56h224l154-118v118h62c31 0 56 25 56 56v190zm-128-54v-82H410v82h310z"/>
+</svg>

@@ -74,6 +74,7 @@ internal sealed class HotkeyRecorder : Button
     {
         IsRecording = true;
         Content = "按下组合键…";
+        RecordingStateChanged?.Invoke(this, true);
         Focus();
         Keyboard.Focus(this);
     }
@@ -82,6 +83,7 @@ internal sealed class HotkeyRecorder : Button
     {
         IsRecording = false;
         Content = BindingValue?.DisplayName ?? "未设置";
+        RecordingStateChanged?.Invoke(this, false);
     }
 
     protected override void OnLostKeyboardFocus(KeyboardFocusChangedEventArgs e)
@@ -136,6 +138,7 @@ internal sealed class HotkeyRecorder : Button
         IsRecording = false;
         BindingValue = candidate;
         Content = candidate.DisplayName;
+        RecordingStateChanged?.Invoke(this, false);
         RaiseEvent(new RoutedEventArgs(RecordedEvent, this));
     }
 
@@ -150,4 +153,6 @@ internal sealed class HotkeyRecorder : Button
         add => AddHandler(RecordedEvent, value);
         remove => RemoveHandler(RecordedEvent, value);
     }
+
+    internal event EventHandler<bool>? RecordingStateChanged;
 }
