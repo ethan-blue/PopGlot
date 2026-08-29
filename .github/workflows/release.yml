@@ -28,7 +28,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked --release -- -D warnings
       - run: cargo fmt --all -- --check
       - run: dotnet build apps/PopGlot.Windows/PopGlot.Windows.csproj --configuration Release
-      - run: dotnet run --project tests/PopGlot.Windows.LogicTests/PopGlot.Windows.LogicTests.csproj --configuration Release --no-restore
+      - run: dotnet run --project tests/PopGlot.Windows.LogicTests/PopGlot.Windows.LogicTests.csproj --configuration Release
 
       - name: Publish portable build
         run: >
