@@ -38,10 +38,13 @@ jobs:
           --output dist/release
           /p:DebugType=None /p:DebugPortablePdb=false
 
-      - name: Verify the Rust core shipped with the app
+      # The csproj copies the Rust core into the build output only, so the
+      # publish folder needs the native dll shipped explicitly.
+      - name: Ship the Rust core with the app
         shell: pwsh
         run: |
-          if (-not (Test-Path 'dist/release/popglot_ffi.dll')) {
+          Copy-Item 'target\release\popglot_ffi.dll' 'dist\release\popglot_ffi.dll'
+          if (-not (Test-Path 'dist\release\popglot_ffi.dll')) {
             throw 'popglot_ffi.dll is missing from the publish output.'
           }
 
