@@ -6,7 +6,18 @@
     <AssemblyName>PopGlot.Windows.LogicTests</AssemblyName>
     <RootNamespace>PopGlot.Windows.LogicTests</RootNamespace>
   </PropertyGroup>
+
+  <PropertyGroup>
+    <RustTargetDir>$(MSBuildProjectDirectory)\..\..\target</RustTargetDir>
+    <RustProfile>debug</RustProfile>
+    <RustProfile Condition="'$(Configuration)' == 'Release'">release</RustProfile>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\apps\PopGlot.Windows\PopGlot.Windows.csproj" />
   </ItemGroup>
+
+  <Target Name="CopyRustCoreForTests" AfterTargets="Build">
+    <Copy SourceFiles="$(RustTargetDir)\$(RustProfile)\popglot_ffi.dll" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

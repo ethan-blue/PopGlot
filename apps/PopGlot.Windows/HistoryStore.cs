@@ -1,6 +1,8 @@
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using PopGlot.Windows.Services;
 
 namespace PopGlot.Windows;
 
@@ -11,7 +13,9 @@ internal sealed record TranslationHistoryEntry(
     string Source,
     string Translation,
     string Explanation,
-    IReadOnlyList<string> ProtectedTerms);
+    IReadOnlyList<string> ProtectedTerms,
+    string SourceLanguage = "auto",
+    string TargetLanguage = "zh-CN");
 
 internal enum HistoryAddResult
 {
@@ -21,14 +25,22 @@ internal enum HistoryAddResult
     Failed,
 }
 
-internal sealed partial class HistoryStore
+internal sealed partial class HistoryStore : IHistoryRepository
 {
-    private const int MaxEntries = 100;
+    private const int MaxEntries = 200;
     private const int MaxSourceCharacters = 4_000;
     private const int MaxTranslationCharacters = 8_000;
-    private const int MaxFileBytes = 2 * 1024 * 1024;
+    private const int MaxFileBytes = 4 * 1024 * 1024;
     private static readonly TimeSpan MaxAge = TimeSpan.FromDays(90);
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true,
+    };
+
     private readonly string _path;
+    private readonly Lock _gate = new();
 
     public HistoryStore(string? path = null)
     {
@@ -40,6 +52,14 @@ internal sealed partial class HistoryStore
 
     public IReadOnlyList<TranslationHistoryEntry> Load()
     {
+        lock (_gate)
+        {
+            return LoadUnlocked();
+        }
+    }
+
+    private IReadOnlyList<TranslationHistoryEntry> LoadUnlocked()
+    {
         try
         {
             if (!File.Exists(_path) || new FileInfo(_path).Length > MaxFileBytes)
@@ -47,7 +67,7 @@ internal sealed partial class HistoryStore
                 return [];
             }
             var entries = JsonSerializer.Deserialize<List<TranslationHistoryEntry>>(
-                File.ReadAllText(_path)) ?? [];
+                File.ReadAllText(_path), JsonOptions) ?? [];
             var cutoff = DateTimeOffset.UtcNow - MaxAge;
             return entries
                 .Where(entry => entry.CreatedAt >= cutoff)
@@ -55,11 +75,8 @@ internal sealed partial class HistoryStore
                 .Take(MaxEntries)
                 .ToArray();
         }
-        catch (IOException)
-        {
-            return [];
-        }
-        catch (JsonException)
+        catch (Exception exception) when (
+            exception is IOException or JsonException or UnauthorizedAccessException)
         {
             return [];
         }
@@ -67,6 +84,7 @@ internal sealed partial class HistoryStore
 
     public HistoryAddResult TryAdd(TranslationHistoryEntry entry, bool enabled)
     {
+        ArgumentNullException.ThrowIfNull(entry);
         if (!enabled)
         {
             return HistoryAddResult.Disabled;
@@ -75,43 +93,113 @@ internal sealed partial class HistoryStore
         {
             return HistoryAddResult.SkippedSensitiveOrLarge;
         }
-        try
+
+        lock (_gate)
         {
-            var entries = Load().Prepend(entry).Take(MaxEntries).ToArray();
-            Save(entries);
-            return HistoryAddResult.Stored;
-        }
-        catch (IOException)
-        {
-            return HistoryAddResult.Failed;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return HistoryAddResult.Failed;
-        }
-        catch (InvalidOperationException)
-        {
-            return HistoryAddResult.Failed;
+            try
+            {
+                var existing = LoadUnlocked()
+                    .Where(item => !(item.Source == entry.Source
+                        && item.TargetLanguage == entry.TargetLanguage))
+                    .Take(MaxEntries - 1);
+                Save([entry, .. existing]);
+                return HistoryAddResult.Stored;
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                return HistoryAddResult.Failed;
+            }
         }
     }
 
-    public void Clear()
+    public bool Remove(Guid id)
     {
-        if (File.Exists(_path))
+        lock (_gate)
         {
-            File.Delete(_path);
+            try
+            {
+                var remaining = LoadUnlocked().Where(entry => entry.Id != id).ToArray();
+                Save(remaining);
+                return true;
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                return false;
+            }
         }
+    }
+
+    public bool Clear()
+    {
+        lock (_gate)
+        {
+            try
+            {
+                if (File.Exists(_path))
+                {
+                    File.Delete(_path);
+                }
+                return true;
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+    }
+
+    public string ExportToCsv()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Id,CreatedAt,SourceKind,SourceLanguage,TargetLanguage,Source,Translation,Explanation");
+        lock (_gate)
+        {
+            foreach (var e in LoadUnlocked())
+            {
+                sb.AppendLine($"{e.Id},{e.CreatedAt:O},{CsvEscape(e.SourceKind)},{CsvEscape(e.SourceLanguage)},{CsvEscape(e.TargetLanguage)},{CsvEscape(e.Source)},{CsvEscape(e.Translation)},{CsvEscape(e.Explanation)}");
+            }
+        }
+        return sb.ToString();
+    }
+
+    public string ExportToMarkdown()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("# PopGlot 翻译历史记录\n");
+        sb.AppendLine("| 时间 | 方式 | 语言对 | 原文 | 译文 |");
+        sb.AppendLine("| :--- | :--- | :--- | :--- | :--- |");
+        lock (_gate)
+        {
+            foreach (var e in LoadUnlocked())
+            {
+                var time = e.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+                var pair = $"{e.SourceLanguage} → {e.TargetLanguage}";
+                var src = e.Source.Replace("|", "\\|").Replace("\n", " ");
+                var tr = e.Translation.Replace("|", "\\|").Replace("\n", " ");
+                sb.AppendLine($"| {time} | {e.SourceKind} | {pair} | {src} | {tr} |");
+            }
+        }
+        return sb.ToString();
+    }
+
+    private static string CsvEscape(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return "\"\"";
+        return $"\"{value.Replace("\"", "\"\"")}\"";
     }
 
     internal static bool CanPersist(TranslationHistoryEntry entry)
     {
+        ArgumentNullException.ThrowIfNull(entry);
         if (entry.Source.Length > MaxSourceCharacters ||
             entry.Translation.Length > MaxTranslationCharacters)
         {
             return false;
         }
-        var combined = $"{entry.Source}\n{entry.Translation}";
-        return !SensitiveContentRegex().IsMatch(combined);
+        return !SensitiveContentRegex().IsMatch($"{entry.Source}\n{entry.Translation}");
     }
 
     private void Save(IReadOnlyList<TranslationHistoryEntry> entries)
@@ -119,10 +207,10 @@ internal sealed partial class HistoryStore
         var directory = Path.GetDirectoryName(_path)
             ?? throw new InvalidOperationException("Unable to resolve the PopGlot history directory.");
         Directory.CreateDirectory(directory);
-        var json = JsonSerializer.Serialize(entries, new JsonSerializerOptions { WriteIndented = true });
-        if (System.Text.Encoding.UTF8.GetByteCount(json) > MaxFileBytes)
+        var json = JsonSerializer.Serialize(entries, JsonOptions);
+        if (Encoding.UTF8.GetByteCount(json) > MaxFileBytes)
         {
-            throw new InvalidOperationException("本地历史超过 2 MiB 上限。");
+            throw new InvalidOperationException("本地历史超过大小上限。");
         }
         var temporaryPath = _path + ".tmp";
         File.WriteAllText(temporaryPath, json);
@@ -130,7 +218,7 @@ internal sealed partial class HistoryStore
     }
 
     [GeneratedRegex(
-        @"(?i)(-----BEGIN [A-Z ]*PRIVATE KEY-----|\bpassword\s*[:=]|\bapi[_-]?key\s*[:=]|\bsk-[a-z0-9_-]{16,}|\bAIza[a-z0-9_-]{16,})",
+        @"(?i)(-----BEGIN [A-Z ]*PRIVATE KEY-----|\bpassword\s*[:=]|\bapi[_-]?key\s*[:=]|\bsecret\s*[:=]|\bsk-[a-z0-9_-]{16,}|\bAIza[a-z0-9_-]{16,}|\bghp_[a-zA-Z0-9]{16,})",
         RegexOptions.CultureInvariant)]
     private static partial Regex SensitiveContentRegex();
 }

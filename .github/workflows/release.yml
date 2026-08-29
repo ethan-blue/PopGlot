@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      # Full gate before packaging: Rust tests/clippy must pass and the shell
+      # logic tests (privacy matrix, DPI screenshots) run against the Release dll.
+      - run: cargo test --workspace --locked --release
+      - run: cargo clippy --workspace --all-targets --locked --release -- -D warnings
+      - run: cargo fmt --all -- --check
+      - run: dotnet build apps/PopGlot.Windows/PopGlot.Windows.csproj --configuration Release
+      - run: dotnet run --project tests/PopGlot.Windows.LogicTests/PopGlot.Windows.LogicTests.csproj --configuration Release --no-restore
+
+      - name: Publish portable build
+        run: >
+          dotnet publish apps/PopGlot.Windows/PopGlot.Windows.csproj
+          --configuration Release --runtime win-x64
+          --self-contained false
+          --output dist/release
+          /p:DebugType=None /p:DebugPortablePdb=false
+
+      - name: Verify the Rust core shipped with the app
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'dist/release/popglot_ffi.dll')) {
+            throw 'popglot_ffi.dll is missing from the publish output.'
+          }
+
+      - name: Zip portable build
+        shell: pwsh
+        run: |
+          Compress-Archive -Path 'dist/release/*' -DestinationPath 'dist/PopGlot-${{ github.ref_name }}-win-x64.zip'
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/PopGlot-${{ github.ref_name }}-win-x64.zip

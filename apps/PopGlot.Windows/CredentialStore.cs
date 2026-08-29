@@ -2,21 +2,24 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using PopGlot.Windows.Services;
 
 namespace PopGlot.Windows;
 
-internal static partial class CredentialStore
+internal sealed partial class CredentialStore : ICredentialVault
 {
-    private const string TargetName = "PopGlot/OpenAICompatibleApiKey";
+    public const string DefaultTargetName = "PopGlot/OpenAICompatibleApiKey";
     private const uint CredTypeGeneric = 1;
     private const uint CredPersistLocalMachine = 2;
     private const int MaxKeyCharacters = 2048;
 
-    public static void SaveApiKey(string apiKey)
+    public static CredentialStore Instance { get; } = new();
+
+    public static void SaveApiKey(string apiKey, string targetName = DefaultTargetName)
     {
         if (string.IsNullOrWhiteSpace(apiKey))
         {
-            DeleteApiKey();
+            DeleteApiKey(targetName);
             return;
         }
         if (apiKey.Length > MaxKeyCharacters)
@@ -32,7 +35,7 @@ internal static partial class CredentialStore
             var credential = new NativeCredential
             {
                 Type = CredTypeGeneric,
-                TargetName = TargetName,
+                TargetName = targetName,
                 CredentialBlobSize = (uint)secretBytes.Length,
                 CredentialBlob = secretPointer,
                 Persist = CredPersistLocalMachine,
@@ -54,9 +57,9 @@ internal static partial class CredentialStore
         }
     }
 
-    public static bool HasApiKey()
+    public static bool HasApiKey(string targetName = DefaultTargetName)
     {
-        if (!CredRead(TargetName, CredTypeGeneric, 0, out var credentialPointer))
+        if (!CredRead(targetName, CredTypeGeneric, 0, out var credentialPointer))
         {
             const int ErrorNotFound = 1168;
             var error = Marshal.GetLastWin32Error();
@@ -70,9 +73,9 @@ internal static partial class CredentialStore
         return true;
     }
 
-    public static string? LoadApiKey()
+    public static string? LoadApiKey(string targetName = DefaultTargetName)
     {
-        if (!CredRead(TargetName, CredTypeGeneric, 0, out var credentialPointer))
+        if (!CredRead(targetName, CredTypeGeneric, 0, out var credentialPointer))
         {
             const int ErrorNotFound = 1168;
             var error = Marshal.GetLastWin32Error();
@@ -112,9 +115,9 @@ internal static partial class CredentialStore
         }
     }
 
-    private static void DeleteApiKey()
+    public static void DeleteApiKey(string targetName = DefaultTargetName)
     {
-        if (!CredDelete(TargetName, CredTypeGeneric, 0))
+        if (!CredDelete(targetName, CredTypeGeneric, 0))
         {
             const int ErrorNotFound = 1168;
             var error = Marshal.GetLastWin32Error();
@@ -124,6 +127,12 @@ internal static partial class CredentialStore
             }
         }
     }
+
+    // ICredentialVault implementation
+    bool ICredentialVault.HasCredential(string target) => HasApiKey(target);
+    string? ICredentialVault.LoadCredential(string target) => LoadApiKey(target);
+    void ICredentialVault.SaveCredential(string secret, string target) => SaveApiKey(secret, target);
+    void ICredentialVault.DeleteCredential(string target) => DeleteApiKey(target);
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct NativeCredential
@@ -142,7 +151,7 @@ internal static partial class CredentialStore
         [MarshalAs(UnmanagedType.LPWStr)] public string UserName;
     }
 
-    #pragma warning disable SYSLIB1054 // NativeCredential uses supported runtime marshalling.
+    #pragma warning disable SYSLIB1054
     [DllImport("advapi32.dll", EntryPoint = "CredWriteW", SetLastError = true, CharSet = CharSet.Unicode)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CredWrite(ref NativeCredential credential, uint flags);

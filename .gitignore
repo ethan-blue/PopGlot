@@ -14,3 +14,6 @@ artifacts/
 # Local secrets and provider overrides must never be committed.
 appsettings.local.json
 *.secrets.json
+
+# Local publish output
+dist/

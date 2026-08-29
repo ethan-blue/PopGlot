@@ -1,7 +1,8 @@
 use popglot_core::provider::{
-    ImageInput, ProviderClient, ProviderErrorKind, TranslationInput, TransportLimits, provider_for,
+    ImageInput, ProviderClient, ProviderErrorKind, TranslationRequest, TransportLimits,
+    provider_for,
 };
-use popglot_domain::{ProviderSettings, ProviderType};
+use popglot_domain::{LanguagePair, ProviderSettings, ProviderType};
 use serde_json::Value;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -174,13 +175,13 @@ async fn openai_chat_sends_bearer_auth_and_image_url_content() {
             &config,
             "local-test-key",
             "chat-mock",
-            &TranslationInput::Vision {
-                prompt: "translate".to_owned(),
-                image: ImageInput::Bytes {
+            &TranslationRequest::vision(
+                ImageInput::Bytes {
                     media_type: "image/png".to_owned(),
                     data: vec![1, 2, 3],
                 },
-            },
+                LanguagePair::new("auto", "zh-CN"),
+            ),
             &CancellationToken::new(),
         )
         .await
@@ -215,10 +216,10 @@ async fn openai_responses_sends_bearer_auth_and_input_image_content() {
             &config,
             "responses-local-key",
             "responses-mock",
-            &TranslationInput::Vision {
-                prompt: "translate".to_owned(),
-                image: ImageInput::Url("https://example.invalid/image.png".to_owned()),
-            },
+            &TranslationRequest::vision(
+                ImageInput::Url("https://example.invalid/image.png".to_owned()),
+                LanguagePair::new("auto", "zh-CN"),
+            ),
             &CancellationToken::new(),
         )
         .await
@@ -250,13 +251,13 @@ async fn anthropic_sends_native_auth_version_and_image_source() {
             &config,
             "anthropic-local-key",
             "anthropic-mock",
-            &TranslationInput::Vision {
-                prompt: "translate".to_owned(),
-                image: ImageInput::Bytes {
+            &TranslationRequest::vision(
+                ImageInput::Bytes {
                     media_type: "image/jpeg".to_owned(),
                     data: vec![1, 2, 3],
                 },
-            },
+                LanguagePair::new("auto", "zh-CN"),
+            ),
             &CancellationToken::new(),
         )
         .await
@@ -285,13 +286,13 @@ async fn gemini_sends_native_key_and_inline_data() {
             &config,
             "gemini-local-key",
             "gemini-mock",
-            &TranslationInput::Vision {
-                prompt: "translate".to_owned(),
-                image: ImageInput::Bytes {
+            &TranslationRequest::vision(
+                ImageInput::Bytes {
                     media_type: "image/webp".to_owned(),
                     data: vec![1, 2, 3],
                 },
-            },
+                LanguagePair::new("auto", "zh-CN"),
+            ),
             &CancellationToken::new(),
         )
         .await
@@ -334,9 +335,7 @@ async fn transient_server_error_retries_once_then_succeeds() {
             &config,
             "local-test-key",
             "retry-mock",
-            &TranslationInput::Text {
-                source: "test".to_owned(),
-            },
+            &TranslationRequest::text("test", LanguagePair::new("auto", "zh-CN")),
             &CancellationToken::new(),
         )
         .await
@@ -360,9 +359,7 @@ async fn authentication_error_is_classified_without_retry() {
             &config,
             "local-test-key",
             "auth-mock",
-            &TranslationInput::Text {
-                source: "test".to_owned(),
-            },
+            &TranslationRequest::text("test", LanguagePair::new("auto", "zh-CN")),
             &CancellationToken::new(),
         )
         .await
@@ -389,9 +386,7 @@ async fn oversized_response_is_rejected_without_unbounded_buffering() {
             &config,
             "local-test-key",
             "oversized-mock",
-            &TranslationInput::Text {
-                source: "test".to_owned(),
-            },
+            &TranslationRequest::text("test", LanguagePair::new("auto", "zh-CN")),
             &CancellationToken::new(),
         )
         .await
@@ -420,9 +415,7 @@ async fn total_timeout_and_cancellation_are_distinct() {
             &timeout_config,
             "local-test-key",
             "timeout-mock",
-            &TranslationInput::Text {
-                source: "test".to_owned(),
-            },
+            &TranslationRequest::text("test", LanguagePair::new("auto", "zh-CN")),
             &CancellationToken::new(),
         )
         .await
@@ -447,9 +440,7 @@ async fn total_timeout_and_cancellation_are_distinct() {
             &cancel_config,
             "local-test-key",
             "cancel-mock",
-            &TranslationInput::Text {
-                source: "test".to_owned(),
-            },
+            &TranslationRequest::text("test", LanguagePair::new("auto", "zh-CN")),
             &cancellation,
         )
         .await

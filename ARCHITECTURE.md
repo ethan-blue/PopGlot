@@ -7,8 +7,8 @@ PopGlot 首发使用 WPF 获得可靠的 Windows 桌面交互，但 Rust Core �
 ## 当前结构
 
 ```text
-apps/PopGlot.Windows       WPF Shell、托盘、三快捷键、剪贴板事务、截图、浮窗、历史、凭据
-crates/popglot-domain      领域 DTO、自动路由、受保护 Token
+apps/PopGlot.Windows       WPF Shell、托盘、四快捷键、剪贴板事务、截图、浮窗、控制中心、资料库、服务 Profile
+crates/popglot-domain      领域 DTO、自动路由、受保护 Token、Provider Profile 数据模型
 crates/popglot-core        配置、应用编排、统一 Provider 与有界 HTTP
 crates/popglot-ffi         窄 C ABI；唯一允许裸指针的 Rust crate
 scripts                    构建和验证入口
@@ -28,13 +28,13 @@ scripts                    构建和验证入口
 }
 ```
 
-所有 Rust 返回字符串均由 `popglot_free_string` 释放。C# `CoreBridge.Invoke` 在 `finally` 中完成释放，不把原生指针暴露给 UI。Provider 配置当前为 `schema_version=2`；新增字段使用 Rust `serde(default)` 保持旧配置可读。
+所有 Rust 返回字符串均由 `popglot_free_string` 释放。C# `CoreBridge.Invoke` 在 `finally` 中完成释放，不把原生指针暴露给 UI。Provider 配置当前为 `schema_version=3`；反序列化经过手工实现的迁移——出网权限（`network_enabled`、`allow_image_upload_in_auto`）缺失时一律按 `false` 处理，旧配置不会自动获得联网或上传图片的权利，其余字段保持默认值回退，无法解析的配置备份为 `provider-settings.corrupt-*.json` 并经 `popglot_take_startup_notice` 通知 Shell，而不是阻断启动。翻译类导出接收显式的源/目标语言参数（可传 null 表示沿用已保存的语言对），因此 UI 上的语言选择会真实影响模型 prompt。
 
 当独立 Core 进程成为真实需求时，同一领域操作可以映射到 Named Pipe/Unix Domain Socket；在此之前不引入后台守护进程、RPC 框架或共享内存。
 
 ## 平台端口
 
-Windows Shell 当前已实现剪贴板、截图、快捷键和凭据适配；本地 OCR 与文本注入仍是后续端口：
+Windows Shell 当前已实现剪贴板、截图、快捷键、凭据与本地 OCR 适配；文本注入仍是后续端口：
 
 - `ScreenCapturePort`
 - `PlatformOcrPort`
@@ -66,7 +66,7 @@ overlay selection → CopyFromScreen → bounded in-memory PNG
 → configured vision Provider → shared result panel
 ```
 
-截图不落盘。当前 Windows 本地 OCR 端口尚未实现；Local OCR 选择会返回明确错误，而不是静默上传或显示假结果。
+截图不落盘。Windows 本地 OCR 已接入 `Windows.Media.Ocr`，并按所选源语言挑选识别引擎；系统未安装任何语言包时显示真实限制，而不是静默上传或显示假结果。
 
 ## 双翻译管线
 
@@ -90,7 +90,7 @@ CaptureFrame → image limits/redaction → vision model
 
 ### 自动路由
 
-路由只使用可解释输入：视觉模型是否配置、上传授权、代码概率、复杂布局、图片质量和 OCR 置信度。`RoutingDecision` 返回稳定原因码和中文解释。用户强制选择 `LocalOcr` 时，任何错误都不得触发图片上传。
+路由由 Core 的 `select_route` 统一裁决，Shell 通过 `popglot_plan_screenshot_route` 询问而不是自行推导，避免两侧规则漂移。路由只使用可解释输入：视觉模型是否可达（含凭据与离线开关）、上传授权、本地 OCR 是否可用、代码概率、复杂布局、图片质量和 OCR 置信度。`RoutingDecision` 返回稳定原因码和中文解释。用户强制选择 `LocalOcr` 时，任何错误都不得触发图片上传。
 
 ## Provider 与 HTTP 边界
 
@@ -113,6 +113,7 @@ CaptureFrame → image limits/redaction → vision model
 
 - 单次截图最多 16,000,000 像素，PNG 编码后最多 8 MiB；超过时提示重新框选。
 - 同时最多一个前台翻译请求；新会话先取消并关闭旧会话。
+- 启动只创建单实例、托盘、主题和一个隐藏热键窗口；主窗口在首次使用时构建，资料库、OCR 状态与服务列表按需刷新。剪贴板等待与重试全部使用异步延迟，不在 UI 线程上 Sleep。
 - 图片最多 8 MiB、序列化请求最多 12 MiB、响应正文最多 4 MiB。
 - HTTP 连接超时 5 秒、总请求 45 秒；仅对连接/超时以及 408、429、500、502、503、504 重试一次，`Retry-After` 最多等待 2 秒。
 - 不建立结果内存缓存；本地历史默认关闭，启用后最多 100 项、90 天、2 MiB，截图位图不入库。

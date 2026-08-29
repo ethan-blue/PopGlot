@@ -1,13 +1,8 @@
 using System.ComponentModel;
-using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Windows;
 using System.Windows.Media.Imaging;
-using Clipboard = System.Windows.Clipboard;
-using DataObject = System.Windows.DataObject;
-using TextDataFormat = System.Windows.TextDataFormat;
 
 namespace PopGlot.Windows;
 
@@ -16,10 +11,10 @@ internal interface IClipboardSnapshot : IDisposable;
 internal interface ISelectionClipboardAdapter
 {
     uint SequenceNumber { get; }
-    IClipboardSnapshot Capture();
-    void SendCopy();
-    string? ReadText();
-    void Restore(IClipboardSnapshot snapshot);
+    Task<IClipboardSnapshot> CaptureAsync();
+    Task SendCopyAsync();
+    Task<string?> ReadTextAsync();
+    Task RestoreAsync(IClipboardSnapshot snapshot);
 }
 
 internal sealed class ClipboardSelectionService
@@ -36,13 +31,13 @@ internal sealed class ClipboardSelectionService
     public async Task<string> ReadSelectionAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var snapshot = _clipboard.Capture();
+        using var snapshot = await _clipboard.CaptureAsync();
         var sequenceBeforeCopy = _clipboard.SequenceNumber;
         uint? copiedSequence = null;
         var cancellationRequested = false;
         try
         {
-            _clipboard.SendCopy();
+            await _clipboard.SendCopyAsync();
             var deadline = DateTime.UtcNow + CopyTimeout;
             while (DateTime.UtcNow < deadline)
             {
@@ -69,7 +64,7 @@ internal sealed class ClipboardSelectionService
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            var text = _clipboard.ReadText()?.Trim();
+            var text = (await _clipboard.ReadTextAsync())?.Trim();
             if (string.IsNullOrWhiteSpace(text))
             {
                 throw new InvalidOperationException("选区没有可用文本，或当前应用禁止复制。");
@@ -91,7 +86,7 @@ internal sealed class ClipboardSelectionService
             // write. A real user write during the transaction always wins.
             if (copiedSequence is not null && _clipboard.SequenceNumber == copiedSequence.Value)
             {
-                _clipboard.Restore(snapshot);
+                await _clipboard.RestoreAsync(snapshot);
             }
         }
     }
@@ -112,11 +107,12 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
 
     public uint SequenceNumber => NativeMethods.GetClipboardSequenceNumber();
 
-    public IClipboardSnapshot Capture() => RetryClipboard(() => ClipboardSnapshot.Capture());
+    public Task<IClipboardSnapshot> CaptureAsync() => RetryClipboardAsync(() =>
+        Task.FromResult<IClipboardSnapshot>(ClipboardSnapshot.Capture()));
 
-    public void SendCopy()
+    public async Task SendCopyAsync()
     {
-        WaitForModifiersReleased();
+        await WaitForModifiersReleasedAsync();
         var inputs = new[]
         {
             KeyboardInput(VkControl, 0),
@@ -134,11 +130,14 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
         }
     }
 
+    /// <summary>
     /// The user may still be physically holding Ctrl/Alt from the hotkey that
     /// triggered this copy. Sending C while they are held produces Ctrl+Alt+C,
     /// which most applications ignore, so wait briefly for the modifiers to
-    /// come up before synthesizing Ctrl+C.
-    private static void WaitForModifiersReleased()
+    /// come up before synthesizing Ctrl+C. Awaits instead of sleeping so the
+    /// UI thread stays responsive during the wait.
+    /// </summary>
+    private static async Task WaitForModifiersReleasedAsync()
     {
         var deadline = Environment.TickCount64 + 400;
         while (Environment.TickCount64 < deadline)
@@ -153,41 +152,42 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
             {
                 return;
             }
-            Thread.Sleep(10);
+            await Task.Delay(10);
         }
     }
 
-    public string? ReadText() => RetryClipboard(() =>
-        Clipboard.ContainsText(TextDataFormat.UnicodeText)
-            ? Clipboard.GetText(TextDataFormat.UnicodeText)
-            : null);
+    public Task<string?> ReadTextAsync() => RetryClipboardAsync(() =>
+        Task.FromResult(
+            Clipboard.ContainsText(TextDataFormat.UnicodeText)
+                ? Clipboard.GetText(TextDataFormat.UnicodeText)
+                : null));
 
-    public void Restore(IClipboardSnapshot snapshot)
+    public Task RestoreAsync(IClipboardSnapshot snapshot)
     {
         if (snapshot is not ClipboardSnapshot clipboardSnapshot)
         {
             throw new ArgumentException("Unsupported clipboard snapshot.", nameof(snapshot));
         }
-        RetryClipboard(() =>
+        return RetryClipboardAsync(() =>
         {
             clipboardSnapshot.Restore();
-            return true;
+            return Task.FromResult(true);
         });
     }
 
-    private static T RetryClipboard<T>(Func<T> operation)
+    private static async Task<T> RetryClipboardAsync<T>(Func<Task<T>> operation)
     {
         Exception? lastError = null;
         for (var attempt = 0; attempt < ClipboardAttempts; attempt++)
         {
             try
             {
-                return operation();
+                return await operation();
             }
             catch (COMException exception)
             {
                 lastError = exception;
-                Thread.Sleep(12 * (attempt + 1));
+                await Task.Delay(12 * (attempt + 1));
             }
         }
         throw new InvalidOperationException("剪贴板正被其他应用占用，请稍后重试。", lastError);
@@ -316,7 +316,7 @@ internal sealed class ClipboardSnapshot : IClipboardSnapshot
         string[] paths => paths.ToArray(),
         byte[] bytes => bytes.ToArray(),
         MemoryStream stream => new MemoryStream(stream.ToArray(), writable: false),
-        Bitmap bitmap => bitmap.Clone(),
+        Drawing.Bitmap bitmap => bitmap.Clone(),
         BitmapSource image => CloneBitmapSource(image),
         _ when data.GetType().IsValueType => data,
         _ => throw new InvalidOperationException(

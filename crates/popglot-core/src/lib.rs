@@ -6,18 +6,23 @@
 
 pub mod provider;
 
-use popglot_domain::{ProviderSettings, TranslationMode, protect_tokens, restore_tokens};
-use std::fs;
+use popglot_domain::{
+    LanguagePair, ProviderSettings, RoutingContext, RoutingDecision, TranslationMode,
+    protect_tokens, restore_tokens, select_route,
+};
+use std::fs::{self, File};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio_util::sync::CancellationToken;
 
 use provider::{
-    ImageInput, ProviderClient, ProviderError, ProviderErrorKind, TranslationInput,
+    ImageInput, ProviderClient, ProviderError, ProviderErrorKind, TranslationRequest,
     TranslationResponse, TransportLimits, provider_for, validate_provider_settings,
 };
 
 const SETTINGS_FILE: &str = "provider-settings.json";
+const MAX_SOURCE_BYTES: usize = 64 * 1024;
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug)]
@@ -25,6 +30,7 @@ pub struct AppCore {
     settings_path: PathBuf,
     settings: ProviderSettings,
     provider_client: ProviderClient,
+    startup_notice: Option<String>,
 }
 
 impl AppCore {
@@ -33,14 +39,33 @@ impl AppCore {
     /// # Errors
     ///
     /// Returns [`CoreError`] when the directory cannot be created or existing
-    /// settings cannot be read and decoded.
+    /// settings cannot be read. Corrupt JSON files are backed up safely with a
+    /// timestamp suffix so user data is never lost.
     pub fn open(config_directory: impl AsRef<Path>) -> Result<Self, CoreError> {
         let directory = config_directory.as_ref();
         fs::create_dir_all(directory)?;
         let settings_path = directory.join(SETTINGS_FILE);
+        let mut startup_notice = None;
         let settings = if settings_path.exists() {
             let json = fs::read_to_string(&settings_path)?;
-            serde_json::from_str(&json)?
+            match serde_json::from_str::<ProviderSettings>(&json) {
+                Ok(loaded) => loaded,
+                Err(err) => {
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs());
+                    let corrupt_name = format!("provider-settings.corrupt-{timestamp}.json");
+                    let corrupt_path = directory.join(&corrupt_name);
+                    let _ = fs::rename(&settings_path, &corrupt_path);
+                    tracing::warn!(error = %err, "Corrupted provider settings backed up to {:?}", corrupt_path);
+                    // The shell surfaces this so a silent-looking reset is never
+                    // mistaken for the user's own configuration.
+                    startup_notice = Some(format!(
+                        "provider-settings.json 无法解析，已重置为默认设置；原文件保留为 {corrupt_name}，可从中恢复你的配置。"
+                    ));
+                    ProviderSettings::default()
+                }
+            }
         } else {
             ProviderSettings::default()
         };
@@ -49,10 +74,12 @@ impl AppCore {
             settings_path,
             settings,
             provider_client,
+            startup_notice,
         })
     }
 
-    fn limits_for(settings: &ProviderSettings) -> TransportLimits {
+    #[must_use]
+    pub fn limits_for(settings: &ProviderSettings) -> TransportLimits {
         TransportLimits {
             accept_invalid_certs: settings.allow_insecure_tls,
             ..TransportLimits::default()
@@ -64,7 +91,21 @@ impl AppCore {
         &self.settings
     }
 
-    /// Validates and persists non-secret provider settings.
+    #[must_use]
+    pub fn provider_client(&self) -> &ProviderClient {
+        &self.provider_client
+    }
+
+    /// Returns and clears the one-shot startup notice (e.g. corrupted settings
+    /// were backed up), so the shell can tell the user what happened.
+    pub fn take_startup_notice(&mut self) -> Option<String> {
+        self.startup_notice.take()
+    }
+
+    /// Validates and atomically persists non-secret provider settings.
+    ///
+    /// Writes to a temporary file, flushes to disk, backs up the previous version,
+    /// and performs an atomic replace so process interruption never corrupts the configuration.
     ///
     /// # Errors
     ///
@@ -73,7 +114,22 @@ impl AppCore {
         validate_settings(&settings)?;
         validate_provider_settings(&settings)?;
         let json = serde_json::to_string_pretty(&settings)?;
-        fs::write(&self.settings_path, json)?;
+
+        let temp_path = self.settings_path.with_extension("tmp");
+        let bak_path = self.settings_path.with_extension("bak");
+
+        {
+            // Flush to disk before the rename: a crash between write and
+            // replace must never leave a truncated temp file as the "new" copy.
+            let mut file = File::create(&temp_path)?;
+            file.write_all(json.as_bytes())?;
+            file.sync_all()?;
+        }
+        if self.settings_path.exists() {
+            let _ = fs::copy(&self.settings_path, &bak_path);
+        }
+        fs::rename(&temp_path, &self.settings_path)?;
+
         if settings.allow_insecure_tls != self.settings.allow_insecure_tls {
             self.provider_client = ProviderClient::new(Self::limits_for(&settings))?;
         }
@@ -81,31 +137,100 @@ impl AppCore {
         Ok(())
     }
 
-    /// Sends a minimal text-only connection test after every privacy gate passes.
+    /// Explains which screenshot pipeline the current settings would choose.
+    ///
+    /// The shell asks before capturing so that routing lives in one place
+    /// instead of being re-derived by each platform front-end.
+    #[must_use]
+    pub fn plan_screenshot_route(
+        &self,
+        local_ocr_available: bool,
+        credential_present: bool,
+    ) -> RoutingDecision {
+        select_route(&RoutingContext::from_settings(
+            &self.settings,
+            local_ocr_available,
+            credential_present,
+        ))
+    }
+
+    /// Sends a minimal text-only connection test using active settings.
     ///
     /// # Errors
     ///
-    /// Returns [`ProviderError`] for disabled networking, missing credentials,
-    /// protocol, timeout, cancellation, HTTP, or response parsing errors.
+    /// Returns [`ProviderError`] for transport or configuration failures.
     pub async fn test_connection(
         &self,
         api_key: &str,
         cancellation: &CancellationToken,
     ) -> Result<TranslationResponse, ProviderError> {
-        let provider = provider_for(self.settings.provider_type);
         let request_id = format!(
             "connection-test-{}",
             REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         );
-        self.provider_client
+        Self::execute_test_connection_snapshot(
+            &self.settings,
+            &self.provider_client,
+            api_key,
+            &request_id,
+            cancellation,
+        )
+        .await
+    }
+
+    /// Tests connection using an in-memory draft configuration.
+    ///
+    /// Does not mutate the active core settings, change the stored credential,
+    /// or write to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderError`] for invalid draft settings or transport failures.
+    pub async fn test_connection_draft(
+        draft_settings: &ProviderSettings,
+        api_key: &str,
+        request_id: Option<&str>,
+        cancellation: &CancellationToken,
+    ) -> Result<TranslationResponse, ProviderError> {
+        validate_settings(draft_settings)
+            .map_err(|e| ProviderError::new(ProviderErrorKind::Configuration, e.to_string()))?;
+        validate_provider_settings(draft_settings)?;
+        let client = ProviderClient::new(Self::limits_for(draft_settings))?;
+        let generated_id = format!(
+            "connection-draft-{}",
+            REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        );
+        let req_id = request_id.unwrap_or(&generated_id);
+        Self::execute_test_connection_snapshot(
+            draft_settings,
+            &client,
+            api_key,
+            req_id,
+            cancellation,
+        )
+        .await
+    }
+
+    async fn execute_test_connection_snapshot(
+        settings: &ProviderSettings,
+        client: &ProviderClient,
+        api_key: &str,
+        request_id: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<TranslationResponse, ProviderError> {
+        let provider = provider_for(settings.provider_type);
+        let request = TranslationRequest::text(
+            "Connection test",
+            LanguagePair::new("en", &settings.target_language),
+        )
+        .with_explanation(false);
+        client
             .execute(
                 provider.as_ref(),
-                &self.settings,
+                settings,
                 api_key,
-                &request_id,
-                &TranslationInput::Text {
-                    source: "Translate the phrase 'Connection test' into Chinese.".to_owned(),
-                },
+                request_id,
+                &request,
                 cancellation,
             )
             .await
@@ -121,44 +246,97 @@ impl AppCore {
         &self,
         api_key: &str,
         source: &str,
+        languages: &LanguagePair,
+        cancellation: &CancellationToken,
+    ) -> Result<TranslationResponse, ProviderError> {
+        let request_id = format!(
+            "translation-{}",
+            REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        );
+        Self::execute_translate_text_snapshot(
+            &self.settings,
+            &self.provider_client,
+            api_key,
+            source,
+            languages,
+            &request_id,
+            cancellation,
+        )
+        .await
+    }
+
+    /// Pure lock-free text translation snapshot execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderError`] for transport or parsing failures.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_translate_text_snapshot(
+        settings: &ProviderSettings,
+        client: &ProviderClient,
+        api_key: &str,
+        source: &str,
+        languages: &LanguagePair,
+        request_id: &str,
         cancellation: &CancellationToken,
     ) -> Result<TranslationResponse, ProviderError> {
         let source = source.trim();
-        if source.is_empty() || source.len() > 64 * 1024 {
-            return Err(ProviderError {
-                kind: ProviderErrorKind::Configuration,
-                message: "选中文本必须大于 0 且不超过 64 KiB。".to_owned(),
-                status_code: None,
-                retryable: false,
-            });
+        if source.is_empty() || source.len() > MAX_SOURCE_BYTES {
+            return Err(ProviderError::new(
+                ProviderErrorKind::Configuration,
+                format!(
+                    "选中文本必须大于 0 且不超过 {} KiB。",
+                    MAX_SOURCE_BYTES / 1024
+                ),
+            ));
         }
+
+        if !settings.protect_code_tokens {
+            let provider = provider_for(settings.provider_type);
+            let request = TranslationRequest::text(source, languages.clone())
+                .with_explanation(settings.include_explanation);
+            return client
+                .execute(
+                    provider.as_ref(),
+                    settings,
+                    api_key,
+                    request_id,
+                    &request,
+                    cancellation,
+                )
+                .await;
+        }
+
         let protected = protect_tokens(source);
-        let mut response = self
-            .execute_translation(
+        let provider = provider_for(settings.provider_type);
+        let request = TranslationRequest::text(protected.sanitized_text, languages.clone())
+            .with_explanation(settings.include_explanation);
+        let mut response = client
+            .execute(
+                provider.as_ref(),
+                settings,
                 api_key,
-                TranslationInput::Text {
-                    source: protected.sanitized_text,
-                },
+                request_id,
+                &request,
                 cancellation,
             )
             .await?;
+
         if !protected.tokens.is_empty() {
-            response.result.translated_text = restore_tokens(
-                &response.result.translated_text,
-                &protected.tokens,
-            )
-            .map_err(|_| ProviderError {
-                kind: ProviderErrorKind::InvalidResponse,
-                message: "模型修改或遗漏了受保护的代码元素；为避免展示错误标识符，本次结果已拒绝。"
-                    .to_owned(),
-                status_code: None,
-                retryable: false,
-            })?;
+            let restored = restore_tokens(&response.result.translated_text, &protected.tokens);
+            response.result.translated_text = restored.text;
             response.result.protected_terms = protected
                 .tokens
-                .into_iter()
-                .map(|token| token.original)
+                .iter()
+                .map(|token| token.original.clone())
                 .collect();
+            if !restored.dropped_terms.is_empty() {
+                response.result.is_partial = true;
+                response.result.warnings.push(format!(
+                    "模型未在译文中保留这些代码元素：{}",
+                    restored.dropped_terms.join("、")
+                ));
+            }
         }
         Ok(response)
     }
@@ -167,65 +345,77 @@ impl AppCore {
     ///
     /// # Errors
     ///
-    /// Returns a classified Provider error for privacy gates, unsupported modes,
-    /// image limits, cancellation, transport failures, or invalid model output.
+    /// Returns [`ProviderError`] for transport or parsing failures.
     pub async fn translate_vision(
         &self,
         api_key: &str,
         media_type: &str,
         image: Vec<u8>,
+        languages: &LanguagePair,
         cancellation: &CancellationToken,
     ) -> Result<TranslationResponse, ProviderError> {
-        if self.settings.mode == TranslationMode::LocalOcr {
-            return Err(ProviderError {
-                kind: ProviderErrorKind::UnsupportedInput,
-                message: "当前模式为本地 OCR，截图不应上传；请由外壳使用本地 OCR 后翻译文字。"
-                    .to_owned(),
-                status_code: None,
-                retryable: false,
-            });
-        }
-        if !self.settings.allow_image_upload_in_auto {
-            return Err(ProviderError {
-                kind: ProviderErrorKind::NetworkDisabled,
-                message: "隐私设置未授权上传截图；未发送图片。可在设置中勾选“允许截图上传”，或使用本地 OCR 模式。"
-                    .to_owned(),
-                status_code: None,
-                retryable: false,
-            });
-        }
-        self.execute_translation(
+        let request_id = format!(
+            "translation-{}",
+            REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        );
+        Self::execute_translate_vision_snapshot(
+            &self.settings,
+            &self.provider_client,
             api_key,
-            TranslationInput::Vision {
-                prompt: "Accurately transcribe and translate this screenshot into Chinese. Preserve every code token, identifier, command, path, URL, version, and error code exactly.".to_owned(),
-                image: ImageInput::Bytes {
-                    media_type: media_type.to_owned(),
-                    data: image,
-                },
-            },
+            media_type,
+            image,
+            languages,
+            &request_id,
             cancellation,
         )
         .await
     }
 
-    async fn execute_translation(
-        &self,
+    /// Pure lock-free vision translation snapshot execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderError`] for transport or parsing failures.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_translate_vision_snapshot(
+        settings: &ProviderSettings,
+        client: &ProviderClient,
         api_key: &str,
-        input: TranslationInput,
+        media_type: &str,
+        image: Vec<u8>,
+        languages: &LanguagePair,
+        request_id: &str,
         cancellation: &CancellationToken,
     ) -> Result<TranslationResponse, ProviderError> {
-        let provider = provider_for(self.settings.provider_type);
-        let request_id = format!(
-            "translation-{}",
-            REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        );
-        self.provider_client
+        if settings.mode == TranslationMode::LocalOcr {
+            return Err(ProviderError::new(
+                ProviderErrorKind::UnsupportedInput,
+                "当前模式为本地 OCR，截图不应上传；请由外壳使用本地 OCR 后翻译文字。",
+            ));
+        }
+        if !settings.allow_image_upload_in_auto {
+            return Err(ProviderError::new(
+                ProviderErrorKind::NetworkDisabled,
+                "隐私设置未授权上传截图；未发送图片。可在设置中勾选“允许截图上传”，或使用本地 OCR 模式。",
+            ));
+        }
+
+        let provider = provider_for(settings.provider_type);
+        let request = TranslationRequest::vision(
+            ImageInput::Bytes {
+                media_type: media_type.to_owned(),
+                data: image,
+            },
+            languages.clone(),
+        )
+        .with_explanation(settings.include_explanation);
+        client
             .execute(
                 provider.as_ref(),
-                &self.settings,
+                settings,
                 api_key,
-                &request_id,
-                &input,
+                request_id,
+                &request,
                 cancellation,
             )
             .await
@@ -234,15 +424,17 @@ impl AppCore {
 
 fn validate_settings(settings: &ProviderSettings) -> Result<(), CoreError> {
     let base = settings.api_base_url.trim();
+    if base.is_empty() {
+        return Err(CoreError::InvalidSettings(
+            "API Base URL 不能为空。".to_owned(),
+        ));
+    }
     if !(base.starts_with("https://")
-        || base.starts_with("http://localhost")
-        || base.starts_with("http://127.0.0.1")
-        || base.starts_with("http://192.168.")
-        || base.starts_with("http://10.")
-        || base.starts_with("http://172."))
+        || (base.starts_with("http://") && popglot_domain::is_local_base_url(base)))
     {
         return Err(CoreError::InvalidSettings(
-            "API Base URL 必须使用 HTTPS；本地或局域网 (如 Ollama/LM Studio) 允许 HTTP。".to_owned(),
+            "API Base URL 必须使用 HTTPS；仅本机或局域网服务 (如 Ollama/LM Studio) 允许 HTTP。"
+                .to_owned(),
         ));
     }
     Ok(())
@@ -265,17 +457,26 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
-    fn settings_round_trip_without_secret_value() {
+    fn scratch_directory(label: &str) -> PathBuf {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        let directory = std::env::temp_dir().join(format!("popglot-core-test-{suffix}"));
+        std::env::temp_dir().join(format!("popglot-{label}-{suffix}"))
+    }
+
+    fn pair() -> LanguagePair {
+        LanguagePair::new("auto", "zh-CN")
+    }
+
+    #[test]
+    fn settings_round_trip_without_secret_value() {
+        let directory = scratch_directory("core-test");
         let mut core = AppCore::open(&directory).expect("open core");
         let settings = ProviderSettings {
             text_model: "demo-text".to_owned(),
             api_key_configured: true,
+            target_language: "ja".to_owned(),
             ..ProviderSettings::default()
         };
         core.save_settings(settings.clone()).expect("save settings");
@@ -286,23 +487,72 @@ mod tests {
         fs::remove_dir_all(directory).expect("remove isolated test directory");
     }
 
+    #[test]
+    fn corrupt_settings_fall_back_to_defaults_and_backup_corrupt_file() {
+        let directory = scratch_directory("corrupt-test");
+        fs::create_dir_all(&directory).expect("create directory");
+        fs::write(directory.join(SETTINGS_FILE), "{ not json").expect("write corrupt settings");
+        let mut core = AppCore::open(&directory).expect("core must still open");
+        assert_eq!(core.settings(), &ProviderSettings::default());
+
+        // The shell is told what happened instead of the reset being silent.
+        let notice = core.take_startup_notice().expect("startup notice");
+        assert!(notice.contains("provider-settings.corrupt-"), "{notice}");
+        assert!(core.take_startup_notice().is_none(), "notice is one-shot");
+
+        // Corrupt file must be preserved with a backup name
+        let entries = fs::read_dir(&directory)
+            .expect("read dir")
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert!(
+            entries
+                .iter()
+                .any(|name| name.starts_with("provider-settings.corrupt-"))
+        );
+
+        fs::remove_dir_all(directory).expect("remove isolated test directory");
+    }
+
+    #[test]
+    fn healthy_settings_produce_no_startup_notice() {
+        let directory = scratch_directory("notice-test");
+        let mut core = AppCore::open(&directory).expect("open core");
+        assert!(core.take_startup_notice().is_none());
+        fs::remove_dir_all(directory).expect("remove isolated test directory");
+    }
+
+    #[test]
+    fn http_is_rejected_for_public_hosts_and_allowed_for_loopback() {
+        let directory = scratch_directory("url-test");
+        let mut core = AppCore::open(&directory).expect("open core");
+        let public_http = ProviderSettings {
+            api_base_url: "http://api.example.com/v1".to_owned(),
+            ..ProviderSettings::default()
+        };
+        assert!(core.save_settings(public_http).is_err());
+        let loopback = ProviderSettings {
+            api_base_url: "http://127.0.0.1:11434/v1".to_owned(),
+            ..ProviderSettings::default()
+        };
+        assert!(core.save_settings(loopback).is_ok());
+        fs::remove_dir_all(directory).expect("remove isolated test directory");
+    }
+
     #[tokio::test]
     async fn selected_text_respects_validation_and_network_gate() {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let directory = std::env::temp_dir().join(format!("popglot-selection-test-{suffix}"));
+        let directory = scratch_directory("selection-test");
         let mut core = AppCore::open(&directory).expect("open core");
         let cancellation = CancellationToken::new();
         let empty = core
-            .translate_text("key", "   ", &cancellation)
+            .translate_text("key", "   ", &pair(), &cancellation)
             .await
             .expect_err("empty selection must fail");
         assert_eq!(empty.kind, ProviderErrorKind::Configuration);
         core.settings.network_enabled = false;
         let disabled = core
-            .translate_text("key", "selected text", &cancellation)
+            .translate_text("key", "selected text", &pair(), &cancellation)
             .await
             .expect_err("disabled network gate must fail");
         assert_eq!(disabled.kind, ProviderErrorKind::NetworkDisabled);
@@ -311,26 +561,50 @@ mod tests {
 
     #[tokio::test]
     async fn screenshot_route_never_bypasses_local_or_upload_permission() {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let directory = std::env::temp_dir().join(format!("popglot-vision-test-{suffix}"));
+        let directory = scratch_directory("vision-test");
         let mut core = AppCore::open(&directory).expect("open core");
         let cancellation = CancellationToken::new();
         core.settings.mode = TranslationMode::LocalOcr;
         let local = core
-            .translate_vision("key", "image/png", vec![1], &cancellation)
+            .translate_vision("key", "image/png", vec![1], &pair(), &cancellation)
             .await
             .expect_err("local mode must not upload");
         assert_eq!(local.kind, ProviderErrorKind::UnsupportedInput);
         core.settings.mode = TranslationMode::VisionDirect;
         core.settings.allow_image_upload_in_auto = false;
         let unapproved = core
-            .translate_vision("key", "image/png", vec![1], &cancellation)
+            .translate_vision("key", "image/png", vec![1], &pair(), &cancellation)
             .await
             .expect_err("unapproved screenshot must not upload");
         assert_eq!(unapproved.kind, ProviderErrorKind::NetworkDisabled);
+        fs::remove_dir_all(directory).expect("remove isolated test directory");
+    }
+
+    #[test]
+    fn screenshot_route_plan_reflects_credentials_and_permissions() {
+        let directory = scratch_directory("route-test");
+        let mut core = AppCore::open(&directory).expect("open core");
+        core.settings.mode = TranslationMode::Auto;
+
+        // No credential yet: the vision model is unreachable, so local OCR wins.
+        let without_key = core.plan_screenshot_route(true, false);
+        assert_eq!(without_key.selected_mode, TranslationMode::LocalOcr);
+        assert!(!without_key.may_upload_image);
+
+        // Credential present and upload permitted: vision becomes reachable and
+        // simple text still prefers local OCR.
+        let with_key = core.plan_screenshot_route(true, true);
+        assert_eq!(with_key.reason_code, "auto_local_first");
+
+        // No OCR language pack: vision is the only route that can produce text.
+        let no_ocr = core.plan_screenshot_route(false, true);
+        assert_eq!(no_ocr.selected_mode, TranslationMode::VisionDirect);
+
+        // The offline switch outranks everything.
+        core.settings.safe_dev_mode = true;
+        let offline = core.plan_screenshot_route(true, true);
+        assert!(!offline.may_upload_image);
+
         fs::remove_dir_all(directory).expect("remove isolated test directory");
     }
 }

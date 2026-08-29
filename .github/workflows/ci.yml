@@ -31,3 +31,6 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - run: dotnet build apps/PopGlot.Windows/PopGlot.Windows.csproj --configuration Release
+      # Headless shell-logic tests, including the zero-outbound offline journey,
+      # draft-test isolation, hotkey round-trips and the DPI screenshot matrix.
+      - run: dotnet run --project tests/PopGlot.Windows.LogicTests/PopGlot.Windows.LogicTests.csproj --configuration Release

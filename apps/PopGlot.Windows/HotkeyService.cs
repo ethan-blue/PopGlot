@@ -4,18 +4,24 @@ using System.Windows.Interop;
 
 namespace PopGlot.Windows;
 
+/// <summary>
+/// Registers the process-wide hotkeys and reports precisely which one Windows
+/// refused, so the settings page can point at the offending row instead of
+/// silently leaving the app without shortcuts.
+/// </summary>
 internal sealed partial class HotkeyService : IDisposable
 {
     private const int FirstHotkeyId = 0x5047;
     private const int WmHotkey = 0x0312;
     private readonly HwndSource _source;
     private readonly Dictionary<int, HotkeyAction> _registered = [];
-    private IReadOnlyDictionary<HotkeyAction, ShortcutOption> _current =
-        new Dictionary<HotkeyAction, ShortcutOption>();
+    private IReadOnlyDictionary<HotkeyAction, HotkeyBinding> _current =
+        new Dictionary<HotkeyAction, HotkeyBinding>();
     private bool _disposed;
 
     public HotkeyService(Window owner)
     {
+        ArgumentNullException.ThrowIfNull(owner);
         var handle = new WindowInteropHelper(owner).EnsureHandle();
         _source = HwndSource.FromHwnd(handle)
             ?? throw new InvalidOperationException("Unable to attach the PopGlot hotkey window hook.");
@@ -24,17 +30,22 @@ internal sealed partial class HotkeyService : IDisposable
 
     public event EventHandler<HotkeyAction>? Pressed;
 
+    /// <summary>
+    /// Applies a whole set atomically: on any failure the previously working
+    /// set is restored so the user is never left with no shortcuts at all.
+    /// </summary>
     public bool TryRegisterAll(
-        IReadOnlyDictionary<HotkeyAction, ShortcutOption> hotkeys,
+        IReadOnlyDictionary<HotkeyAction, HotkeyBinding> hotkeys,
         out string? conflict)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        conflict = null;
+        ArgumentNullException.ThrowIfNull(hotkeys);
+
         var previous = _current;
         UnregisterAll();
         if (RegisterSet(hotkeys, out conflict))
         {
-            _current = new Dictionary<HotkeyAction, ShortcutOption>(hotkeys);
+            _current = new Dictionary<HotkeyAction, HotkeyBinding>(hotkeys);
             return true;
         }
 
@@ -45,19 +56,20 @@ internal sealed partial class HotkeyService : IDisposable
     }
 
     private bool RegisterSet(
-        IReadOnlyDictionary<HotkeyAction, ShortcutOption> hotkeys,
+        IReadOnlyDictionary<HotkeyAction, HotkeyBinding> hotkeys,
         out string? conflict)
     {
         var id = FirstHotkeyId;
-        foreach (var (action, shortcut) in hotkeys)
+        foreach (var (action, binding) in hotkeys)
         {
             if (!NativeMethods.RegisterHotKey(
                     _source.Handle,
                     id,
-                    shortcut.Modifiers | NativeMethods.ModNoRepeat,
-                    shortcut.VirtualKey))
+                    binding.Modifiers | NativeMethods.ModNoRepeat,
+                    binding.VirtualKey))
             {
-                conflict = shortcut.DisplayName;
+                conflict =
+                    $"{ShellSettings.ActionName(action)}：{binding.DisplayName} 已被其他程序占用";
                 return false;
             }
             _registered[id] = action;

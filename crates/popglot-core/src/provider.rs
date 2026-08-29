@@ -2,7 +2,7 @@
 
 use base64::Engine as _;
 use futures_util::StreamExt as _;
-use popglot_domain::{ProviderSettings, ProviderType};
+use popglot_domain::{LanguagePair, ProviderSettings, ProviderType, is_local_base_url};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, RETRY_AFTER};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -16,12 +16,91 @@ pub const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_MODEL_OUTPUT_TOKENS: u32 = 1_200;
 const MAX_EXTRA_HEADERS: usize = 16;
 
-const SYSTEM_INSTRUCTIONS: &str = r"You translate English and Chinese desktop content for users who may not know English well. Return exactly one JSON object with keys translated_text, transcription, explanation, protected_terms, and warnings. protected_terms and warnings are arrays of strings. Preserve code, identifiers, paths, commands, URLs, error codes, versions, and placeholders byte-for-byte. Do not invent missing context. Use an empty string or empty array when a field is not applicable. Do not wrap JSON in Markdown.";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranslationInput {
     Text { source: String },
-    Vision { prompt: String, image: ImageInput },
+    Vision { image: ImageInput },
+}
+
+/// One translation call: what to translate, between which languages, and how
+/// much commentary the user asked for.
+///
+/// The language pair lives here rather than inside [`TranslationInput`] so that
+/// every protocol adapter builds its prompt from the same source of truth; the
+/// previous design hard-coded Chinese in two unrelated places.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranslationRequest {
+    pub input: TranslationInput,
+    pub languages: LanguagePair,
+    pub include_explanation: bool,
+}
+
+impl TranslationRequest {
+    #[must_use]
+    pub fn text(source: impl Into<String>, languages: LanguagePair) -> Self {
+        Self {
+            input: TranslationInput::Text {
+                source: source.into(),
+            },
+            languages,
+            include_explanation: true,
+        }
+    }
+
+    #[must_use]
+    pub fn vision(image: ImageInput, languages: LanguagePair) -> Self {
+        Self {
+            input: TranslationInput::Vision { image },
+            languages,
+            include_explanation: true,
+        }
+    }
+
+    #[must_use]
+    pub fn with_explanation(mut self, include_explanation: bool) -> Self {
+        self.include_explanation = include_explanation;
+        self
+    }
+
+    /// System prompt describing the JSON contract and the requested languages.
+    #[must_use]
+    pub fn system_instructions(&self) -> String {
+        let explanation_rule = if self.include_explanation {
+            "Use `explanation` for one short note (in the target language) about tone, ambiguity, or a technical term the reader may not know; leave it empty when the translation is self-evident."
+        } else {
+            "Always leave `explanation` empty."
+        };
+        let transcription_rule = match self.input {
+            TranslationInput::Vision { .. } => {
+                "Put the exact text you read from the image into `transcription`, preserving line order."
+            }
+            TranslationInput::Text { .. } => "Leave `transcription` empty.",
+        };
+        format!(
+            "You are a precise translation engine embedded in a desktop tool. {}\n\
+             Return exactly one JSON object with the keys translated_text, transcription, \
+             explanation, protected_terms, and warnings. protected_terms and warnings are arrays \
+             of strings.\n\
+             {transcription_rule}\n\
+             {explanation_rule}\n\
+             Preserve code, identifiers, file paths, commands, URLs, error codes, version numbers, \
+             and any ⟦PG_0000⟧ placeholder byte-for-byte — copy placeholders verbatim, never \
+             translate or renumber them.\n\
+             Translate only; never answer, explain away, or refuse the content. Do not invent \
+             context that is not present. Use an empty string or empty array for fields that do \
+             not apply. Never wrap the JSON in Markdown fences.",
+            self.languages.instruction()
+        )
+    }
+
+    /// User-visible instruction attached to an image request.
+    #[must_use]
+    pub fn vision_prompt(&self) -> String {
+        format!(
+            "{} Transcribe every visible line of this screenshot exactly, then translate it.",
+            self.languages.instruction()
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +117,7 @@ pub struct TranslationResult {
     pub explanation: String,
     pub protected_terms: Vec<String>,
     pub warnings: Vec<String>,
+    pub is_partial: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,7 +163,7 @@ pub trait TranslationProvider: Send + Sync {
     fn prepare(
         &self,
         settings: &ProviderSettings,
-        input: &TranslationInput,
+        request: &TranslationRequest,
     ) -> Result<PreparedProviderRequest, ProviderError>;
     /// Parses a protocol response into the common result DTO.
     ///
@@ -121,7 +201,7 @@ pub struct ProviderError {
 }
 
 impl ProviderError {
-    fn new(kind: ProviderErrorKind, message: impl Into<String>) -> Self {
+    pub fn new(kind: ProviderErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
             message: message.into(),
@@ -214,12 +294,12 @@ impl ProviderClient {
         settings: &ProviderSettings,
         api_key: &str,
         request_id: &str,
-        input: &TranslationInput,
+        request: &TranslationRequest,
         cancellation: &CancellationToken,
     ) -> Result<TranslationResponse, ProviderError> {
         validate_execution(settings, api_key, request_id)?;
-        validate_input_capability(settings, input)?;
-        let prepared = provider.prepare(settings, input)?;
+        validate_input_capability(settings, &request.input)?;
+        let prepared = provider.prepare(settings, request)?;
         let body = serde_json::to_vec(&prepared.body).map_err(|error| {
             ProviderError::new(
                 ProviderErrorKind::Configuration,
@@ -441,20 +521,20 @@ impl TranslationProvider for OpenAiChatProvider {
     fn prepare(
         &self,
         settings: &ProviderSettings,
-        input: &TranslationInput,
+        request: &TranslationRequest,
     ) -> Result<PreparedProviderRequest, ProviderError> {
-        let (model, endpoint, user_content, contains_image) = match input {
+        let (model, endpoint, user_content, contains_image) = match &request.input {
             TranslationInput::Text { source } => (
                 require_model(&settings.text_model, "文本")?,
                 &settings.text_endpoint,
                 Value::String(source.clone()),
                 false,
             ),
-            TranslationInput::Vision { prompt, image } => (
+            TranslationInput::Vision { image } => (
                 require_model(&settings.vision_model, "视觉")?,
                 &settings.vision_endpoint,
                 json!([
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": request.vision_prompt()},
                     {"type": "image_url", "image_url": {"url": image_data_url(image)?}},
                 ]),
                 true,
@@ -471,7 +551,7 @@ impl TranslationProvider for OpenAiChatProvider {
                 "temperature": 0.1,
                 "max_tokens": MAX_MODEL_OUTPUT_TOKENS,
                 "messages": [
-                    {"role": "system", "content": SYSTEM_INSTRUCTIONS},
+                    {"role": "system", "content": request.system_instructions()},
                     {"role": "user", "content": user_content},
                 ],
             }),
@@ -502,20 +582,20 @@ impl TranslationProvider for OpenAiResponsesProvider {
     fn prepare(
         &self,
         settings: &ProviderSettings,
-        input: &TranslationInput,
+        request: &TranslationRequest,
     ) -> Result<PreparedProviderRequest, ProviderError> {
-        let (model, endpoint, content, contains_image) = match input {
+        let (model, endpoint, content, contains_image) = match &request.input {
             TranslationInput::Text { source } => (
                 require_model(&settings.text_model, "文本")?,
                 &settings.text_endpoint,
                 json!([{"type": "input_text", "text": source}]),
                 false,
             ),
-            TranslationInput::Vision { prompt, image } => (
+            TranslationInput::Vision { image } => (
                 require_model(&settings.vision_model, "视觉")?,
                 &settings.vision_endpoint,
                 json!([
-                    {"type": "input_text", "text": prompt},
+                    {"type": "input_text", "text": request.vision_prompt()},
                     {"type": "input_image", "image_url": image_data_url(image)?, "detail": "auto"},
                 ]),
                 true,
@@ -530,7 +610,7 @@ impl TranslationProvider for OpenAiResponsesProvider {
                 "model": model,
                 "store": false,
                 "max_output_tokens": MAX_MODEL_OUTPUT_TOKENS,
-                "instructions": SYSTEM_INSTRUCTIONS,
+                "instructions": request.system_instructions(),
                 "input": [{"role": "user", "content": content}],
             }),
         })
@@ -574,16 +654,16 @@ impl TranslationProvider for AnthropicMessagesProvider {
     fn prepare(
         &self,
         settings: &ProviderSettings,
-        input: &TranslationInput,
+        request: &TranslationRequest,
     ) -> Result<PreparedProviderRequest, ProviderError> {
-        let (model, endpoint, content, contains_image) = match input {
+        let (model, endpoint, content, contains_image) = match &request.input {
             TranslationInput::Text { source } => (
                 require_model(&settings.text_model, "文本")?,
                 &settings.text_endpoint,
                 json!([{"type": "text", "text": source}]),
                 false,
             ),
-            TranslationInput::Vision { prompt, image } => {
+            TranslationInput::Vision { image } => {
                 let image_block = match image {
                     ImageInput::Bytes { media_type, data } => {
                         validate_image(media_type, data.len())?;
@@ -604,7 +684,7 @@ impl TranslationProvider for AnthropicMessagesProvider {
                 (
                     require_model(&settings.vision_model, "视觉")?,
                     &settings.vision_endpoint,
-                    json!([image_block, {"type": "text", "text": prompt}]),
+                    json!([image_block, {"type": "text", "text": request.vision_prompt()}]),
                     true,
                 )
             }
@@ -622,7 +702,7 @@ impl TranslationProvider for AnthropicMessagesProvider {
             body: json!({
                 "model": model,
                 "max_tokens": MAX_MODEL_OUTPUT_TOKENS,
-                "system": SYSTEM_INSTRUCTIONS,
+                "system": request.system_instructions(),
                 "messages": [{"role": "user", "content": content}],
             }),
         })
@@ -657,16 +737,16 @@ impl TranslationProvider for GeminiGenerateContentProvider {
     fn prepare(
         &self,
         settings: &ProviderSettings,
-        input: &TranslationInput,
+        request: &TranslationRequest,
     ) -> Result<PreparedProviderRequest, ProviderError> {
-        let (model, endpoint_template, parts, contains_image) = match input {
+        let (model, endpoint_template, parts, contains_image) = match &request.input {
             TranslationInput::Text { source } => (
                 require_model(&settings.text_model, "文本")?,
                 &settings.text_endpoint,
                 json!([{"text": source}]),
                 false,
             ),
-            TranslationInput::Vision { prompt, image } => {
+            TranslationInput::Vision { image } => {
                 let ImageInput::Bytes { media_type, data } = image else {
                     return Err(ProviderError::new(
                         ProviderErrorKind::UnsupportedInput,
@@ -684,7 +764,7 @@ impl TranslationProvider for GeminiGenerateContentProvider {
                                 "data": base64::engine::general_purpose::STANDARD.encode(data),
                             }
                         },
-                        {"text": prompt},
+                        {"text": request.vision_prompt()},
                     ]),
                     true,
                 )
@@ -698,7 +778,7 @@ impl TranslationProvider for GeminiGenerateContentProvider {
             contains_image,
             extra_headers: extra_headers(settings),
             body: json!({
-                "system_instruction": {"parts": [{"text": SYSTEM_INSTRUCTIONS}]},
+                "system_instruction": {"parts": [{"text": request.system_instructions()}]},
                 "contents": [{"role": "user", "parts": parts}],
                 "generationConfig": {
                     "temperature": 0.1,
@@ -843,19 +923,21 @@ fn validate_execution(
     api_key: &str,
     request_id: &str,
 ) -> Result<(), ProviderError> {
+    // Master offline switch: checked first so that no other permission can
+    // re-enable outbound traffic while the user believes they are offline.
+    if settings.safe_dev_mode {
+        return Err(ProviderError::new(
+            ProviderErrorKind::NetworkDisabled,
+            "安全离线模式已开启；未发送任何模型请求。可在「翻译服务」中关闭它。",
+        ));
+    }
     if !settings.network_enabled {
         return Err(ProviderError::new(
             ProviderErrorKind::NetworkDisabled,
             "网络访问未启用；未发送任何 Provider 请求。请在设置中勾选「启用大模型网络翻译」。",
         ));
     }
-    let is_local = settings.api_base_url.contains("localhost")
-        || settings.api_base_url.contains("127.0.0.1")
-        || settings.api_base_url.contains("192.168.")
-        || settings.api_base_url.contains("10.")
-        || settings.api_base_url.contains("172.");
-
-    if api_key.trim().is_empty() && !is_local {
+    if api_key.trim().is_empty() && !is_local_base_url(&settings.api_base_url) {
         return Err(ProviderError::new(
             ProviderErrorKind::MissingCredential,
             "未配置 API Key；请先在设置中填入对应服务的 API Key 或使用本地模型。",
@@ -919,21 +1001,19 @@ fn build_url(base: &str, endpoint: &str) -> Result<reqwest::Url, ProviderError> 
     // that case instead of concatenating both prefixes.
     let base_path = base_url.path().trim_matches('/');
     let endpoint_path = endpoint.trim_start_matches('/');
-    let full_path = if !base_path.is_empty()
-        && endpoint_path
-            .strip_prefix(&format!("{base_path}/"))
-            .is_some()
-    {
-        format!("/{endpoint_path}")
-    } else if base_path.is_empty() {
+    let endpoint_repeats_base =
+        !base_path.is_empty() && endpoint_path.starts_with(&format!("{base_path}/"));
+    let full_path = if base_path.is_empty() || endpoint_repeats_base {
         format!("/{endpoint_path}")
     } else {
         format!("/{base_path}/{endpoint_path}")
     };
-    let host = base_url
-        .host_str()
-        .ok_or_else(|| ProviderError::new(ProviderErrorKind::Configuration, "API Base URL 无效。"))?;
-    let port = base_url.port().map_or_else(String::new, |value| format!(":{value}"));
+    let host = base_url.host_str().ok_or_else(|| {
+        ProviderError::new(ProviderErrorKind::Configuration, "API Base URL 无效。")
+    })?;
+    let port = base_url
+        .port()
+        .map_or_else(String::new, |value| format!(":{value}"));
     let joined = format!("{}://{host}{port}{full_path}", base_url.scheme());
     reqwest::Url::parse(&joined).map_err(|_| {
         ProviderError::new(ProviderErrorKind::Configuration, "Provider endpoint 无效。")
@@ -1089,21 +1169,19 @@ fn parse_translation_json(model_text: &str) -> Result<TranslationResult, Provide
         .map_or(trimmed, str::trim);
 
     // 1. Direct JSON parse
-    if let Ok(result) = serde_json::from_str::<TranslationResult>(json_text) {
-        if !result.translated_text.trim().is_empty() {
-            return Ok(result);
-        }
+    if let Ok(result) = serde_json::from_str::<TranslationResult>(json_text)
+        && !result.translated_text.trim().is_empty()
+    {
+        return Ok(result);
     }
 
     // 2. Substring JSON parse if enclosed in other text
-    if let (Some(start), Some(end)) = (json_text.find('{'), json_text.rfind('}')) {
-        if start < end {
-            if let Ok(result) = serde_json::from_str::<TranslationResult>(&json_text[start..=end]) {
-                if !result.translated_text.trim().is_empty() {
-                    return Ok(result);
-                }
-            }
-        }
+    if let (Some(start), Some(end)) = (json_text.find('{'), json_text.rfind('}'))
+        && start < end
+        && let Ok(result) = serde_json::from_str::<TranslationResult>(&json_text[start..=end])
+        && !result.translated_text.trim().is_empty()
+    {
+        return Ok(result);
     }
 
     // 3. Fallback: treat entire output as translated text if non-empty
@@ -1114,6 +1192,7 @@ fn parse_translation_json(model_text: &str) -> Result<TranslationResult, Provide
             explanation: String::new(),
             protected_terms: Vec::new(),
             warnings: Vec::new(),
+            is_partial: false,
         });
     }
 
@@ -1158,26 +1237,23 @@ mod tests {
         }
     }
 
+    fn text_request(source: &str) -> TranslationRequest {
+        TranslationRequest::text(source, LanguagePair::new("auto", "zh-CN"))
+    }
+
+    fn vision_request() -> TranslationRequest {
+        TranslationRequest::vision(image(), LanguagePair::new("auto", "zh-CN"))
+    }
+
     #[test]
     fn openai_chat_serializes_text_and_image_content() {
         let provider = OpenAiChatProvider;
         let config = settings(ProviderType::OpenAiCompatible);
         let text = provider
-            .prepare(
-                &config,
-                &TranslationInput::Text {
-                    source: "hello".to_owned(),
-                },
-            )
+            .prepare(&config, &text_request("hello"))
             .expect("text request");
         let vision = provider
-            .prepare(
-                &config,
-                &TranslationInput::Vision {
-                    prompt: "translate".to_owned(),
-                    image: image(),
-                },
-            )
+            .prepare(&config, &vision_request())
             .expect("vision request");
         assert_eq!(text.body["messages"][1]["content"], "hello");
         assert_eq!(
@@ -1193,17 +1269,52 @@ mod tests {
     }
 
     #[test]
+    fn requested_target_language_reaches_every_protocol_prompt() {
+        let request = TranslationRequest::text("hello", LanguagePair::new("en", "ja"));
+        let instructions = request.system_instructions();
+        assert!(instructions.contains("English"));
+        assert!(instructions.contains("Japanese"));
+
+        let chat = OpenAiChatProvider
+            .prepare(&settings(ProviderType::OpenAiCompatible), &request)
+            .expect("chat request");
+        assert_eq!(chat.body["messages"][0]["content"], instructions);
+
+        let responses = OpenAiResponsesProvider
+            .prepare(&settings(ProviderType::OpenAiResponses), &request)
+            .expect("responses request");
+        assert_eq!(responses.body["instructions"], instructions);
+
+        let anthropic = AnthropicMessagesProvider
+            .prepare(&settings(ProviderType::AnthropicMessages), &request)
+            .expect("anthropic request");
+        assert_eq!(anthropic.body["system"], instructions);
+
+        let gemini = GeminiGenerateContentProvider
+            .prepare(&settings(ProviderType::GeminiGenerateContent), &request)
+            .expect("gemini request");
+        assert_eq!(
+            gemini.body["system_instruction"]["parts"][0]["text"],
+            instructions
+        );
+    }
+
+    #[test]
+    fn explanation_opt_out_reaches_the_prompt() {
+        let request = text_request("hello").with_explanation(false);
+        assert!(
+            request
+                .system_instructions()
+                .contains("Always leave `explanation` empty")
+        );
+    }
+
+    #[test]
     fn openai_responses_uses_input_image_shape() {
         let provider = OpenAiResponsesProvider;
         let config = settings(ProviderType::OpenAiResponses);
         let request = provider
-            .prepare(
-                &config,
-                &TranslationInput::Vision {
-                    prompt: "translate".to_owned(),
-                    image: image(),
-                },
-            )
+            .prepare(&config, &vision_request())
             .expect("vision request");
         assert_eq!(request.endpoint, "/responses");
         assert_eq!(request.body["input"][0]["content"][0]["type"], "input_text");
@@ -1219,13 +1330,7 @@ mod tests {
         let provider = AnthropicMessagesProvider;
         let config = settings(ProviderType::AnthropicMessages);
         let request = provider
-            .prepare(
-                &config,
-                &TranslationInput::Vision {
-                    prompt: "translate".to_owned(),
-                    image: image(),
-                },
-            )
+            .prepare(&config, &vision_request())
             .expect("vision request");
         assert_eq!(request.endpoint, "/v1/messages");
         assert_eq!(request.body["messages"][0]["content"][0]["type"], "image");
@@ -1246,13 +1351,7 @@ mod tests {
         let mut config = settings(ProviderType::GeminiGenerateContent);
         config.vision_model = "gemini-test-flash".to_owned();
         let request = provider
-            .prepare(
-                &config,
-                &TranslationInput::Vision {
-                    prompt: "translate".to_owned(),
-                    image: image(),
-                },
-            )
+            .prepare(&config, &vision_request())
             .expect("vision request");
         assert_eq!(
             request.endpoint,
@@ -1262,7 +1361,12 @@ mod tests {
             request.body["contents"][0]["parts"][0]["inline_data"]["mime_type"],
             "image/png"
         );
-        assert_eq!(request.body["contents"][0]["parts"][1]["text"], "translate");
+        assert!(
+            request.body["contents"][0]["parts"][1]["text"]
+                .as_str()
+                .expect("vision prompt")
+                .contains("Transcribe")
+        );
     }
 
     #[test]
@@ -1339,12 +1443,7 @@ mod tests {
             .extra_headers
             .insert("Authorization".to_owned(), "secret".to_owned());
         let prepared = OpenAiChatProvider
-            .prepare(
-                &config,
-                &TranslationInput::Text {
-                    source: "hello".to_owned(),
-                },
-            )
+            .prepare(&config, &text_request("hello"))
             .expect("prepare");
         let error = build_headers(&config, &prepared).expect_err("must reject secret header");
         assert_eq!(error.kind, ProviderErrorKind::Configuration);
@@ -1370,17 +1469,35 @@ mod tests {
     }
 
     #[test]
+    fn safe_dev_mode_blocks_even_a_fully_configured_provider() {
+        let mut config = settings(ProviderType::OpenAiCompatible);
+        config.safe_dev_mode = true;
+        let error = validate_execution(&config, "key", "request").expect_err("offline gate");
+        assert_eq!(error.kind, ProviderErrorKind::NetworkDisabled);
+        assert!(error.message.contains("安全离线模式"));
+    }
+
+    #[test]
+    fn local_runtime_needs_no_key_but_a_public_lookalike_still_does() {
+        let mut config = settings(ProviderType::OpenAiCompatible);
+        config.api_base_url = "http://localhost:11434/v1".to_owned();
+        assert!(validate_execution(&config, "", "request").is_ok());
+        // `relay-10.example.com` used to pass the naive substring host check.
+        config.api_base_url = "https://relay-10.example.com/v1".to_owned();
+        assert_eq!(
+            validate_execution(&config, "", "request")
+                .expect_err("public host still needs a key")
+                .kind,
+            ProviderErrorKind::MissingCredential
+        );
+    }
+
+    #[test]
     fn disabled_capability_fails_before_preparing_request() {
         let mut config = settings(ProviderType::OpenAiCompatible);
         config.supports_vision = false;
-        let error = validate_input_capability(
-            &config,
-            &TranslationInput::Vision {
-                prompt: "translate".to_owned(),
-                image: image(),
-            },
-        )
-        .expect_err("vision capability is disabled");
+        let error = validate_input_capability(&config, &vision_request().input)
+            .expect_err("vision capability is disabled");
         assert_eq!(error.kind, ProviderErrorKind::UnsupportedInput);
     }
 
@@ -1407,8 +1524,7 @@ mod tests {
 
     #[test]
     fn url_join_keeps_distinct_base_path() {
-        let url = build_url("https://api.openai.com/v1", "/chat/completions")
-            .expect("openai url");
+        let url = build_url("https://api.openai.com/v1", "/chat/completions").expect("openai url");
         assert_eq!(url.as_str(), "https://api.openai.com/v1/chat/completions");
     }
 

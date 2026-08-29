@@ -1,13 +1,17 @@
-using System.Runtime.InteropServices;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace PopGlot.Windows;
 
+/// <summary>
+/// The managed side of the Rust core's C ABI.
+/// </summary>
 internal static partial class CoreBridge
 {
     private const string LibraryName = "popglot_ffi";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -16,63 +20,166 @@ internal static partial class CoreBridge
         Converters = { new JsonStringEnumConverter() },
     };
 
+    private static readonly Lock SettingsGate = new();
+    private static ProviderSettings? _cachedSettings;
+
     public static void Initialize()
     {
         var configDirectory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "PopGlot");
-        var response = Invoke(() => NativeMethods.Initialize(configDirectory));
-        EnsureSuccess<string>(response);
+        Directory.CreateDirectory(configDirectory);
+        EnsureSuccess<string>(Invoke(() => NativeMethods.Initialize(configDirectory)));
     }
 
+    /// <summary>
+    /// Returns and clears the core's one-shot startup notice, e.g. that a
+    /// corrupted settings file was backed up and defaults restored.
+    /// </summary>
+    public static string TakeStartupNotice()
+    {
+        try
+        {
+            return EnsureSuccess<string>(Invoke(NativeMethods.TakeStartupNotice));
+        }
+        catch (Exception)
+        {
+            // A missing notice must never break startup.
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Current provider settings.
+    /// </summary>
     public static ProviderSettings GetSettings()
     {
-        return EnsureSuccess<ProviderSettings>(Invoke(NativeMethods.GetSettings));
+        lock (SettingsGate)
+        {
+            _cachedSettings ??= EnsureSuccess<ProviderSettings>(Invoke(NativeMethods.GetSettings));
+            return _cachedSettings;
+        }
     }
 
     public static void SaveSettings(ProviderSettings settings)
     {
+        ArgumentNullException.ThrowIfNull(settings);
         var json = JsonSerializer.Serialize(settings, JsonOptions);
         EnsureSuccess<string>(Invoke(() => NativeMethods.SaveSettings(json)));
+        lock (SettingsGate)
+        {
+            _cachedSettings = settings;
+        }
     }
 
-    public static Task<TranslationResponse> TestConnectionAsync(string apiKey)
+    /// <summary>Asks the core which screenshot pipeline the settings imply.</summary>
+    public static RoutingDecision PlanScreenshotRoute(bool localOcrAvailable, bool credentialPresent) =>
+        EnsureSuccess<RoutingDecision>(Invoke(() => NativeMethods.PlanScreenshotRoute(
+            localOcrAvailable ? 1 : 0,
+            credentialPresent ? 1 : 0)));
+
+    public static Task<TranslationResponse> TestConnectionDraftAsync(
+        ProviderSettings draftSettings,
+        string apiKey,
+        string? requestId = null,
+        CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
-        return Task.Run(() =>
-            EnsureSuccess<TranslationResponse>(Invoke(() => NativeMethods.TestConnection(apiKey))));
+        ArgumentNullException.ThrowIfNull(draftSettings);
+        var reqId = requestId ?? Guid.NewGuid().ToString("N");
+        var draftJson = JsonSerializer.Serialize(draftSettings, JsonOptions);
+        var effectiveKey = string.IsNullOrWhiteSpace(apiKey) ? "local" : apiKey;
+        return RunCancellableAsync(
+            () => EnsureSuccess<TranslationResponse>(Invoke(
+                () => NativeMethods.TestConnectionDraft(draftJson, effectiveKey, reqId))),
+            reqId,
+            cancellationToken);
     }
 
+    /// <summary>
+    /// Translates text through the configured Provider only. Whether the
+    /// built-in free engine may be used instead is a privacy decision owned by
+    /// <see cref="Services.TranslationCoordinator"/>, never by the bridge.
+    /// </summary>
     public static async Task<TranslationResponse> TranslateTextAsync(
         string? apiKey,
         string source,
-        string sourceLang = "auto",
-        string targetLang = "zh-CN")
+        string sourceLang,
+        string targetLang,
+        string? requestId = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(source);
 
         var settings = GetSettings();
-        var isLocal = IsLocalBaseUrl(settings.ApiBaseUrl);
-
-        if (!string.IsNullOrWhiteSpace(apiKey) || isLocal)
+        if (settings.SafeDevMode || !settings.NetworkEnabled)
         {
-            // A provider is explicitly configured: surface its real error instead
-            // of silently degrading to the free web engine.
-            var effectiveKey = string.IsNullOrWhiteSpace(apiKey) ? "ollama" : apiKey;
-            return await Task.Run(() => EnsureSuccess<TranslationResponse>(
-                Invoke(() => NativeMethods.TranslateText(effectiveKey, source))));
+            if (!settings.TargetsLocalRuntime)
+            {
+                throw new InvalidOperationException(
+                    "安全离线模式或网络翻译已禁用；未发送任何在线翻译请求。可在设置中配置本地模型或开启网络。");
+            }
         }
 
-        // Zero-config free web translation
-        return await FreeTranslateService.TranslateAsync(source, sourceLang, targetLang);
+        var usesConfiguredProvider = !string.IsNullOrWhiteSpace(apiKey) || settings.TargetsLocalRuntime;
+        if (!usesConfiguredProvider)
+        {
+            throw new InvalidOperationException(
+                "尚未配置模型服务；未发送任何请求。可配置 API Key、本地模型地址，或允许内置免费引擎。");
+        }
+
+        var effectiveKey = string.IsNullOrWhiteSpace(apiKey) ? "local" : apiKey;
+        var reqId = requestId ?? Guid.NewGuid().ToString("N");
+        return await RunCancellableAsync(
+            () => EnsureSuccess<TranslationResponse>(Invoke(
+                () => NativeMethods.TranslateTextV2(effectiveKey, source, sourceLang, targetLang, reqId))),
+            reqId,
+            cancellationToken);
     }
 
-    public static async Task<TranslationResponse> TranslateVisionAsync(
+    /// <summary>
+    /// Translates already-recognized text (e.g. from local OCR) through the
+    /// configured provider, or — with an explicit, persisted consent — through
+    /// the free web engine when nothing else is configured.
+    /// </summary>
+    internal static async Task<TranslationResponse> TranslateRecognizedTextAsync(
         string? apiKey,
-        string mediaType,
+        string source,
+        string sourceLang,
+        string targetLang,
+        string? requestId,
+        CancellationToken cancellationToken)
+    {
+        var settings = GetSettings();
+        var usesConfiguredProvider = !string.IsNullOrWhiteSpace(apiKey) || settings.TargetsLocalRuntime;
+        if (usesConfiguredProvider)
+        {
+            return await TranslateTextAsync(apiKey, source, sourceLang, targetLang, requestId, cancellationToken);
+        }
+
+        if (!Services.OutboundPolicy.AllowsFreeEngine(settings, out var denial))
+        {
+            throw new InvalidOperationException(
+                denial is null ? "未允许出网翻译。" : $"{denial.Message} {denial.ActionableSuggestion}".Trim());
+        }
+
+        return await FreeTranslateService.TranslateAsync(source, sourceLang, targetLang, cancellationToken);
+    }
+
+    public static Task<ScreenshotTranslation> TranslateScreenshotAsync(
+        string? apiKey,
         byte[] image,
-        string sourceLang = "auto",
-        string targetLang = "zh-CN")
+        string sourceLang,
+        string targetLang,
+        CancellationToken cancellationToken) =>
+        TranslateScreenshotAsync(apiKey, image, sourceLang, targetLang, null, cancellationToken);
+
+    public static async Task<ScreenshotTranslation> TranslateScreenshotAsync(
+        string? apiKey,
+        byte[] image,
+        string sourceLang,
+        string targetLang,
+        string? requestId = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(image);
         if (image.Length == 0 || image.Length > 8 * 1024 * 1024)
@@ -80,69 +187,120 @@ internal static partial class CoreBridge
             throw new ArgumentOutOfRangeException(nameof(image), "截图必须大于 0 且不超过 8 MiB。");
         }
 
-        var settings = GetSettings();
+        var ocrAvailable = WindowsOcrService.IsSupported;
+        var route = PlanScreenshotRoute(ocrAvailable, !string.IsNullOrWhiteSpace(apiKey));
 
-        // Uploading requires the privacy toggle, a configured vision model, a
-        // credential, and enabled networking. Otherwise use local OCR directly
-        // instead of firing a request the core will refuse.
-        var mayUpload = settings.NetworkEnabled
-            && settings.AllowImageUploadInAuto
-            && settings.Mode != TranslationMode.LocalOcr
-            && settings.VisionIsConfigured
-            && !string.IsNullOrWhiteSpace(apiKey);
-
-        if (!mayUpload)
+        if (route.MayUploadImage)
         {
-            return await TranslateViaLocalOcrAsync(apiKey, image, sourceLang, targetLang);
+            var imageBase64 = Convert.ToBase64String(image);
+            var effectiveKey = string.IsNullOrWhiteSpace(apiKey) ? "local" : apiKey;
+            var reqId = requestId ?? Guid.NewGuid().ToString("N");
+            try
+            {
+                var response = await RunCancellableAsync(
+                    () => EnsureSuccess<TranslationResponse>(Invoke(
+                        () => NativeMethods.TranslateVisionV2(
+                            effectiveKey, "image/png", imageBase64, sourceLang, targetLang, reqId))),
+                    reqId,
+                    cancellationToken);
+                return new ScreenshotTranslation(response, "视觉模型", route.ExplanationZh);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception visionError) when (ocrAvailable)
+            {
+                try
+                {
+                    var fallback = await TranslateViaLocalOcrAsync(
+                        apiKey, image, sourceLang, targetLang, reqId, cancellationToken);
+                    return fallback with
+                    {
+                        PipelineReason = $"视觉模型失败（{visionError.Message}），已回退到本地 OCR。",
+                    };
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception fallbackError)
+                {
+                    throw new InvalidOperationException(
+                        $"视觉模型翻译失败（{visionError.Message}）；本地 OCR 回退也失败（{fallbackError.Message}）。");
+                }
+            }
         }
 
-        var imageBase64 = Convert.ToBase64String(image);
-        Exception visionError;
-        try
+        if (!ocrAvailable)
         {
-            return await Task.Run(() => EnsureSuccess<TranslationResponse>(
-                Invoke(() => NativeMethods.TranslateVision(apiKey!, mediaType, imageBase64))));
-        }
-        catch (Exception exception)
-        {
-            visionError = exception;
+            throw new InvalidOperationException(route.ExplanationZh);
         }
 
-        // Vision failed (e.g. the model rejected the image); degrade to local
-        // OCR + text translation, but keep the original failure visible if the
-        // fallback also fails.
-        try
-        {
-            return await TranslateViaLocalOcrAsync(apiKey, image, sourceLang, targetLang);
-        }
-        catch (Exception fallbackError)
-        {
-            throw new InvalidOperationException(
-                $"视觉模型翻译失败（{visionError.Message}）；本地 OCR 回退也失败（{fallbackError.Message}）。");
-        }
+        var local = await TranslateViaLocalOcrAsync(
+            apiKey, image, sourceLang, targetLang, requestId, cancellationToken);
+        return local with { PipelineReason = route.ExplanationZh };
     }
 
-    private static async Task<TranslationResponse> TranslateViaLocalOcrAsync(
+    private static async Task<ScreenshotTranslation> TranslateViaLocalOcrAsync(
         string? apiKey,
         byte[] image,
         string sourceLang,
-        string targetLang)
+        string targetLang,
+        string? requestId,
+        CancellationToken cancellationToken)
     {
-        var recognizedText = await WindowsOcrService.RecognizeTextAsync(image);
-        if (string.IsNullOrWhiteSpace(recognizedText))
+        var recognized = await WindowsOcrService.RecognizeTextAsync(image, sourceLang);
+        if (string.IsNullOrWhiteSpace(recognized))
         {
-            throw new InvalidOperationException("本地 OCR 未能识别到文字，请重新框选，或在设置中开启截图上传使用视觉模型。");
+            throw new InvalidOperationException(
+                "本地 OCR 未能在所选区域识别到文字。请重新框选更清晰的区域，或在设置中开启截图上传以使用视觉模型。");
         }
-        return await TranslateTextAsync(apiKey, recognizedText, sourceLang, targetLang);
+        cancellationToken.ThrowIfCancellationRequested();
+        var response = await TranslateTextAsync(
+            apiKey, recognized, sourceLang, targetLang, requestId, cancellationToken);
+        var withTranscription = response with
+        {
+            Result = response.Result with { Transcription = recognized },
+        };
+        return new ScreenshotTranslation(withTranscription, "本地 OCR", string.Empty);
     }
 
-    internal static bool IsLocalBaseUrl(string baseUrl) =>
-        baseUrl.Contains("localhost")
-        || baseUrl.Contains("127.0.0.1")
-        || baseUrl.Contains("192.168.")
-        || baseUrl.Contains("10.");
+    public static void CancelRequest(string requestId)
+    {
+        if (!string.IsNullOrWhiteSpace(requestId))
+        {
+            NativeMethods.CancelRequest(requestId);
+        }
+    }
 
-    public static bool CancelActiveRequest() => NativeMethods.CancelActiveRequest() != 0;
+    public static void CancelActiveRequest()
+    {
+        NativeMethods.CancelActiveRequest();
+    }
+
+    private static async Task<T> RunCancellableAsync<T>(
+        Func<T> blockingWork,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        var work = Task.Run(blockingWork);
+        if (!cancellationToken.CanBeCanceled)
+        {
+            return await work;
+        }
+
+        await using var registration = cancellationToken.Register(
+            () => CancelRequest(requestId));
+        try
+        {
+            return await work;
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
+        }
+    }
 
     private static string Invoke(Func<nint> nativeCall)
     {
@@ -184,17 +342,37 @@ internal static partial class CoreBridge
         [LibraryImport(LibraryName, EntryPoint = "popglot_get_settings")]
         internal static partial nint GetSettings();
 
+        [LibraryImport(LibraryName, EntryPoint = "popglot_take_startup_notice")]
+        internal static partial nint TakeStartupNotice();
+
         [LibraryImport(LibraryName, EntryPoint = "popglot_save_settings", StringMarshalling = StringMarshalling.Utf8)]
         internal static partial nint SaveSettings(string json);
 
-        [LibraryImport(LibraryName, EntryPoint = "popglot_test_connection", StringMarshalling = StringMarshalling.Utf8)]
-        internal static partial nint TestConnection(string apiKey);
+        [LibraryImport(LibraryName, EntryPoint = "popglot_plan_screenshot_route")]
+        internal static partial nint PlanScreenshotRoute(int localOcrAvailable, int credentialPresent);
 
-        [LibraryImport(LibraryName, EntryPoint = "popglot_translate_text", StringMarshalling = StringMarshalling.Utf8)]
-        internal static partial nint TranslateText(string apiKey, string source);
+        [LibraryImport(LibraryName, EntryPoint = "popglot_test_connection_draft", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint TestConnectionDraft(string draftJson, string apiKey, string? requestId);
 
-        [LibraryImport(LibraryName, EntryPoint = "popglot_translate_vision", StringMarshalling = StringMarshalling.Utf8)]
-        internal static partial nint TranslateVision(string apiKey, string mediaType, string imageBase64);
+        [LibraryImport(LibraryName, EntryPoint = "popglot_translate_text_v2", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint TranslateTextV2(
+            string apiKey,
+            string source,
+            string sourceLang,
+            string targetLang,
+            string? requestId);
+
+        [LibraryImport(LibraryName, EntryPoint = "popglot_translate_vision_v2", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint TranslateVisionV2(
+            string apiKey,
+            string mediaType,
+            string imageBase64,
+            string sourceLang,
+            string targetLang,
+            string? requestId);
+
+        [LibraryImport(LibraryName, EntryPoint = "popglot_cancel_request", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial int CancelRequest(string requestId);
 
         [LibraryImport(LibraryName, EntryPoint = "popglot_cancel_active_request")]
         internal static partial int CancelActiveRequest();
@@ -236,18 +414,76 @@ internal sealed record ProviderSettings(
     bool AllowImageUploadInAuto,
     bool SafeDevMode,
     bool AllowInsecureTls,
-    bool ApiKeyConfigured)
+    bool ApiKeyConfigured,
+    string SourceLanguage,
+    string TargetLanguage,
+    bool IncludeExplanation,
+    bool ProtectCodeTokens)
 {
     public bool VisionIsConfigured => SupportsVision && !string.IsNullOrWhiteSpace(VisionModel);
     public bool TextIsConfigured => SupportsText && !string.IsNullOrWhiteSpace(TextModel);
+
+    public bool TargetsLocalRuntime => IsLocalBaseUrl(ApiBaseUrl);
+
+    internal static bool IsLocalBaseUrl(string? baseUrl)
+    {
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            return false;
+        }
+        var text = baseUrl.Trim();
+        if (!text.Contains("://", StringComparison.Ordinal))
+        {
+            text = "http://" + text;
+        }
+        if (!Uri.TryCreate(text, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        var host = uri.Host;
+        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+            host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase) ||
+            host is "::1" or "[::1]")
+        {
+            return true;
+        }
+        if (!System.Net.IPAddress.TryParse(host, out var address))
+        {
+            return false;
+        }
+        if (System.Net.IPAddress.IsLoopback(address))
+        {
+            return true;
+        }
+        var octets = address.GetAddressBytes();
+        if (octets.Length != 4)
+        {
+            return false;
+        }
+        return octets[0] switch
+        {
+            10 => true,
+            192 => octets[1] == 168,
+            172 => octets[1] is >= 16 and <= 31,
+            _ => false,
+        };
+    }
 }
+
+internal sealed record RoutingDecision(
+    TranslationMode SelectedMode,
+    string ReasonCode,
+    string ExplanationZh,
+    bool MayUploadImage);
 
 internal sealed record TranslationResult(
     string TranslatedText,
     string Transcription,
     string Explanation,
     IReadOnlyList<string> ProtectedTerms,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    string Phonetic = "");
 
 internal sealed record ProviderDiagnostics(
     string RequestId,
@@ -259,4 +495,15 @@ internal sealed record ProviderDiagnostics(
 
 internal sealed record TranslationResponse(
     TranslationResult Result,
-    ProviderDiagnostics Diagnostics);
+    ProviderDiagnostics Diagnostics)
+{
+    public bool IsFreeEngine =>
+        string.Equals(Diagnostics.RequestId, FreeTranslateService.RequestId, StringComparison.Ordinal);
+
+    public string EngineLabel => IsFreeEngine ? "免费引擎" : Diagnostics.ProviderType.ToString();
+}
+
+internal sealed record ScreenshotTranslation(
+    TranslationResponse Response,
+    string Pipeline,
+    string PipelineReason);

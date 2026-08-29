@@ -3,103 +3,51 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
-        <SolidColorBrush x:Key="PageBackground" Color="#0E1117" />
-        <SolidColorBrush x:Key="SidebarBackground" Color="#12161E" />
-        <SolidColorBrush x:Key="CardBackground" Color="#171C25" />
-        <SolidColorBrush x:Key="ElevatedBackground" Color="#1D2430" />
-        <SolidColorBrush x:Key="InputBackground" Color="#11161E" />
-        <SolidColorBrush x:Key="AccentBrush" Color="#59D3B1" />
-        <SolidColorBrush x:Key="AccentTextBrush" Color="#07130F" />
-        <SolidColorBrush x:Key="AccentMutedBrush" Color="#205C50" />
-        <SolidColorBrush x:Key="PrimaryText" Color="#F4F7FB" />
-        <SolidColorBrush x:Key="SecondaryText" Color="#A5AFBD" />
-        <SolidColorBrush x:Key="TertiaryText" Color="#748093" />
-        <SolidColorBrush x:Key="DividerBrush" Color="#26303D" />
-        <SolidColorBrush x:Key="DangerBrush" Color="#F08A8A" />
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/Controls.xaml" />
+            </ResourceDictionary.MergedDictionaries>
 
-        <Style TargetType="Window">
-            <Setter Property="FontFamily" Value="Segoe UI Variable, Microsoft YaHei UI" />
-            <Setter Property="FontSize" Value="14" />
-            <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
-            <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
-        </Style>
+            <!--
+                Seed values only. ThemeService replaces every one of these on
+                startup and whenever the theme changes; they exist so the
+                designer and the very first layout pass have something to bind
+                to instead of falling back to transparent.
+            -->
+            <SolidColorBrush x:Key="CanvasBrush" Color="#0B0E14" />
+            <SolidColorBrush x:Key="SidebarBrush" Color="#0F131B" />
+            <SolidColorBrush x:Key="SurfaceBrush" Color="#151A23" />
+            <SolidColorBrush x:Key="SurfaceAltBrush" Color="#1B2130" />
+            <SolidColorBrush x:Key="SurfaceHoverBrush" Color="#232C3C" />
+            <SolidColorBrush x:Key="SurfacePressedBrush" Color="#2B3547" />
+            <SolidColorBrush x:Key="InputBrush" Color="#111722" />
+            <SolidColorBrush x:Key="BorderSubtleBrush" Color="#222B39" />
+            <SolidColorBrush x:Key="BorderStrongBrush" Color="#334054" />
+            <SolidColorBrush x:Key="AccentBrush" Color="#35D0A5" />
+            <SolidColorBrush x:Key="AccentHoverBrush" Color="#4FE0B8" />
+            <SolidColorBrush x:Key="AccentPressedBrush" Color="#23B48C" />
+            <SolidColorBrush x:Key="AccentTextBrush" Color="#04211A" />
+            <SolidColorBrush x:Key="AccentSoftBrush" Color="#123328" />
+            <SolidColorBrush x:Key="AccentBorderBrush" Color="#1E6B55" />
+            <SolidColorBrush x:Key="TextPrimaryBrush" Color="#E9EEF6" />
+            <SolidColorBrush x:Key="TextSecondaryBrush" Color="#98A5B8" />
+            <SolidColorBrush x:Key="TextTertiaryBrush" Color="#6A7688" />
+            <SolidColorBrush x:Key="TextInverseBrush" Color="#0B0E14" />
+            <SolidColorBrush x:Key="DangerBrush" Color="#FF7A7A" />
+            <SolidColorBrush x:Key="DangerSoftBrush" Color="#3A1D22" />
+            <SolidColorBrush x:Key="WarningBrush" Color="#F4B860" />
+            <SolidColorBrush x:Key="WarningSoftBrush" Color="#3A2E1A" />
+            <SolidColorBrush x:Key="SuccessBrush" Color="#35D0A5" />
+            <SolidColorBrush x:Key="SuccessSoftBrush" Color="#123328" />
+            <SolidColorBrush x:Key="OverlayScrimBrush" Color="#B3070A10" />
 
-        <Style TargetType="Button">
-            <Setter Property="Background" Value="{DynamicResource ElevatedBackground}" />
-            <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Padding" Value="14,8" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Surface" Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="7" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Surface" Property="Opacity" Value="0.88" />
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Surface" Property="Opacity" Value="0.7" />
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="Surface" Property="Opacity" Value="0.45" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
-            <Setter Property="BorderThickness" Value="0" />
-        </Style>
-
-        <Style x:Key="NavButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="HorizontalContentAlignment" Value="Left" />
-            <Setter Property="Padding" Value="14,11" />
-            <Setter Property="Margin" Value="0,2" />
-        </Style>
-
-        <Style TargetType="TextBox">
-            <Setter Property="Background" Value="{DynamicResource InputBackground}" />
-            <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
-            <Setter Property="CaretBrush" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Padding" Value="10,8" />
-        </Style>
-
-        <Style TargetType="PasswordBox">
-            <Setter Property="Background" Value="{DynamicResource InputBackground}" />
-            <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Padding" Value="10,8" />
-        </Style>
-
-        <Style TargetType="ComboBox">
-            <!-- The stock WPF ComboBox template keeps a system-colored popup;
-                 a neutral light field guarantees readable text in both themes. -->
-            <Setter Property="Background" Value="#F1F3F6" />
-            <Setter Property="Foreground" Value="#18212C" />
-            <Setter Property="BorderBrush" Value="{DynamicResource DividerBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Padding" Value="8,6" />
-        </Style>
-
-        <Style TargetType="CheckBox">
-            <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-        </Style>
+            <Style TargetType="Window">
+                <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
+                <Setter Property="FontSize" Value="13" />
+                <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
+                <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
+                <Setter Property="UseLayoutRounding" Value="True" />
+            </Style>
+        </ResourceDictionary>
     </Application.Resources>
 </Application>

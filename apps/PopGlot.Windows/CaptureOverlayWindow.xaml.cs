@@ -1,89 +1,231 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Shapes;
-using KeyEventArgs = System.Windows.Input.KeyEventArgs;
-using MouseEventArgs = System.Windows.Input.MouseEventArgs;
-using Point = System.Windows.Point;
+using System.Windows.Threading;
 
 namespace PopGlot.Windows;
 
-internal sealed record ScreenSelection(Rect DisplayBounds, Rect PixelBounds);
+/// <summary>Result of a completed screen selection, in physical pixels.</summary>
+internal sealed record ScreenCapture(Rect PixelBounds, byte[] Png, bool IsOcrOnly = false);
 
+/// <summary>
+/// Full-desktop marquee for picking a region to translate or extract text.
+/// </summary>
 public partial class CaptureOverlayWindow : Window
 {
-    private Point? _start;
+    private Point? _dragStart;
+    private bool _completed;
+    private bool _closing;
+    private bool _forceOcrMode;
 
     public CaptureOverlayWindow()
     {
         InitializeComponent();
-        Left = SystemParameters.VirtualScreenLeft;
-        Top = SystemParameters.VirtualScreenTop;
-        Width = SystemParameters.VirtualScreenWidth;
-        Height = SystemParameters.VirtualScreenHeight;
-        Loaded += (_, _) => Keyboard.Focus(this);
+        SourceInitialized += OnSourceInitialized;
+        Loaded += OnLoaded;
     }
 
-    internal event EventHandler<ScreenSelection>? SelectionCompleted;
-
-    private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    internal void SetOcrOnlyMode(bool ocrOnly)
     {
-        _start = e.GetPosition(this);
+        _forceOcrMode = ocrOnly;
+        if (ocrOnly)
+        {
+            HintDetail.Text = "Esc 或右键取消 · 仅提取画面文字 (OCR)";
+        }
+    }
+
+    /// <summary>Raised once a region has been captured successfully.</summary>
+    internal event EventHandler<ScreenCapture>? Captured;
+
+    /// <summary>Raised when capture was attempted but failed.</summary>
+    internal event EventHandler<string>? Failed;
+
+    private void OnSourceInitialized(object? sender, EventArgs args)
+    {
+        // Size the HWND to the whole virtual desktop in physical pixels. Setting
+        // Width/Height in WPF units instead leaves gaps on mixed-DPI setups.
+        var bounds = ScreenGeometry.VirtualScreenPixels();
+        ScreenGeometry.ResizeToPixels(this, bounds);
+    }
+
+    private void OnLoaded(object sender, RoutedEventArgs args)
+    {
+        Activate();
+        Focus();
+        Keyboard.Focus(this);
+        PositionHintNearCursor();
+        UpdateCrosshair(Mouse.GetPosition(this));
+    }
+
+    protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
+    {
+        base.OnMouseLeftButtonDown(e);
+        _dragStart = e.GetPosition(this);
         CaptureMouse();
-        InitialShade.Visibility = Visibility.Collapsed;
+        ShadeFull.Visibility = Visibility.Collapsed;
+        HintChip.Visibility = Visibility.Collapsed;
         SetShadeVisibility(Visibility.Visible);
         SelectionBorder.Visibility = Visibility.Visible;
         SizeBadge.Visibility = Visibility.Visible;
-        UpdateSelection(_start.Value);
+        SetHandleVisibility(Visibility.Visible);
+        UpdateSelection(_dragStart.Value);
     }
 
-    private void Window_MouseMove(object sender, MouseEventArgs e)
+    protected override void OnMouseMove(MouseEventArgs e)
     {
-        if (_start is not null && e.LeftButton == MouseButtonState.Pressed)
+        base.OnMouseMove(e);
+        var position = e.GetPosition(this);
+        UpdateCrosshair(position);
+        if (_dragStart is not null && e.LeftButton == MouseButtonState.Pressed)
         {
-            UpdateSelection(e.GetPosition(this));
+            UpdateSelection(position);
         }
     }
 
-    private void Window_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    protected override async void OnMouseLeftButtonUp(MouseButtonEventArgs e)
     {
-        if (_start is null)
+        base.OnMouseLeftButtonUp(e);
+        if (_dragStart is null || _completed)
         {
             return;
         }
-        var local = Normalize(_start.Value, e.GetPosition(this));
-        var screenTopLeft = PointToScreen(local.TopLeft);
-        var screenBottomRight = PointToScreen(local.BottomRight);
-        _start = null;
+
+        var start = _dragStart.Value;
+        var end = e.GetPosition(this);
+        _dragStart = null;
         ReleaseMouseCapture();
-        Close();
-        if (local.Width >= 6 && local.Height >= 6)
+
+        // Both corners go through PointToScreen so the rectangle lands in real
+        // desktop pixels regardless of which monitor (and scale) it spans.
+        var pixelRect = Normalize(PointToScreen(start), PointToScreen(end));
+        if (pixelRect.Width < 6 || pixelRect.Height < 6)
         {
-            SelectionCompleted?.Invoke(
-                this,
-                new ScreenSelection(
-                    new Rect(local.X + Left, local.Y + Top, local.Width, local.Height),
-                    Normalize(screenTopLeft, screenBottomRight)));
+            Close();
+            return;
         }
+
+        _completed = true;
+        var isOcrMode = _forceOcrMode || Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift);
+        await CaptureAndCloseAsync(pixelRect, isOcrMode);
+    }
+
+    /// <summary>Right-click is the conventional "never mind" for a marquee.</summary>
+    protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
+    {
+        base.OnMouseRightButtonUp(e);
+        Close();
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (e.Key is Key.Escape)
+        {
+            e.Handled = true;
+            Close();
+        }
+    }
+
+    /// <summary>
+    /// Losing activation means something else took the foreground; keeping a
+    /// full-screen transparent window alive over it would trap the user.
+    /// </summary>
+    protected override void OnDeactivated(EventArgs e)
+    {
+        base.OnDeactivated(e);
+        // Closing raises WM_ACTIVATE itself, and calling Close() again from
+        // inside that message throws.
+        if (!_completed && !_closing)
+        {
+            Close();
+        }
+    }
+
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        _closing = true;
+        base.OnClosing(e);
+    }
+
+    private async Task CaptureAndCloseAsync(Rect pixelRect, bool isOcrOnly = false)
+    {
+        Hide();
+        try
+        {
+            // Yield until the compositor has actually presented a frame without
+            // this window, so the grab cannot include our own dimming layer.
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            await Task.Delay(60);
+
+            var png = ScreenCaptureService.CapturePng(pixelRect);
+            Close();
+            Captured?.Invoke(this, new ScreenCapture(pixelRect, png, isOcrOnly));
+        }
+        catch (Exception exception)
+        {
+            Close();
+            Failed?.Invoke(this, exception.Message);
+        }
+    }
+
+    private void UpdateCrosshair(Point position)
+    {
+        CrossHorizontal.X1 = 0;
+        CrossHorizontal.X2 = ActualWidth;
+        CrossHorizontal.Y1 = position.Y;
+        CrossHorizontal.Y2 = position.Y;
+        CrossVertical.Y1 = 0;
+        CrossVertical.Y2 = ActualHeight;
+        CrossVertical.X1 = position.X;
+        CrossVertical.X2 = position.X;
     }
 
     private void UpdateSelection(Point current)
     {
-        if (_start is null)
+        if (_dragStart is null)
         {
             return;
         }
-        var rect = Normalize(_start.Value, current);
+        var rect = Normalize(_dragStart.Value, current);
         Place(SelectionBorder, rect.X, rect.Y, rect.Width, rect.Height);
         Place(ShadeTop, 0, 0, ActualWidth, rect.Top);
         Place(ShadeLeft, 0, rect.Top, rect.Left, rect.Height);
         Place(ShadeRight, rect.Right, rect.Top, Math.Max(0, ActualWidth - rect.Right), rect.Height);
         Place(ShadeBottom, 0, rect.Bottom, ActualWidth, Math.Max(0, ActualHeight - rect.Bottom));
-        Canvas.SetLeft(SizeBadge, Math.Min(rect.X, Math.Max(0, ActualWidth - 104)));
-        Canvas.SetTop(SizeBadge, rect.Bottom + 8 <= ActualHeight - 34
-            ? rect.Bottom + 8
-            : Math.Max(0, rect.Top - 32));
-        SizeText.Text = $"{rect.Width:0} × {rect.Height:0}";
+
+        PlaceHandle(HandleTopLeft, rect.Left, rect.Top);
+        PlaceHandle(HandleTopRight, rect.Right, rect.Top);
+        PlaceHandle(HandleBottomLeft, rect.Left, rect.Bottom);
+        PlaceHandle(HandleBottomRight, rect.Right, rect.Bottom);
+
+        // Report physical pixels: that is what actually gets captured, and it is
+        // what the user compares against when sizing a region.
+        var scale = ScreenGeometry.ScaleOf(this);
+        SizeText.Text =
+            $"{rect.Width * scale.X:0} × {rect.Height * scale.Y:0} px";
+
+        SizeBadge.UpdateLayout();
+        var badgeWidth = SizeBadge.ActualWidth;
+        var badgeHeight = SizeBadge.ActualHeight;
+        Canvas.SetLeft(SizeBadge, Math.Clamp(rect.X, 0, Math.Max(0, ActualWidth - badgeWidth)));
+        Canvas.SetTop(
+            SizeBadge,
+            rect.Bottom + 8 + badgeHeight <= ActualHeight
+                ? rect.Bottom + 8
+                : Math.Max(0, rect.Top - badgeHeight - 8));
+    }
+
+    private void PositionHintNearCursor()
+    {
+        HintChip.UpdateLayout();
+        var work = ScreenGeometry.WorkAreaForPixel(ScreenGeometry.CursorPixels());
+        var scale = ScreenGeometry.ScaleOf(this);
+        // Convert the monitor's work area into this window's coordinate space.
+        var origin = PointFromScreen(new Point(work.Left, work.Top));
+        var localWidth = work.Width / scale.X;
+        var localHeight = work.Height / scale.Y;
+        Canvas.SetLeft(HintChip, origin.X + ((localWidth - HintChip.ActualWidth) / 2));
+        Canvas.SetTop(HintChip, origin.Y + (localHeight * 0.12));
     }
 
     private static void Place(FrameworkElement element, double x, double y, double width, double height)
@@ -94,6 +236,12 @@ public partial class CaptureOverlayWindow : Window
         element.Height = Math.Max(0, height);
     }
 
+    private static void PlaceHandle(FrameworkElement handle, double x, double y)
+    {
+        Canvas.SetLeft(handle, x - (handle.Width / 2));
+        Canvas.SetTop(handle, y - (handle.Height / 2));
+    }
+
     private void SetShadeVisibility(Visibility visibility)
     {
         ShadeTop.Visibility = visibility;
@@ -102,17 +250,17 @@ public partial class CaptureOverlayWindow : Window
         ShadeBottom.Visibility = visibility;
     }
 
+    private void SetHandleVisibility(Visibility visibility)
+    {
+        HandleTopLeft.Visibility = visibility;
+        HandleTopRight.Visibility = visibility;
+        HandleBottomLeft.Visibility = visibility;
+        HandleBottomRight.Visibility = visibility;
+    }
+
     internal static Rect Normalize(Point first, Point second) => new(
         Math.Min(first.X, second.X),
         Math.Min(first.Y, second.Y),
         Math.Abs(first.X - second.X),
         Math.Abs(first.Y - second.Y));
-
-    private void Window_KeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Escape)
-        {
-            Close();
-        }
-    }
 }
