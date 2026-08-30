@@ -705,22 +705,30 @@ internal static class Program
             Equal(false, offline.OutboundOccurred);
             await WaitUntilConnectionAsync(connectionCount, 1, "safe mode must still reach loopback");
 
-            // Network Off follows the same locality contract.
+            // Network Off follows the same locality contract. TextModel must be
+            // restated: `original` may carry an empty model on a fresh machine,
+            // and an empty model fails validation before any connection.
             CoreBridge.SaveSettings(original with
             {
                 ApiBaseUrl = $"http://127.0.0.1:{port}/v1",
+                TextModel = "mock-model",
                 NetworkEnabled = false,
                 SafeDevMode = false,
             });
             var networkOff = await coordinator.TranslateTextAsync(
                 "hello offline", "en", "zh-CN", TranslationInputSource.QuickSearch, CancellationToken.None);
             Equal(TranslationSessionStage.Failed, networkOff.Stage);
+            True(
+                string.Equals(networkOff.PipelineLabel, "本地模型", StringComparison.Ordinal),
+                $"network off must route to the local provider, got label " +
+                $"<{networkOff.PipelineLabel}> error <{networkOff.Error?.Message}>");
             await WaitUntilConnectionAsync(connectionCount, 2, "network off must still reach loopback");
 
             // Sanity: normal online mode reaches the same local endpoint too.
             CoreBridge.SaveSettings(original with
             {
                 ApiBaseUrl = $"http://127.0.0.1:{port}/v1",
+                TextModel = "mock-model",
                 NetworkEnabled = true,
                 SafeDevMode = false,
             });
