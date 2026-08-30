@@ -66,25 +66,9 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
     {
         try
         {
-            // Same credential resolution as the engine status and the actual
-            // translation route — never the legacy default slot.
-            var route = CoreBridge.PlanScreenshotRoute(
-                WindowsOcrService.IsSupported,
-                CredentialStore.HasApiKey(ProfileManager.ResolveActiveCredentialTarget()));
-            var pipeline = route.MayUploadImage ? "视觉模型" : "本地 OCR";
-            RouteBadgeText.Text = pipeline;
-            RouteCardTitle.Text = "当前实际线路";
-            RoutePreviewText.Text = $"截图将走「{pipeline}」。{route.ExplanationZh}";
-            // Uploading screenshots is the privacy-relevant case; the card
-            // switches to the warning surface so it reads as a boundary.
-            RouteCard.Background = (Brush)FindResource(
-                route.MayUploadImage ? "WarningSoftBrush" : "SurfaceMutedBrush");
-            RouteBadge.Background = (Brush)FindResource(
-                route.MayUploadImage ? "WarningSoftBrush" : "AccentSoftBrush");
-            RouteBadge.BorderBrush = (Brush)FindResource(
-                route.MayUploadImage ? "WarningBrush" : "AccentBorderBrush");
-            RouteBadgeText.Foreground = (Brush)FindResource(
-                route.MayUploadImage ? "WarningBrush" : "AccentBrush");
+            RenderRoute(
+                ProfileManager.ResolveRoute(CoreBridge.GetSettings(), WindowsOcrService.IsSupported),
+                "当前实际线路");
         }
         catch (Exception exception)
         {
@@ -102,43 +86,41 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
     {
         try
         {
-            var current = CoreBridge.GetSettings();
-            var mode = Helpers.SelectedEnum(ModeComboBox, TranslationMode.Auto);
-            var uploadAllowed = AllowImageUploadToggle.IsChecked == true;
-            var networkAllowed = NetworkEnabledToggle.IsChecked == true && SafeModeToggle.IsChecked != true;
-            var visionReady = current.SupportsVision &&
-                !string.IsNullOrWhiteSpace(current.VisionModel) &&
-                networkAllowed &&
-                (current.TargetsLocalRuntime || CredentialStore.HasApiKey(ProfileManager.ResolveActiveCredentialTarget()));
-            var useVision = mode switch
+            var draft = CoreBridge.GetSettings() with
             {
-                TranslationMode.VisionDirect => visionReady && uploadAllowed,
-                TranslationMode.Auto => !WindowsOcrService.IsSupported && visionReady && uploadAllowed,
-                _ => false,
+                Mode = Helpers.SelectedEnum(ModeComboBox, TranslationMode.Auto),
+                AllowImageUploadInAuto = AllowImageUploadToggle.IsChecked == true,
+                NetworkEnabled = NetworkEnabledToggle.IsChecked == true,
+                SafeDevMode = SafeModeToggle.IsChecked == true,
             };
-            var pipeline = useVision ? "视觉模型" : "本地 OCR";
-            RouteCardTitle.Text = "保存后预计线路";
-            RouteBadgeText.Text = pipeline;
-            RoutePreviewText.Text = mode switch
-            {
-                TranslationMode.VisionDirect when useVision => "视觉模型将直接读取并翻译截图。",
-                TranslationMode.VisionDirect when !uploadAllowed => "未允许上传截图，将回退到本地 OCR。",
-                TranslationMode.VisionDirect => "视觉模型当前不可用，将回退到本地 OCR。",
-                TranslationMode.LocalOcr => "截图只在本机 OCR，随后把文字交给文本模型。",
-                _ when useVision => "本机没有可用 OCR，自动模式将使用视觉模型。",
-                _ => "自动模式优先使用本地 OCR，不上传截图。",
-            };
+            RenderRoute(
+                ProfileManager.ResolveRoute(draft, WindowsOcrService.IsSupported),
+                "保存后预计线路");
             RouteDraftNote.Text = "这是未保存设置的预计线路；保存后成为实际线路。";
             RouteDraftNote.Visibility = Visibility.Visible;
-            RouteCard.Background = (Brush)FindResource(useVision ? "WarningSoftBrush" : "SurfaceMutedBrush");
-            RouteBadge.Background = (Brush)FindResource(useVision ? "WarningSoftBrush" : "AccentSoftBrush");
-            RouteBadge.BorderBrush = (Brush)FindResource(useVision ? "WarningBrush" : "AccentBorderBrush");
-            RouteBadgeText.Foreground = (Brush)FindResource(useVision ? "WarningBrush" : "AccentBrush");
         }
         catch (Exception exception)
         {
             RoutePreviewText.Text = $"无法预估保存后的线路：{exception.Message}";
         }
+    }
+
+    private void RenderRoute(ResolvedRoute route, string title)
+    {
+        var pipeline = route.ScreenshotPipeline switch
+        {
+            ScreenshotPipeline.VisionDirect => "视觉模型",
+            ScreenshotPipeline.LocalOcr => "本地 OCR",
+            _ => "不可用",
+        };
+        RouteCardTitle.Text = title;
+        RouteBadgeText.Text = pipeline;
+        RoutePreviewText.Text = $"截图将走「{pipeline}」。{route.ExplanationZh}";
+        var warning = route.MayUploadImage || route.ScreenshotPipeline == ScreenshotPipeline.Unavailable;
+        RouteCard.Background = (Brush)FindResource(warning ? "WarningSoftBrush" : "SurfaceMutedBrush");
+        RouteBadge.Background = (Brush)FindResource(warning ? "WarningSoftBrush" : "AccentSoftBrush");
+        RouteBadge.BorderBrush = (Brush)FindResource(warning ? "WarningBrush" : "AccentBorderBrush");
+        RouteBadgeText.Foreground = (Brush)FindResource(warning ? "WarningBrush" : "AccentBrush");
     }
 
     // ================= Free engine consent =================

@@ -78,6 +78,65 @@ internal static partial class CoreBridge
             localOcrAvailable ? 1 : 0,
             credentialPresent ? 1 : 0)));
 
+    /// <summary>
+    /// Translates one screenshot through a draft settings snapshot with a
+    /// dedicated vision provider. The text key and the vision key travel
+    /// separately; the settings JSON is used without being persisted.
+    /// </summary>
+    public static Task<TranslationResponse> TranslateVisionDraftAsync(
+        ProviderSettings draftSettings,
+        string textApiKey,
+        string visionApiKey,
+        byte[] image,
+        string sourceLang,
+        string targetLang,
+        string? requestId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(draftSettings);
+        var reqId = requestId ?? Guid.NewGuid().ToString("N");
+        var draftJson = JsonSerializer.Serialize(draftSettings, JsonOptions);
+        var imageBase64 = Convert.ToBase64String(image);
+        // The draft is already the selected vision provider's complete
+        // settings. Pass its credential as the primary key; never let the
+        // text route become the authentication source for this request.
+        var effectiveKey = string.IsNullOrWhiteSpace(visionApiKey) ? "local" : visionApiKey;
+        return RunCancellableAsync(
+            () => EnsureSuccess<TranslationResponse>(Invoke(
+                () => NativeMethods.TranslateVisionV3(
+                    effectiveKey, string.Empty, draftJson, "image/png", imageBase64,
+                    sourceLang, targetLang, reqId))),
+            reqId,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Executes text translation using the complete provider snapshot supplied
+    /// by the caller. This is used for OCR output so the text route cannot be
+    /// accidentally replaced by the Core's stale mirrored settings.
+    /// </summary>
+    public static Task<TranslationResponse> TranslateTextDraftAsync(
+        ProviderSettings draftSettings,
+        string apiKey,
+        string source,
+        string sourceLang,
+        string targetLang,
+        string? requestId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(draftSettings);
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+        var reqId = requestId ?? Guid.NewGuid().ToString("N");
+        var draftJson = JsonSerializer.Serialize(draftSettings, JsonOptions);
+        var effectiveKey = string.IsNullOrWhiteSpace(apiKey) ? "local" : apiKey;
+        return RunCancellableAsync(
+            () => EnsureSuccess<TranslationResponse>(Invoke(
+                () => NativeMethods.TranslateTextDraftV1(
+                    draftJson, effectiveKey, source, sourceLang, targetLang, reqId))),
+            reqId,
+            cancellationToken);
+    }
+
     public static Task<TranslationResponse> TestConnectionDraftAsync(
         ProviderSettings draftSettings,
         string apiKey,
@@ -242,6 +301,60 @@ internal static partial class CoreBridge
         return local with { PipelineReason = route.ExplanationZh };
     }
 
+    /// <summary>
+    /// The OCR fallback path: recognise locally, then translate the text via
+    /// the unified entry — configured provider when present, the authorised
+    /// free engine otherwise. Never bypasses the free-engine decision.
+    /// </summary>
+    public static async Task<(TranslationResponse Response, ulong OcrElapsedMs, ulong NetworkElapsedMs)>
+        TranslateScreenshotViaOcrAsync(
+            string? apiKey,
+            byte[] image,
+            string sourceLang,
+            string targetLang,
+            string? requestId = null,
+            CancellationToken cancellationToken = default,
+            ProviderSettings? textRouteSettings = null)
+    {
+        var ocrStopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var recognized = await WindowsOcrService.RecognizeTextAsync(image, sourceLang);
+        ocrStopwatch.Stop();
+        if (string.IsNullOrWhiteSpace(recognized))
+        {
+            throw new InvalidOperationException(
+                "本地 OCR 未能在所选区域识别到文字。请重新框选更清晰的区域，或在设置中开启截图上传以使用视觉模型。");
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var networkStopwatch = System.Diagnostics.Stopwatch.StartNew();
+        TranslationResponse response;
+        if (textRouteSettings is not null &&
+            (textRouteSettings.TextIsConfigured || textRouteSettings.TargetsLocalRuntime))
+        {
+            response = await TranslateTextDraftAsync(
+                textRouteSettings,
+                apiKey ?? string.Empty,
+                recognized,
+                sourceLang,
+                targetLang,
+                requestId,
+                cancellationToken);
+        }
+        else
+        {
+            response = await TranslateRecognizedTextAsync(
+                apiKey, recognized, sourceLang, targetLang, requestId, cancellationToken);
+        }
+        networkStopwatch.Stop();
+
+        return (response with
+            {
+                Result = response.Result with { Transcription = recognized },
+            },
+            (ulong)ocrStopwatch.ElapsedMilliseconds,
+            (ulong)networkStopwatch.ElapsedMilliseconds);
+    }
+
     private static async Task<ScreenshotTranslation> TranslateViaLocalOcrAsync(
         string? apiKey,
         byte[] image,
@@ -354,6 +467,15 @@ internal static partial class CoreBridge
         [LibraryImport(LibraryName, EntryPoint = "popglot_test_connection_draft", StringMarshalling = StringMarshalling.Utf8)]
         internal static partial nint TestConnectionDraft(string draftJson, string apiKey, string? requestId);
 
+        [LibraryImport(LibraryName, EntryPoint = "popglot_translate_text_draft_v1", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint TranslateTextDraftV1(
+            string draftJson,
+            string apiKey,
+            string source,
+            string sourceLang,
+            string targetLang,
+            string? requestId);
+
         [LibraryImport(LibraryName, EntryPoint = "popglot_translate_text_v2", StringMarshalling = StringMarshalling.Utf8)]
         internal static partial nint TranslateTextV2(
             string apiKey,
@@ -361,6 +483,17 @@ internal static partial class CoreBridge
             string sourceLang,
             string targetLang,
             string? requestId);
+
+        [LibraryImport(LibraryName, EntryPoint = "popglot_translate_vision_v3", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint TranslateVisionV3(
+            string apiKey,
+            string visionApiKey,
+            string settingsJson,
+            string mediaType,
+            string imageBase64,
+            string sourceLang,
+            string targetLang,
+            string requestId);
 
         [LibraryImport(LibraryName, EntryPoint = "popglot_translate_vision_v2", StringMarshalling = StringMarshalling.Utf8)]
         internal static partial nint TranslateVisionV2(
@@ -397,6 +530,18 @@ internal enum ProviderType
     GeminiGenerateContent,
 }
 
+/// A dedicated vision provider: complete connection details for screenshot
+/// traffic. The API key never travels inside this record — it is supplied per
+/// request — so it is safe to persist as part of the settings document.
+internal sealed record VisionProviderOverride(
+    ProviderType ProviderType,
+    string ApiBaseUrl,
+    string VisionEndpoint,
+    string VisionModel,
+    IReadOnlyDictionary<string, string> ExtraHeaders,
+    string AnthropicVersion,
+    bool AllowInsecureTls = false);
+
 internal sealed record ProviderSettings(
     uint SchemaVersion,
     ProviderType ProviderType,
@@ -418,7 +563,8 @@ internal sealed record ProviderSettings(
     string SourceLanguage,
     string TargetLanguage,
     bool IncludeExplanation,
-    bool ProtectCodeTokens)
+    bool ProtectCodeTokens,
+    VisionProviderOverride? VisionProvider = null)
 {
     public bool VisionIsConfigured => SupportsVision && !string.IsNullOrWhiteSpace(VisionModel);
     public bool TextIsConfigured => SupportsText && !string.IsNullOrWhiteSpace(TextModel);

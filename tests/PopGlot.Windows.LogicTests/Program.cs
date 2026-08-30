@@ -2,6 +2,7 @@ using PopGlot.Windows.Services;
 using PopGlot.Windows.Sections;
 using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
 using System.Net.Sockets;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -60,7 +61,7 @@ internal static class Program
         Run("hotkey action enum values are recognized without exception", HotkeyActionsRecognized);
         Run("show window hotkey and free engine consent round-trip", ShellSettingsShowWindowAndConsentRoundTrip);
         await RunAsync("free engine consent gates the outbound decision", FreeEngineConsentGatesOutbound);
-        await RunAsync("offline mode never sends a request to a listening socket", OfflineModeSendsNothing);
+        await RunAsync("offline policy blocks remote but allows local providers", OfflineModeSendsNothing);
         await RunAsync("test connection draft never alters saved settings", DraftConnectionLeavesSettingsUntouched);
         Run("icon controls expose automation names", IconControlsExposeAutomationNames);
         Run("window caption resources and geometries are consistent", WindowCaptionResourcesConsistent);
@@ -87,6 +88,10 @@ internal static class Program
         Run("daily flows never open system dialogs", DailyFlowsUseInlineConfirmations);
         Run("unready services cannot become the default", UnreadyServicesCannotBecomeDefault);
         Run("schema v4 factory profiles migrate out of configured services", SchemaV4MigratesPristineTemplates);
+        Run("empty config resolves no fabricated providers", EmptyConfigResolvesNoProviders);
+        Run("vision readiness requires model and credential", VisionReadinessRequiresModelAndCredential);
+        Run("resolved route drives screenshot preview and execution", ResolvedRouteDrivesScreenshotStateMachine);
+        await RunAsync("model catalogs are protocol-aware and never invent vision", ModelCatalogsNeverInventVision);
         Run("a failed profile save does not poison the cache", FailedSaveDoesNotPoisonCache);
         Run("information architecture surfaces workbench, library and control center", InformationArchitectureSurfacesPresent);
         RunSta("render screenshots and measure performance baseline", RenderScreenshotsAndMeasureBaseline);
@@ -635,9 +640,8 @@ internal static class Program
     }
 
     /// <summary>
-    /// P0 privacy acceptance: every entry goes through the coordinator, and in
-    /// offline modes the mock endpoint is never even contacted — zero TCP
-    /// connections, hence zero HTTP and DNS.
+    /// P0 privacy acceptance: offline controls block remote traffic, while a
+    /// provider explicitly hosted on loopback remains executable.
     /// </summary>
     private static async Task OfflineModeSendsNothing()
     {
@@ -679,15 +683,14 @@ internal static class Program
                 SafeDevMode = true,
             });
 
-            // SafeDevMode is the total switch: the coordinator must fail before
-            // any socket work, even for a loopback provider.
+            // Safe mode blocks remote traffic, not an explicitly local model.
             var offline = await coordinator.TranslateTextAsync(
                 "hello offline", "en", "zh-CN", TranslationInputSource.Manual, CancellationToken.None);
-            Equal(TranslationSessionStage.Failed, offline.Stage);
+            Equal(TranslationSessionStage.Failed, offline.Stage); // mock closes without a valid body
             Equal(false, offline.OutboundOccurred);
-            Equal(0, Volatile.Read(ref connectionCount));
+            True(Volatile.Read(ref connectionCount) >= 1, "safe mode must still reach loopback");
 
-            // A disabled network switch denies just as hard.
+            // Network Off follows the same locality contract.
             CoreBridge.SaveSettings(original with
             {
                 ApiBaseUrl = $"http://127.0.0.1:{port}/v1",
@@ -697,10 +700,9 @@ internal static class Program
             var networkOff = await coordinator.TranslateTextAsync(
                 "hello offline", "en", "zh-CN", TranslationInputSource.QuickSearch, CancellationToken.None);
             Equal(TranslationSessionStage.Failed, networkOff.Stage);
-            Equal(0, Volatile.Read(ref connectionCount));
+            True(Volatile.Read(ref connectionCount) >= 2, "network off must still reach loopback");
 
-            // Sanity: with permissions granted the same endpoint is reached,
-            // proving the mock would have counted any leaked request above.
+            // Sanity: normal online mode reaches the same local endpoint too.
             CoreBridge.SaveSettings(original with
             {
                 ApiBaseUrl = $"http://127.0.0.1:{port}/v1",
@@ -832,6 +834,8 @@ internal static class Program
         True(templates.Any(t => t.Id == "openai-default"), "OpenAI template exists");
         True(templates.Any(t => t.Id == "deepseek"), "DeepSeek template exists");
         True(templates.Any(t => t.Id == "zhipu"), "GLM template exists");
+        True(templates.All(t => string.IsNullOrEmpty(t.TextModel) && string.IsNullOrEmpty(t.VisionModel)),
+            "new-service templates must never fabricate model ids");
 
         // Pristine templates are exactly what migration looks for.
         var deepseek = templates.First(t => t.Id == "deepseek");
@@ -858,7 +862,7 @@ internal static class Program
         var dsSettings = deepseek.ToProviderSettings(baseSettings);
         Equal(ProviderType.OpenAiCompatible, dsSettings.ProviderType);
         Equal("https://api.deepseek.com/v1", dsSettings.ApiBaseUrl);
-        Equal("deepseek-chat", dsSettings.TextModel);
+        Equal(string.Empty, dsSettings.TextModel);
         True(!dsSettings.SupportsVision, "deepseek has no vision model");
     }
 
@@ -979,11 +983,11 @@ internal static class Program
         Equal(StatusTone.Warning, noKeyTone);
 
         var (untestedText, untestedTone) = ServicesSection.DescribeProfileState(isLocal: false, hasKey: true, outcome: null);
-        Equal("未测试", untestedText);
+        Equal("已配置 · 尚未验证", untestedText);
         Equal(StatusTone.Info, untestedTone);
 
         var (okText, okTone) = ServicesSection.DescribeProfileState(isLocal: false, hasKey: true, outcome: "ok");
-        Equal("可用", okText);
+        Equal("文字连接已验证", okText);
         Equal(StatusTone.Success, okTone);
 
         var (failText, failTone) = ServicesSection.DescribeProfileState(isLocal: false, hasKey: true, outcome: "fail");
@@ -1104,7 +1108,14 @@ internal static class Program
         var path = Path.Combine(dir, "product-config.json");
         var openAi = ProviderCatalog.Templates.First(t => t.Id == "openai-default");
         var deepseek = ProviderCatalog.Templates.First(t => t.Id == "deepseek");
-        var userService = new ProviderProfile(deepseek) { Name = "我的 DeepSeek", TextModel = "deepseek-reasoner" };
+        var userService = new ProviderProfile(deepseek)
+        {
+            Name = "我的双用途服务",
+            TextModel = "shared-model",
+            VisionModel = "shared-model",
+            SupportsText = false,
+            SupportsVision = false,
+        };
 
         var v4 = new CoreProductConfig
         {
@@ -1119,12 +1130,14 @@ internal static class Program
         try
         {
             var migrated = ProfileManager.Load();
-            Equal(5, migrated.SchemaVersion, "migration bumps the schema version");
+            Equal(6, migrated.SchemaVersion, "migration bumps the schema version");
             Equal(1, migrated.Profiles.Count, "only the user-configured service survives");
-            Equal("我的 DeepSeek", migrated.Profiles[0].Name);
-            Equal("我的 DeepSeek", migrated.GetActiveProfile().Name,
-                "a migrated-away default re-points at the surviving service");
-            Equal(5, System.Text.Json.JsonSerializer.Deserialize<CoreProductConfig>(
+            Equal("我的双用途服务", migrated.Profiles[0].Name);
+            True(migrated.Profiles[0].SupportsText && migrated.Profiles[0].SupportsVision,
+                "model fields, including one shared model, derive both route roles");
+            Equal("我的双用途服务", migrated.TryGetActiveProfile()!.Name,
+                "a migrated-away default re-points at the surviving text service");
+            Equal(6, System.Text.Json.JsonSerializer.Deserialize<CoreProductConfig>(
                 File.ReadAllText(path))?.SchemaVersion ?? -1,
                 "the migrated schema is persisted");
         }
@@ -1239,6 +1252,12 @@ internal static class Program
         True(source.Contains("RefreshDraftRoutePreview"), "unsaved screenshot settings need a route preview");
         True(source.Contains("保存后预计线路"), "the preview must distinguish draft from actual routing");
         True(source.Contains("RouteBadgeText.Text = pipeline"), "the route badge must follow the calculated route");
+        True(source.Contains("ProfileManager.ResolveRoute"), "preview must consume the authoritative resolved route");
+
+        var panel = File.ReadAllText(Path.Combine(
+            FindProjectRoot(), "apps", "PopGlot.Windows", "TranslationPanelWindow.xaml.cs"));
+        True(panel.Contains("图片已进入视觉请求") && panel.Contains("图片未上传"),
+            "screenshot results must disclose what actually crossed the image boundary");
     }
 
     private static void ServiceEditorUsesStableResponsiveGrid()
@@ -1322,7 +1341,202 @@ internal static class Program
         Equal("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000", handler.RequestUri);
         Equal("draft-secret", handler.Headers["x-goog-api-key"]);
         Equal(1, result.Models.Count);
-        Equal("gemini-flash", result.Models[0]);
+        Equal("gemini-flash", result.Models[0].Id);
+    }
+
+    /// <summary>
+    /// An empty configuration must resolve to NO provider at all: no OpenAI,
+    /// no gpt-4o-mini, no invented vision capability, no credential target.
+    /// </summary>
+    private static void EmptyConfigResolvesNoProviders()
+    {
+        var config = new CoreProductConfig();
+        True(config.TryGetActiveProfile() is null, "an empty config has no active profile");
+        True(config.TryGetVisionProfile() is null, "an empty config has no vision profile");
+
+        ProfileManager.ResetForTests();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-empty-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        ProfileManager.ConfigPathOverride = Path.Combine(dir, "product-config.json");
+        try
+        {
+            var (text, vision) = ProfileManager.ResolveRoutes();
+            True(text is null, "an empty config resolves no text route");
+            True(vision is null, "an empty config resolves no vision route");
+        }
+        finally
+        {
+            ProfileManager.ResetForTests();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Catalog adapters must be protocol-aware and must never mark vision as
+    /// supported: catalogs that carry no modality data yield Unknown.
+    /// </summary>
+    private static async Task ModelCatalogsNeverInventVision()
+    {
+        // OpenAI-compatible: /models returns ids only.
+        var openAiPayload = """{"data":[{"id":"m-text-a"},{"id":"m-text-b"}]}""";
+        // Gemini: methods prove generation, not image input.
+        var geminiPayload = """{"models":[{"name":"models/gem-x","supportedGenerationMethods":["generateContent"]}]}""";
+
+        async Task<ModelCatalogResult> RunAsync(string payload, ProviderSettings settings)
+        {
+            var handler = new FakeHttpHandler(payload);
+            return await ModelCatalogService.FetchAsync(settings, "test-key", testHandler: handler);
+        }
+
+        var openAi = await RunAsync(openAiPayload, CoreBridge.GetSettings() with
+        {
+            ProviderType = ProviderType.OpenAiCompatible,
+            ApiBaseUrl = "https://fake.local/v1",
+            NetworkEnabled = true,
+            SafeDevMode = false,
+        });
+        Equal(2, openAi.Models.Count);
+        True(openAi.Models.All(model => model.VisionInput == CapabilityState.Unknown),
+            "an id-only catalog must report Unknown vision capability");
+        True(openAi.Models.All(model => model.VisionInput != CapabilityState.Supported),
+            "vision must never be invented from a model id");
+
+        var gemini = await RunAsync(geminiPayload, CoreBridge.GetSettings() with
+        {
+            ProviderType = ProviderType.GeminiGenerateContent,
+            ApiBaseUrl = "https://fake.local",
+            NetworkEnabled = true,
+            SafeDevMode = false,
+        });
+        Equal(1, gemini.Models.Count);
+        Equal("gem-x", gemini.Models[0].Id);
+        True(gemini.Models[0].VisionInput == CapabilityState.Unknown,
+            "supportedGenerationMethods says nothing about image input");
+        await Task.CompletedTask;
+    }
+
+    private sealed class FakeHttpHandler(string payload) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json"),
+            };
+            return Task.FromResult(response);
+        }
+    }
+
+    /// <summary>
+    /// Vision readiness: no model named, or a cloud service without a key,
+    /// means the service cannot serve the vision route.
+    /// </summary>
+    private static void VisionReadinessRequiresModelAndCredential()
+    {
+        var config = new CoreProductConfig();
+        foreach (var template in ProviderCatalog.Templates)
+        {
+            config.Profiles.Add(new ProviderProfile(template));
+        }
+
+        // A fresh template has no model: not vision-ready even if flagged.
+        var flagged = new ProviderProfile(config.Profiles[0])
+        {
+            SupportsVision = true,
+            VisionModel = string.Empty,
+        };
+        True(!ProfileManager.IsVisionReady(flagged), "a missing vision model blocks readiness");
+
+        // A local service with a model is ready without a key.
+        var local = new ProviderProfile(flagged)
+        {
+            ApiBaseUrl = "http://localhost:11434/v1",
+            IsLocal = false, // stale persisted flag must not override the URL
+            VisionModel = "llava",
+        };
+        True(ProfileManager.IsVisionReady(local), "a local vision service needs no key");
+
+        // A cloud service with a model but no key is not ready (test profiles
+        // use fictional targets that the real vault does not contain).
+        var cloud = new ProviderProfile(flagged)
+        {
+            VisionModel = "some-vision-model",
+            CredentialTarget = $"PopGlot/provider/test-{Guid.NewGuid():N}",
+        };
+        True(!ProfileManager.IsVisionReady(cloud), "a cloud vision service needs a stored key");
+    }
+
+    private static void ResolvedRouteDrivesScreenshotStateMachine()
+    {
+        ProfileManager.ResetForTests();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-route-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        ProfileManager.ConfigPathOverride = Path.Combine(dir, "product-config.json");
+        try
+        {
+            var text = new ProviderProfile
+            {
+                Id = "text-local",
+                Name = "Local text",
+                ApiBaseUrl = "http://127.0.0.1:11434/v1",
+                TextModel = "installed-text",
+                VisionModel = string.Empty,
+                SupportsText = true,
+                SupportsVision = false,
+                IsLocal = true,
+                CredentialTarget = "PopGlot/provider/text-local",
+            };
+            var vision = new ProviderProfile
+            {
+                Id = "vision-local",
+                Name = "Local vision",
+                ProviderType = ProviderType.GeminiGenerateContent,
+                ApiBaseUrl = "http://localhost:9000",
+                TextEndpoint = "/v1beta/models/{model}:generateContent",
+                VisionEndpoint = "/v1beta/models/{model}:generateContent",
+                TextModel = string.Empty,
+                VisionModel = "installed-vision",
+                SupportsText = false,
+                SupportsVision = true,
+                IsLocal = true,
+                CredentialTarget = "PopGlot/provider/vision-local",
+            };
+            ProfileManager.Save(new CoreProductConfig
+            {
+                ActiveProfileId = text.Id,
+                VisionProfileId = vision.Id,
+                Profiles = [text, vision],
+            });
+
+            var routes = ProfileManager.ResolveRoutes();
+            Equal(ProviderType.GeminiGenerateContent, routes.Vision!.Profile.ProviderType);
+            Equal("PopGlot/provider/vision-local", routes.Vision.CredentialTarget);
+
+            var settings = CoreBridge.GetSettings() with
+            {
+                Mode = TranslationMode.Auto,
+                NetworkEnabled = true,
+                SafeDevMode = false,
+                AllowImageUploadInAuto = false,
+            };
+            var localFirst = ProfileManager.ResolveRoute(settings, localOcrAvailable: true);
+            Equal(ScreenshotPipeline.LocalOcr, localFirst.ScreenshotPipeline);
+            True(!localFirst.MayUploadImage, "auto local-first must not upload pixels");
+
+            var localVisionFallback = ProfileManager.ResolveRoute(settings, localOcrAvailable: false);
+            Equal(ScreenshotPipeline.VisionDirect, localVisionFallback.ScreenshotPipeline);
+            True(!localVisionFallback.MayUploadImage, "a loopback vision route does not leave the device");
+
+            var unavailable = ProfileManager.ResolveRoute(
+                settings with { Mode = TranslationMode.LocalOcr }, localOcrAvailable: false);
+            Equal(ScreenshotPipeline.Unavailable, unavailable.ScreenshotPipeline);
+        }
+        finally
+        {
+            ProfileManager.ResetForTests();
+            Directory.Delete(dir, recursive: true);
+        }
     }
 
     private static void InformationArchitectureSurfacesPresent()

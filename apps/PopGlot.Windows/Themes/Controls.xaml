@@ -531,7 +531,7 @@
                                        Foreground="{DynamicResource TextTertiaryBrush}"
                                        FontSize="{TemplateBinding FontSize}"
                                        Margin="0"
-                                       VerticalAlignment="Center"
+                                       VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
                                        IsHitTestVisible="False"
                                        TextTrimming="CharacterEllipsis"
                                        Visibility="Collapsed" />
@@ -573,6 +573,9 @@
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Padding" Value="0" />
+        <!-- Borderless boxes are the multi-line work areas (workbench panes, panel
+             body, history detail): text starts at the top-left, never centered. -->
+        <Setter Property="VerticalContentAlignment" Value="Top" />
     </Style>
 
     <Style x:Key="FlatRichTextBox" TargetType="RichTextBox">

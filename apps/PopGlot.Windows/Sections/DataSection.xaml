@@ -35,7 +35,7 @@
                            Text="删除 history.json 中的全部记录，不可恢复" />
             </StackPanel>
             <Button x:Name="ClearHistoryButton" Grid.Column="1" Content="清空历史"
-                    Style="{StaticResource DangerButton}" Click="ClearHistory_Click" />
+                    Style="{StaticResource DangerButton}" />
         </Grid>
 
         <Border Style="{StaticResource SettingsDivider}" />
@@ -50,8 +50,7 @@
                 <TextBlock Style="{StaticResource RowHint}"
                            Text="删除全部生词与收藏，不可恢复" />
             </StackPanel>
-            <Button x:Name="ClearVocabularyButton" Grid.Column="1" Content="清空生词本" Style="{StaticResource DangerButton}"
-                    Click="ClearVocabulary_Click" />
+            <Button x:Name="ClearVocabularyButton" Grid.Column="1" Content="清空生词本" Style="{StaticResource DangerButton}" />
         </Grid>
     </StackPanel>
 </UserControl>

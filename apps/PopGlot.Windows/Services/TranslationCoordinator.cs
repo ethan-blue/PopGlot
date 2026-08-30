@@ -207,30 +207,131 @@ internal sealed class TranslationCoordinator
                 return session;
             }
 
+            // ---- Routing: an explicit state machine over resolved routes ----
             session.Stage = TranslationSessionStage.Routing;
             onStageChanged?.Invoke(session.Stage);
 
-            var apiKey = CredentialStore.LoadApiKey(ProfileManager.ResolveActiveCredentialTarget());
+            var routingStopwatch = Stopwatch.StartNew();
+            var settings = CoreBridge.GetSettings();
             var ocrAvailable = WindowsOcrService.IsSupported;
-            var route = CoreBridge.PlanScreenshotRoute(ocrAvailable, !string.IsNullOrWhiteSpace(apiKey));
-            session.RoutingReason = route.ExplanationZh;
+            var route = ProfileManager.ResolveRoute(settings, ocrAvailable);
+            var textRoute = route.Text;
+            var visionRoute = route.Vision;
 
-            session.Stage = route.MayUploadImage
-                ? TranslationSessionStage.Translating
-                : TranslationSessionStage.OcrRunning;
-            onStageChanged?.Invoke(session.Stage);
+            var textApiKey = textRoute is null
+                ? null
+                : CredentialStore.LoadApiKey(textRoute.CredentialTarget);
+            var visionApiKey = visionRoute is null
+                ? null
+                : CredentialStore.LoadApiKey(visionRoute.CredentialTarget);
+            // These snapshots are the execution contract. Never reconstruct a
+            // provider from CoreBridge's mirrored global settings after this
+            // point: the selected text and vision profiles may be unrelated.
+            var textRuntimeSettings = textRoute?.Profile.ToProviderSettings(settings);
+            var visionRuntimeSettings = visionRoute is null
+                ? null
+                : visionRoute.Profile.ToProviderSettings(settings) with
+                {
+                    Mode = TranslationMode.VisionDirect,
+                    AllowImageUploadInAuto = true,
+                    VisionProvider = null,
+                };
+            routingStopwatch.Stop();
 
-            var netStopwatch = Stopwatch.StartNew();
-            var screenshotResult = await CoreBridge.TranslateScreenshotAsync(
-                apiKey, imageBytes, sourceLang, targetLang, session.SessionId, cancellationToken);
-            netStopwatch.Stop();
+            // Both routes dead: say what would fix it, before any pixel work.
+            if (route.ScreenshotPipeline == ScreenshotPipeline.Unavailable)
+            {
+                session.Stage = TranslationSessionStage.Failed;
+                session.Error = new TranslationError(
+                    TranslationErrorKind.OcrFailed,
+                    "没有可用的截图翻译线路。",
+                    "任选其一：安装 Windows OCR 语言包（设置 → 时间和语言 → 语言 → 光学字符识别）；" +
+                    "在服务页配置并启用支持图片的视觉模型；或在「隐私与数据」中允许截图上传。");
+                onStageChanged?.Invoke(session.Stage);
+                return session;
+            }
 
-            session.PipelineLabel = screenshotResult.Pipeline;
-            session.RoutingReason = screenshotResult.PipelineReason;
-            session.ImageUploaded = route.MayUploadImage;
-            session.OutboundOccurred = route.MayUploadImage || !CoreBridge.GetSettings().TargetsLocalRuntime;
+            ulong ocrElapsedMs = 0;
+            ulong networkElapsedMs = 0;
+            var imageSentToProvider = false;
+            var imageLeftDevice = false;
+            TranslationResponse response;
+            var pipelineLabel = "本地 OCR";
+            var routingReason = route.ExplanationZh;
 
-            var response = screenshotResult.Response;
+            if (route.ScreenshotPipeline == ScreenshotPipeline.VisionDirect && visionRoute is not null)
+            {
+                session.Stage = TranslationSessionStage.Translating;
+                onStageChanged?.Invoke(session.Stage);
+
+                if (visionRuntimeSettings is null)
+                {
+                    throw new InvalidOperationException("所选图片服务没有可执行配置。");
+                }
+                try
+                {
+                    // A remote vision call means the image crossed the device
+                    // boundary. A loopback vision call still sends the image to
+                    // the selected provider, but it is not an upload.
+                    imageSentToProvider = true;
+                    imageLeftDevice = !visionRuntimeSettings.TargetsLocalRuntime;
+                    response = await CoreBridge.TranslateVisionDraftAsync(
+                        visionRuntimeSettings,
+                        string.Empty,
+                        visionApiKey ?? string.Empty,
+                        imageBytes,
+                        sourceLang,
+                        targetLang,
+                        session.SessionId,
+                        cancellationToken);
+                    networkElapsedMs = response.Diagnostics.ElapsedMs;
+                    pipelineLabel = visionRuntimeSettings.TargetsLocalRuntime
+                        ? "本地视觉模型"
+                        : "视觉模型 · 独立服务";
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception visionError) when (ocrAvailable && settings.Mode == TranslationMode.Auto)
+                {
+                    // Vision failed: fall back to local OCR + text translation.
+                    pipelineLabel = "本地 OCR";
+                    var fallback = await CoreBridge.TranslateScreenshotViaOcrAsync(
+                        textApiKey, imageBytes, sourceLang, targetLang, session.SessionId, cancellationToken,
+                        textRuntimeSettings);
+                    response = fallback.Response;
+                    routingReason = $"视觉模型失败（{visionError.Message}），已回退到本地 OCR。";
+                    ocrElapsedMs = fallback.OcrElapsedMs;
+                    networkElapsedMs = fallback.NetworkElapsedMs;
+                }
+            }
+            else
+            {
+                session.Stage = TranslationSessionStage.OcrRunning;
+                onStageChanged?.Invoke(session.Stage);
+
+                var local = await CoreBridge.TranslateScreenshotViaOcrAsync(
+                    textApiKey, imageBytes, sourceLang, targetLang, session.SessionId, cancellationToken,
+                    textRuntimeSettings);
+                response = local.Response;
+                ocrElapsedMs = local.OcrElapsedMs;
+                networkElapsedMs = local.NetworkElapsedMs;
+            }
+
+            session.PipelineLabel = pipelineLabel;
+            session.RoutingReason = routingReason;
+            // Record what ACTUALLY happened, never the routing plan.
+            session.ImageSentToProvider = imageSentToProvider;
+            session.ImageLeftDevice = imageLeftDevice;
+            session.ImageUploaded = imageLeftDevice;
+            var textLeavesDevice = textRuntimeSettings is not null &&
+                !textRuntimeSettings.TargetsLocalRuntime;
+            // For OCR routes, only the recognised text may leave the device;
+            // for vision routes, use the actual selected vision locality.
+            session.OutboundOccurred = imageLeftDevice || textLeavesDevice ||
+                (textRuntimeSettings is null && !string.IsNullOrWhiteSpace(textApiKey));
+
             session.SourceText = response.Result.Transcription;
             session.TranslatedText = response.Result.TranslatedText;
             session.Transcription = response.Result.Transcription;
@@ -245,15 +346,15 @@ internal sealed class TranslationCoordinator
 
             totalStopwatch.Stop();
             session.Timing = new TranslationSessionTiming(
-                OcrElapsedMs: 0,
-                RoutingElapsedMs: 0,
-                NetworkElapsedMs: (ulong)netStopwatch.ElapsedMilliseconds,
+                OcrElapsedMs: ocrElapsedMs,
+                RoutingElapsedMs: (ulong)routingStopwatch.ElapsedMilliseconds,
+                NetworkElapsedMs: networkElapsedMs,
                 TotalElapsedMs: (ulong)totalStopwatch.ElapsedMilliseconds);
             session.CompletedAt = DateTimeOffset.UtcNow;
 
             onStageChanged?.Invoke(session.Stage);
 
-            if (session.IsSuccess && _history is not null && !string.IsNullOrWhiteSpace(session.SourceText))
+                        if (session.IsSuccess && _history is not null && !string.IsNullOrWhiteSpace(session.SourceText))
             {
                 var shellSettings = ShellSettingsStore.Load();
                 var entry = new TranslationHistoryEntry(

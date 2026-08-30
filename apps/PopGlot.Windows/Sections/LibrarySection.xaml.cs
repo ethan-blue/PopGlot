@@ -5,7 +5,7 @@ using PopGlot.Windows.Services;
 
 namespace PopGlot.Windows.Sections;
 
-/// <summary>One row of the unified library list (history or vocabulary).</summary>
+/// <summary>One row of the library list (history record or vocabulary word).</summary>
 internal sealed record LibraryRow(
     Guid Id,
     string Title,
@@ -17,7 +17,27 @@ internal sealed record LibraryRow(
     string Translation,
     string Explanation,
     TranslationHistoryEntry? History,
-    VocabularyWord? Word);
+    VocabularyWord? Word)
+{
+    /// <summary>
+    /// List summaries must stay one line. History sources often carry
+    /// newlines (OCR output, pasted paragraphs) which a plain TextBlock
+    /// happily renders as multiple lines — flatten and trim them here.
+    /// </summary>
+    public string TitleOneLine => OneLine(Title);
+
+    public string DetailOneLine => OneLine(Detail);
+
+    private static string OneLine(string text)
+    {
+        var flattened = text.Replace("\r\n", " ").Replace('\n', ' ').Replace('\r', ' ');
+        while (flattened.Contains("  ", StringComparison.Ordinal))
+        {
+            flattened = flattened.Replace("  ", " ", StringComparison.Ordinal);
+        }
+        return flattened.Trim();
+    }
+}
 
 public partial class LibrarySection : System.Windows.Controls.UserControl
 {
@@ -44,12 +64,6 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
     {
         InitializeComponent();
         _clearCurrentConfirm = ConfirmButton.Attach(ClearCurrentButton, "确认清空？", ClearCurrent);
-    }
-
-    /// <summary>Compact mode narrows the list column; layout stays master–detail.</summary>
-    internal void SetCompact(bool compact)
-    {
-        ListColumn.Width = new GridLength(compact ? 280 : 340);
     }
 
     internal void Initialize(HistoryStore history, VocabularyStore? vocabulary)
@@ -93,7 +107,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         }
     }
 
-    // ================= Unified list =================
+    // ================= List / filter =================
 
     private void Mode_Checked(object sender, RoutedEventArgs e)
     {
@@ -135,8 +149,6 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             LibraryEmptyTitle.Text = "生词本还是空的";
             LibraryEmptyHint.Text = "在翻译浮窗或查词栏点击「收藏」，即可把单词/句子收进生词本。";
         }
-
-        ShowDetail(null);
     }
 
     private List<LibraryRow> BuildHistoryRows(string query)
@@ -172,8 +184,10 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             word.Word,
             word.Translation,
             word.CreatedAt.ToLocalTime().ToString("MM-dd HH:mm", System.Globalization.CultureInfo.CurrentCulture),
-            string.IsNullOrWhiteSpace(word.Phonetic) ? "生词" : $"[{word.Phonetic}]",
-            $"{LanguageCatalog.DisplayName(word.SourceLanguage)} → {LanguageCatalog.DisplayName(word.TargetLanguage)}",
+            "生词",
+            word.Phonetic is { Length: > 0 } phonetic
+                ? $"{phonetic} · {LanguageCatalog.DisplayName(word.SourceLanguage)} → {LanguageCatalog.DisplayName(word.TargetLanguage)}"
+                : $"{LanguageCatalog.DisplayName(word.SourceLanguage)} → {LanguageCatalog.DisplayName(word.TargetLanguage)}",
             word.Word,
             word.Translation,
             word.Explanation,
@@ -183,33 +197,35 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
 
     private void LibrarySearch_TextChanged(object sender, TextChangedEventArgs e) => ApplyFilter();
 
-    // ================= Detail =================
+    // ================= Detail pane =================
 
     private LibraryRow? SelectedRow() => LibraryListBox.SelectedItem as LibraryRow;
 
-    private void LibraryList_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
-        ShowDetail(SelectedRow());
-
-    private void ShowDetail(LibraryRow? row)
+    private void LibraryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (row is null)
+        if (SelectedRow() is { } row)
         {
-            DetailEmpty.Visibility = Visibility.Visible;
-            DetailScroll.Visibility = Visibility.Collapsed;
-            DetailContent.Visibility = Visibility.Collapsed;
-            return;
+            ShowDetail(row);
         }
-        DetailEmpty.Visibility = Visibility.Collapsed;
-        DetailScroll.Visibility = Visibility.Visible;
-        DetailContent.Visibility = Visibility.Visible;
+        else
+        {
+            DetailPlaceholder.Visibility = Visibility.Visible;
+            DetailScroll.Visibility = Visibility.Collapsed;
+        }
+    }
 
-        DetailKindText.Text = _mode == LibraryMode.History ? (row.Kind == string.Empty ? "历史" : row.Kind) : "生词";
-        DetailMetaText.Text = $"{row.LanguagePair} · {row.Timestamp}" +
-            (_mode == LibraryMode.Vocabulary && row.Kind != "生词" ? $" · {row.Kind}" : string.Empty);
-        DetailSourceText.Text = row.Source;
-        DetailTranslationText.Text = row.Translation;
-        DetailExplanationText.Text = row.Explanation;
-        DetailExplanationText.Visibility = string.IsNullOrWhiteSpace(row.Explanation)
+    private void ShowDetail(LibraryRow row)
+    {
+        DetailPlaceholder.Visibility = Visibility.Collapsed;
+        DetailScroll.Visibility = Visibility.Visible;
+        DetailContent.ScrollToTop();
+
+        DetailKind.Text = $"{row.Kind} · {row.Timestamp}";
+        DetailLanguagePair.Text = row.LanguagePair;
+        DetailSource.Text = row.Source;
+        DetailTranslation.Text = row.Translation;
+        DetailExplanation.Text = row.Explanation;
+        DetailExplanation.Visibility = string.IsNullOrWhiteSpace(row.Explanation)
             ? Visibility.Collapsed
             : Visibility.Visible;
     }
@@ -219,70 +235,57 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         if (e.Key == Key.Enter)
         {
             e.Handled = true;
-            LoadSelected();
+            if (SelectedRow() is { } row)
+            {
+                LoadRow(row);
+            }
         }
         else if (e.Key == Key.Delete)
         {
             e.Handled = true;
-            DeleteSelected();
+            if (SelectedRow() is { } row)
+            {
+                DeleteRow(row);
+            }
         }
     }
-
-    private void LibraryList_MouseDoubleClick(object sender, MouseButtonEventArgs e) => LoadSelected();
 
     // ================= Detail actions =================
 
-    private void LoadSelected_Click(object sender, RoutedEventArgs e) => LoadSelected();
-
-    private void LoadSelected()
+    private void CardSpeak_Click(object sender, RoutedEventArgs e)
     {
-        var row = SelectedRow();
-        if (row is null)
+        if (SelectedRow() is { } row)
         {
-            return;
+            TtsService.Speak(_mode == LibraryMode.Vocabulary ? row.Source : row.Translation);
         }
-        LoadToTranslate?.Invoke(
-            row.Source, row.Translation, row.Explanation,
-            row.History?.SourceLanguage ?? row.Word?.SourceLanguage,
-            row.History?.TargetLanguage ?? row.Word?.TargetLanguage,
-            _mode == LibraryMode.History ? "历史记录" : "生词本");
     }
 
-    private async void CopySelected_Click(object sender, RoutedEventArgs e)
+    private async void CardCopy_Click(object sender, RoutedEventArgs e)
     {
-        var row = SelectedRow();
-        if (row is null)
-        {
-            StatusChanged?.Invoke("请先选择一个条目。", StatusTone.Info);
-            return;
-        }
-        if (await Helpers.CopyToClipboardAsync(row.Translation))
+        if (SelectedRow() is { } row && await Helpers.CopyToClipboardAsync(row.Translation))
         {
             StatusChanged?.Invoke("已复制译文。", StatusTone.Info);
         }
     }
 
-    private void SpeakSelected_Click(object sender, RoutedEventArgs e)
+    private void CardLoad_Click(object sender, RoutedEventArgs e)
     {
-        var row = SelectedRow();
-        if (row is null)
+        if (SelectedRow() is { } row)
         {
-            StatusChanged?.Invoke("请先选择一个条目。", StatusTone.Info);
-            return;
+            LoadRow(row);
         }
-        TtsService.Speak(_mode == LibraryMode.Vocabulary ? row.Source : row.Translation);
     }
 
-    private void DeleteSelected_Click(object sender, RoutedEventArgs e) => DeleteSelected();
-
-    private void DeleteSelected()
+    private void CardDelete_Click(object sender, RoutedEventArgs e)
     {
-        var row = SelectedRow();
-        if (row is null)
+        if (SelectedRow() is { } row)
         {
-            StatusChanged?.Invoke("请先选择一个条目。", StatusTone.Info);
-            return;
+            DeleteRow(row);
         }
+    }
+
+    private void DeleteRow(LibraryRow row)
+    {
         if (_mode == LibraryMode.History)
         {
             _history.Remove(row.Id);
@@ -296,6 +299,13 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             StatusChanged?.Invoke("已从生词本移除该词条。", StatusTone.Info);
         }
     }
+
+    private void LoadRow(LibraryRow row) =>
+        LoadToTranslate?.Invoke(
+            row.Source, row.Translation, row.Explanation,
+            row.History?.SourceLanguage ?? row.Word?.SourceLanguage,
+            row.History?.TargetLanguage ?? row.Word?.TargetLanguage,
+            _mode == LibraryMode.History ? "历史记录" : "生词本");
 
     // ================= Export & clear =================
 
@@ -362,12 +372,6 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         {
             StatusChanged?.Invoke($"导出生词本失败：{exception.Message}", StatusTone.Error);
         }
-    }
-
-    private void ClearCurrent_Click(object sender, RoutedEventArgs e)
-    {
-        // ConfirmButton has already asked inline (two-step click).
-        ClearCurrent();
     }
 
     private void ClearCurrent()

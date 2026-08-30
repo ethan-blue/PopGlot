@@ -223,7 +223,8 @@ internal sealed record ShellSettings(
     bool CopyTranslationAutomatically = false,
     bool StartWithWindows = false,
     HotkeyBinding? ShowWindowHotkey = null,
-    FreeEngineConsent FreeEngineConsent = FreeEngineConsent.Unset)
+    FreeEngineConsent FreeEngineConsent = FreeEngineConsent.Unset,
+    bool CloseHintShown = false)
 {
     public const int CurrentSchemaVersion = 3;
 
@@ -238,7 +239,8 @@ internal sealed record ShellSettings(
         CopyTranslationAutomatically: false,
         StartWithWindows: false,
         ShowWindowHotkey: HotkeyBinding.ShowWindowDefault,
-        FreeEngineConsent: FreeEngineConsent.Unset);
+        FreeEngineConsent: FreeEngineConsent.Unset,
+        CloseHintShown: false);
 
     public IReadOnlyDictionary<HotkeyAction, HotkeyBinding> Hotkeys
     {
@@ -344,7 +346,8 @@ internal static class ShellSettingsStore
                     ? Enum.TryParse<FreeEngineConsent>(persisted.FreeEngineConsent, ignoreCase: true, out var consent)
                         ? consent
                         : FreeEngineConsent.Unset
-                    : FreeEngineConsent.Unset);
+                    : FreeEngineConsent.Unset,
+                persisted.CloseHintShown ?? false);
         }
         catch (Exception exception) when (exception is IOException or JsonException or UnauthorizedAccessException)
         {
@@ -381,7 +384,8 @@ internal static class ShellSettingsStore
             settings.CopyTranslationAutomatically,
             settings.StartWithWindows,
             settings.ShowWindowHotkey?.Serialize(),
-            settings.FreeEngineConsent.ToString());
+            settings.FreeEngineConsent.ToString(),
+            settings.CloseHintShown);
 
         // Write through a temporary file so a crash mid-write cannot leave the
         // user without settings on the next launch.
@@ -405,5 +409,6 @@ internal static class ShellSettingsStore
         bool? CopyTranslationAutomatically,
         bool? StartWithWindows,
         string? ShowWindowHotkey = null,
-        string? FreeEngineConsent = null);
+        string? FreeEngineConsent = null,
+        bool? CloseHintShown = null);
 }

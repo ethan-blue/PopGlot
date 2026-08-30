@@ -37,4 +37,9 @@
   <Target Name="CopyRustCore" AfterTargets="BuildRustCore">
     <Copy SourceFiles="$(RustTargetDir)\$(RustProfile)\popglot_ffi.dll" DestinationFolder="$(OutDir)" />
   </Target>
+
+  <Target Name="CopyRustCoreToPublish" AfterTargets="Publish"
+          Condition="Exists('$(RustTargetDir)\$(RustProfile)\popglot_ffi.dll')">
+    <Copy SourceFiles="$(RustTargetDir)\$(RustProfile)\popglot_ffi.dll" DestinationFolder="$(PublishDir)" />
+  </Target>
 </Project>

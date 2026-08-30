@@ -131,6 +131,8 @@ fn settings(provider_type: ProviderType, server: &MockServer) -> ProviderSetting
         vision_endpoint: endpoint,
         text_model: "test-text-model".to_owned(),
         vision_model: "test-vision-model".to_owned(),
+        supports_text: true,
+        supports_vision: true,
         network_enabled: true,
         safe_dev_mode: false,
         ..ProviderSettings::default()

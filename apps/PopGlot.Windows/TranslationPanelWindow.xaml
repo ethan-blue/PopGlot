@@ -108,7 +108,12 @@
                          Foreground="{DynamicResource AccentBrush}" Background="Transparent" BorderThickness="0" />
 
             <!-- ==================== 2. Body Workspace ==================== -->
-            <StackPanel Grid.Row="2" Margin="14,12,14,12">
+            <!-- ScrollViewer: the window caps at MaxHeight near the screen edge;
+                 when the stacked segments exceed that cap the body scrolls
+                 instead of being clipped (long results, chips, warnings). -->
+            <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Margin="14,12,14,12">
 
                 <!-- ── Segment 1: Source ── -->
                 <Border Background="{DynamicResource InputBrush}" CornerRadius="10"
@@ -338,7 +343,8 @@
                                HorizontalAlignment="Right"
                                Foreground="{DynamicResource TextTertiaryBrush}" />
                 </Grid>
-            </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
         </Grid>
     </Border>
 </Window>

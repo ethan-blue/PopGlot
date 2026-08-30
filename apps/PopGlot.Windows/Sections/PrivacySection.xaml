@@ -60,7 +60,7 @@
             <StackPanel>
                 <TextBlock Text="内置免费引擎" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap"
-                           Text="无需配置的备选引擎：会把待翻译文本发送到 Google 公共翻译服务（translate.googleapis.com），不含截图与凭据。" />
+                           Text="零配置兜底：只在「服务」页没有任何可用服务（无密钥且非本地模型）时才会启用；配置了服务后不会使用。会把待翻译文本发送到 Google 公共翻译服务，不含截图与凭据。" />
                 <TextBlock x:Name="FreeEngineConsentState" Style="{StaticResource Caption}"
                            Margin="0,5,0,0" />
             </StackPanel>

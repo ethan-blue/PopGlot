@@ -2,9 +2,9 @@
 
 ## 配置位置
 
-非秘密设置由 Windows Shell 指定目录，当前为 `%LOCALAPPDATA%\PopGlot\provider-settings.json`。Rust Core 不自行读取 Windows 环境变量，也不依赖注册表。配置 `schema_version` 当前为 `3`。
+非秘密运行策略由 Windows Shell 指定目录，当前为 `%LOCALAPPDATA%\PopGlot\provider-settings.json`。Rust Core 不自行读取 Windows 环境变量，也不依赖注册表。服务列表另存于 `%LOCALAPPDATA%\PopGlot\product-config.json`，当前 Profile schema 为 `5`。
 
-API Key 不进入 JSON。Windows Shell 将当前活动 Provider 的 Key 保存为 Windows Credential Manager 通用凭据 `PopGlot/OpenAICompatibleApiKey`。此名称来自首个版本，为避免丢失已有凭据暂不迁移；语义已经是“当前活动 Provider Key”。切换 Provider 后应在设置页替换它。
+API Key 不进入 JSON。每个 Profile 使用自己的 Windows Credential Manager 通用凭据 `PopGlot/provider/{id}`；历史统一目标 `PopGlot/OpenAICompatibleApiKey` 只作为当前活动 Profile 的兼容读取来源，既不会复制到其他服务，也不会被升级删除。
 
 ## v1 到 v2
 
@@ -81,4 +81,10 @@ v3 新增字段：
 
 `%LOCALAPPDATA%\PopGlot\product-config.json` 保存服务 Profile 列表：每个服务拥有稳定 id、显示名称、协议、地址、模型、能力与独立凭据引用 `PopGlot/provider/{id}`（Windows Credential Manager 通用凭据）。该文件与核心设置使用同样的持久化契约：临时文件、flush、原子替换、保留 `.bak`。
 
-首次运行到 v4 结构时，若文件不存在，应用会从当前 `provider-settings.json` 播种出唯一的服务并设为默认——已配置好的模型不会被打厂预设覆盖；全新安装（默认 OpenAI 地址 + 默认模型 + 无密钥）则展示五个厂商预设。历史上保存在旧统一目标 `PopGlot/OpenAICompatibleApiKey` 的密钥继续可读：当 Profile 自己的目标为空时自动回退，直到用户下次编辑密钥为止。删除服务会同时删除其独立凭据；测试连接永远使用内存草稿，不写该文件。
+首次运行到 Profile 结构时，若文件不存在，应用只会收养 `provider-settings.json` 中真实存在的用户配置；空配置不会再伪造成 OpenAI 服务。新建服务页展示厂商连接模板，但所有模型字段为空，必须从供应商目录获取或由用户输入，程序不会根据厂商或模型名称猜测能力。
+
+v4 → v5 会移除历史版本自动播种且从未修改、从未保存密钥的工厂条目；用户改过名称、地址、模型、能力，或拥有凭据的条目全部保留。默认文字/视觉 Profile id、每个 `CredentialTarget`、API Key、模型与自定义请求头均不重写。写入前保留 `.bak`；写盘失败时原文件与进程缓存都不被新草稿污染。
+
+文字与视觉线路现在是两份完整运行配置：各自携带协议、Base URL、endpoint、模型、headers、Anthropic version 与独立 CredentialTarget。视觉线路可使用与文字线路不同的协议和主机；Core 只在视觉请求中应用视觉快照，并且视觉凭据缺失时失败关闭，绝不拿文字 Key 代替。
+
+模型目录使用协议适配器读取，并返回 `Supported` / `Unsupported` / `Unknown` 三态能力。OpenAI-compatible、Anthropic 与当前 Gemini 目录没有可靠图片输入字段时返回 `Unknown`；UI 明示未知，既不根据模型 id 猜测，也不静默把未知升级为支持。

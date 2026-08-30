@@ -37,7 +37,8 @@ public partial class DataSection : System.Windows.Controls.UserControl
 
     // ================= Event handlers =================
 
-    private void ClearHistory_Click(object sender, RoutedEventArgs e) => ClearHistory();
+    // The destructive actions run only through ConfirmButton's two-step click;
+    // wiring the buttons' Click here would wipe on the first click.
 
     private void ClearHistory()
     {
@@ -48,8 +49,6 @@ public partial class DataSection : System.Windows.Controls.UserControl
             cleared ? StatusTone.Info : StatusTone.Error);
         DataCleared?.Invoke();
     }
-
-    private void ClearVocabulary_Click(object sender, RoutedEventArgs e) => ClearVocabulary();
 
     private void ClearVocabulary()
     {

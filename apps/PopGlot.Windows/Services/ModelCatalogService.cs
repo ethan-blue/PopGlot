@@ -6,10 +6,31 @@ using System.Text.Json;
 
 namespace PopGlot.Windows.Services;
 
+/// <summary>Tri-state capability. Never guessed from a model name.</summary>
+internal enum CapabilityState
+{
+    Supported,
+    Unsupported,
+    Unknown,
+}
+
+/// <summary>
+/// One model as the provider's catalog declares it. A catalog that carries no
+/// input-modality information yields <see cref="CapabilityState.Unknown"/> —
+/// the UI must then ask the user to confirm or verify before treating the
+/// model as vision-capable.
+/// </summary>
+internal sealed record ModelDescriptor(
+    string Id,
+    CapabilityState TextGeneration,
+    CapabilityState VisionInput,
+    string CapabilitySource);
+
 internal sealed record ModelCatalogResult(
-    IReadOnlyList<string> Models,
+    IReadOnlyList<ModelDescriptor> Models,
     Uri Endpoint,
-    long ElapsedMs);
+    long ElapsedMs,
+    string ProviderKind);
 
 /// <summary>Loads the models exposed by the provider draft without saving it.</summary>
 internal static class ModelCatalogService
@@ -28,236 +49,267 @@ internal static class ModelCatalogService
         }
         if (!settings.NetworkEnabled)
         {
-            throw new InvalidOperationException("网络访问未启用；未发送模型列表请求。");
-        }
-        if (string.IsNullOrWhiteSpace(apiKey) && !settings.TargetsLocalRuntime)
-        {
-            throw new InvalidOperationException("请先填写 API Key，再获取该服务可用的模型。");
+            throw new InvalidOperationException("网络翻译未启用；未发送模型列表请求。");
         }
 
-        var endpoint = BuildModelsUri(settings.ApiBaseUrl, settings.ProviderType);
-        using var handler = testHandler is null ? CreateHandler(settings.AllowInsecureTls) : null;
-        using var client = new HttpClient(testHandler ?? handler!, disposeHandler: false)
-        {
-            Timeout = TimeSpan.FromSeconds(15),
-        };
-        using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
-        ApplyHeaders(request, settings, apiKey);
+        var adapter = CatalogAdapter.For(settings);
+        var (uri, request) = adapter.BuildRequest(settings, apiKey);
+        var stopwatch = Stopwatch.StartNew();
+        using var httpClient = testHandler is null ? new HttpClient() : new HttpClient(testHandler);
+        httpClient.Timeout = TimeSpan.FromSeconds(15);
+        using var response = await httpClient.SendAsync(request, cancellationToken);
+        stopwatch.Stop();
 
-        var started = Stopwatch.GetTimestamp();
-        using var response = await client.SendAsync(
-            request,
-            HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken);
-        if (!response.IsSuccessStatusCode)
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
-            throw new InvalidOperationException(DescribeFailure(response.StatusCode));
+            throw new InvalidOperationException("密钥无效或没有权限（HTTP 401），无法读取模型列表。");
         }
+        if (response.StatusCode == HttpStatusCode.Forbidden)
+        {
+            throw new InvalidOperationException("服务拒绝了模型列表请求（HTTP 403）。");
+        }
+        if (response.StatusCode == HttpStatusCode.TooManyRequests)
+        {
+            throw new InvalidOperationException("模型列表请求被限流（HTTP 429），请稍后再试。");
+        }
+        response.EnsureSuccessStatusCode();
 
-        if (response.Content.Headers.ContentLength is > MaxResponseBytes)
+        var contentLength = response.Content.Headers.ContentLength;
+        if (contentLength is > MaxResponseBytes)
         {
-            throw new InvalidOperationException("模型列表响应过大，已停止读取。");
+            throw new InvalidOperationException("模型列表响应超过 1 MiB 上限，已拒绝处理。");
         }
-        await response.Content.LoadIntoBufferAsync(MaxResponseBytes, cancellationToken);
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        var models = ParseModels(json, settings.ProviderType);
-        if (models.Count == 0)
+        if (json.Length > MaxResponseBytes)
         {
-            throw new InvalidOperationException("服务返回成功，但没有找到可用于生成内容的模型。");
+            throw new InvalidOperationException("模型列表响应超过 1 MiB 上限，已拒绝处理。");
         }
 
+        var models = adapter.Parse(json);
         return new ModelCatalogResult(
             models,
-            endpoint,
-            (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+            uri,
+            stopwatch.ElapsedMilliseconds,
+            adapter.Kind);
     }
 
     internal static Uri BuildModelsUri(string baseUrl, ProviderType providerType)
     {
-        if (!Uri.TryCreate(baseUrl.Trim(), UriKind.Absolute, out var parsed) ||
-            string.IsNullOrWhiteSpace(parsed.Host))
+        var settings = CoreBridge.GetSettings() with
         {
-            throw new InvalidOperationException("请求地址无效，请先检查 API Base URL。");
-        }
-        if (!string.IsNullOrEmpty(parsed.UserInfo) ||
-            !string.IsNullOrEmpty(parsed.Query) ||
-            !string.IsNullOrEmpty(parsed.Fragment))
-        {
-            throw new InvalidOperationException("API Base URL 不能包含凭据、查询参数或片段。");
-        }
-        var isLocal = ProviderSettings.IsLocalBaseUrl(baseUrl);
-        if (!string.Equals(parsed.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
-            !(isLocal && string.Equals(parsed.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)))
-        {
-            throw new InvalidOperationException("API Base URL 必须使用 HTTPS；本地或局域网服务允许 HTTP。");
-        }
-
-        var basePath = parsed.AbsolutePath.TrimEnd('/');
-        var (versionPath, query) = providerType switch
-        {
-            ProviderType.GeminiGenerateContent => ("/v1beta", "?pageSize=1000"),
-            ProviderType.AnthropicMessages => ("/v1", "?limit=1000"),
-            _ => (string.Empty, string.Empty),
+            ProviderType = providerType,
+            ApiBaseUrl = baseUrl,
         };
-        var path = providerType switch
-        {
-            ProviderType.OpenAiCompatible or ProviderType.OpenAiResponses =>
-                EndsWithSegment(basePath, "models") ? basePath : basePath + "/models",
-            _ when EndsWithSegment(basePath, "models") => basePath,
-            _ when basePath.EndsWith(versionPath, StringComparison.OrdinalIgnoreCase) => basePath + "/models",
-            _ => basePath + versionPath + "/models",
-        };
-
-        var builder = new UriBuilder(parsed)
-        {
-            Path = path,
-            Query = query.TrimStart('?'),
-        };
-        return builder.Uri;
+        return CatalogAdapter.For(settings).BuildRequest(settings, string.Empty).Endpoint;
     }
 
     internal static IReadOnlyList<string> ParseModels(string json, ProviderType providerType)
     {
-        using var document = JsonDocument.Parse(json);
-        var root = document.RootElement;
-        JsonElement items;
-        if (root.ValueKind == JsonValueKind.Array)
-        {
-            items = root;
-        }
-        else if (root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
-        {
-            items = data;
-        }
-        else if (root.TryGetProperty("models", out var models) && models.ValueKind == JsonValueKind.Array)
-        {
-            items = models;
-        }
-        else
-        {
-            return [];
-        }
+        var settings = CoreBridge.GetSettings() with { ProviderType = providerType };
+        return CatalogAdapter.For(settings).Parse(json)
+            .Select(model => model.Id)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+    }
+}
 
-        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var item in items.EnumerateArray())
+/// <summary>
+/// Protocol-specific catalog access. Each adapter owns the list URL, the
+/// auth headers and the response shape; none of them invent capabilities.
+/// </summary>
+internal interface ICatalogAdapter
+{
+    string Kind { get; }
+
+    (Uri Endpoint, HttpRequestMessage Request) BuildRequest(
+        ProviderSettings settings, string apiKey);
+
+    IReadOnlyList<ModelDescriptor> Parse(string json);
+}
+
+internal static class CatalogAdapter
+{
+    internal static ICatalogAdapter For(ProviderSettings settings) => settings.ProviderType switch
+    {
+        ProviderType.GeminiGenerateContent => new GeminiCatalogAdapter(),
+        ProviderType.AnthropicMessages => new AnthropicCatalogAdapter(),
+        _ => new OpenAiCompatibleCatalogAdapter(),
+    };
+
+    internal static Uri BuildUri(string baseUrl, string path, string? query = null)
+    {
+        var trimmed = baseUrl.Trim().TrimEnd('/');
+        if (!trimmed.Contains("://", StringComparison.Ordinal))
         {
-            if (item.ValueKind == JsonValueKind.String)
-            {
-                AddModel(result, item.GetString());
-                continue;
-            }
-            if (item.ValueKind != JsonValueKind.Object ||
-                (providerType == ProviderType.GeminiGenerateContent && !SupportsGenerateContent(item)))
-            {
-                continue;
-            }
-            if (item.TryGetProperty("id", out var id))
-            {
-                AddModel(result, id.GetString());
-            }
-            else if (item.TryGetProperty("name", out var name))
-            {
-                AddModel(result, name.GetString());
-            }
+            trimmed = "https://" + trimmed;
         }
-        return result.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).Take(1_000).ToArray();
+        var full = trimmed + (path.StartsWith('/') ? path : "/" + path) + (query ?? string.Empty);
+        var uri = new Uri(full, UriKind.Absolute);
+        if (uri.Scheme == Uri.UriSchemeHttp && !ProviderSettings.IsLocalBaseUrl(uri.GetLeftPart(UriPartial.Authority)))
+        {
+            throw new InvalidOperationException("公网模型目录必须使用 HTTPS。");
+        }
+        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new InvalidOperationException("模型目录只支持 HTTP(S) 地址。");
+        }
+        return uri;
     }
 
-    private static SocketsHttpHandler CreateHandler(bool allowInsecureTls)
+    internal static string AppendPathOnce(string baseUrl, string versionPrefix, string suffix)
     {
-        var handler = new SocketsHttpHandler
-        {
-            ConnectTimeout = TimeSpan.FromSeconds(5),
-            PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-            AutomaticDecompression = DecompressionMethods.All,
-        };
-        if (allowInsecureTls)
-        {
-            handler.SslOptions.RemoteCertificateValidationCallback = (_, _, _, _) => true;
-        }
-        return handler;
+        var trimmed = baseUrl.Trim().TrimEnd('/');
+        return trimmed.EndsWith(versionPrefix, StringComparison.OrdinalIgnoreCase)
+            ? suffix
+            : versionPrefix + suffix;
     }
+}
 
-    private static void ApplyHeaders(HttpRequestMessage request, ProviderSettings settings, string apiKey)
+/// <summary>
+/// OpenAI-compatible catalog: GET {base}/models with a bearer token. The
+/// response carries ids only — no input modality — so every model reports
+/// Unknown vision capability.
+/// </summary>
+internal sealed class OpenAiCompatibleCatalogAdapter : ICatalogAdapter
+{
+    public string Kind => "OpenAI 兼容";
+
+    public (Uri Endpoint, HttpRequestMessage Request) BuildRequest(
+        ProviderSettings settings, string apiKey)
     {
+        var uri = CatalogAdapter.BuildUri(settings.ApiBaseUrl, "/models");
+        var request = new HttpRequestMessage(HttpMethod.Get, uri);
         if (!string.IsNullOrWhiteSpace(apiKey))
         {
-            switch (settings.ProviderType)
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        }
+        foreach (var header in settings.ExtraHeaders)
+        {
+            request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        }
+        return (uri, request);
+    }
+
+    public IReadOnlyList<ModelDescriptor> Parse(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var data = document.RootElement.GetProperty("data");
+        var models = new List<ModelDescriptor>();
+        foreach (var item in data.EnumerateArray())
+        {
+            var id = item.GetProperty("id").GetString();
+            if (!string.IsNullOrWhiteSpace(id))
             {
-                case ProviderType.GeminiGenerateContent:
-                    request.Headers.TryAddWithoutValidation("x-goog-api-key", apiKey.Trim());
-                    break;
-                case ProviderType.AnthropicMessages:
-                    request.Headers.TryAddWithoutValidation("x-api-key", apiKey.Trim());
-                    request.Headers.TryAddWithoutValidation(
-                        "anthropic-version",
-                        string.IsNullOrWhiteSpace(settings.AnthropicVersion)
-                            ? "2023-06-01"
-                            : settings.AnthropicVersion.Trim());
-                    break;
-                default:
-                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey.Trim());
-                    break;
+                models.Add(new ModelDescriptor(
+                    id, CapabilityState.Unknown, CapabilityState.Unknown, $"{Kind} /models（无模态信息）"));
             }
         }
+        return models;
+    }
+}
 
-        foreach (var (name, value) in settings.ExtraHeaders)
+/// <summary>
+/// Gemini catalog: GET {base}/v1beta/models with the key as a query
+/// parameter. supportedGenerationMethods says which actions exist, not which
+/// input modalities a model accepts, so vision stays Unknown.
+/// </summary>
+internal sealed class GeminiCatalogAdapter : ICatalogAdapter
+{
+    public string Kind => "Gemini";
+
+    public (Uri Endpoint, HttpRequestMessage Request) BuildRequest(
+        ProviderSettings settings, string apiKey)
+    {
+        var path = CatalogAdapter.AppendPathOnce(settings.ApiBaseUrl, "/v1beta", "/models");
+        var uri = CatalogAdapter.BuildUri(settings.ApiBaseUrl, path, "?pageSize=1000");
+        var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        if (!string.IsNullOrWhiteSpace(apiKey))
         {
-            if (IsReservedHeader(name))
+            request.Headers.TryAddWithoutValidation("x-goog-api-key", apiKey);
+        }
+        foreach (var header in settings.ExtraHeaders)
+        {
+            request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        }
+        return (uri, request);
+    }
+
+    public IReadOnlyList<ModelDescriptor> Parse(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var models = new List<ModelDescriptor>();
+        foreach (var item in document.RootElement.GetProperty("models").EnumerateArray())
+        {
+            var name = item.GetProperty("name").GetString();
+            if (string.IsNullOrWhiteSpace(name))
             {
                 continue;
             }
-            request.Headers.TryAddWithoutValidation(name, value);
-        }
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-    }
-
-    private static bool SupportsGenerateContent(JsonElement item)
-    {
-        foreach (var property in new[] { "supportedGenerationMethods", "supportedActions" })
-        {
-            if (!item.TryGetProperty(property, out var methods) || methods.ValueKind != JsonValueKind.Array)
+            var id = name.StartsWith("models/", StringComparison.Ordinal) ? name["models/".Length..] : name;
+            var actions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (item.TryGetProperty("supportedGenerationMethods", out var methods))
             {
-                continue;
+                foreach (var method in methods.EnumerateArray())
+                {
+                    if (method.GetString() is { } value)
+                    {
+                        actions.Add(value);
+                    }
+                }
             }
-            return methods.EnumerateArray().Any(value =>
-                string.Equals(value.GetString(), "generateContent", StringComparison.OrdinalIgnoreCase));
+            // generateContent presence proves the model exists for generation;
+            // it says nothing about image inputs, so vision stays Unknown.
+            var text = actions.Count == 0 || actions.Contains("generateContent")
+                ? CapabilityState.Unknown
+                : CapabilityState.Unsupported;
+            if (text != CapabilityState.Unsupported)
+            {
+                models.Add(new ModelDescriptor(id, text, CapabilityState.Unknown, $"{Kind} supportedGenerationMethods"));
+            }
         }
-        return true;
+        return models;
+    }
+}
+
+/// <summary>
+/// Anthropic catalog: GET {base}/v1/models with x-api-key and the
+/// anthropic-version header. The response carries display metadata only.
+/// </summary>
+internal sealed class AnthropicCatalogAdapter : ICatalogAdapter
+{
+    public string Kind => "Anthropic";
+
+    public (Uri Endpoint, HttpRequestMessage Request) BuildRequest(
+        ProviderSettings settings, string apiKey)
+    {
+        var path = CatalogAdapter.AppendPathOnce(settings.ApiBaseUrl, "/v1", "/models");
+        var uri = CatalogAdapter.BuildUri(settings.ApiBaseUrl, path, "?limit=1000");
+        var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        request.Headers.TryAddWithoutValidation("x-api-key", apiKey);
+        request.Headers.TryAddWithoutValidation(
+            "anthropic-version",
+            string.IsNullOrWhiteSpace(settings.AnthropicVersion) ? "2023-06-01" : settings.AnthropicVersion);
+        foreach (var header in settings.ExtraHeaders)
+        {
+            request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        }
+        return (uri, request);
     }
 
-    private static void AddModel(HashSet<string> result, string? value)
+    public IReadOnlyList<ModelDescriptor> Parse(string json)
     {
-        var model = value?.Trim();
-        if (string.IsNullOrWhiteSpace(model))
+        using var document = JsonDocument.Parse(json);
+        var models = new List<ModelDescriptor>();
+        foreach (var item in document.RootElement.GetProperty("data").EnumerateArray())
         {
-            return;
+            var id = item.GetProperty("id").GetString();
+            if (!string.IsNullOrWhiteSpace(id))
+            {
+                models.Add(new ModelDescriptor(
+                    id, CapabilityState.Unknown, CapabilityState.Unknown, $"{Kind} /v1/models（无模态信息）"));
+            }
         }
-        if (model.StartsWith("models/", StringComparison.OrdinalIgnoreCase))
-        {
-            model = model["models/".Length..];
-        }
-        if (model.Length <= 200)
-        {
-            result.Add(model);
-        }
+        return models;
     }
-
-    private static bool EndsWithSegment(string path, string segment) =>
-        path.Equals('/' + segment, StringComparison.OrdinalIgnoreCase) ||
-        path.EndsWith('/' + segment, StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsReservedHeader(string name) => name.Trim().ToLowerInvariant() is
-        "authorization" or "x-api-key" or "x-goog-api-key" or "anthropic-version" or
-        "content-length" or "host";
-
-    private static string DescribeFailure(HttpStatusCode statusCode) => statusCode switch
-    {
-        HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden =>
-            "获取模型失败：API Key 无效或没有读取模型列表的权限。",
-        HttpStatusCode.NotFound =>
-            "获取模型失败：服务没有提供模型列表接口，请检查 Base URL。",
-        (HttpStatusCode)429 => "获取模型过于频繁，请稍后重试。",
-        _ => $"获取模型失败（HTTP {(int)statusCode}）。",
-    };
 }

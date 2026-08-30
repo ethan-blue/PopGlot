@@ -362,6 +362,9 @@ impl AppCore {
             &self.settings,
             &self.provider_client,
             api_key,
+            // No separate vision key on the legacy in-core path: without a
+            // dedicated vision provider the text key authenticates both.
+            "",
             media_type,
             image,
             languages,
@@ -381,6 +384,7 @@ impl AppCore {
         settings: &ProviderSettings,
         client: &ProviderClient,
         api_key: &str,
+        vision_api_key: &str,
         media_type: &str,
         image: Vec<u8>,
         languages: &LanguagePair,
@@ -393,14 +397,23 @@ impl AppCore {
                 "当前模式为本地 OCR，截图不应上传；请由外壳使用本地 OCR 后翻译文字。",
             ));
         }
-        if !settings.allow_image_upload_in_auto {
+        // The upload consent protects images leaving the device. A loopback
+        // vision provider still receives the image, but it remains local and
+        // must work in Network Off / Safe Mode.
+        if !settings.allow_image_upload_in_auto && !settings.targets_local_runtime() {
             return Err(ProviderError::new(
                 ProviderErrorKind::NetworkDisabled,
                 "隐私设置未授权上传截图；未发送图片。可在设置中勾选“允许截图上传”，或使用本地 OCR 模式。",
             ));
         }
 
-        let provider = provider_for(settings.provider_type);
+        // A dedicated vision provider replaces the text provider's connection
+        // details wholesale - base URL, protocol, endpoint, model, headers -
+        // and is authenticated with its own key, never the text key.
+        let (effective_settings, effective_key) =
+            resolve_vision_runtime(settings, api_key, vision_api_key);
+
+        let provider = provider_for(effective_settings.provider_type);
         let request = TranslationRequest::vision(
             ImageInput::Bytes {
                 media_type: media_type.to_owned(),
@@ -408,17 +421,36 @@ impl AppCore {
             },
             languages.clone(),
         )
-        .with_explanation(settings.include_explanation);
+        .with_explanation(effective_settings.include_explanation);
         client
             .execute(
                 provider.as_ref(),
-                settings,
-                api_key,
+                &effective_settings,
+                &effective_key,
                 request_id,
                 &request,
                 cancellation,
             )
             .await
+    }
+}
+
+/// Resolves provider details and authentication together. A dedicated vision
+/// route never inherits the text credential: an empty vision credential must
+/// fail closed in provider validation instead of leaking the text key to a
+/// different host.
+fn resolve_vision_runtime(
+    settings: &ProviderSettings,
+    text_api_key: &str,
+    vision_api_key: &str,
+) -> (ProviderSettings, String) {
+    if let Some(vision) = &settings.vision_provider {
+        (
+            settings.with_vision_provider(vision),
+            vision_api_key.to_owned(),
+        )
+    } else {
+        (settings.clone(), text_api_key.to_owned())
     }
 }
 
@@ -455,6 +487,7 @@ pub enum CoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn scratch_directory(label: &str) -> PathBuf {
@@ -463,6 +496,30 @@ mod tests {
             .expect("clock")
             .as_nanos();
         std::env::temp_dir().join(format!("popglot-{label}-{suffix}"))
+    }
+
+    #[test]
+    fn dedicated_vision_route_never_inherits_text_credential() {
+        let settings = ProviderSettings {
+            vision_provider: Some(popglot_domain::VisionProviderSettings {
+                provider_type: popglot_domain::ProviderType::GeminiGenerateContent,
+                api_base_url: "https://vision.example".to_owned(),
+                vision_endpoint: "/v1beta/models/{model}:generateContent".to_owned(),
+                vision_model: "configured-vision".to_owned(),
+                extra_headers: BTreeMap::default(),
+                anthropic_version: String::new(),
+                allow_insecure_tls: false,
+            }),
+            ..ProviderSettings::default()
+        };
+
+        let (vision_settings, key) = resolve_vision_runtime(&settings, "text-secret", "");
+        assert_eq!(vision_settings.api_base_url, "https://vision.example");
+        assert!(key.is_empty(), "missing vision key must fail closed");
+
+        let (_, independent_key) =
+            resolve_vision_runtime(&settings, "text-secret", "vision-secret");
+        assert_eq!(independent_key, "vision-secret");
     }
 
     fn pair() -> LanguagePair {
@@ -585,6 +642,11 @@ mod tests {
         let directory = scratch_directory("route-test");
         let mut core = AppCore::open(&directory).expect("open core");
         core.settings.mode = TranslationMode::Auto;
+        // Fresh installs declare no model; this test exercises the route
+        // matrix with a vision-capable provider configured.
+        core.settings.supports_vision = true;
+        core.settings.vision_model = "vision-test-model".to_owned();
+        core.settings.allow_image_upload_in_auto = true;
 
         // No credential yet: the vision model is unreachable, so local OCR wins.
         let without_key = core.plan_screenshot_route(true, false);

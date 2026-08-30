@@ -17,3 +17,4 @@ appsettings.local.json
 
 # Local publish output
 dist/
+.alma/

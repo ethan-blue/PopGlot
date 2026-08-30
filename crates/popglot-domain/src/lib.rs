@@ -60,6 +60,29 @@ pub struct ProviderSettings {
     pub include_explanation: bool,
     /// Keep code identifiers byte-for-byte by masking them before translation.
     pub protect_code_tokens: bool,
+    /// Independent vision provider. When present, screenshot requests use
+    /// this provider's base URL, protocol, endpoint, model and headers — with
+    /// the vision API key supplied per call by the shell — instead of
+    /// reusing the text provider's connection details.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision_provider: Option<VisionProviderSettings>,
+}
+
+/// Complete connection details for a dedicated vision provider. The API key
+/// deliberately lives outside this struct: it is passed per request and is
+/// never persisted inside settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VisionProviderSettings {
+    pub provider_type: ProviderType,
+    pub api_base_url: String,
+    pub vision_endpoint: String,
+    pub vision_model: String,
+    #[serde(default)]
+    pub extra_headers: BTreeMap<String, String>,
+    #[serde(default)]
+    pub anthropic_version: String,
+    #[serde(default)]
+    pub allow_insecure_tls: bool,
 }
 
 impl Default for ProviderSettings {
@@ -70,15 +93,18 @@ impl Default for ProviderSettings {
             api_base_url: "https://api.openai.com/v1".to_owned(),
             text_endpoint: "/chat/completions".to_owned(),
             vision_endpoint: "/chat/completions".to_owned(),
-            text_model: "gpt-4o-mini".to_owned(),
-            vision_model: "gpt-4o-mini".to_owned(),
+            // Fresh installs declare no models: models are fetched from the
+            // provider's catalog or typed by the user, never invented here.
+            text_model: String::new(),
+            vision_model: String::new(),
             extra_headers: BTreeMap::new(),
             anthropic_version: "2023-06-01".to_owned(),
             supports_text: true,
-            supports_vision: true,
+            supports_vision: false,
             network_enabled: true,
             mode: TranslationMode::Auto,
-            allow_image_upload_in_auto: true,
+            // Screenshots never leave the machine unless the user opts in.
+            allow_image_upload_in_auto: false,
             safe_dev_mode: false,
             allow_insecure_tls: false,
             api_key_configured: false,
@@ -86,6 +112,7 @@ impl Default for ProviderSettings {
             target_language: "zh-CN".to_owned(),
             include_explanation: true,
             protect_code_tokens: true,
+            vision_provider: None,
         }
     }
 }
@@ -142,6 +169,8 @@ impl ProviderSettings {
             target_language: String,
             include_explanation: bool,
             protect_code_tokens: bool,
+            #[serde(default)]
+            vision_provider: Option<VisionProviderSettings>,
         }
 
         impl Default for Shadow {
@@ -169,6 +198,7 @@ impl ProviderSettings {
                     target_language: defaults.target_language.clone(),
                     include_explanation: defaults.include_explanation,
                     protect_code_tokens: defaults.protect_code_tokens,
+                    vision_provider: None,
                 }
             }
         }
@@ -196,12 +226,37 @@ impl ProviderSettings {
             target_language: shadow.target_language,
             include_explanation: shadow.include_explanation,
             protect_code_tokens: shadow.protect_code_tokens,
+            vision_provider: shadow.vision_provider,
         })
     }
 
     #[must_use]
     pub fn vision_is_configured(&self) -> bool {
         self.supports_vision && !self.vision_model.trim().is_empty()
+    }
+
+    /// Applies a dedicated vision provider on top of these settings: the
+    /// returned snapshot routes vision requests through the override's base
+    /// URL, endpoint, model, headers and protocol. Text routing is untouched.
+    #[must_use]
+    pub fn with_vision_provider(&self, vision: &VisionProviderSettings) -> Self {
+        Self {
+            provider_type: vision.provider_type,
+            api_base_url: vision.api_base_url.clone(),
+            vision_endpoint: vision.vision_endpoint.clone(),
+            vision_model: vision.vision_model.clone(),
+            extra_headers: vision.extra_headers.clone(),
+            anthropic_version: if vision.anthropic_version.trim().is_empty() {
+                self.anthropic_version.clone()
+            } else {
+                vision.anthropic_version.clone()
+            },
+            allow_insecure_tls: vision.allow_insecure_tls,
+            supports_vision: true,
+            supports_text: false,
+            vision_provider: None,
+            ..self.clone()
+        }
     }
 
     #[must_use]
@@ -263,8 +318,8 @@ impl ProviderProfile {
             api_base_url: "https://api.openai.com/v1".to_owned(),
             text_endpoint: "/chat/completions".to_owned(),
             vision_endpoint: "/chat/completions".to_owned(),
-            text_model: "gpt-4o-mini".to_owned(),
-            vision_model: "gpt-4o-mini".to_owned(),
+            text_model: String::new(),
+            vision_model: String::new(),
             extra_headers: BTreeMap::new(),
             anthropic_version: "2023-06-01".to_owned(),
             supports_text: true,
@@ -284,7 +339,7 @@ impl ProviderProfile {
             api_base_url: "https://api.deepseek.com/v1".to_owned(),
             text_endpoint: "/chat/completions".to_owned(),
             vision_endpoint: "/chat/completions".to_owned(),
-            text_model: "deepseek-chat".to_owned(),
+            text_model: String::new(),
             vision_model: String::new(),
             extra_headers: BTreeMap::new(),
             anthropic_version: "2023-06-01".to_owned(),
@@ -305,8 +360,8 @@ impl ProviderProfile {
             api_base_url: "http://localhost:11434/v1".to_owned(),
             text_endpoint: "/chat/completions".to_owned(),
             vision_endpoint: "/chat/completions".to_owned(),
-            text_model: "qwen2.5:7b".to_owned(),
-            vision_model: "llava:7b".to_owned(),
+            text_model: String::new(),
+            vision_model: String::new(),
             extra_headers: BTreeMap::new(),
             anthropic_version: "2023-06-01".to_owned(),
             supports_text: true,
@@ -326,8 +381,8 @@ impl ProviderProfile {
             api_base_url: "https://generativelanguage.googleapis.com".to_owned(),
             text_endpoint: "/v1beta/models/{model}:generateContent".to_owned(),
             vision_endpoint: "/v1beta/models/{model}:generateContent".to_owned(),
-            text_model: "gemini-3.6-flash".to_owned(),
-            vision_model: "gemini-3.6-flash".to_owned(),
+            text_model: String::new(),
+            vision_model: String::new(),
             extra_headers: BTreeMap::new(),
             anthropic_version: "2023-06-01".to_owned(),
             supports_text: true,
@@ -347,8 +402,8 @@ impl ProviderProfile {
             api_base_url: "https://api.anthropic.com".to_owned(),
             text_endpoint: "/v1/messages".to_owned(),
             vision_endpoint: "/v1/messages".to_owned(),
-            text_model: "claude-3-5-sonnet-latest".to_owned(),
-            vision_model: "claude-3-5-sonnet-latest".to_owned(),
+            text_model: String::new(),
+            vision_model: String::new(),
             extra_headers: BTreeMap::new(),
             anthropic_version: "2023-06-01".to_owned(),
             supports_text: true,
@@ -392,6 +447,7 @@ impl ProviderProfile {
             target_language: prefs.target_language.clone(),
             include_explanation: prefs.include_explanation,
             protect_code_tokens: prefs.protect_code_tokens,
+            vision_provider: None,
         }
     }
 }
@@ -955,7 +1011,7 @@ mod tests {
         // Switch to deepseek profile
         config.active_profile_id = "deepseek".to_owned();
         let ds_settings = config.to_provider_settings();
-        assert_eq!(ds_settings.text_model, "deepseek-chat");
+        assert!(ds_settings.text_model.is_empty());
         assert_eq!(ds_settings.api_base_url, "https://api.deepseek.com/v1");
         assert!(!ds_settings.supports_vision);
 
@@ -963,7 +1019,7 @@ mod tests {
         config.active_profile_id = "ollama-local".to_owned();
         let ollama_settings = config.to_provider_settings();
         assert!(ollama_settings.targets_local_runtime());
-        assert_eq!(ollama_settings.text_model, "qwen2.5:7b");
+        assert!(ollama_settings.text_model.is_empty());
     }
 
     #[test]

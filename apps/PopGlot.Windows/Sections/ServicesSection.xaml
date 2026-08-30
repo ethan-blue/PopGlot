@@ -306,6 +306,13 @@
                                                 <ComboBox x:Name="VisionModelCombo" Style="{StaticResource EditorComboField}" IsEditable="True" FontFamily="{StaticResource MonoFontFamily}"/>
                                             </StackPanel>
                                         </Grid>
+                                        <CheckBox x:Name="UseTextModelForVisionCheckBox"
+                                                  Content="同一模型同时用于文字与图片"
+                                                  Margin="2,10,0,0"
+                                                  Checked="UseTextModelForVision_Changed"
+                                                  Unchecked="UseTextModelForVision_Changed" />
+                                        <TextBlock Text="配置了文字模型即启用文字路线；配置了图片模型即启用图片路线，不需要额外测试或能力开关。"
+                                                   Style="{StaticResource Caption}" Margin="26,4,0,0" TextWrapping="Wrap" />
                                         <TextBlock x:Name="ModelCatalogStatusText" Visibility="Collapsed" Style="{StaticResource Caption}"
                                                    Margin="2,9,0,0" TextWrapping="Wrap" />
                                     </StackPanel>
@@ -346,11 +353,12 @@
                                                 <StackPanel x:Name="CapabilitiesPanel" Grid.Column="2">
                                                     <TextBlock Text="Anthropic API 版本" Style="{StaticResource FieldLabel}"/>
                                                     <TextBox x:Name="AnthropicVersionTextBox" Style="{StaticResource EditorTextField}" FontFamily="{StaticResource MonoFontFamily}"/>
-                                                    <TextBlock Text="服务能力" Style="{StaticResource FieldLabel}" Margin="0,15,0,8"/>
-                                                    <WrapPanel>
-                                                        <CheckBox x:Name="SupportsTextCheckBox" Content="文字" Margin="0,0,20,10"/>
-                                                        <CheckBox x:Name="SupportsVisionCheckBox" Content="图片" Margin="0,0,20,10"/>
-                                                    </WrapPanel>
+                                                    <TextBlock Text="服务用途" Style="{StaticResource FieldLabel}" Margin="0,15,0,8"/>
+                                                    <TextBlock Text="由上方文字模型和图片模型自动决定，不再使用人工能力开关。"
+                                                               Style="{StaticResource Caption}" TextWrapping="Wrap"/>
+                                                    <!-- Kept hidden for schema/editor compatibility; runtime roles are derived from model fields. -->
+                                                    <CheckBox x:Name="SupportsTextCheckBox" Visibility="Collapsed"/>
+                                                    <CheckBox x:Name="SupportsVisionCheckBox" Visibility="Collapsed"/>
                                                     <CheckBox x:Name="AllowInsecureTlsCheckBox" Content="信任自签名 TLS 证书" Margin="0,2,0,0"/>
                                                     <TextBlock Text="仅用于你信任的本地或私有服务。" Style="{StaticResource Caption}" Margin="24,4,0,0"/>
                                                 </StackPanel>

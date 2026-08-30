@@ -94,20 +94,79 @@ public partial class MainWindow : Window
             var hasKey = CredentialStore.HasApiKey(ProfileManager.ResolveActiveCredentialTarget());
             var consent = ShellSettingsStore.Load().FreeEngineConsent;
             var (summary, tone) = DescribeEngine(settings, hasKey, consent);
-            EngineSummary.Text = summary + " · " + DescribeUploadNote(settings, hasKey);
+            if (UsesFreeEngine(settings, hasKey, consent))
+            {
+                // The free engine is the active text route: the probe result
+                // replaces the static guess below, so show a probing state.
+                EngineSummary.Text = "内置免费引擎 · 检测中…";
+            }
+            else
+            {
+                EngineSummary.Text = summary + " · " + DescribeUploadNote(settings, hasKey);
+            }
             EngineDot.Background = (Brush)FindResource(tone switch
             {
                 StatusTone.Error => "DangerBrush",
                 StatusTone.Warning => "WarningBrush",
                 StatusTone.Info => "TextSecondaryBrush",
-                _ => "AccentBrush",
+                _ => "SuccessBrush",
             });
+
+            // When the built-in free engine is the active text route, probe it
+            // once so the footer shows verified reachability, not a guess.
+            if (UsesFreeEngine(settings, hasKey, consent))
+            {
+                _ = UpdateFreeEngineHealthAsync(force: false);
+            }
         }
         catch (InvalidOperationException)
         {
             EngineSummary.Text = "配置不可用";
         }
     }
+
+    private static bool UsesFreeEngine(ProviderSettings settings, bool hasKey, FreeEngineConsent consent) =>
+        !settings.SafeDevMode &&
+        settings.NetworkEnabled &&
+        !hasKey &&
+        !settings.TargetsLocalRuntime &&
+        consent != FreeEngineConsent.Denied;
+
+    /// <summary>Probes the free engine and paints the result into the footer.</summary>
+    private async Task UpdateFreeEngineHealthAsync(bool force)
+    {
+        try
+        {
+            if (force)
+            {
+                EngineSummary.Text = "免费引擎 · 检测中…";
+            }
+            var health = await FreeTranslateService.GetHealthAsync(force);
+            if (!System.Windows.Application.Current.Dispatcher.CheckAccess())
+            {
+                return; // window may be gone; RefreshEngineStatus will repaint next time
+            }
+            if (health.Ok)
+            {
+                EngineSummary.Text = $"免费引擎可用 · {health.LatencyMs} ms";
+                EngineDot.Background = (Brush)FindResource("SuccessBrush");
+                EngineHealthButton.ToolTip = "免费翻译引擎连通正常 · 点击重新检测";
+            }
+            else
+            {
+                EngineSummary.Text = "免费引擎不可用";
+                EngineDot.Background = (Brush)FindResource("WarningBrush");
+                EngineHealthButton.ToolTip = $"免费引擎检测失败：{health.Error} · 点击重新检测";
+            }
+        }
+        catch (Exception)
+        {
+            // Probe failures already land in health.Error; never crash the footer.
+        }
+    }
+
+    private void EngineHealthButton_Click(object sender, RoutedEventArgs e) =>
+        _ = UpdateFreeEngineHealthAsync(force: true);
 
     private static (string Summary, StatusTone Tone) DescribeEngine(
         ProviderSettings settings, bool hasKey, FreeEngineConsent consent)
@@ -132,17 +191,39 @@ public partial class MainWindow : Window
     }
 
     private static string DescribeUploadNote(ProviderSettings settings, bool hasKey)
+
     {
+
         try
+
         {
-            var route = CoreBridge.PlanScreenshotRoute(WindowsOcrService.IsSupported, hasKey);
-            return route.MayUploadImage ? "截图可能上传" : "截图不离开本机";
+
+            // Use the same profile resolver as screenshot execution. The Rust
+
+            // legacy planner only sees mirrored settings and can describe a
+
+            // different vision route than the one the user selected.
+
+            var route = ProfileManager.ResolveRoute(settings, WindowsOcrService.IsSupported);
+
+            return route.ScreenshotPipeline == ScreenshotPipeline.VisionDirect
+
+                ? route.MayUploadImage ? "截图会发送到所选视觉服务" : "本地视觉服务，图片不离开本机"
+
+                : "截图不上传，使用本地 OCR";
+
         }
+
         catch (Exception)
+
         {
+
             return settings.TargetsLocalRuntime ? "本地模型" : "在线文本服务";
+
         }
+
     }
+
 
     // ================= Cross-section event handlers =================
 
@@ -181,7 +262,6 @@ public partial class MainWindow : Window
     {
         var compact = e.NewSize.Width < 900;
         TranslateSection.SetCompact(compact);
-        LibrarySection.SetCompact(compact);
     }
 
     private void Nav_Checked(object sender, RoutedEventArgs e)
@@ -239,12 +319,14 @@ public partial class MainWindow : Window
             StatusTone.Error => "DangerBrush",
             _ => "TextSecondaryBrush",
         });
+        // Info covers the idle/ready state and neutral confirmations; a gray
+        // dot reads as "disabled" — the accent reads as "alive" instead.
         StatusDot.Background = (Brush)FindResource(tone switch
         {
             StatusTone.Success => "SuccessBrush",
             StatusTone.Warning => "WarningBrush",
             StatusTone.Error => "DangerBrush",
-            _ => "TextTertiaryBrush",
+            _ => "AccentBrush",
         });
     }
 
@@ -254,12 +336,23 @@ public partial class MainWindow : Window
         {
             e.Cancel = true;
             Hide();
-            if (!_closeHintShown)
+            // The "still running" balloon shows at most once per install:
+            // in-memory for this run, persisted so later runs never nag.
+            if (!_closeHintShown && !ShellSettingsStore.Load().CloseHintShown)
             {
                 _closeHintShown = true;
                 NotifyTray?.Invoke(
                     "PopGlot 还在运行",
                     "窗口已最小化到托盘；划词、截图翻译与快捷键仍然可用。托盘图标右键可真正退出。");
+                try
+                {
+                    var settings = ShellSettingsStore.Load();
+                    ShellSettingsStore.Save(settings with { CloseHintShown = true });
+                }
+                catch (Exception)
+                {
+                    // Best-effort persistence; the in-memory flag still gates this run.
+                }
             }
         }
         base.OnClosing(e);

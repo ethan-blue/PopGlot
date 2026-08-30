@@ -182,6 +182,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         WatchCombo(VisionModelCombo);
         WatchToggle(SupportsTextCheckBox);
         WatchToggle(SupportsVisionCheckBox);
+        WatchToggle(UseTextModelForVisionCheckBox);
         WatchToggle(AllowInsecureTlsCheckBox);
         ApiKeyPasswordBox.PasswordChanged += (_, _) => MarkEditorDirty();
         ProviderTypeComboBox.SelectionChanged += (_, _) => MarkEditorDirty();
@@ -232,12 +233,25 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             AnthropicVersionTextBox.Text,
             SupportsTextCheckBox.IsChecked == true ? "1" : "0",
             SupportsVisionCheckBox.IsChecked == true ? "1" : "0",
+            UseTextModelForVisionCheckBox.IsChecked == true ? "1" : "0",
             AllowInsecureTlsCheckBox.IsChecked == true ? "1" : "0",
             ApiKeyPasswordBox.Password ?? string.Empty);
     }
 
     internal static bool HasEditorChanges(string current, string baseline) =>
         !string.Equals(current, baseline, StringComparison.Ordinal);
+
+    private void UseTextModelForVision_Changed(object sender, RoutedEventArgs e)
+    {
+        var shared = UseTextModelForVisionCheckBox.IsChecked == true;
+        VisionModelCombo.IsEnabled = !shared;
+        VisionModelPanel.Opacity = shared ? 0.62 : 1.0;
+        if (shared)
+        {
+            VisionModelCombo.Text = TextModelCombo.Text.Trim();
+        }
+        MarkEditorDirty();
+    }
 
     private void UpdateEditorDirtyBadge() =>
         EditorDirtyBadge.Visibility = _editorDirty ? Visibility.Visible : Visibility.Collapsed;
@@ -292,9 +306,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     internal void LoadActiveProfileIntoForm()
     {
         var config = ProfileManager.Load();
-        if (config.Profiles.Count > 0)
+        if (config.Profiles.Count > 0 && config.TryGetActiveProfile() is { } profile)
         {
-            var profile = config.GetActiveProfile();
             _editingProfileId = profile.Id;
             LoadProfileIntoForm(profile);
             RefreshApiKeyState();
@@ -306,7 +319,12 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     internal void ReloadEditorFromSaved()
     {
         var config = ProfileManager.Load();
-        var profile = SelectedProfile() ?? config.GetActiveProfile();
+        var profile = SelectedProfile() ?? config.TryGetActiveProfile();
+        if (profile is null)
+        {
+            ShowOverview();
+            return;
+        }
         _editingProfileId = profile.Id;
         _isAdding = false;
         LoadProfileIntoForm(profile);
@@ -337,13 +355,18 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             VisionEndpointTextBox.Text = profile.VisionEndpoint;
             TextModelCombo.Text = profile.TextModel;
             VisionModelCombo.Text = profile.VisionModel;
+            var sharedModel = !string.IsNullOrWhiteSpace(profile.TextModel) &&
+                string.Equals(profile.TextModel, profile.VisionModel, StringComparison.Ordinal);
+            UseTextModelForVisionCheckBox.IsChecked = sharedModel;
+            VisionModelCombo.IsEnabled = !sharedModel;
+            VisionModelPanel.Opacity = sharedModel ? 0.62 : 1.0;
             UpdateModelSuggestions(profile.ProviderType);
             ExtraHeadersTextBox.Text = string.Join(
                 Environment.NewLine,
                 profile.ExtraHeaders.Select(pair => $"{pair.Key}: {pair.Value}"));
             AnthropicVersionTextBox.Text = profile.AnthropicVersion;
-            SupportsTextCheckBox.IsChecked = profile.SupportsText;
-            SupportsVisionCheckBox.IsChecked = profile.SupportsVision;
+            SupportsTextCheckBox.IsChecked = !string.IsNullOrWhiteSpace(profile.TextModel);
+            SupportsVisionCheckBox.IsChecked = !string.IsNullOrWhiteSpace(profile.VisionModel);
             AllowInsecureTlsCheckBox.IsChecked = profile.AllowInsecureTls;
             var presetHost = IsPresetCloudHost(profile.ApiBaseUrl);
             UpdateEditorIdentity(profile.Name, profile.ProviderType, profile.ApiBaseUrl, profile.IsLocal);
@@ -416,7 +439,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         ProfilesListBox.ItemsSource = config.Profiles.Select(profile =>
         {
             var (stateText, stateTone) = DescribeProfileState(
-                profile.IsLocal,
+                ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl),
                 HasStoredKey(profile),
                 _testOutcomes.TryGetValue(profile.Id, out var outcome) ? outcome : null);
             return new ProfilesRow(
@@ -505,12 +528,12 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
         return outcome switch
         {
-            "ok" => ("可用", StatusTone.Success),
+            "ok" => ("文字连接已验证", StatusTone.Success),
             "auth" => ("鉴权失败", StatusTone.Error),
             "rate" => ("限流", StatusTone.Warning),
             "endpoint" => ("接口不存在", StatusTone.Error),
             "unreachable" => isLocal ? ("本地不可达", StatusTone.Error) : ("服务不可达", StatusTone.Error),
-            null => ("未测试", StatusTone.Info),
+            null => ("已配置 · 尚未验证", StatusTone.Info),
             _ => ("测试失败", StatusTone.Error),
         };
     }
@@ -581,22 +604,17 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             {
                 return;
             }
-            var notReady = CheckReadiness(profile.IsLocal, HasStoredKey(profile), profile.TextModel, profile.ApiBaseUrl);
+            var notReady = CheckReadiness(
+                ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl),
+                HasStoredKey(profile),
+                profile.TextModel,
+                profile.ApiBaseUrl);
             if (notReady is not null)
             {
                 StatusChanged?.Invoke($"无法设为默认：{notReady}。请补全后保存。", StatusTone.Warning);
                 return;
             }
             config.ActiveProfileId = profile.Id;
-            // A vision default on a different protocol no longer composes.
-            if (config.VisionProfileId is { Length: > 0 } visionId)
-            {
-                var vision = config.Profiles.FirstOrDefault(p => p.Id == visionId);
-                if (vision is not null && vision.ProviderType != profile.ProviderType)
-                {
-                    config.VisionProfileId = null;
-                }
-            }
             ProfileManager.Save(config);
             ApplyToCore(config);
             RefreshProfilesList();
@@ -637,7 +655,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                     // Unready profiles stay visible but disabled, with the
                     // blocking reason inline.
                     var notReady = CheckReadiness(
-                        profile.IsLocal, HasStoredKey(profile), profile.TextModel, profile.ApiBaseUrl);
+                        ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl),
+                        HasStoredKey(profile),
+                        profile.TextModel,
+                        profile.ApiBaseUrl);
                     return new ProviderComboOption(
                         profile.Id,
                         notReady is null ? profile.Name : $"{profile.Name}（{notReady}）",
@@ -647,26 +668,36 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             DefaultTextCombo.SelectedItem = (DefaultTextCombo.ItemsSource as List<ProviderComboOption>)?
                 .FirstOrDefault(option => option.Id == config.ActiveProfileId);
 
-            // Vision profiles on a different protocol stay visible but disabled,
-            // with the reason inline — they never silently disappear.
-            var textProfile = config.GetActiveProfile();
+            // Vision options check FULL readiness (model + credential). Text
+            // and vision are independent complete routes, so protocols may
+            // differ without sharing endpoints, headers or credentials.
+            var textProfile = config.TryGetActiveProfile();
             var visionOptions = new List<ProviderComboOption> { new("", "跟随默认文字服务") };
             visionOptions.AddRange(config.Profiles
                 .Where(profile => profile.SupportsVision)
-                .Select(profile => new ProviderComboOption(
-                    profile.Id,
-                    profile.ProviderType == textProfile.ProviderType
-                        ? profile.Name
-                        : $"{profile.Name}（协议不同）",
-                    profile.ProviderType == textProfile.ProviderType)));
+                .Select(profile =>
+                {
+                    var local = ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl);
+                    var missingModel = string.IsNullOrWhiteSpace(profile.VisionModel);
+                    var missingKey = !local && !HasStoredKey(profile);
+                    var reason = missingModel
+                        ? "缺少视觉模型"
+                        : missingKey
+                            ? "缺少 API Key"
+                            : null;
+                    return new ProviderComboOption(
+                        profile.Id,
+                        reason is null ? profile.Name : $"{profile.Name}（{reason}）",
+                        reason is null);
+                }));
             DefaultVisionCombo.ItemsSource = visionOptions;
             var visionId = config.VisionProfileId ?? "";
             DefaultVisionCombo.SelectedItem = visionOptions.FirstOrDefault(option => option.Id == visionId);
 
             var incompatibleCount = visionOptions.Count(option => option.Id != "" && !option.IsCompatible);
             var hasIncompatible = incompatibleCount > 0;
-            VisionIncompatHint.Text = hasIncompatible
-                ? $"{incompatibleCount} 个支持图片的服务因协议与默认文字服务（{textProfile.Name}）不同而被禁用。"
+            VisionIncompatHint.Text = hasIncompatible && textProfile is not null
+                ? $"{incompatibleCount} 个图片服务尚未配置完整模型或凭据。"
                 : string.Empty;
             VisionIncompatHint.Visibility = hasIncompatible
                 ? Visibility.Visible
@@ -732,21 +763,52 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     /// </summary>
     private static void ApplyToCore(CoreProductConfig config)
     {
-        var textProfile = config.GetActiveProfile();
         var current = CoreBridge.GetSettings();
-        var settings = textProfile.ToProviderSettings(current);
-        if (!string.IsNullOrEmpty(config.VisionProfileId))
+        var textProfile = config.TryGetActiveProfile();
+        if (textProfile is null)
         {
-            var vision = config.Profiles.FirstOrDefault(profile => profile.Id == config.VisionProfileId);
-            if (vision is not null && vision.ProviderType == textProfile.ProviderType)
+            // Nothing configured: keep user preferences but drop every
+            // provider detail, so the core can never mistake an empty setup
+            // for an OpenAI service.
+            CoreBridge.SaveSettings(current with
             {
-                settings = settings with
-                {
-                    VisionModel = vision.VisionModel,
-                    VisionEndpoint = vision.VisionEndpoint,
-                    SupportsVision = vision.SupportsVision,
-                };
-            }
+                ProviderType = ProviderType.OpenAiCompatible,
+                ApiBaseUrl = "https://api.openai.com/v1",
+                TextEndpoint = "/chat/completions",
+                VisionEndpoint = "/chat/completions",
+                TextModel = string.Empty,
+                VisionModel = string.Empty,
+                ExtraHeaders = new Dictionary<string, string>(),
+                SupportsText = true,
+                SupportsVision = false,
+                VisionProvider = null,
+            });
+            return;
+        }
+
+        var settings = textProfile.ToProviderSettings(current);
+        var visionProfile = config.TryGetVisionProfile();
+        if (visionProfile is not null && visionProfile.SupportsVision &&
+            !string.IsNullOrWhiteSpace(visionProfile.VisionModel))
+        {
+            // Never fold by host/protocol. The selected vision profile is an
+            // independent route even when it happens to share the same URL.
+            settings = settings with
+            {
+                SupportsVision = true,
+                VisionProvider = new VisionProviderOverride(
+                    visionProfile.ProviderType,
+                    visionProfile.ApiBaseUrl,
+                    visionProfile.VisionEndpoint,
+                    visionProfile.VisionModel,
+                    visionProfile.ExtraHeaders,
+                    visionProfile.AnthropicVersion,
+                    visionProfile.AllowInsecureTls),
+            };
+        }
+        else
+        {
+            settings = settings with { SupportsVision = false, VisionProvider = null };
         }
         CoreBridge.SaveSettings(settings);
     }
@@ -884,23 +946,25 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
 
         var isCustom = preset == "custom";
-        var (type, baseUrl, endpoint, textModel, visionModel, note) = preset switch
+        // Presets provide protocol and official endpoints only. Models must
+        // be fetched from the provider's catalog or typed by the user — a
+        // preset never claims a model exists or that it supports images.
+        var (type, baseUrl, endpoint, note) = preset switch
         {
             "openai" => (ProviderType.OpenAiCompatible, "https://api.openai.com/v1",
-                "/chat/completions", "gpt-4o-mini", "gpt-4o-mini", "已应用 OpenAI 预设，填入 API Key 即可。"),
+                "/chat/completions", "已应用 OpenAI 预设：填入 API Key 后「获取模型」选择，或手工输入模型名。"),
             "deepseek" => (ProviderType.OpenAiCompatible, "https://api.deepseek.com/v1",
-                "/chat/completions", "deepseek-chat", "", "已应用 DeepSeek 预设（无视觉模型）。"),
+                "/chat/completions", "已应用 DeepSeek 预设：填入 API Key 后「获取模型」选择，或手工输入模型名。"),
             "gemini" => (ProviderType.GeminiGenerateContent, "https://generativelanguage.googleapis.com",
-                "/v1beta/models/{model}:generateContent", "gemini-3.6-flash", "gemini-3.6-flash",
-                "已应用 Google Gemini 预设。"),
+                "/v1beta/models/{model}:generateContent", "已应用 Google Gemini 预设：填入 API Key 后「获取模型」选择，或手工输入模型名。"),
             "claude" => (ProviderType.AnthropicMessages, "https://api.anthropic.com",
-                "/v1/messages", "claude-sonnet-4-5", "claude-sonnet-4-5", "已应用 Anthropic Claude 预设。"),
+                "/v1/messages", "已应用 Anthropic Claude 预设：填入 API Key 后「获取模型」选择，或手工输入模型名。"),
             "zhipu" => (ProviderType.OpenAiCompatible, "https://open.bigmodel.cn/api/paas/v4",
-                "/chat/completions", "glm-4-flash", "glm-4v-flash", "已应用智谱 GLM 预设。"),
+                "/chat/completions", "已应用智谱 GLM 预设：填入 API Key 后「获取模型」选择，或手工输入模型名。"),
             "ollama" => (ProviderType.OpenAiCompatible, "http://localhost:11434/v1",
-                "/chat/completions", "qwen2.5:7b", "llava", "已应用本地 Ollama 预设，无需 API Key。"),
+                "/chat/completions", "已应用本地 Ollama 预设，无需 API Key：可直接输入或拉取本地模型。"),
             _ => (ProviderType.OpenAiCompatible, string.Empty,
-                "/chat/completions", string.Empty, string.Empty, "自定义服务：请填写协议、Base URL 与模型。"),
+                "/chat/completions", "自定义服务：请填写协议、Base URL，然后获取或输入模型。"),
         };
 
         _loading = true;
@@ -927,11 +991,14 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             TextEndpointTextBox.Text = endpoint;
             VisionEndpointTextBox.Text = endpoint;
             UpdateModelSuggestions(type);
-            TextModelCombo.Text = textModel;
-            VisionModelCombo.Text = visionModel;
+            TextModelCombo.Text = string.Empty;
+            VisionModelCombo.Text = string.Empty;
             AnthropicVersionTextBox.Text = "2023-06-01";
-            SupportsTextCheckBox.IsChecked = true;
-            SupportsVisionCheckBox.IsChecked = !string.IsNullOrEmpty(visionModel);
+            SupportsTextCheckBox.IsChecked = false;
+            SupportsVisionCheckBox.IsChecked = false;
+            UseTextModelForVisionCheckBox.IsChecked = false;
+            VisionModelCombo.IsEnabled = true;
+            VisionModelPanel.Opacity = 1.0;
             CustomProtocolGroup.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
             BaseUrlPanel.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
             // Preset cloud hosts hide the protocol surface entirely; custom and
@@ -1011,30 +1078,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private void UpdateModelSuggestions(ProviderType providerType)
     {
-        var suggestions = providerType switch
-        {
-            ProviderType.OpenAiCompatible => new[]
-            {
-                "gpt-4o-mini", "deepseek-chat", "deepseek-reasoner", "glm-4-flash", "qwen2.5:7b",
-            },
-            ProviderType.OpenAiResponses => new[] { "gpt-4o-mini", "o4-mini" },
-            ProviderType.AnthropicMessages => new[]
-            {
-                "claude-sonnet-4-5", "claude-3-5-haiku-latest",
-            },
-            ProviderType.GeminiGenerateContent => new[]
-            {
-                "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
-            },
-            _ => Array.Empty<string>(),
-        };
-        // Keep the typed value; only the suggestion list changes.
-        var currentText = TextModelCombo.Text;
-        var currentVision = VisionModelCombo.Text;
-        TextModelCombo.ItemsSource = suggestions;
-        VisionModelCombo.ItemsSource = suggestions;
-        TextModelCombo.Text = currentText;
-        VisionModelCombo.Text = currentVision;
+        // No invented model names: the picker stays empty until the user
+        // fetches the provider's real catalog or types a model themselves.
+        _ = providerType;
     }
 
     private async void FetchModels_Click(object sender, RoutedEventArgs e)
@@ -1050,19 +1096,20 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 : ApiKeyPasswordBox.Password.Trim();
             var result = await ModelCatalogService.FetchAsync(draft, typedKey ?? string.Empty);
 
+            SetModelCatalogStatus(
+                $"已从 {result.Endpoint.Host} 获取 {result.Models.Count} 个模型（{result.ProviderKind}）· " +
+                $"图片输入 {DescribeCapabilityCounts(result.Models)} · {result.ElapsedMs} ms",
+                StatusTone.Success);
             var wasLoading = _loading;
             _loading = true;
             try
             {
-                ApplyModelSuggestions(result.Models);
+                ApplyModelSuggestions(result);
             }
             finally
             {
                 _loading = wasLoading;
             }
-            SetModelCatalogStatus(
-                $"已获取 {result.Models.Count} 个模型 · {result.Endpoint.Host}{result.Endpoint.AbsolutePath} · {result.ElapsedMs} ms",
-                StatusTone.Success);
         }
         catch (Exception exception)
         {
@@ -1075,14 +1122,41 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
     }
 
-    private void ApplyModelSuggestions(IReadOnlyList<string> models)
+    private void ApplyModelSuggestions(ModelCatalogResult result)
     {
+        var ids = result.Models.Select(model => model.Id).ToList();
+        // Refreshing keeps the current selection; a pick that no longer
+        // exists in the catalog is flagged, never silently replaced.
         var currentText = TextModelCombo.Text;
         var currentVision = VisionModelCombo.Text;
-        TextModelCombo.ItemsSource = models;
-        VisionModelCombo.ItemsSource = models;
+        TextModelCombo.ItemsSource = ids;
+        VisionModelCombo.ItemsSource = ids;
         TextModelCombo.Text = currentText;
         VisionModelCombo.Text = currentVision;
+
+        if (!string.IsNullOrWhiteSpace(currentVision) &&
+            !currentVision.StartsWith('{') &&
+            result.Models.All(model => model.Id != currentVision))
+        {
+            SetModelCatalogStatus(
+                $"警告：当前视觉模型「{currentVision}」不在最新列表中，可能已下线；保存前请确认。",
+                StatusTone.Warning);
+        }
+        else if (!string.IsNullOrWhiteSpace(currentVision) &&
+            result.Models.FirstOrDefault(model => model.Id == currentVision) is { VisionInput: CapabilityState.Unknown })
+        {
+            SetModelCatalogStatus(
+                $"视觉模型「{currentVision}」存在，但目录未声明图片输入能力；请以供应商文档或连接测试确认，系统不会根据名称猜测。",
+                StatusTone.Warning);
+        }
+    }
+
+    internal static string DescribeCapabilityCounts(IReadOnlyList<ModelDescriptor> models)
+    {
+        var supported = models.Count(model => model.VisionInput == CapabilityState.Supported);
+        var unsupported = models.Count(model => model.VisionInput == CapabilityState.Unsupported);
+        var unknown = models.Count - supported - unsupported;
+        return $"支持 {supported} / 不支持 {unsupported} / 未知 {unknown}";
     }
 
     private void ResetModelCatalogStatus()
@@ -1181,6 +1255,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     private ProviderSettings BuildDraftSettings()
     {
         var current = CoreBridge.GetSettings();
+        var textModel = TextModelCombo.Text.Trim();
+        var visionModel = UseTextModelForVisionCheckBox.IsChecked == true
+            ? textModel
+            : VisionModelCombo.Text.Trim();
         return current with
         {
             SchemaVersion = current.SchemaVersion,
@@ -1188,12 +1266,12 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             ApiBaseUrl = BaseUrlTextBox.Text.Trim(),
             TextEndpoint = TextEndpointTextBox.Text.Trim(),
             VisionEndpoint = VisionEndpointTextBox.Text.Trim(),
-            TextModel = TextModelCombo.Text.Trim(),
-            VisionModel = VisionModelCombo.Text.Trim(),
+            TextModel = textModel,
+            VisionModel = visionModel,
             ExtraHeaders = ParseExtraHeaders(ExtraHeadersTextBox.Text),
             AnthropicVersion = AnthropicVersionTextBox.Text.Trim(),
-            SupportsText = SupportsTextCheckBox.IsChecked == true,
-            SupportsVision = SupportsVisionCheckBox.IsChecked == true,
+            SupportsText = !string.IsNullOrWhiteSpace(textModel),
+            SupportsVision = !string.IsNullOrWhiteSpace(visionModel),
             AllowInsecureTls = AllowInsecureTlsCheckBox.IsChecked == true,
             ApiKeyConfigured = CredentialStore.HasApiKey(CurrentCredentialTarget()),
         };
@@ -1325,10 +1403,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             ApiKeyPasswordBox.Clear();
             SetTestResult(StatusTone.Info, string.Empty, null);
             StatusChanged?.Invoke("已清空输入框。新增服务保存后密钥才会写入本机凭据管理器。", StatusTone.Info);
-            return;
         }
-        // Edit mode: the ConfirmButton wrapper asks the second click inline.
-        ClearKeyForCurrentProfile();
+        // Edit mode: the ConfirmButton wrapper asks the second click inline;
+        // running ClearKeyForCurrentProfile here too would wipe on the first.
     }
 
     private void ClearKeyForCurrentProfile()
@@ -1468,11 +1545,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         if (profile is null)
         {
             StatusChanged?.Invoke("请先在列表中选择要删除的服务。", StatusTone.Info);
-            return;
         }
-        // ConfirmButton has already asked inline (two-step click); the route
-        // consequence is explained on the button's tooltip, not a dialog.
-        DeleteSelectedProfile();
+        // A selected profile is deleted only through ConfirmButton's two-step
+        // click; deleting here too would wipe on the first click.
     }
 
     private void DeleteSelectedProfile()
@@ -1522,7 +1597,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             }
             else
             {
-                StatusChanged?.Invoke($"服务已删除，默认服务切换为「{config.GetActiveProfile().Name}」。", StatusTone.Info);
+                StatusChanged?.Invoke(
+                    $"服务已删除，默认服务切换为「{config.TryGetActiveProfile()?.Name ?? "（无）"}」。", StatusTone.Info);
             }
         }
         catch (Exception exception)
@@ -1600,12 +1676,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             // "设为文字默认".
             if (isFirstService || wasActive)
             {
-                var previousVision = config.Profiles.FirstOrDefault(p => p.Id == config.VisionProfileId);
                 config.ActiveProfileId = draft.Id;
-                if (previousVision is not null && previousVision.ProviderType != draft.ProviderType)
-                {
-                    config.VisionProfileId = null;
-                }
             }
 
             try
@@ -1718,6 +1789,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             throw new InvalidOperationException("API Base URL 不能为空。");
         }
         var isLocal = ProviderSettings.IsLocalBaseUrl(baseUrl);
+        var textModel = TextModelCombo.Text.Trim();
+        var visionModel = UseTextModelForVisionCheckBox.IsChecked == true
+            ? textModel
+            : VisionModelCombo.Text.Trim();
         if (!baseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase) && !isLocal)
         {
             throw new InvalidOperationException("API Base URL 必须使用 HTTPS；仅本机或局域网服务允许 HTTP。");
@@ -1731,15 +1806,15 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 ? "/chat/completions" : TextEndpointTextBox.Text.Trim(),
             VisionEndpoint = string.IsNullOrWhiteSpace(VisionEndpointTextBox.Text)
                 ? "/chat/completions" : VisionEndpointTextBox.Text.Trim(),
-            TextModel = TextModelCombo.Text.Trim(),
-            VisionModel = VisionModelCombo.Text.Trim(),
+            TextModel = textModel,
+            VisionModel = visionModel,
             ExtraHeaders = new Dictionary<string, string>(
                 ParseExtraHeaders(ExtraHeadersTextBox.Text),
                 StringComparer.OrdinalIgnoreCase),
             AnthropicVersion = string.IsNullOrWhiteSpace(AnthropicVersionTextBox.Text)
                 ? "2023-06-01" : AnthropicVersionTextBox.Text.Trim(),
-            SupportsText = SupportsTextCheckBox.IsChecked == true,
-            SupportsVision = SupportsVisionCheckBox.IsChecked == true,
+            SupportsText = !string.IsNullOrWhiteSpace(textModel),
+            SupportsVision = !string.IsNullOrWhiteSpace(visionModel),
             AllowInsecureTls = AllowInsecureTlsCheckBox.IsChecked == true,
             IsLocal = isLocal,
         };

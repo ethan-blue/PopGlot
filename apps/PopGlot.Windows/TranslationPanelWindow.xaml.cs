@@ -421,9 +421,23 @@ public partial class TranslationPanelWindow : Window
         EngineBadge.Text = partial ? "部分成功" : session.PipelineLabel ?? "翻译完成";
         SetResultTone(failed: false, partial: partial);
         var totalMs = session.Timing.TotalElapsedMs + (ulong)Math.Max(0, _inputAcquisitionMs);
-        RouteText.Text = _inputAcquisitionMs > 0
-            ? $"{session.PipelineLabel} · 取词 {_inputAcquisitionMs} ms · 模型 {session.Timing.NetworkElapsedMs} ms · 总计 {totalMs} ms"
-            : $"{session.PipelineLabel} · 模型 {session.Timing.NetworkElapsedMs} ms · 总计 {totalMs} ms";
+        var timingParts = new List<string> { session.PipelineLabel ?? "翻译" };
+        if (_inputAcquisitionMs > 0)
+        {
+            timingParts.Add($"取词 {_inputAcquisitionMs} ms");
+        }
+        if (session.Timing.OcrElapsedMs > 0)
+        {
+            timingParts.Add($"OCR {session.Timing.OcrElapsedMs} ms");
+        }
+        if (session.InputSource == TranslationInputSource.Screenshot)
+        {
+            timingParts.Add(session.ImageUploaded ? "图片已进入视觉请求" : "图片未上传");
+        }
+        timingParts.Add($"路由 {session.Timing.RoutingElapsedMs} ms");
+        timingParts.Add($"网络/模型 {session.Timing.NetworkElapsedMs} ms");
+        timingParts.Add($"总计 {totalMs} ms");
+        RouteText.Text = string.Join(" · ", timingParts);
         StatusText.Text = partial
             ? "部分成功 · 见下方提醒"
             : (string.IsNullOrWhiteSpace(pipelineNote)

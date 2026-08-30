@@ -9,6 +9,7 @@
 
 use base64::Engine as _;
 use popglot_core::AppCore;
+use popglot_core::provider::ProviderClient;
 use popglot_domain::{LanguagePair, ProviderSettings};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -295,6 +296,52 @@ pub unsafe extern "C" fn popglot_translate_text_v2(
     })
 }
 
+/// Translates text through a complete, non-persisted provider snapshot.
+/// The snapshot and credential are supplied together so OCR output cannot
+/// accidentally use a stale global provider configuration.
+///
+/// # Safety
+///
+/// Pointers must be valid null-terminated UTF-8 strings or null where optional.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_translate_text_draft_v1(
+    settings_json: *const c_char,
+    api_key: *const c_char,
+    source: *const c_char,
+    source_lang: *const c_char,
+    target_lang: *const c_char,
+    request_id: *const c_char,
+) -> *mut c_char {
+    ffi_guard(|| {
+        let settings_json = unsafe { read_utf8(settings_json) }?;
+        let api_key = unsafe { read_utf8(api_key) }?;
+        let source = unsafe { read_utf8(source) }?;
+        let source_lang = unsafe { read_optional_utf8(source_lang) }?;
+        let target_lang = unsafe { read_optional_utf8(target_lang) }?;
+        let custom_id = unsafe { read_optional_utf8(request_id) }?;
+        let settings = serde_json::from_str::<popglot_domain::ProviderSettings>(settings_json)
+            .map_err(|error| format!("文字草稿设置无效：{error}"))?;
+        let client = ProviderClient::new(AppCore::limits_for(&settings))
+            .map_err(|error| error.to_string())?;
+        let languages = resolve_languages(&settings, source_lang, target_lang);
+        let runtime = provider_runtime()?;
+        let ticket = begin_request(custom_id)?;
+        let response = runtime
+            .block_on(AppCore::execute_translate_text_snapshot(
+                &settings,
+                &client,
+                api_key,
+                source,
+                &languages,
+                &ticket.id,
+                &ticket.token,
+            ))
+            .map_err(|error| error.to_string());
+        finish_request(&ticket.id);
+        Ok(response.map_or_else(failure, success))
+    })
+}
+
 /// Translates one base64-encoded screenshot through the active vision Provider.
 ///
 /// # Safety
@@ -361,6 +408,75 @@ pub unsafe extern "C" fn popglot_translate_vision_v2(
                 &settings,
                 &client,
                 api_key,
+                "",
+                media_type,
+                image,
+                &languages,
+                &ticket.id,
+                &ticket.token,
+            ))
+            .map_err(|error| error.to_string());
+        finish_request(&ticket.id);
+        Ok(response.map_or_else(failure, success))
+    })
+}
+
+/// Translates one screenshot through a draft settings snapshot with a
+/// dedicated vision provider: the shell passes the text key, the vision
+/// key, and (optionally) a full settings JSON that is used without being
+/// persisted. When `settings_json` is empty the stored settings apply.
+///
+/// # Safety
+///
+/// Pointers must be valid null-terminated UTF-8 strings or null where optional.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_translate_vision_v3(
+    api_key: *const c_char,
+    vision_api_key: *const c_char,
+    settings_json: *const c_char,
+    media_type: *const c_char,
+    image_base64: *const c_char,
+    source_lang: *const c_char,
+    target_lang: *const c_char,
+    request_id: *const c_char,
+) -> *mut c_char {
+    ffi_guard(|| {
+        let api_key = unsafe { read_utf8(api_key) }?;
+        let vision_api_key = unsafe { read_optional_utf8(vision_api_key) }?.unwrap_or_default();
+        let settings_json = unsafe { read_optional_utf8(settings_json) }?.unwrap_or_default();
+        let media_type = unsafe { read_utf8(media_type) }?;
+        let image_base64 = unsafe { read_utf8(image_base64) }?;
+        let source_lang = unsafe { read_optional_utf8(source_lang) }?;
+        let target_lang = unsafe { read_optional_utf8(target_lang) }?;
+        let custom_id = unsafe { read_optional_utf8(request_id) }?;
+
+        if image_base64.len() > 12 * 1024 * 1024 {
+            return Err("编码后的截图超过 12 MiB FFI 上限。".to_owned());
+        }
+        let image = base64::engine::general_purpose::STANDARD
+            .decode(image_base64)
+            .map_err(|_| "截图不是有效的 base64。".to_owned())?;
+
+        let settings = if settings_json.trim().is_empty() {
+            let core = core_read()?;
+            core.settings().clone()
+        } else {
+            serde_json::from_str::<popglot_domain::ProviderSettings>(settings_json)
+                .map_err(|error| format!("视觉草稿设置无效：{error}"))?
+        };
+        // A draft may target a completely different provider and TLS policy;
+        // the global Core client is therefore never safe to reuse here.
+        let client = ProviderClient::new(AppCore::limits_for(&settings))
+            .map_err(|error| error.to_string())?;
+        let languages = resolve_languages(&settings, source_lang, target_lang);
+        let runtime = provider_runtime()?;
+        let ticket = begin_request(custom_id)?;
+        let response = runtime
+            .block_on(AppCore::execute_translate_vision_snapshot(
+                &settings,
+                &client,
+                api_key,
+                vision_api_key,
                 media_type,
                 image,
                 &languages,

@@ -109,7 +109,8 @@ impl TranslationRequest {
 /// envelope. Screenshot transcription retains the full ceiling.
 fn output_token_limit(request: &TranslationRequest) -> u32 {
     match &request.input {
-        TranslationInput::Text { source } => (source.chars().count() as u32)
+        TranslationInput::Text { source } => u32::try_from(source.chars().count())
+            .unwrap_or(u32::MAX)
             .saturating_mul(2)
             .saturating_add(256)
             .clamp(384, MAX_MODEL_OUTPUT_TOKENS),
@@ -126,6 +127,18 @@ fn gemini_thinking_config(model: &str) -> Option<Value> {
         Some(json!({"thinkingLevel": "low"}))
     } else if normalized.starts_with("gemini-2.5-flash") {
         Some(json!({"thinkingBudget": 0}))
+    } else {
+        None
+    }
+}
+
+fn glm_thinking_config(model: &str) -> Option<Value> {
+    let normalized = model.to_ascii_lowercase();
+    if normalized.starts_with("glm-") {
+        // Zhipu GLM 4.5+ defaults to visible reasoning, which burns the tight
+        // output token budget on hidden reasoning_content before the
+        // translation itself and adds seconds of latency for zero gain.
+        Some(json!({"type": "disabled"}))
     } else {
         None
     }
@@ -568,21 +581,25 @@ impl TranslationProvider for OpenAiChatProvider {
                 true,
             ),
         };
+        let mut body = json!({
+            "model": model,
+            "stream": false,
+            "temperature": 0.1,
+            "max_tokens": output_token_limit(request),
+            "messages": [
+                {"role": "system", "content": request.system_instructions()},
+                {"role": "user", "content": user_content},
+            ],
+        });
+        if let Some(thinking) = glm_thinking_config(model) {
+            body["thinking"] = thinking;
+        }
         Ok(PreparedProviderRequest {
             provider_type: self.provider_type(),
             endpoint: endpoint.clone(),
             contains_image,
             extra_headers: extra_headers(settings),
-            body: json!({
-                "model": model,
-                "stream": false,
-                "temperature": 0.1,
-                "max_tokens": output_token_limit(request),
-                "messages": [
-                    {"role": "system", "content": request.system_instructions()},
-                    {"role": "user", "content": user_content},
-                ],
-            }),
+            body,
         })
     }
 
@@ -955,18 +972,19 @@ fn validate_execution(
     api_key: &str,
     request_id: &str,
 ) -> Result<(), ProviderError> {
-    // Master offline switch: checked first so that no other permission can
-    // re-enable outbound traffic while the user believes they are offline.
-    if settings.safe_dev_mode {
+    // Offline controls block remote traffic, not a provider explicitly
+    // hosted on loopback/private local infrastructure.
+    let local_runtime = is_local_base_url(&settings.api_base_url);
+    if !local_runtime && settings.safe_dev_mode {
         return Err(ProviderError::new(
             ProviderErrorKind::NetworkDisabled,
-            "安全离线模式已开启；未发送任何模型请求。可在「翻译服务」中关闭它。",
+            "安全离线模式已开启；未发送任何远程模型请求。可使用本地模型，或关闭安全离线模式。",
         ));
     }
-    if !settings.network_enabled {
+    if !local_runtime && !settings.network_enabled {
         return Err(ProviderError::new(
             ProviderErrorKind::NetworkDisabled,
-            "网络访问未启用；未发送任何 Provider 请求。请在设置中勾选「启用大模型网络翻译」。",
+            "网络访问未启用；未发送任何远程 Provider 请求。请在设置中勾选「启用大模型网络翻译」。",
         ));
     }
     if api_key.trim().is_empty() && !is_local_base_url(&settings.api_base_url) {
@@ -1300,6 +1318,40 @@ mod tests {
             Some(json!({"thinkingBudget": 0}))
         );
         assert_eq!(gemini_thinking_config("gemini-2.0-flash"), None);
+    }
+
+    #[test]
+    fn glm_translation_disables_reasoning_in_chat_completions_body() {
+        assert_eq!(
+            glm_thinking_config("glm-5.3-flash"),
+            Some(json!({"type": "disabled"}))
+        );
+        assert_eq!(
+            glm_thinking_config("GLM-4.6"),
+            Some(json!({"type": "disabled"}))
+        );
+        assert_eq!(glm_thinking_config("deepseek-chat"), None);
+
+        let provider = OpenAiChatProvider;
+        let mut config = settings(ProviderType::OpenAiCompatible);
+        config.text_model = "glm-5.3-flash".to_owned();
+        let prepared = provider
+            .prepare(&config, &text_request("hello"))
+            .expect("prepare succeeds");
+        assert_eq!(
+            prepared.body["thinking"],
+            json!({"type": "disabled"}),
+            "GLM chat completions must ship thinking disabled"
+        );
+
+        config.text_model = "deepseek-chat".to_owned();
+        let prepared = provider
+            .prepare(&config, &text_request("hello"))
+            .expect("prepare succeeds");
+        assert!(
+            prepared.body.get("thinking").is_none(),
+            "non-GLM models must not receive the Zhipu thinking field"
+        );
     }
 
     #[test]

@@ -230,6 +230,61 @@ internal static class FreeTranslateService
         Cache[key] = value;
     }
 
+    // ================= Health probe =================
+
+    public readonly record struct FreeEngineHealth(bool Ok, int LatencyMs, string? Error);
+
+    private static readonly TimeSpan HealthTtl = TimeSpan.FromMinutes(10);
+    private static long _healthCompletedTicks;
+    private static Task<FreeEngineHealth>? _healthProbe;
+    private static FreeEngineHealth _lastHealth;
+    private static int _probeSequence;
+
+    /// <summary>
+    /// Whether the free engine currently reaches a working endpoint. Cached
+    /// for HealthTtl; pass force=true to re-check immediately (footer click).
+    /// </summary>
+    public static Task<FreeEngineHealth> GetHealthAsync(bool force = false)
+    {
+        if (!force && DateTime.UtcNow.Ticks - Interlocked.Read(ref _healthCompletedTicks) < HealthTtl.Ticks)
+        {
+            return Task.FromResult(_lastHealth);
+        }
+        // Single in-flight probe; a forced click supersedes it.
+        var probe = Interlocked.Exchange(ref _healthProbe, null);
+        if (probe is not null && !force)
+        {
+            return probe;
+        }
+        probe = ProbeCoreAsync();
+        _healthProbe = probe;
+        return probe;
+    }
+
+    private static async Task<FreeEngineHealth> ProbeCoreAsync()
+    {
+        var started = Stopwatch.GetTimestamp();
+        try
+        {
+            // A unique text every time so the probe never answers from the
+            // translation cache — it must hit the real endpoint.
+            var text = $"ping {Interlocked.Increment(ref _probeSequence)}";
+            await TranslateAsync(text, "auto", "zh-CN", CancellationToken.None);
+            _lastHealth = new FreeEngineHealth(
+                true, (int)Stopwatch.GetElapsedTime(started).TotalMilliseconds, null);
+        }
+        catch (Exception exception)
+        {
+            _lastHealth = new FreeEngineHealth(false, 0, exception.Message);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _healthCompletedTicks, DateTime.UtcNow.Ticks);
+            _healthProbe = null;
+        }
+        return _lastHealth;
+    }
+
     private static InvalidOperationException RateLimitedError(bool inCooldown) => new(
         inCooldown
             ? "免费翻译接口刚刚被限流（HTTP 429），一分钟内暂不自动重试；通常几分钟内自动恢复，也可在设置中配置自己的模型服务。"

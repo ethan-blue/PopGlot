@@ -61,6 +61,11 @@ internal sealed class TranslationSession
     public string? PipelineLabel { get; set; }
     public string? RoutingReason { get; set; }
     public bool OutboundOccurred { get; set; }
+    /// <summary>True when the screenshot entered any vision Provider request.</summary>
+    public bool ImageSentToProvider { get; set; }
+    /// <summary>True only when the screenshot crossed the device boundary.</summary>
+    public bool ImageLeftDevice { get; set; }
+    // Compatibility/display alias for existing callers: means remote upload.
     public bool ImageUploaded { get; set; }
 
     public string TranslatedText { get; set; } = string.Empty;
