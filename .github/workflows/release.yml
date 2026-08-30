@@ -14,6 +14,47 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate version consistency across manifest files
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -notmatch '^v(?<version>.+)$') {
+            throw "Release tag '$tag' does not start with 'v'."
+          }
+          $expectedVersion = $Matches['version']
+
+          # 1. PopGlot.Windows.csproj <Version>
+          $csprojText = Get-Content 'apps/PopGlot.Windows/PopGlot.Windows.csproj' -Raw
+          if ($csprojText -notmatch '<Version>\s*([^\s<]+)\s*</Version>') {
+            throw "Could not parse <Version> from apps/PopGlot.Windows/PopGlot.Windows.csproj"
+          }
+          $csprojVersion = $Matches[1]
+          if ($csprojVersion -ne $expectedVersion) {
+            throw "Version mismatch: tag '$tag' specifies version '$expectedVersion', but PopGlot.Windows.csproj has '$csprojVersion'."
+          }
+
+          # 2. Cargo.toml workspace.package version
+          $cargoText = Get-Content 'Cargo.toml' -Raw
+          if ($cargoText -notmatch '(?ms)\[workspace\.package\].*?version\s*=\s*"([^"]+)"') {
+            throw "Could not parse [workspace.package] version from Cargo.toml"
+          }
+          $cargoVersion = $Matches[1]
+          if ($cargoVersion -ne $expectedVersion) {
+            throw "Version mismatch: tag '$tag' specifies version '$expectedVersion', but Cargo.toml workspace version has '$cargoVersion'."
+          }
+
+          # 3. CHANGELOG.md top version
+          $changelogText = Get-Content 'CHANGELOG.md' -Raw
+          if ($changelogText -notmatch '(?m)^##\s+\[?v?([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)\]?') {
+            throw "Could not parse top version header from CHANGELOG.md"
+          }
+          $changelogVersion = $Matches[1]
+          if ($changelogVersion -ne $expectedVersion) {
+            throw "Version mismatch: tag '$tag' specifies version '$expectedVersion', but CHANGELOG.md top version is '$changelogVersion'."
+          }
+
+          Write-Host "All versions match release tag $tag ($expectedVersion): csproj=$csprojVersion, cargo=$cargoVersion, changelog=$changelogVersion"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
@@ -37,6 +78,7 @@ jobs:
           --self-contained false
           --output dist/release
           /p:DebugType=None /p:DebugPortablePdb=false
+          /p:ContinuousIntegrationBuild=true
 
       # The csproj copies the Rust core into the build output only, so the
       # publish folder needs the native dll shipped explicitly.
@@ -51,10 +93,17 @@ jobs:
       - name: Zip portable build
         shell: pwsh
         run: |
-          Compress-Archive -Path 'dist/release/*' -DestinationPath 'dist/PopGlot-${{ github.ref_name }}-win-x64.zip'
+          $zipName = "PopGlot-$($env:GITHUB_REF_NAME)-win-x64.zip"
+          $zipPath = "dist/$zipName"
+          $shaPath = "dist/$zipName.sha256"
+          Compress-Archive -Path 'dist/release/*' -DestinationPath $zipPath
+          $hash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $zipName`n" | Set-Content -Path $shaPath -NoNewline
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: dist/PopGlot-${{ github.ref_name }}-win-x64.zip
+          files: |
+            dist/PopGlot-${{ github.ref_name }}-win-x64.zip
+            dist/PopGlot-${{ github.ref_name }}-win-x64.zip.sha256

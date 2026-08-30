@@ -3,6 +3,35 @@
 本文件从 **0.0.1** 开始维护。更早的开发过程没有正式版本号；
 曾被误打的 `v0.3.0` tag 已撤回（见 `docs/VERSIONING.md` 历史修正），编号不复用。
 
+## 0.0.2 - 2026-08-30
+
+本版本聚焦稳定性强化、离线与隐私门禁收紧、原子存储与发布质量门禁。
+
+### 新增
+
+- Release 发布工作流（`.github/workflows/release.yml`）新增 Release Tag、`PopGlot.Windows.csproj`、`Cargo.toml` 与 `CHANGELOG.md` 四方版本一致性门禁检查，并在打包时自动生成 `.zip.sha256` 校验和文件。
+- 便携版（Portable）分发包依赖 .NET 10 Desktop Runtime（x64），框架依赖产物更轻量且共享系统运行时补丁。
+
+### 变更
+
+- 配置文件 Schema 升级至 v6：由 `TextModel` 与 `VisionModel` 字段显式决定文本与视觉路由支持能力，自动同步 `IsLocal` 与角色推导，避免配置有效视觉模型时因历史状态位导致不可用；旧版本 v5 自动无损升级为 v6。
+
+### 修复
+
+- **TTS 离线门禁**：`TtsService` 增加离线策略检查，在网络未启用或安全离线模式下强制走 Windows 本地语音合成（SAPI / OneCore），杜绝云端 TTS 意外出网。
+- **词库原子存储与损坏保全**：`VocabularyStore` 改用临时文件写入加原子替换机制，避免进程崩溃导致词库写损；遇到损坏 JSON 文件自动复制为 `<path>.corrupt-<timestamp>` 备份，防止异常时静默清空用户生词。
+- **服务删除与运行时同步**：修复服务删除逻辑，删除时先保存配置，再尽力（best-effort）清理对应凭据（保存失败时凭据保持），并在删除默认文字服务时通过 `ApplyToCore` 同步更新或清空底层运行配置。
+- **文本路由与凭据快照一致性**：统一草稿态与运行时解析，确保服务编辑与路由决策中的 Base URL、模型及 `CredentialTarget` 快照严格同步。
+- **模型目录 TLS 与请求头规范**：`ModelCatalogService` 接入统一安全 TLS 策略，过滤保留敏感请求头，按 Provider 规范正确构造鉴权与请求头，避免跨协议拉取模型异常。
+- **健康探测 Single-flight 去重**：服务连接测试增加单飞（single-flight）并发控制，避免快速切换或重复点击时发起重叠网络探测。
+- **设置窗口主题事件退订**：`SettingsWindow` 关闭时显式退订 `ThemeService.ThemeChanged` 事件，消除长期运行下的主题事件监听泄漏。
+- **FFI 取消与释放 Panic 防护**：`popglot-ffi` 对 `popglot_cancel_request`、`popglot_free_string` 等导出函数包裹 `catch_unwind` 并做空指针防护，阻止 Rust 侧 panic 穿透 FFI 边界导致前端崩溃。
+- **测试套件稳定性**：修复逻辑测试中异步等待轮询形参副本的问题，完善 Windows 逻辑测试套件覆盖。
+
+### 迁移与风险
+
+- product-config.json v5→v6 自动迁移，已有服务、模型配置与凭据均完整保留。
+
 ## 0.0.1 - 2026-08-29
 
 首个正式版本基线：四轮 UI/产品重构 + P0 缺陷修复的全部累积改动。

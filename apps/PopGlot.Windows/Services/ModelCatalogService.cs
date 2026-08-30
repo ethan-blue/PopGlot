@@ -55,7 +55,14 @@ internal static class ModelCatalogService
         var adapter = CatalogAdapter.For(settings);
         var (uri, request) = adapter.BuildRequest(settings, apiKey);
         var stopwatch = Stopwatch.StartNew();
-        using var httpClient = testHandler is null ? new HttpClient() : new HttpClient(testHandler);
+        using var httpClient = testHandler is null
+            ? new HttpClient(new SocketsHttpHandler
+            {
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+                AutomaticDecompression = DecompressionMethods.All,
+            })
+            : new HttpClient(testHandler);
         httpClient.Timeout = TimeSpan.FromSeconds(15);
         using var response = await httpClient.SendAsync(request, cancellationToken);
         stopwatch.Stop();
@@ -130,6 +137,34 @@ internal interface ICatalogAdapter
 
 internal static class CatalogAdapter
 {
+    private static readonly HashSet<string> SensitiveHeaders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+        "x-api-key",
+        "api-key",
+        "x-goog-api-key",
+    };
+
+    internal static bool IsSensitiveHeader(string headerName) =>
+        !string.IsNullOrWhiteSpace(headerName) && SensitiveHeaders.Contains(headerName.Trim());
+
+    internal static void ApplySafeExtraHeaders(
+        HttpRequestMessage request,
+        IEnumerable<KeyValuePair<string, string>> extraHeaders)
+    {
+        foreach (var header in extraHeaders)
+        {
+            if (string.IsNullOrWhiteSpace(header.Key) || IsSensitiveHeader(header.Key))
+            {
+                continue;
+            }
+            request.Headers.TryAddWithoutValidation(header.Key.Trim(), header.Value);
+        }
+    }
+
     internal static ICatalogAdapter For(ProviderSettings settings) => settings.ProviderType switch
     {
         ProviderType.GeminiGenerateContent => new GeminiCatalogAdapter(),
@@ -184,10 +219,7 @@ internal sealed class OpenAiCompatibleCatalogAdapter : ICatalogAdapter
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         }
-        foreach (var header in settings.ExtraHeaders)
-        {
-            request.Headers.TryAddWithoutValidation(header.Key, header.Value);
-        }
+        CatalogAdapter.ApplySafeExtraHeaders(request, settings.ExtraHeaders);
         return (uri, request);
     }
 
@@ -228,10 +260,7 @@ internal sealed class GeminiCatalogAdapter : ICatalogAdapter
         {
             request.Headers.TryAddWithoutValidation("x-goog-api-key", apiKey);
         }
-        foreach (var header in settings.ExtraHeaders)
-        {
-            request.Headers.TryAddWithoutValidation(header.Key, header.Value);
-        }
+        CatalogAdapter.ApplySafeExtraHeaders(request, settings.ExtraHeaders);
         return (uri, request);
     }
 
@@ -286,14 +315,14 @@ internal sealed class AnthropicCatalogAdapter : ICatalogAdapter
         var path = CatalogAdapter.AppendPathOnce(settings.ApiBaseUrl, "/v1", "/models");
         var uri = CatalogAdapter.BuildUri(settings.ApiBaseUrl, path, "?limit=1000");
         var request = new HttpRequestMessage(HttpMethod.Get, uri);
-        request.Headers.TryAddWithoutValidation("x-api-key", apiKey);
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            request.Headers.TryAddWithoutValidation("x-api-key", apiKey);
+        }
         request.Headers.TryAddWithoutValidation(
             "anthropic-version",
             string.IsNullOrWhiteSpace(settings.AnthropicVersion) ? "2023-06-01" : settings.AnthropicVersion);
-        foreach (var header in settings.ExtraHeaders)
-        {
-            request.Headers.TryAddWithoutValidation(header.Key, header.Value);
-        }
+        CatalogAdapter.ApplySafeExtraHeaders(request, settings.ExtraHeaders);
         return (uri, request);
     }
 

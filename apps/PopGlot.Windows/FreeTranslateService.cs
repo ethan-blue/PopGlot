@@ -235,6 +235,7 @@ internal static class FreeTranslateService
     public readonly record struct FreeEngineHealth(bool Ok, int LatencyMs, string? Error);
 
     private static readonly TimeSpan HealthTtl = TimeSpan.FromMinutes(10);
+    private static readonly object HealthGate = new();
     private static long _healthCompletedTicks;
     private static Task<FreeEngineHealth>? _healthProbe;
     private static FreeEngineHealth _lastHealth;
@@ -246,19 +247,20 @@ internal static class FreeTranslateService
     /// </summary>
     public static Task<FreeEngineHealth> GetHealthAsync(bool force = false)
     {
-        if (!force && DateTime.UtcNow.Ticks - Interlocked.Read(ref _healthCompletedTicks) < HealthTtl.Ticks)
+        lock (HealthGate)
         {
-            return Task.FromResult(_lastHealth);
-        }
-        // Single in-flight probe; a forced click supersedes it.
-        var probe = Interlocked.Exchange(ref _healthProbe, null);
-        if (probe is not null && !force)
-        {
+            if (!force && DateTime.UtcNow.Ticks - Interlocked.Read(ref _healthCompletedTicks) < HealthTtl.Ticks)
+            {
+                return Task.FromResult(_lastHealth);
+            }
+            if (_healthProbe is not null && !force)
+            {
+                return _healthProbe;
+            }
+            var probe = ProbeCoreAsync();
+            _healthProbe = probe;
             return probe;
         }
-        probe = ProbeCoreAsync();
-        _healthProbe = probe;
-        return probe;
     }
 
     private static async Task<FreeEngineHealth> ProbeCoreAsync()
@@ -280,7 +282,10 @@ internal static class FreeTranslateService
         finally
         {
             Interlocked.Exchange(ref _healthCompletedTicks, DateTime.UtcNow.Ticks);
-            _healthProbe = null;
+            lock (HealthGate)
+            {
+                _healthProbe = null;
+            }
         }
         return _lastHealth;
     }

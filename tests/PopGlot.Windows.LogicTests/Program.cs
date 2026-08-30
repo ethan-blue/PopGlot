@@ -57,6 +57,7 @@ internal static class Program
         Run("edge neural tts resolves voices by language script", EdgeTtsResolvesVoicesCorrectly);
         Run("vocabulary store supports star, remove and export", VocabularyStoreBehaviour);
         Run("vocabulary store csv export conforms to standard format", VocabularyStoreCsvExportConforms);
+        Run("vocabulary store handles corrupt json safely", VocabularyStoreHandlesCorruptJsonSafely);
         Run("history store csv and markdown export conform to format", HistoryStoreExportConforms);
         Run("hotkey action enum values are recognized without exception", HotkeyActionsRecognized);
         Run("show window hotkey and free engine consent round-trip", ShellSettingsShowWindowAndConsentRoundTrip);
@@ -88,10 +89,13 @@ internal static class Program
         Run("daily flows never open system dialogs", DailyFlowsUseInlineConfirmations);
         Run("unready services cannot become the default", UnreadyServicesCannotBecomeDefault);
         Run("schema v4 factory profiles migrate out of configured services", SchemaV4MigratesPristineTemplates);
+        Run("concurrent saves do not collide on temporary files", ProfileManagerConcurrentSavesDoNotClash);
+        Run("unsaved load mutation does not poison cached config", UnsavedLoadMutationDoesNotPolluteCache);
         Run("empty config resolves no fabricated providers", EmptyConfigResolvesNoProviders);
         Run("vision readiness requires model and credential", VisionReadinessRequiresModelAndCredential);
         Run("resolved route drives screenshot preview and execution", ResolvedRouteDrivesScreenshotStateMachine);
         await RunAsync("model catalogs are protocol-aware and never invent vision", ModelCatalogsNeverInventVision);
+        await RunAsync("model catalog requests filter sensitive headers", ModelCatalogFiltersSensitiveHeaders);
         Run("a failed profile save does not poison the cache", FailedSaveDoesNotPoisonCache);
         Run("information architecture surfaces workbench, library and control center", InformationArchitectureSurfacesPresent);
         RunSta("render screenshots and measure performance baseline", RenderScreenshotsAndMeasureBaseline);
@@ -472,36 +476,77 @@ internal static class Program
 
     private static void VocabularyStoreBehaviour()
     {
-        var store = new VocabularyStore();
-        store.Clear();
-        True(!store.IsStarred("borrow checker"), "clean store should not have word");
+        var tempFile = Path.Combine(Path.GetTempPath(), $"popglot-vocab-{Guid.NewGuid():N}.json");
+        try
+        {
+            var store = new VocabularyStore(tempFile);
+            True(!store.IsStarred("borrow checker"), "clean store should not have word");
 
-        var starred = store.ToggleStar("borrow checker", "借用检查器", "bɒrəʊ", "Rust内存安全", "en", "zh-CN");
-        True(starred, "word should be marked starred");
-        True(store.IsStarred("borrow checker"), "word must be queried as starred");
+            var starred = store.ToggleStar("borrow checker", "借用检查器", "bɒrəʊ", "Rust内存安全", "en", "zh-CN");
+            True(starred, "word should be marked starred");
+            True(store.IsStarred("borrow checker"), "word must be queried as starred");
 
-        var tsv = store.ExportToAnkiTsv();
-        True(tsv.Contains("borrow checker\t借用检查器"), "Anki export must contain tab-separated front/back");
+            var tsv = store.ExportToAnkiTsv();
+            True(tsv.Contains("borrow checker\t借用检查器"), "Anki export must contain tab-separated front/back");
 
-        var md = store.ExportToMarkdown();
-        True(md.Contains("| **borrow checker** | 借用检查器 |"), "Markdown export must contain table row");
+            var md = store.ExportToMarkdown();
+            True(md.Contains("| **borrow checker** | 借用检查器 |"), "Markdown export must contain table row");
 
-        var unstarred = !store.ToggleStar("borrow checker", "");
-        True(unstarred, "toggling again must unstar the word");
-        True(!store.IsStarred("borrow checker"), "word should no longer be starred");
+            var unstarred = !store.ToggleStar("borrow checker", "");
+            True(unstarred, "toggling again must unstar the word");
+            True(!store.IsStarred("borrow checker"), "word should no longer be starred");
+        }
+        finally
+        {
+            try { File.Delete(tempFile); } catch { }
+            try { File.Delete(tempFile + ".bak"); } catch { }
+        }
     }
 
     private static void VocabularyStoreCsvExportConforms()
     {
-        var store = new VocabularyStore();
-        store.Clear();
-        store.ToggleStar("async/await", "异步/等待", "əˈsɪŋk", "C# & Rust 关键字", "en", "zh-CN");
+        var tempFile = Path.Combine(Path.GetTempPath(), $"popglot-vocab-csv-{Guid.NewGuid():N}.json");
+        try
+        {
+            var store = new VocabularyStore(tempFile);
+            store.ToggleStar("async/await", "异步/等待", "əˈsɪŋk", "C# & Rust 关键字", "en", "zh-CN");
 
-        var csv = store.ExportToCsv();
-        True(csv.StartsWith("Id,CreatedAt,Word,Translation,Phonetic,Explanation,SourceLanguage,TargetLanguage,Tags"),
-            "CSV must start with header row");
-        True(csv.Contains("\"async/await\""), "Word with special characters must be properly escaped in CSV");
-        True(csv.Contains("\"异步/等待\""), "Translation must be in CSV");
+            var csv = store.ExportToCsv();
+            True(csv.StartsWith("Id,CreatedAt,Word,Translation,Phonetic,Explanation,SourceLanguage,TargetLanguage,Tags"),
+                "CSV must start with header row");
+            True(csv.Contains("\"async/await\""), "Word with special characters must be properly escaped in CSV");
+            True(csv.Contains("\"异步/等待\""), "Translation must be in CSV");
+        }
+        finally
+        {
+            try { File.Delete(tempFile); } catch { }
+            try { File.Delete(tempFile + ".bak"); } catch { }
+        }
+    }
+
+    private static void VocabularyStoreHandlesCorruptJsonSafely()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"popglot-vocab-corrupt-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(tempFile, "{ this is not valid JSON }");
+            var store = new VocabularyStore(tempFile);
+            Equal(0, store.GetAll().Count);
+            // Corrupt file was preserved with timestamp suffix
+            var dir = Path.GetTempPath();
+            var prefix = Path.GetFileName(tempFile) + ".corrupt-";
+            var corruptFiles = Directory.EnumerateFiles(dir, prefix + "*").ToList();
+            True(corruptFiles.Count > 0, "Corrupt vocabulary JSON must be backed up as a quarantine file");
+            foreach (var cf in corruptFiles)
+            {
+                try { File.Delete(cf); } catch { }
+            }
+        }
+        finally
+        {
+            try { File.Delete(tempFile); } catch { }
+            try { File.Delete(tempFile + ".bak"); } catch { }
+        }
     }
 
     private static void HistoryStoreExportConforms()
@@ -646,20 +691,25 @@ internal static class Program
     /// <summary>
     /// The mock counts accepted connections only after the userspace accept
     /// loop runs, which can lag the kernel-completed handshake by seconds on a
-    /// loaded CI runner — poll instead of asserting the instant a request fails.
+    /// loaded CI runner — poll with a dynamic getter instead of asserting the instant a request fails.
     /// </summary>
-    private static async Task WaitUntilConnectionAsync(int count, int minimum, string message)
+    private static async Task WaitUntilConnectionAsync(Func<int> countGetter, int minimum, string message)
     {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (Volatile.Read(ref count) < minimum && DateTime.UtcNow < deadline)
+        while (countGetter() < minimum && DateTime.UtcNow < deadline)
         {
-            await Task.Delay(100);
+            await Task.Delay(50);
         }
-        True(Volatile.Read(ref count) >= minimum, message);
+        True(countGetter() >= minimum, message);
     }
 
     private static async Task OfflineModeSendsNothing()
     {
+        ProfileManager.ResetForTests();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-offline-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        ProfileManager.ConfigPathOverride = Path.Combine(dir, "product-config.json");
+
         CoreBridge.Initialize();
         var original = CoreBridge.GetSettings();
 
@@ -689,6 +739,26 @@ internal static class Program
         var coordinator = new TranslationCoordinator();
         try
         {
+            var loopbackProfile = new ProviderProfile
+            {
+                Id = "text-local",
+                Name = "Local text",
+                ProviderType = ProviderType.OpenAiCompatible,
+                ApiBaseUrl = $"http://127.0.0.1:{port}/v1",
+                TextEndpoint = "/chat/completions",
+                TextModel = "mock-model",
+                VisionModel = string.Empty,
+                SupportsText = true,
+                SupportsVision = false,
+                IsLocal = true,
+                CredentialTarget = "PopGlot/provider/text-local",
+            };
+            ProfileManager.Save(new CoreProductConfig
+            {
+                ActiveProfileId = loopbackProfile.Id,
+                Profiles = [loopbackProfile],
+            });
+
             CoreBridge.SaveSettings(original with
             {
                 ApiBaseUrl = $"http://127.0.0.1:{port}/v1",
@@ -703,7 +773,7 @@ internal static class Program
                 "hello offline", "en", "zh-CN", TranslationInputSource.Manual, CancellationToken.None);
             Equal(TranslationSessionStage.Failed, offline.Stage); // mock closes without a valid body
             Equal(false, offline.OutboundOccurred);
-            await WaitUntilConnectionAsync(connectionCount, 1, "safe mode must still reach loopback");
+            await WaitUntilConnectionAsync(() => Volatile.Read(ref connectionCount), 1, "safe mode must still reach loopback");
 
             // Network Off follows the same locality contract. TextModel must be
             // restated: `original` may carry an empty model on a fresh machine,
@@ -722,7 +792,7 @@ internal static class Program
                 string.Equals(networkOff.PipelineLabel, "本地模型", StringComparison.Ordinal),
                 $"network off must route to the local provider, got label " +
                 $"<{networkOff.PipelineLabel}> error <{networkOff.Error?.Message}>");
-            await WaitUntilConnectionAsync(connectionCount, 2, "network off must still reach loopback");
+            await WaitUntilConnectionAsync(() => Volatile.Read(ref connectionCount), 2, "network off must still reach loopback");
 
             // Sanity: normal online mode reaches the same local endpoint too.
             CoreBridge.SaveSettings(original with
@@ -735,10 +805,21 @@ internal static class Program
             var permitted = await coordinator.TranslateTextAsync(
                 "hello permitted", "en", "zh-CN", TranslationInputSource.Manual, CancellationToken.None);
             Equal(TranslationSessionStage.Failed, permitted.Stage); // the mock's empty reply parses as an error
-            await WaitUntilConnectionAsync(connectionCount, 3, "sanity: permitted traffic must reach the mock");
+            await WaitUntilConnectionAsync(() => Volatile.Read(ref connectionCount), 3, "sanity: permitted traffic must reach the mock");
         }
         finally
         {
+            ProfileManager.ResetForTests();
+            if (Directory.Exists(dir))
+            {
+                try
+                {
+                    Directory.Delete(dir, recursive: true);
+                }
+                catch
+                {
+                }
+            }
             CoreBridge.SaveSettings(original);
             listener.Stop();
             await acceptLoop;
@@ -1163,6 +1244,80 @@ internal static class Program
             Equal(6, System.Text.Json.JsonSerializer.Deserialize<CoreProductConfig>(
                 File.ReadAllText(path))?.SchemaVersion ?? -1,
                 "the migrated schema is persisted");
+
+            True(File.Exists(path + ".bak"), ".bak file was created during migration save");
+            var bakConfig = System.Text.Json.JsonSerializer.Deserialize<CoreProductConfig>(File.ReadAllText(path + ".bak"));
+            Equal(4, bakConfig?.SchemaVersion ?? -1, ".bak file must be the original pre-migration v4 file");
+            Equal(3, bakConfig?.Profiles.Count ?? -1, ".bak file must contain the original 3 profiles before migration");
+        }
+        finally
+        {
+            ProfileManager.ResetForTests();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    private static void ProfileManagerConcurrentSavesDoNotClash()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-concurrency-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "product-config.json");
+
+        ProfileManager.ResetForTests();
+        ProfileManager.ConfigPathOverride = path;
+        try
+        {
+            var tasks = Enumerable.Range(0, 10).Select(i => Task.Run(() =>
+            {
+                var config = new CoreProductConfig
+                {
+                    ActiveProfileId = $"profile-{i}",
+                    Profiles = [new ProviderProfile { Id = $"profile-{i}", Name = $"Name-{i}" }]
+                };
+                ProfileManager.Save(config);
+            })).ToArray();
+
+            Task.WaitAll(tasks);
+
+            var loaded = ProfileManager.Load();
+            Equal(1, loaded.Profiles.Count, "concurrent saves completed cleanly without corruption");
+            True(File.Exists(path), "config file exists on disk");
+            var tmpFiles = Directory.GetFiles(dir, "*.tmp");
+            Equal(0, tmpFiles.Length, "no leftover tmp files from concurrent saves");
+        }
+        finally
+        {
+            ProfileManager.ResetForTests();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    private static void UnsavedLoadMutationDoesNotPolluteCache()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-clone-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "product-config.json");
+
+        ProfileManager.ResetForTests();
+        ProfileManager.ConfigPathOverride = path;
+        try
+        {
+            var initial = new CoreProductConfig
+            {
+                ActiveProfileId = "original",
+                Profiles = [new ProviderProfile { Id = "original", Name = "Original Service" }]
+            };
+            ProfileManager.Save(initial);
+
+            var loaded1 = ProfileManager.Load();
+            loaded1.ActiveProfileId = "mutated-id";
+            loaded1.Profiles.Add(new ProviderProfile { Id = "mutated-id", Name = "Mutated Service" });
+            loaded1.Profiles[0].Name = "Polluted Name";
+
+            var loaded2 = ProfileManager.Load();
+            Equal("original", loaded2.ActiveProfileId, "un-saved mutation must not affect subsequent Load active id");
+            Equal(1, loaded2.Profiles.Count, "un-saved mutation must not affect subsequent Load profiles count");
+            Equal("Original Service", loaded2.Profiles[0].Name, "un-saved mutation must not affect cached profile properties");
         }
         finally
         {
@@ -1436,6 +1591,85 @@ internal static class Program
         True(gemini.Models[0].VisionInput == CapabilityState.Unknown,
             "supportedGenerationMethods says nothing about image input");
         await Task.CompletedTask;
+    }
+
+    private static async Task ModelCatalogFiltersSensitiveHeaders()
+    {
+        var extraHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Authorization"] = "Bearer malicious-auth",
+            ["Proxy-Authorization"] = "Basic proxy-token",
+            ["Cookie"] = "session=12345",
+            ["Set-Cookie"] = "tracker=67890",
+            ["x-api-key"] = "leak-claude-key",
+            ["api-key"] = "leak-azure-key",
+            ["x-goog-api-key"] = "leak-gemini-key",
+            ["X-Custom-Trace"] = "safe-trace-id",
+            ["X-Client-Version"] = "1.0.0",
+        };
+
+        var openAiDraft = CoreBridge.GetSettings() with
+        {
+            ProviderType = ProviderType.OpenAiCompatible,
+            ApiBaseUrl = "https://relay.example/v1",
+            NetworkEnabled = true,
+            SafeDevMode = false,
+            ExtraHeaders = extraHeaders,
+        };
+        var openAiHandler = new RecordingHttpHandler("""{"data":[{"id":"gpt-4o"}]}""");
+        await ModelCatalogService.FetchAsync(openAiDraft, "legit-openai-key", testHandler: openAiHandler);
+
+        Equal("Bearer legit-openai-key", openAiHandler.Headers["Authorization"], "OpenAI adapter must use formal auth header");
+        True(!openAiHandler.Headers.ContainsKey("Proxy-Authorization"), "Proxy-Authorization must be filtered");
+        True(!openAiHandler.Headers.ContainsKey("Cookie"), "Cookie must be filtered");
+        True(!openAiHandler.Headers.ContainsKey("Set-Cookie"), "Set-Cookie must be filtered");
+        True(!openAiHandler.Headers.ContainsKey("x-api-key"), "x-api-key must be filtered");
+        True(!openAiHandler.Headers.ContainsKey("api-key"), "api-key must be filtered");
+        True(!openAiHandler.Headers.ContainsKey("x-goog-api-key"), "x-goog-api-key must be filtered");
+        Equal("safe-trace-id", openAiHandler.Headers["X-Custom-Trace"], "Non-sensitive extra header must be preserved");
+        Equal("1.0.0", openAiHandler.Headers["X-Client-Version"], "Non-sensitive extra header must be preserved");
+
+        var geminiDraft = CoreBridge.GetSettings() with
+        {
+            ProviderType = ProviderType.GeminiGenerateContent,
+            ApiBaseUrl = "https://generativelanguage.googleapis.com",
+            NetworkEnabled = true,
+            SafeDevMode = false,
+            ExtraHeaders = extraHeaders,
+        };
+        var geminiHandler = new RecordingHttpHandler("""{"models":[{"name":"models/gemini-flash","supportedGenerationMethods":["generateContent"]}]}""");
+        await ModelCatalogService.FetchAsync(geminiDraft, "legit-gemini-key", testHandler: geminiHandler);
+
+        Equal("legit-gemini-key", geminiHandler.Headers["x-goog-api-key"], "Gemini adapter must use formal x-goog-api-key");
+        True(!geminiHandler.Headers.ContainsKey("Authorization"), "Authorization must be filtered");
+        True(!geminiHandler.Headers.ContainsKey("Proxy-Authorization"), "Proxy-Authorization must be filtered");
+        True(!geminiHandler.Headers.ContainsKey("Cookie"), "Cookie must be filtered");
+        True(!geminiHandler.Headers.ContainsKey("Set-Cookie"), "Set-Cookie must be filtered");
+        True(!geminiHandler.Headers.ContainsKey("x-api-key"), "x-api-key must be filtered");
+        True(!geminiHandler.Headers.ContainsKey("api-key"), "api-key must be filtered");
+        Equal("safe-trace-id", geminiHandler.Headers["X-Custom-Trace"], "Non-sensitive extra header must be preserved");
+
+        var anthropicDraft = CoreBridge.GetSettings() with
+        {
+            ProviderType = ProviderType.AnthropicMessages,
+            ApiBaseUrl = "https://api.anthropic.com",
+            AnthropicVersion = "2023-06-01",
+            NetworkEnabled = true,
+            SafeDevMode = false,
+            ExtraHeaders = extraHeaders,
+        };
+        var anthropicHandler = new RecordingHttpHandler("""{"data":[{"id":"claude-3-5-sonnet-20241022"}]}""");
+        await ModelCatalogService.FetchAsync(anthropicDraft, "legit-claude-key", testHandler: anthropicHandler);
+
+        Equal("legit-claude-key", anthropicHandler.Headers["x-api-key"], "Anthropic adapter must use formal x-api-key");
+        Equal("2023-06-01", anthropicHandler.Headers["anthropic-version"], "Anthropic adapter must send anthropic-version");
+        True(!anthropicHandler.Headers.ContainsKey("Authorization"), "Authorization must be filtered");
+        True(!anthropicHandler.Headers.ContainsKey("Proxy-Authorization"), "Proxy-Authorization must be filtered");
+        True(!anthropicHandler.Headers.ContainsKey("Cookie"), "Cookie must be filtered");
+        True(!anthropicHandler.Headers.ContainsKey("Set-Cookie"), "Set-Cookie must be filtered");
+        True(!anthropicHandler.Headers.ContainsKey("api-key"), "api-key must be filtered");
+        True(!anthropicHandler.Headers.ContainsKey("x-goog-api-key"), "x-goog-api-key must be filtered");
+        Equal("safe-trace-id", anthropicHandler.Headers["X-Custom-Trace"], "Non-sensitive extra header must be preserved");
     }
 
     private sealed class FakeHttpHandler(string payload) : HttpMessageHandler

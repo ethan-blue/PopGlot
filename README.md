@@ -2,9 +2,51 @@
 
 PopGlot 是一个 Windows-first 的轻量 AI 翻译桌面助手。首要场景是程序员阅读英文报错、代码变量、命令、路径和技术文档；底层同时为普通屏幕翻译和未来 macOS/Linux Shell 保留清晰边界。
 
-当前版本 **0.0.1**。版本号从这一版起算，按 `docs/VERSIONING.md` 的规则只做增量递增（0.0.2、0.0.3…，大功能批次进 0.1.0）；此前误打的 `v0.3.0` tag 已撤回作废。逐版本变更见 [CHANGELOG.md](CHANGELOG.md)。
+
+
+当前版本 **0.0.2**。版本号从 0.0.1 起算，按 `docs/VERSIONING.md` 的规则只做增量递增（0.0.2、0.0.3…，大功能批次进 0.1.0）；此前误打的 `v0.3.0` tag 已撤回作废。逐版本变更见 [CHANGELOG.md](CHANGELOG.md)。
+
+
 
 当前仓库已经包含可用的 Windows 核心交互：选中文字后按快捷键即可安全读取选区、恢复剪贴板并翻译；截图框选会捕获内存 PNG，交由本地 OCR 或（在获得明确授权后）视觉 Provider 处理。划词、截图和手动输入共享同一个结果浮窗、取消、错误、复制与本地历史模型。开箱即用：未配置密钥时走内置免费引擎；「安全离线模式」可一键切断全部外发请求。
+
+
+
+## 下载与运行要求
+
+
+
+### 系统要求
+
+
+
+- **操作系统**：Windows 10 (版本 19041+) 或 Windows 11 x64
+
+- **运行环境**：[.NET 10 Desktop Runtime (x64)](https://dotnet.microsoft.com/download/dotnet/10.0)（便携版基于框架依赖构建，请确保已安装 x64 桌面运行时）
+
+
+
+### 产物校验（SHA256）
+
+
+
+从 GitHub Releases 下载 `PopGlot-v0.0.2-win-x64.zip` 与对应 `PopGlot-v0.0.2-win-x64.zip.sha256` 后，可在 PowerShell 中运行以下命令校验完整性：
+
+
+
+```powershell
+
+# 计算下载包 SHA256 哈希
+
+(Get-FileHash -Path .\PopGlot-v0.0.2-win-x64.zip -Algorithm SHA256).Hash.ToLower()
+
+
+
+# 对比 sha256 文件内容
+
+Get-Content .\PopGlot-v0.0.2-win-x64.zip.sha256
+
+```
 
 ## 当前能力
 
@@ -76,7 +118,7 @@ WPF 项目构建时会自动构建 `popglot-ffi` 并将 `popglot_ffi.dll` 复制
 
 ## 配置与隐私
 
-非秘密设置位于 `%LOCALAPPDATA%\PopGlot`（服务配置在 `product-config.json`，schema v5）。API Key 使用 Windows Credential Manager，且**每个服务有独立凭据项**（`PopGlot/provider/<id>`）；旧的通用凭据项 `PopGlot/OpenAICompatibleApiKey` 为兼容初始版本保留，代表"当前活动 Provider 的 Key"。
+非秘密设置位于 `%LOCALAPPDATA%\PopGlot`（服务配置在 `product-config.json`，schema v6，旧版本 v5 自动无缝迁移）。API Key 使用 Windows Credential Manager，且**每个服务有独立凭据项**（`PopGlot/provider/<id>`）；旧的通用凭据项 `PopGlot/OpenAICompatibleApiKey` 为兼容初始版本保留，代表"当前活动 Provider 的 Key"。
 
 - `LocalOcr` 模式的产品契约是永不上传截图。
 - `Auto` 只有在用户明确允许、视觉模型已配置且路由认为必要时才能上传截图。

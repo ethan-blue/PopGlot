@@ -496,32 +496,38 @@ pub unsafe extern "C" fn popglot_translate_vision_v3(
 /// `request_id` must be a valid null-terminated UTF-8 string pointer or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn popglot_cancel_request(request_id: *const c_char) -> i32 {
-    let Ok(id) = (unsafe { read_utf8(request_id) }) else {
-        return 0;
-    };
-    let requests = ACTIVE_REQUESTS.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(mut map) = requests.lock()
-        && let Some(token) = map.remove(id)
-    {
-        token.cancel();
-        return 1;
-    }
-    0
+    catch_unwind(AssertUnwindSafe(|| {
+        let Ok(id) = (unsafe { read_utf8(request_id) }) else {
+            return 0;
+        };
+        let requests = ACTIVE_REQUESTS.get_or_init(|| Mutex::new(HashMap::new()));
+        if let Ok(mut map) = requests.lock()
+            && let Some(token) = map.remove(id)
+        {
+            token.cancel();
+            return 1;
+        }
+        0
+    }))
+    .unwrap_or(0)
 }
 
 /// Cancels all active requests in the process.
 #[unsafe(no_mangle)]
 pub extern "C" fn popglot_cancel_active_request() -> i32 {
-    let requests = ACTIVE_REQUESTS.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(mut map) = requests.lock() {
-        let mut cancelled_any = false;
-        for (_, token) in map.drain() {
-            token.cancel();
-            cancelled_any = true;
+    catch_unwind(AssertUnwindSafe(|| {
+        let requests = ACTIVE_REQUESTS.get_or_init(|| Mutex::new(HashMap::new()));
+        if let Ok(mut map) = requests.lock() {
+            let mut cancelled_any = false;
+            for (_, token) in map.drain() {
+                token.cancel();
+                cancelled_any = true;
+            }
+            return i32::from(cancelled_any);
         }
-        return i32::from(cancelled_any);
-    }
-    0
+        0
+    }))
+    .unwrap_or(0)
 }
 
 /// Releases strings returned by this library.
@@ -532,7 +538,9 @@ pub extern "C" fn popglot_cancel_active_request() -> i32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn popglot_free_string(value: *mut c_char) {
     if !value.is_null() {
-        drop(unsafe { CString::from_raw(value) });
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            drop(unsafe { CString::from_raw(value) });
+        }));
     }
 }
 
@@ -654,6 +662,11 @@ mod tests {
         // Unknown ids cancel nothing.
         let ghost = CString::new("test-req-ghost").unwrap();
         assert_eq!(unsafe { popglot_cancel_request(ghost.as_ptr()) }, 0);
+
+        // Null pointer cancels nothing and does not panic.
+        assert_eq!(unsafe { popglot_cancel_request(ptr::null()) }, 0);
+        // Null pointer free does not panic.
+        unsafe { popglot_free_string(ptr::null_mut()) };
 
         // The global cancel clears whatever remains.
         let ticket = begin_request(None).expect("begin anonymous request");

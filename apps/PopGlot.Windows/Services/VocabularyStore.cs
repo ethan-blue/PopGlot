@@ -21,18 +21,22 @@ public sealed record VocabularyWord(
 /// </summary>
 internal sealed class VocabularyStore : IVocabularyRepository
 {
-    private static readonly string StoragePath = Path.Combine(
+    private static readonly string DefaultStoragePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "PopGlot",
         "vocabulary.json");
 
+    private readonly string _storagePath;
     private readonly Lock _gate = new();
     private readonly List<VocabularyWord> _words = [];
 
-    public VocabularyStore()
+    public VocabularyStore(string? customPath = null)
     {
+        _storagePath = customPath ?? DefaultStoragePath;
         Load();
     }
+
+    internal string StoragePath => _storagePath;
 
     public IReadOnlyList<VocabularyWord> GetAll()
     {
@@ -183,8 +187,8 @@ internal sealed class VocabularyStore : IVocabularyRepository
     {
         try
         {
-            if (!File.Exists(StoragePath)) return;
-            var json = File.ReadAllText(StoragePath, Encoding.UTF8);
+            if (!File.Exists(_storagePath)) return;
+            var json = File.ReadAllText(_storagePath, Encoding.UTF8);
             var items = JsonSerializer.Deserialize<List<VocabularyWord>>(json);
             if (items is not null)
             {
@@ -195,21 +199,57 @@ internal sealed class VocabularyStore : IVocabularyRepository
                 }
             }
         }
-        catch { }
+        catch (Exception)
+        {
+            // Corrupt file preservation: quarantine bad file so user data is not lost.
+            try
+            {
+                if (File.Exists(_storagePath))
+                {
+                    var corruptPath = $"{_storagePath}.corrupt-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}";
+                    File.Copy(_storagePath, corruptPath, overwrite: true);
+                }
+            }
+            catch
+            {
+            }
+        }
     }
 
     private void Save()
     {
+        List<VocabularyWord> snapshot;
+        lock (_gate)
+        {
+            snapshot = _words.ToList();
+        }
+
         try
         {
-            var dir = Path.GetDirectoryName(StoragePath);
+            var dir = Path.GetDirectoryName(_storagePath);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             {
                 Directory.CreateDirectory(dir);
             }
-            var json = JsonSerializer.Serialize(_words, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(StoragePath, json, Encoding.UTF8);
+            var json = JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = true });
+            var tempPath = Path.Combine(dir ?? ".", $"vocabulary.{Guid.NewGuid():N}.tmp");
+            var bakPath = _storagePath + ".bak";
+            var bytes = Encoding.UTF8.GetBytes(json);
+
+            using (var stream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                stream.Write(bytes);
+                stream.Flush(flushToDisk: true);
+            }
+
+            if (File.Exists(_storagePath))
+            {
+                File.Copy(_storagePath, bakPath, overwrite: true);
+            }
+            File.Move(tempPath, _storagePath, overwrite: true);
         }
-        catch { }
+        catch
+        {
+        }
     }
 }

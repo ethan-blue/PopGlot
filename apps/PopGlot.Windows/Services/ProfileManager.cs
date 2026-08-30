@@ -30,6 +30,8 @@ internal sealed class ProviderProfile
         IsLocal = source.IsLocal;
     }
 
+    public ProviderProfile Clone() => new(this);
+
     public string Id { get; set; } = "openai-default";
     public string Name { get; set; } = "OpenAI";
     public ProviderType ProviderType { get; set; } = ProviderType.OpenAiCompatible;
@@ -169,6 +171,20 @@ internal sealed record ResolvedRoute(
 
 internal sealed class CoreProductConfig
 {
+    public CoreProductConfig()
+    {
+    }
+
+    public CoreProductConfig(CoreProductConfig source)
+    {
+        SchemaVersion = source.SchemaVersion;
+        ActiveProfileId = source.ActiveProfileId;
+        VisionProfileId = source.VisionProfileId;
+        Profiles = source.Profiles.Select(p => new ProviderProfile(p)).ToList();
+    }
+
+    public CoreProductConfig Clone() => new(this);
+
     public int SchemaVersion { get; set; } = 6;
     public string ActiveProfileId { get; set; } = string.Empty;
     public string? VisionProfileId { get; set; }
@@ -261,6 +277,8 @@ internal static class ProviderCatalog
 
 internal static class ProfileManager
 {
+    private static readonly object Gate = new();
+
     private static readonly string ConfigPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "PopGlot",
@@ -272,8 +290,11 @@ internal static class ProfileManager
     /// <summary>Test seam: clears the process-wide cache between scenarios.</summary>
     internal static void ResetForTests()
     {
-        _cached = null;
-        ConfigPathOverride = null;
+        lock (Gate)
+        {
+            _cached = null;
+            ConfigPathOverride = null;
+        }
     }
 
     private static CoreProductConfig? _cached;
@@ -283,57 +304,72 @@ internal static class ProfileManager
 
     public static CoreProductConfig Load()
     {
-        if (_cached != null)
+        lock (Gate)
         {
-            return _cached;
-        }
-        var path = EffectivePath;
-        try
-        {
-            if (File.Exists(path))
+            if (_cached != null)
             {
-                var json = File.ReadAllText(path);
-                var config = JsonSerializer.Deserialize<CoreProductConfig>(json);
-                if (config is not null)
+                return _cached.Clone();
+            }
+            var path = EffectivePath;
+            try
+            {
+                if (File.Exists(path))
                 {
-                    // Schema v4 and older seeded factory templates as if the
-                    // user had configured them; migrate them away once.
-                    if (config.SchemaVersion < 5)
+                    var json = File.ReadAllText(path);
+                    var config = JsonSerializer.Deserialize<CoreProductConfig>(json);
+                    if (config is not null)
                     {
-                        config = MigrateToV5(config, path);
+                        var originalVersion = config.SchemaVersion;
+                        // Schema v4 and older seeded factory templates as if the
+                        // user had configured them; migrate them away once.
+                        if (config.SchemaVersion < 5)
+                        {
+                            config = MigrateToV5InMemory(config);
+                        }
+                        if (config.SchemaVersion < 6)
+                        {
+                            config = MigrateToV6InMemory(config);
+                        }
+                        if (originalVersion < 6)
+                        {
+                            try
+                            {
+                                SaveLocked(config);
+                            }
+                            catch
+                            {
+                                // Disk write failed: original file remains untouched,
+                                // in-memory config can continue to be used.
+                            }
+                        }
+                        _cached = config.Clone();
                     }
-                    if (config.SchemaVersion < 6)
-                    {
-                        config = MigrateToV6(config);
-                    }
-                    _cached = config;
                 }
             }
-        }
-        catch
-        {
-            // fallback to defaults on corrupt/missing file
-        }
+            catch
+            {
+                // fallback to defaults on corrupt/missing file
+            }
 
-        // First run with profiles: adopt the live provider settings as the
-        // active profile so the service list reflects what actually runs
-        // instead of masking it with factory presets. Never runs for tests
-        // using the override path.
-        if (_cached is null && ConfigPathOverride is null)
-        {
-            _cached = SeedFromLiveSettings();
+            // First run with profiles: adopt the live provider settings as the
+            // active profile so the service list reflects what actually runs
+            // instead of masking it with factory presets. Never runs for tests
+            // using the override path.
+            if (_cached is null && ConfigPathOverride is null)
+            {
+                _cached = SeedFromLiveSettings();
+            }
+            _cached ??= new CoreProductConfig();
+            return _cached.Clone();
         }
-        _cached ??= new CoreProductConfig();
-        return _cached;
     }
 
     /// <summary>
-    /// Schema v4 → v5: factory templates that the user never touched stop
+    /// Schema v4 → v5 (in-memory only): factory templates that the user never touched stop
     /// posing as configured services. Anything the user customised — renamed,
     /// re-modelled, holding a key, or an adopted live setting — is preserved.
-    /// The pre-migration file is kept as .bak by the normal save path.
     /// </summary>
-    private static CoreProductConfig MigrateToV5(CoreProductConfig config, string path)
+    private static CoreProductConfig MigrateToV5InMemory(CoreProductConfig config)
     {
         var kept = new List<ProviderProfile>();
         foreach (var profile in config.Profiles)
@@ -357,7 +393,7 @@ internal static class ProfileManager
             }
         }
 
-        var migrated = new CoreProductConfig
+        return new CoreProductConfig
         {
             SchemaVersion = 5,
             Profiles = kept,
@@ -368,28 +404,16 @@ internal static class ProfileManager
                 ? config.VisionProfileId
                 : null,
         };
-        try
-        {
-            // Writes the migrated schema and rotates the old file into .bak.
-            _cached = null;
-            Save(migrated);
-        }
-        catch (Exception)
-        {
-            // Disk write failed: still return the migrated view so the UI
-            // reflects reality; the original file stays untouched on disk.
-        }
-        return migrated;
     }
 
     /// <summary>
-    /// Schema v5 → v6: model fields are the single source of truth for route
+    /// Schema v5 → v6 (in-memory only): model fields are the single source of truth for route
     /// roles. Older builds could save a VisionModel while SupportsVision was
     /// false, making a visibly configured image model unusable. Preserve every
     /// model and credential, derive both roles, and refresh locality from URL.
     /// A single identical model in both fields is intentionally dual-purpose.
     /// </summary>
-    private static CoreProductConfig MigrateToV6(CoreProductConfig config)
+    private static CoreProductConfig MigrateToV6InMemory(CoreProductConfig config)
     {
         foreach (var profile in config.Profiles)
         {
@@ -408,16 +432,6 @@ internal static class ProfileManager
             !config.Profiles.Any(profile => profile.Id == visionId))
         {
             config.VisionProfileId = null;
-        }
-        try
-        {
-            _cached = null;
-            Save(config);
-        }
-        catch (Exception)
-        {
-            // Keep the migrated in-memory view; the existing file remains and
-            // will be retried on a later save.
         }
         return config;
     }
@@ -475,31 +489,93 @@ internal static class ProfileManager
 
     public static void Save(CoreProductConfig config)
     {
-        var dir = Path.GetDirectoryName(EffectivePath);
+        lock (Gate)
+        {
+            SaveLocked(config);
+        }
+    }
+
+    private static void SaveLocked(CoreProductConfig config)
+    {
+        var targetPath = EffectivePath;
+        var dir = Path.GetDirectoryName(targetPath);
         if (!string.IsNullOrEmpty(dir))
         {
             Directory.CreateDirectory(dir);
         }
         var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
 
-        // Same durability contract as the core settings: temp file, flush,
+        // Same durability contract as the core settings: random temp file, flush,
         // atomic replace, previous copy kept as .bak. The in-memory cache is
         // updated only AFTER the file replace succeeds, so a failed save can
         // never leave memory and disk disagreeing.
-        var tempPath = EffectivePath + ".tmp";
-        var bakPath = EffectivePath + ".bak";
+        var tempPath = Path.Combine(
+            string.IsNullOrEmpty(dir) ? "." : dir,
+            $"{Path.GetFileName(targetPath)}.{Guid.NewGuid():N}.tmp");
+        var bakPath = targetPath + ".bak";
         var bytes = System.Text.Encoding.UTF8.GetBytes(json);
-        using (var stream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
+        try
         {
-            stream.Write(bytes);
-            stream.Flush(true);
+            using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                stream.Write(bytes);
+                stream.Flush(true);
+            }
+            if (File.Exists(targetPath))
+            {
+                File.Copy(targetPath, bakPath, overwrite: true);
+            }
+            File.Move(tempPath, targetPath, overwrite: true);
+            _cached = config.Clone();
         }
-        if (File.Exists(EffectivePath))
+        finally
         {
-            File.Copy(EffectivePath, bakPath, overwrite: true);
+            if (File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch
+                {
+                    // Best effort cleanup of temp file
+                }
+            }
         }
-        File.Move(tempPath, EffectivePath, overwrite: true);
-        _cached = config;
+    }
+
+    /// <summary>
+    /// Deletes a profile from the configuration and updates active/vision defaults.
+    /// </summary>
+    public static bool TryDeleteProfile(
+        CoreProductConfig config,
+        string profileId,
+        out ProviderProfile? deletedProfile,
+        out bool wasTextDefault,
+        out bool wasVisionDefault)
+    {
+        deletedProfile = config.Profiles.FirstOrDefault(p => p.Id == profileId);
+        if (deletedProfile is null)
+        {
+            wasTextDefault = false;
+            wasVisionDefault = false;
+            return false;
+        }
+
+        wasTextDefault = profileId == config.ActiveProfileId;
+        wasVisionDefault = profileId == config.VisionProfileId;
+        var nextDefault = config.Profiles.FirstOrDefault(p => p.Id != profileId && p.SupportsText);
+
+        config.Profiles.RemoveAll(p => p.Id == profileId);
+        if (wasTextDefault)
+        {
+            config.ActiveProfileId = nextDefault?.Id ?? string.Empty;
+        }
+        if (wasVisionDefault)
+        {
+            config.VisionProfileId = null;
+        }
+        return true;
     }
 
     /// <summary>

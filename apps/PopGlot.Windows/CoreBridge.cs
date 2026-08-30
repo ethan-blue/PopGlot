@@ -65,9 +65,9 @@ internal static partial class CoreBridge
     {
         ArgumentNullException.ThrowIfNull(settings);
         var json = JsonSerializer.Serialize(settings, JsonOptions);
-        EnsureSuccess<string>(Invoke(() => NativeMethods.SaveSettings(json)));
         lock (SettingsGate)
         {
+            EnsureSuccess<string>(Invoke(() => NativeMethods.SaveSettings(json)));
             _cachedSettings = settings;
         }
     }

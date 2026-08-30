@@ -1,7 +1,7 @@
-# PopGlot UI 重构 — 开发指引
+# PopGlot UI 重构 — 开发指引（历史归档 · 已完成）
 
-> 本文件供 AI 代理和开发者快速了解进行中的 UI 重构任务。
-> 完整计划见 `docs/UI-REFACTOR-PLAN.md`。
+> **归档状态**：✅ UI 重构与架构解耦已全部完成（截至 0.0.2 版本），全量 68 项 Windows 逻辑测试通过。
+> 完整历史计划见 `docs/UI-REFACTOR-PLAN.md`。
 
 ## 快速上下文
 
@@ -27,7 +27,7 @@ PopGlot/
 │       ├── Services/               # 服务层
 │       └── Themes/Controls.xaml    # 全局控件样式
 ├── tests/                         # 逻辑测试
-├── scripts/verify.ps1             # 验证脚本（39 tests）
+├── scripts/verify.ps1             # 验证脚本（65 tests）
 └── docs/UI-REFACTOR-PLAN.md       # 详细重构计划
 ```
 
@@ -56,7 +56,7 @@ PopGlot/
    ```
    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1
    ```
-5. 预期结果：39 passed, 0 failed
+5. 预期结果：68 passed, 0 failed
 
 ## 关键约束
 

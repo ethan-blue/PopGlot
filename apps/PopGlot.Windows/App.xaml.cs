@@ -71,6 +71,7 @@ public partial class App : Application
             _shellSettings = ShellSettingsStore.Load();
             ThemeService.Apply(_shellSettings.Theme);
             CoreBridge.Initialize();
+            TtsService.CleanupStaleTempFiles();
             AnnounceStartupNotice();
             // Free-engine first-use authorization lives in
             // 「设置 → 隐私与数据」— no runtime popup interrupts translation.

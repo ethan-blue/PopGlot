@@ -1560,24 +1560,26 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         try
         {
             var config = ProfileManager.Load();
-            var isTextDefault = profile.Id == config.ActiveProfileId;
-            var isVisionDefault = profile.Id == config.VisionProfileId;
-            var nextDefault = config.Profiles.FirstOrDefault(p => p.Id != profile.Id);
-
-            config.Profiles.Remove(profile);
-            CredentialStore.DeleteApiKey(profile.CredentialTarget);
-
-            if (isTextDefault)
+            if (!ProfileManager.TryDeleteProfile(config, profile.Id, out _, out var isTextDefault, out _))
             {
-                config.ActiveProfileId = nextDefault?.Id ?? string.Empty;
+                return;
             }
-            if (isVisionDefault)
-            {
-                config.VisionProfileId = null;
-            }
+
+            // 1. Persist config to disk first
             ProfileManager.Save(config);
 
-            if (isTextDefault && config.ActiveProfileId is { Length: > 0 })
+            // 2. Delete credential after config is persisted
+            try
+            {
+                CredentialStore.DeleteApiKey(profile.CredentialTarget);
+            }
+            catch
+            {
+                // Vault delete failure shouldn't crash or corrupt profile state
+            }
+
+            // 3. Clear or update running core configuration when the default service changed or emptied
+            if (isTextDefault)
             {
                 ApplyToCore(config);
             }

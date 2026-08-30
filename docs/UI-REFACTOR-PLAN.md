@@ -1,8 +1,9 @@
-# PopGlot UI 重构计划
+# PopGlot UI 重构计划（历史归档 · 已完成）
 
-> **创建时间**: 2026-08-29  
-> **状态**: 🟡 进行中  
-> **目标**: 对标 Pot / Bob / DeepL 等优秀翻译工具，重构 UI 架构与视觉设计
+> **创建时间**: 2026-08-29
+> **归档状态**: ✅ 已完成并归档（截至 0.0.2 版本）
+> **验证基线**: 68 项 Windows 逻辑测试全部通过
+> **目标**: 对标 Pot / Bob / DeepL 等优秀翻译工具，重构 UI 架构与视觉设计（已全部落地）
 
 ---
 
@@ -195,7 +196,7 @@ public ServicesSection(ProfileManager profiles, CoreBridge bridge) { ... }
 
 **子任务**:
 1. **图标去重**: 把 MainWindow.xaml.Resources 中的图标几何体 (IconTranslate, IconKeyboard, IconProvider, IconCapture, IconHistory, IconLibrary) 迁移到 Controls.xaml，删除重复定义
-2. **硬编码颜色**: 
+2. **硬编码颜色**:
    - `CaptureOverlayWindow.xaml`: `#8C0A0D14`, `#66FFFFFF`, `#F2151A23` → 使用 theme token
    - `FloatingTriggerWindow.xaml`: 硬编码像素偏移 → 命名常量
    - `QuickSearchWindow.xaml`: `Width="680" MaxHeight="600"` → 考虑 DPI 适配

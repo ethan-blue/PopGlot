@@ -21,12 +21,14 @@ public partial class SettingsWindow : Window
     private bool _loading = true;
     private bool _isDirty;
     private string _settingsBaseline = string.Empty;
+    private readonly EventHandler _themeChangedHandler;
 
     internal SettingsWindow(ShellSettings shellSettings, HistoryStore history, VocabularyStore? vocabulary = null)
     {
         _shellSettings = shellSettings;
         _history = history;
         _vocabulary = vocabulary;
+        _themeChangedHandler = (_, _) => ThemeService.ApplyWindowChrome(this);
 
         InitializeComponent();
 
@@ -54,7 +56,7 @@ public partial class SettingsWindow : Window
         _loading = false;
 
         ThemeService.ApplyWindowChrome(this);
-        ThemeService.ThemeChanged += (_, _) => ThemeService.ApplyWindowChrome(this);
+        ThemeService.ThemeChanged += _themeChangedHandler;
         StateChanged += (_, _) => UpdateMaximizeButtonGlyph();
 
         foreach (var recorder in ShortcutRecorders())
@@ -460,5 +462,11 @@ public partial class SettingsWindow : Window
         }
         SetHotkeysSuspended?.Invoke(false);
         base.OnClosing(e);
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        ThemeService.ThemeChanged -= _themeChangedHandler;
+        base.OnClosed(e);
     }
 }

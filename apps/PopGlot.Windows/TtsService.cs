@@ -16,6 +16,15 @@ internal static class TtsService
     private static string? _currentFile;
     private static int _generation;
 
+    /// <summary>Test seam: overrides settings lookup for online TTS gating.</summary>
+    internal static Func<ProviderSettings>? SettingsResolver { get; set; }
+
+    /// <summary>Test seam: overrides Edge neural TTS synthesis.</summary>
+    internal static Func<string, Task<string>>? EdgeSynthesizer { get; set; }
+
+    /// <summary>Test seam: overrides local offline synthesis.</summary>
+    internal static Func<string, Task<string>>? LocalSynthesizer { get; set; }
+
     /// <summary>Raised when speech synthesis begins or ends.</summary>
     public static event EventHandler<bool>? SpeakingStateChanged;
 
@@ -51,15 +60,32 @@ internal static class TtsService
             string? path = null;
             try
             {
-                // First try ultra-natural Edge Neural TTS
-                try
+                var settings = SettingsResolver?.Invoke() ?? CoreBridge.GetSettings();
+                var networkAllowed = settings.NetworkEnabled && !settings.SafeDevMode;
+
+                if (networkAllowed)
                 {
-                    path = await EdgeTtsService.SynthesizeToMp3FileAsync(text);
+                    // First try ultra-natural Edge Neural TTS
+                    try
+                    {
+                        path = EdgeSynthesizer is not null
+                            ? await EdgeSynthesizer(text)
+                            : await EdgeTtsService.SynthesizeToMp3FileAsync(text);
+                    }
+                    catch
+                    {
+                        // Fall back to offline Windows Speech Synthesis
+                        path = LocalSynthesizer is not null
+                            ? await LocalSynthesizer(text)
+                            : await SynthesizeLocalToFileAsync(text);
+                    }
                 }
-                catch
+                else
                 {
-                    // Fall back to offline Windows Speech Synthesis
-                    path = await SynthesizeLocalToFileAsync(text);
+                    // Offline / SafeDevMode: strictly local synthesis, never touch Edge TTS
+                    path = LocalSynthesizer is not null
+                        ? await LocalSynthesizer(text)
+                        : await SynthesizeLocalToFileAsync(text);
                 }
 
                 if (path is not null)
@@ -182,7 +208,36 @@ internal static class TtsService
         return "en";
     }
 
-    private static void TryDelete(string? path)
+    /// <summary>
+    /// Cleans up any stale temporary TTS audio files from prior sessions.
+    /// </summary>
+    public static void CleanupStaleTempFiles(TimeSpan? olderThan = null)
+    {
+        try
+        {
+            var tempDir = Path.GetTempPath();
+            var threshold = DateTime.UtcNow - (olderThan ?? TimeSpan.FromMinutes(10));
+            foreach (var file in Directory.EnumerateFiles(tempDir, "popglot-tts-*.*"))
+            {
+                try
+                {
+                    var lastWrite = File.GetLastWriteTimeUtc(file);
+                    if (lastWrite < threshold)
+                    {
+                        File.Delete(file);
+                    }
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static void TryDelete(string? path, bool isRetry = false)
     {
         if (string.IsNullOrEmpty(path))
         {
@@ -192,7 +247,19 @@ internal static class TtsService
         {
             File.Delete(path);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (IOException)
+        {
+            if (!isRetry)
+            {
+                // File might be briefly locked by MediaPlayer; retry once after 500ms
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(500);
+                    TryDelete(path, isRetry: true);
+                });
+            }
+        }
+        catch (UnauthorizedAccessException)
         {
         }
     }

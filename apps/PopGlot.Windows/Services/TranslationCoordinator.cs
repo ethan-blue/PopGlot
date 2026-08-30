@@ -58,9 +58,16 @@ internal sealed class TranslationCoordinator
             onStageChanged?.Invoke(session.Stage);
 
             var settings = CoreBridge.GetSettings();
-            var apiKey = CredentialStore.LoadApiKey(ProfileManager.ResolveActiveCredentialTarget());
-            var isLocal = settings.TargetsLocalRuntime;
-            var hasConfiguredProvider = !string.IsNullOrWhiteSpace(apiKey) || isLocal;
+            var (textRoute, _) = ProfileManager.ResolveRoutes();
+            var textApiKey = textRoute is null
+                ? CredentialStore.LoadApiKey(ProfileManager.ResolveActiveCredentialTarget())
+                : CredentialStore.LoadApiKey(textRoute.CredentialTarget);
+            var textRuntimeSettings = textRoute?.Profile.ToProviderSettings(settings);
+            var isLocal = textRuntimeSettings?.TargetsLocalRuntime ?? settings.TargetsLocalRuntime;
+            var hasConfiguredProvider = (textRuntimeSettings is not null &&
+                (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))
+                || !string.IsNullOrWhiteSpace(textApiKey)
+                || isLocal;
 
             if (settings.SafeDevMode || !settings.NetworkEnabled)
             {
@@ -85,9 +92,24 @@ internal sealed class TranslationCoordinator
             if (hasConfiguredProvider)
             {
                 session.OutboundOccurred = !isLocal;
-                session.PipelineLabel = isLocal ? "本地模型" : DescribeProvider(settings.ProviderType);
-                response = await CoreBridge.TranslateTextAsync(
-                    apiKey, trimmed, sourceLang, targetLang, session.SessionId, cancellationToken);
+                session.PipelineLabel = isLocal ? "本地模型" : DescribeProvider(textRuntimeSettings?.ProviderType ?? settings.ProviderType);
+                if (textRuntimeSettings is not null &&
+                    (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))
+                {
+                    response = await CoreBridge.TranslateTextDraftAsync(
+                        textRuntimeSettings,
+                        textApiKey ?? string.Empty,
+                        trimmed,
+                        sourceLang,
+                        targetLang,
+                        session.SessionId,
+                        cancellationToken);
+                }
+                else
+                {
+                    response = await CoreBridge.TranslateTextAsync(
+                        textApiKey, trimmed, sourceLang, targetLang, session.SessionId, cancellationToken);
+                }
             }
             else
             {
