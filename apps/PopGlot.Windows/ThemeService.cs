@@ -147,7 +147,14 @@ internal static partial class ThemeService
     //   Input        editable controls
     // Accent (indigo) is the brand only — success/warning/danger are separate
     // hues, so "online/OK/default" never borrows the brand colour.
-    private static readonly (string Key, string Value)[] DarkTokens =
+    //
+    // Contrast budget (audited by tests/PopGlot.Windows.LogicTests via
+    // ThemeContrast): TextTertiary ≥ 4.5:1 on every surface it renders on
+    // (placeholders, captions), control edges (BorderStrong on inputs, the
+    // toggle track outline) ≥ 3:1, status hues ≥ 4.5:1 on their soft chips.
+    // Dimming is reserved for disabled states — never for plain "tertiary"
+    // text, so low-emphasis copy never turns into grey mush.
+    internal static readonly (string Key, string Value)[] DarkTokens =
     [
         ("CanvasBrush", "#0A0B0F"),
         ("SidebarBrush", "#0F1015"),
@@ -155,19 +162,19 @@ internal static partial class ThemeService
         ("SurfaceMutedBrush", "#111318"),
         ("SurfaceRaisedBrush", "#1B1E26"),
         ("SurfaceHoverBrush", "#21242E"),
-        ("SurfacePressedBrush", "#2A2E3A"),
+        ("SurfacePressedBrush", "#333B49"),
         ("InputBrush", "#0E1014"),
-        ("BorderSubtleBrush", "#242833"),
-        ("BorderStrongBrush", "#39404E"),
+        ("BorderSubtleBrush", "#2A303D"),
+        ("BorderStrongBrush", "#626C82"),
         ("AccentBrush", "#8A8FFF"),
         ("AccentHoverBrush", "#A3A7FF"),
         ("AccentPressedBrush", "#7376EE"),
         ("AccentTextBrush", "#0B0C21"),
         ("AccentSoftBrush", "#262850"),
-        ("AccentBorderBrush", "#474B85"),
+        ("AccentBorderBrush", "#6E74B8"),
         ("TextPrimaryBrush", "#EEF0F4"),
         ("TextSecondaryBrush", "#A3A9B4"),
-        ("TextTertiaryBrush", "#6E7582"),
+        ("TextTertiaryBrush", "#8A93A2"),
         ("TextDisabledBrush", "#525A66"),
         ("DangerBrush", "#FF6B7D"),
         ("DangerSoftBrush", "#401C25"),
@@ -178,7 +185,7 @@ internal static partial class ThemeService
         ("OverlayScrimBrush", "#C80A0B0F"),
     ];
 
-    private static readonly (string Key, string Value)[] LightTokens =
+    internal static readonly (string Key, string Value)[] LightTokens =
     [
         ("CanvasBrush", "#F6F7F9"),
         ("SidebarBrush", "#FCFCFD"),
@@ -186,25 +193,25 @@ internal static partial class ThemeService
         ("SurfaceMutedBrush", "#F4F5F7"),
         ("SurfaceRaisedBrush", "#FFFFFF"),
         ("SurfaceHoverBrush", "#EDEFF3"),
-        ("SurfacePressedBrush", "#E0E4EA"),
+        ("SurfacePressedBrush", "#D7DDE6"),
         ("InputBrush", "#FFFFFF"),
-        ("BorderSubtleBrush", "#E3E6EB"),
-        ("BorderStrongBrush", "#C9CFD8"),
+        ("BorderSubtleBrush", "#D5DAE1"),
+        ("BorderStrongBrush", "#8590A0"),
         ("AccentBrush", "#5457E5"),
         ("AccentHoverBrush", "#4548D6"),
         ("AccentPressedBrush", "#3A3CC4"),
         ("AccentTextBrush", "#FFFFFF"),
         ("AccentSoftBrush", "#EDEDFE"),
-        ("AccentBorderBrush", "#C7C8F6"),
+        ("AccentBorderBrush", "#7D82E8"),
         ("TextPrimaryBrush", "#15171C"),
         ("TextSecondaryBrush", "#4D545F"),
-        ("TextTertiaryBrush", "#7C8592"),
+        ("TextTertiaryBrush", "#656F7C"),
         ("TextDisabledBrush", "#A6ACB7"),
-        ("DangerBrush", "#D63A4F"),
+        ("DangerBrush", "#C93148"),
         ("DangerSoftBrush", "#FCEBEE"),
-        ("WarningBrush", "#A96400"),
+        ("WarningBrush", "#9C5B00"),
         ("WarningSoftBrush", "#FFF3DB"),
-        ("SuccessBrush", "#0F8A5F"),
+        ("SuccessBrush", "#0B7350"),
         ("SuccessSoftBrush", "#E3F6EF"),
         ("OverlayScrimBrush", "#A615171C"),
     ];

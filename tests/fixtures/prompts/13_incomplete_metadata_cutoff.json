@@ -1,0 +1,19 @@
+{
+  "id": "incomplete_metadata_cutoff",
+  "category": "bad_missing_metadata",
+  "description": "Stream terminates abruptly immediately after the delimiter without JSON payload",
+  "source_lang": "en",
+  "target_lang": "zh-CN",
+  "input_type": "text",
+  "source_text": "Processing batch jobs in background.",
+  "include_explanation": false,
+  "protect_tokens": false,
+  "delimiter": "PGMETA-cutoffnonce-555",
+  "synthetic_model_output": "在后台处理批处理作业。\nPGMETA-cutoffnonce-555\n",
+  "expected_body": "在后台处理批处理作业。",
+  "expected_metadata": null,
+  "expected_tokens": [],
+  "expected_dropped_tokens": [],
+  "expect_trailer_warning": true,
+  "semantic_evaluation_mode": "live_or_manual_required"
+}

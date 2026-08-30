@@ -3,6 +3,46 @@
 本文件从 **0.0.1** 开始维护。更早的开发过程没有正式版本号；
 曾被误打的 `v0.3.0` tag 已撤回（见 `docs/VERSIONING.md` 历史修正），编号不复用。
 
+## 0.1.0 - 2026-08-31
+
+本版本引入全新的低延迟流式输出架构（SSE + Text-first 协议 + 随机 Trailer 分隔符 + C# 流式缓冲协调器）、智能模型推荐偏好体系、离线与在线基准评测工具，并全面优化设置交互与主题对比度。
+
+### 新增
+
+- **流式传输与解析架构**：
+  - Core 层引入轻量高效的 SSE（Server-Sent Events）增量解析器（`SseDecoder`），支持增量切分、跨 chunk 边界 UTF-8 字节拼接与严格行/事件大小防御。
+  - 统一适配四大 Provider（OpenAI-compatible、OpenAI Responses、Anthropic Messages、Gemini GenerateContent）原生流式协议与事件解析。
+  - 设计 **Text-first + 随机 Trailer 分隔符** 协议：模型首批正文到达后立即增量显示，元数据（保留术语、解释、建议）随防冲突随机 Trailer 在流尾结构化解析，未收齐或格式异常时优雅降级保全正文。
+  - `popglot-ffi` 导出 `popglot_translate_text_stream_v1`、`popglot_translate_text_draft_stream_v1` 与 `popglot_translate_vision_draft_stream_v1` 流式 C ABI，支持基于回调的原生 delta 传输与非零返回值主动 abort。
+  - C# 侧实现 `TranslationStreamBuffer`（O(1) 线程安全短锁缓冲、无 UI 阻塞、防抖 pump、硬上限截断防御）与 `TranslationCoordinator`（40ms 增量抽取与状态管理，支持 Connecting / Streaming / Finalizing / Completed / Failed / Cancelled 完整生命周期）。
+  - 三大交互入口（TranslateSection、TranslationPanelWindow、QuickSearchWindow）实现 **Stream-Final 双层渲染**：首 delta 触发轻量纯文本增量渲染，终态平滑过渡至 Rich Markdown 渲染，字号与行高统一平滑不缩水。
+  - 引入 **UI Final Gate** 动作门禁：流式阶段及 partial/错误状态下严格禁用复制、自动复制、生词收藏、TTS 朗读与本地历史写入，仅在收到合法完整终态 Envelope 时执行。
+- **模型推荐与偏好体系**：
+  - `ModelRecommendationService` 新增 `Speed`（极速）、`Balanced`（均衡）、`Quality`（高质）偏好策略与 `ModelTier` 分级体系。
+  - 依据 Provider 目录事实、模型家族启发式规则（Heuristics）与本地实测基准进行综合推荐；恪守“未知模型不虚构能力（FallbackUnknown）”契约，健康状态不作为保存和使用的阻断门控。
+- **翻译基准评测子系统**：
+  - 新增离线基准测试工具 `stream_benchmark`（支持真实本地 loopback / 内存 mock、网络抖动模拟、UTF-8 切分边界压力测试、TTFT 与吞吐量测量）。
+  - 新增在线基准测试工具 `live_provider_bench`，具备严格的隐私与安全防护（默认离线 Dry-Run 退出 exit code 2，要求 `--live` 与 `--i-understand-cost` 双重显式确认，仅支持环境变量注入 API Key，输出内容严格脱敏）。
+- **主题与对比度加固**：
+  - 新增 `ThemeContrast` 工具类，对浅色与深色主题下的 `TextTertiary`、发丝边框与占位文本进行 WCAG 2.1 AA 级对比度审计与强化。
+
+### 变更
+
+- 主窗口侧栏底部新增同级「设置」入口，便于快速访问系统偏好。
+- 设置窗口默认直达「翻译引擎」核心服务配置。
+- 设置页面 Dirty 状态采用规范化 Snapshot vs Baseline 纯值比对，改回原值自动恢复 Clean，初始化与网络测试不置脏。
+
+### 修复
+
+- **设置保存状态与加载体验**：修复设置保存失败时卡在 Loading 状态的问题，保存失败后根据当前 Snapshot 准确恢复 Dirty/Clean 状态。
+- **输入框占位符渲染**：修复空输入框聚焦时占位符（Placeholder）意外消失的问题。
+- **截图流式与降级回退**：修复截图翻译在 OCR 后无法根据配置模型进行文本流式翻译的问题，以及视觉直译在零 delta 失败时的安全回退逻辑。
+- **测试套件扩充**：扩充 Windows 逻辑测试套件至 113 项全量测试，覆盖流式生命周期、Fencing 隔离、主题对比度与推荐服务。
+
+### 迁移与风险
+
+- 本版本配置 Schema 保持为 v6（`product-config.json` v6，`provider-settings.json` v3），无需执行任何配置迁移，新旧版本配置完全无缝兼容。
+
 ## 0.0.2 - 2026-08-30
 
 本版本聚焦稳定性强化、离线与隐私门禁收紧、原子存储与发布质量门禁。

@@ -4,9 +4,14 @@ using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using PopGlot.Windows;
@@ -68,6 +73,7 @@ internal static class Program
         Run("window caption resources and geometries are consistent", WindowCaptionResourcesConsistent);
         Run("main window includes window chrome and unified caption bar", MainWindowChromeAndCaptionBarPresent);
         Run("theme tokens dark and light palettes are symmetric", ThemeTokensSymmetric);
+        Run("theme contrast ratios and token budgets conform to wcag", ThemeAuditHelper.RunAudits);
         Run("provider profiles support multi-config, independent keys and round-trip", ProviderProfilesSupportMultiConfigAndIndependentKeys);
         Run("service save resolves credential targets per profile", ServiceSaveResolvesCredentialTargets);
         Run("service save writes the key after resolving its target", ServiceSaveKeyOrderGuard);
@@ -75,6 +81,15 @@ internal static class Program
         Run("connection test failures map to actionable hints", ConnectionTestFailuresAreActionable);
         Run("service health states are explicit and hue-safe", ServiceHealthStatesAreExplicit);
         Run("loaded service does not become a false draft", LoadedServiceDoesNotBecomeFalseDraft);
+
+        Run("settings draft snapshot pure comparison and revert clean", SettingsDraftSnapshotPureComparison);
+
+        Run("header normalization and editor revert clean", HeaderNormalizationAndEditorRevertClean);
+
+        Run("shared vision model retention and revert", SharedVisionModelRetentionAndRevert);
+
+        Run("settings and services draft guard transitions", SettingsAndServicesDraftGuardTransitions);
+
         Run("shortcut recording suspends global shortcuts", ShortcutRecordingSuspendsGlobalShortcuts);
         Run("capture drag avoids forced layout", CaptureDragAvoidsForcedLayout);
         Run("settings closes transient translation surfaces", SettingsClosesTransientSurfaces);
@@ -83,6 +98,8 @@ internal static class Program
         Run("model catalog endpoints follow provider protocols", ModelCatalogEndpointsFollowProtocols);
         Run("model catalog parses OpenAI and Gemini responses", ModelCatalogParsesProviderResponses);
         await RunAsync("model catalog uses draft credentials without saving", ModelCatalogUsesDraftCredentialsAsync);
+        Run("model recommendation pure heuristics, benchmark matching and evidence rules", ModelRecommendationTestsHelper.RunAllTests);
+        Run("model recommendation UI pure helpers, evidence badge mapping and preference stability", ModelRecommendationUiTests);
         Run("caption buttons really render their icons", CaptionButtonsRenderTheirIcons);
         Run("page transitions have no text-damaging animations", NoTextDamagingPageTransitions);
         Run("text windows are opaque for ClearType", TextWindowsAreOpaque);
@@ -98,7 +115,60 @@ internal static class Program
         await RunAsync("model catalog requests filter sensitive headers", ModelCatalogFiltersSensitiveHeaders);
         Run("a failed profile save does not poison the cache", FailedSaveDoesNotPoisonCache);
         Run("information architecture surfaces workbench, library and control center", InformationArchitectureSurfacesPresent);
-        RunSta("render screenshots and measure performance baseline", RenderScreenshotsAndMeasureBaseline);
+
+        // Streaming buffer and concurrency tests
+        await RunAsync("stream buffer multi-producer concurrent append preserves order and zero character loss", StreamBufferConcurrentMultiProducerOrderAndZeroLossAsync);
+        await RunAsync("stream buffer high frequency 10k delta drain handles rapid batches without loss", StreamBufferHighFrequency10kDeltaDrainAsync);
+        Run("stream buffer hard limit aborts and preserves pending text without silent drop", StreamBufferHardLimitAbortsWithoutSilentDrop);
+        Run("stream buffer complete and final drain preserves tail with no loss", StreamBufferCompleteFinalDrainZeroTailLoss);
+        Run("stream buffer handles empty delta safely", StreamBufferEmptyDeltaHandling);
+        Run("stream buffer unicode and utf8 multi-byte support", StreamBufferUnicodeAndUtf8MultiByteSupport);
+        Run("stream buffer lifecycle operations are idempotent and reusable", StreamBufferLifecycleAndIdempotence);
+        Run("stream buffer fences session epoch and tracks ttft metrics", StreamBufferSessionEpochFencingAndTtftMetrics);
+        Run("stream buffer callback thunk handles chinese utf8", StreamBufferCallbackThunkHandlesChineseUtf8);
+        Run("stream buffer callback thunk aborts and backpressures", StreamBufferCallbackThunkAbortsAndBackpressures);
+        Run("stream buffer callback thunk invalid userData handled safely", StreamBufferCallbackThunkInvalidUserDataHandledSafely);
+        Run("final envelope deserialization and error checking", FinalEnvelopeDeserializationAndErrorChecking);
+        Run("stream session properties and lifecycle", StreamSessionPropertiesAndLifecycle);
+
+        // Coordinator streaming and lifecycle tests
+        await RunAsync("coordinator streaming delta arrives before completion", CoordinatorDeltaArrivesBeforeCompletionAsync);
+        await RunAsync("coordinator throttling merges rapid deltas", CoordinatorThrottlingMergesDeltasAsync);
+        await RunAsync("coordinator final drain delivers tail delta", CoordinatorFinalDrainDeliversTailAsync);
+        await RunAsync("coordinator final calibration replaces text and metadata", CoordinatorFinalCalibrationReplacesTextAsync);
+        await RunAsync("coordinator error and cancellation preserve partial text and write no history", CoordinatorErrorAndCancellationPreservePartialAndNoHistoryAsync);
+        await RunAsync("coordinator successful translation writes history once", CoordinatorSuccessfulTranslationWritesHistoryOnceAsync);
+        await RunAsync("coordinator free engine single shot emits reset and delta and writes history once", CoordinatorFreeSingleShotAsync);
+        await RunAsync("coordinator vision failure with deltas does not fallback to OCR", CoordinatorVisionWithDeltaFailureDoesNotOcrFallbackAsync);
+        await RunAsync("coordinator vision failure with zero deltas falls back to OCR", CoordinatorVisionZeroDeltaFailureFallsBackToOcrAsync);
+        await RunAsync("coordinator epoch propagation fences session updates", CoordinatorEpochPropagationAsync);
+        await RunAsync("coordinator stage transitions follow correct lifecycle order", CoordinatorStageOrderAsync);
+
+        // QuickSearch streaming and state machine tests
+        Run("quick search epoch and query fencing rejects stale updates", QuickSearchEpochAndQueryFencing);
+        Run("quick search action gates protect partial and streaming states", QuickSearchPartialActionGate);
+        Run("quick search closed guard drops updates and prevents UI leaks", QuickSearchClosedGuard);
+        Run("quick search min height and headless rendering contracts conform", QuickSearchMinHeightAndHeadlessContract);
+
+        // TranslateSection streaming and state machine tests
+        Run("translate section epoch fencing rejects stale updates", TranslateSectionEpochFencing);
+        Run("translate section reset and delta stream transitions", TranslateSectionResetAndDelta);
+        Run("translate section action gating and partial retention", TranslateSectionActionGatingAndPartialRetention);
+
+        // TranslationPanel streaming and state machine tests
+        Run("translation panel epoch and lifetime fencing rejects stale updates", TranslationPanelEpochAndLifetimeFencing);
+        Run("translation panel reset and delta stream transitions", TranslationPanelResetAndDelta);
+        Run("translation panel action gating and partial retention", TranslationPanelActionGatingAndPartialRetention);
+
+        // Both ride one STA thread: the windowed regression needs the
+        // Application the screenshot pass bootstraps, and Application
+        // resources are thread-affine.
+        RunStaBatch(
+            ("quick search component lifecycle and stream contracts", QuickSearchComponentLifecycleAndStreamContracts),
+            ("translate section component lifecycle and stream contracts", TranslateSectionComponentLifecycleAndStreamContracts),
+            ("translation panel component lifecycle and stream contracts", TranslationPanelComponentLifecycleAndStreamContracts),
+            ("render screenshots and measure performance baseline", RenderScreenshotsAndMeasureBaseline),
+            ("a failed save recovers to dirty then clean", FailedSaveRecoversToDirtyThenClean));
 
         if (Environment.GetEnvironmentVariable("POPGLOT_SMOKE_FREE") == "1")
         {
@@ -1389,6 +1459,348 @@ internal static class Program
             "a real field change must create a draft");
     }
 
+    private static void SettingsDraftSnapshotPureComparison()
+    {
+        var baseRoute = RouteDraftSnapshot.Create(networkEnabled: true, safeMode: false, allowImageUpload: true, mode: "Auto");
+        var baseline = SettingsFormSnapshot.Create(
+            selectionHotkey: "Ctrl+Alt+T",
+            screenshotHotkey: "Ctrl+Alt+S",
+            closeHotkey: "Escape",
+            showWindowHotkey: "Ctrl+Alt+W",
+            historyEnabled: true,
+            closeOnFocusLoss: true,
+            autoCopy: false,
+            startWithWindows: false,
+            includeExplanation: true,
+            protectTokens: true,
+            theme: "Dark",
+            route: baseRoute);
+
+        var baselineStr = baseline.Serialize();
+
+        // 1. Exact replica is clean
+        var replica = SettingsFormSnapshot.Create(
+            "Ctrl+Alt+T", "Ctrl+Alt+S", "Escape", "Ctrl+Alt+W",
+            true, true, false, false, true, true, "Dark",
+            RouteDraftSnapshot.Create(true, false, true, "Auto"));
+        True(!SettingsWindow.HasDraftChanges(replica.Serialize(), baselineStr), "identical settings snapshot must be clean");
+
+        // 2. Modifying each field makes it dirty, and restoring it makes it clean
+        // Hotkey change
+        var modifiedHotkey = SettingsFormSnapshot.Create(
+            "Ctrl+Alt+F", "Ctrl+Alt+S", "Escape", "Ctrl+Alt+W",
+            true, true, false, false, true, true, "Dark", baseRoute);
+        True(SettingsWindow.HasDraftChanges(modifiedHotkey.Serialize(), baselineStr), "hotkey change makes draft dirty");
+
+        // Toggle change
+        var modifiedToggle = SettingsFormSnapshot.Create(
+            "Ctrl+Alt+T", "Ctrl+Alt+S", "Escape", "Ctrl+Alt+W",
+            true, true, true, false, true, true, "Dark", baseRoute);
+        True(SettingsWindow.HasDraftChanges(modifiedToggle.Serialize(), baselineStr), "toggle change makes draft dirty");
+
+        // Theme change
+        var modifiedTheme = SettingsFormSnapshot.Create(
+            "Ctrl+Alt+T", "Ctrl+Alt+S", "Escape", "Ctrl+Alt+W",
+            true, true, false, false, true, true, "Light", baseRoute);
+        True(SettingsWindow.HasDraftChanges(modifiedTheme.Serialize(), baselineStr), "theme change makes draft dirty");
+
+        // Route change
+        var modifiedRoute = SettingsFormSnapshot.Create(
+            "Ctrl+Alt+T", "Ctrl+Alt+S", "Escape", "Ctrl+Alt+W",
+            true, true, false, false, true, true, "Dark",
+            RouteDraftSnapshot.Create(networkEnabled: false, safeMode: false, allowImageUpload: true, mode: "Auto"));
+        True(SettingsWindow.HasDraftChanges(modifiedRoute.Serialize(), baselineStr), "route change makes draft dirty");
+        True(SettingsWindow.HasDraftChanges(modifiedRoute.Route.Serialize(), baseRoute.Serialize()), "route draft changes detect pending");
+
+        // Restoring route back to original values drops route pending and restores Clean
+
+        var restoredRoute = RouteDraftSnapshot.Create(true, false, true, "Auto");
+
+        True(!SettingsWindow.HasDraftChanges(restoredRoute.Serialize(), baseRoute.Serialize()), "restoring route values drops route pending");
+
+
+
+        // The shared pure state decision: same snapshots, resolved to states.
+
+        Equal(SettingsEditState.Dirty, SettingsWindow.StateFromDraft(modifiedRoute.Serialize(), baselineStr),
+
+            "a diverging draft resolves Dirty through the shared pure function");
+
+        Equal(SettingsEditState.Clean, SettingsWindow.StateFromDraft(replica.Serialize(), baselineStr),
+
+            "a converged draft resolves Clean through the shared pure function");
+    }
+
+    private static void HeaderNormalizationAndEditorRevertClean()
+    {
+        // 1. Headers normalization handles CRLF, LF, CR, trailing/leading whitespace and blank lines
+        var headers1 = "Authorization: Bearer token1\r\nX-Custom: value1\r\n\r\n";
+        var headers2 = "   Authorization: Bearer token1   \n\nX-Custom: value1\n";
+        var headers3 = "Authorization: Bearer token1\rX-Custom: value1";
+        var norm1 = ServicesSection.NormalizeHeaderValue(headers1);
+        var norm2 = ServicesSection.NormalizeHeaderValue(headers2);
+        var norm3 = ServicesSection.NormalizeHeaderValue(headers3);
+        Equal(norm1, norm2, "CRLF and LF with extra spacing must normalize to identical header block");
+        Equal(norm1, norm3, "CR newlines must normalize identically");
+        Equal("Authorization: Bearer token1\nX-Custom: value1", norm1);
+
+        // 2. Editor snapshot comparison
+        var baseline = ServiceEditorSnapshot.CreateNormalized(
+            name: "DeepSeek Service",
+            providerType: "OpenAiCompatible",
+            baseUrl: "https://api.deepseek.com/v1",
+            textEndpoint: "/chat/completions",
+            visionEndpoint: "/chat/completions",
+            textModel: "deepseek-chat",
+            visionModel: "deepseek-chat",
+            extraHeaders: headers1,
+            anthropicVersion: "2023-06-01",
+            supportsText: true,
+            supportsVision: false,
+            useTextModelForVision: true,
+            allowInsecureTls: false,
+            apiKey: "sk-12345");
+        var baselineStr = baseline.Serialize();
+
+        // Typing same headers with different formatting remains Clean
+        var withDifferentFormatting = ServiceEditorSnapshot.CreateNormalized(
+            "DeepSeek Service ",
+            "OpenAiCompatible",
+            " https://api.deepseek.com/v1\r\n",
+            "/chat/completions",
+            "/chat/completions",
+            " deepseek-chat ",
+            "deepseek-chat",
+            headers2,
+            "2023-06-01",
+            true,
+            false,
+            true,
+            false,
+            "sk-12345");
+        True(!ServicesSection.HasEditorChanges(withDifferentFormatting.Serialize(), baselineStr),
+            "normalized fields with different formatting or newlines must stay Clean");
+
+        // Editing a value makes it Dirty
+        var withEditedUrl = ServiceEditorSnapshot.CreateNormalized(
+            "DeepSeek Service", "OpenAiCompatible", "https://custom-proxy.com/v1",
+            "/chat/completions", "/chat/completions", "deepseek-chat", "deepseek-chat",
+            headers1, "2023-06-01", true, false, true, false, "sk-12345");
+        True(ServicesSection.HasEditorChanges(withEditedUrl.Serialize(), baselineStr),
+            "editing base url makes editor dirty");
+
+        // Reverting the value back to original returns to Clean
+        var revertedUrl = ServiceEditorSnapshot.CreateNormalized(
+            "DeepSeek Service", "OpenAiCompatible", "https://api.deepseek.com/v1",
+            "/chat/completions", "/chat/completions", "deepseek-chat", "deepseek-chat",
+            headers1, "2023-06-01", true, false, true, false, "sk-12345");
+        True(!ServicesSection.HasEditorChanges(revertedUrl.Serialize(), baselineStr),
+            "reverting edited url back to baseline returns editor to Clean");
+    }
+
+    private static void SharedVisionModelRetentionAndRevert()
+    {
+        var tracker = new SharedVisionModelTracker();
+
+        // Case A: distinct text and vision models (e.g. gpt-4o and gpt-4o-mini)
+        tracker.OnLoaded("gpt-4o", "gpt-4o-mini");
+        Equal(null, tracker.StashedVisionModel);
+
+        var baseline = ServiceEditorSnapshot.CreateNormalized(
+            name: "OpenAI Service",
+            providerType: "OpenAiCompatible",
+            baseUrl: "https://api.openai.com/v1",
+            textEndpoint: "/chat/completions",
+            visionEndpoint: "/chat/completions",
+            textModel: "gpt-4o",
+            visionModel: "gpt-4o-mini",
+            extraHeaders: "",
+            anthropicVersion: "2023-06-01",
+            supportsText: true,
+            supportsVision: true,
+            useTextModelForVision: false,
+            allowInsecureTls: false,
+            apiKey: "sk-openai");
+        var baselineStr = baseline.Serialize();
+
+        // 1. User checks "Use text model for vision"
+        var (sharedVision, enabled1) = tracker.OnToggleShared(true, "gpt-4o", "gpt-4o-mini");
+        Equal("gpt-4o", sharedVision, "effective vision model must match text model when shared");
+        Equal(false, enabled1, "vision picker must be disabled when shared");
+        Equal("gpt-4o-mini", tracker.StashedVisionModel, "stashed model must remember original vision model");
+
+        var sharedSnapshot = ServiceEditorSnapshot.CreateNormalized(
+            "OpenAI Service", "OpenAiCompatible", "https://api.openai.com/v1",
+            "/chat/completions", "/chat/completions", "gpt-4o", sharedVision,
+            "", "2023-06-01", true, true, true, false, "sk-openai");
+        True(ServicesSection.HasEditorChanges(sharedSnapshot.Serialize(), baselineStr),
+            "enabling shared model changes effective vision model and checkbox, so it is Dirty");
+
+        // 2. User unchecks "Use text model for vision"
+        var (restoredVision, enabled2) = tracker.OnToggleShared(false, "gpt-4o", sharedVision);
+        Equal("gpt-4o-mini", restoredVision, "unchecking must restore original distinct vision model");
+        Equal(true, enabled2, "vision picker must be re-enabled");
+        Equal(null, tracker.StashedVisionModel, "stashed model must be cleared");
+
+        var restoredSnapshot = ServiceEditorSnapshot.CreateNormalized(
+            "OpenAI Service", "OpenAiCompatible", "https://api.openai.com/v1",
+            "/chat/completions", "/chat/completions", "gpt-4o", restoredVision,
+            "", "2023-06-01", true, true, false, false, "sk-openai");
+        True(!ServicesSection.HasEditorChanges(restoredSnapshot.Serialize(), baselineStr),
+            "unchecking restored the original state, so editor returns to Clean");
+
+        // 3. Repeat toggle cycle: check -> uncheck again
+        var (shared2, _) = tracker.OnToggleShared(true, "gpt-4o", restoredVision);
+        Equal("gpt-4o-mini", tracker.StashedVisionModel);
+        var (restored2, _) = tracker.OnToggleShared(false, "gpt-4o", shared2);
+        Equal("gpt-4o-mini", restored2);
+        Equal(null, tracker.StashedVisionModel);
+
+        // 4. Case B: Editing text model while shared is active, then unchecking restores vision while keeping edited text model
+        var (shared3, _) = tracker.OnToggleShared(true, "gpt-4o", "gpt-4o-mini");
+        var (restoredAfterTextEdit, _) = tracker.OnToggleShared(false, "deepseek-chat", shared3);
+        Equal("gpt-4o-mini", restoredAfterTextEdit, "original vision model is preserved even if text model was modified");
+    }
+
+    private static void SettingsAndServicesDraftGuardTransitions()
+    {
+        // State decisions come from the same pure function the settings
+        // window uses, so the guard semantics below exercise the real state
+        // machine instead of a hand-written copy of the enum transitions.
+        var route = RouteDraftSnapshot.Create(networkEnabled: true, safeMode: false, allowImageUpload: true, mode: "Auto");
+        SettingsFormSnapshot Form(bool networkEnabled, bool autoCopy) => SettingsFormSnapshot.Create(
+            selectionHotkey: "Ctrl+Alt+W",
+            screenshotHotkey: "Ctrl+Shift+T",
+            closeHotkey: "Ctrl+Alt+X",
+            showWindowHotkey: "Ctrl+Alt+O",
+            historyEnabled: false,
+            closeOnFocusLoss: true,
+            autoCopy,
+            startWithWindows: false,
+            includeExplanation: true,
+            protectTokens: true,
+            theme: "System",
+            route: RouteDraftSnapshot.Create(networkEnabled, false, true, "Auto"));
+        var baseline = Form(networkEnabled: true, autoCopy: false).Serialize();
+
+        SettingsEditState StateOf(SettingsFormSnapshot draft) =>
+            SettingsWindow.StateFromDraft(draft.Serialize(), baseline);
+
+        // 1. Clean state allows navigation and closing
+        var settingsState = StateOf(Form(networkEnabled: true, autoCopy: false));
+        Equal(SettingsEditState.Clean, settingsState, "a draft equal to the baseline resolves Clean");
+        var isEditorDirty = false;
+        var shouldBlockNav = isEditorDirty;
+        var shouldBlockClose = isEditorDirty || settingsState is SettingsEditState.Dirty or SettingsEditState.Saving;
+        True(!shouldBlockNav, "clean state does not block navigation");
+        True(!shouldBlockClose, "clean state does not block window closing");
+
+        // 2. Editor dirty blocks page navigation away from provider and blocks closing
+        isEditorDirty = true;
+        shouldBlockNav = isEditorDirty;
+        shouldBlockClose = isEditorDirty || settingsState == SettingsEditState.Dirty;
+        True(shouldBlockNav, "dirty editor blocks leaving Provider page");
+        True(shouldBlockClose, "dirty editor blocks window closing");
+
+        // 3. Discarding / saving editor restores clean state
+        isEditorDirty = false;
+        True(!isEditorDirty, "discarding/saving editor restores clean state");
+
+        // 4. Global settings dirty allows page navigation but blocks closing
+        settingsState = StateOf(Form(networkEnabled: false, autoCopy: false));
+        Equal(SettingsEditState.Dirty, settingsState, "a changed route field resolves Dirty");
+        shouldBlockNav = isEditorDirty; // false
+        shouldBlockClose = isEditorDirty || settingsState == SettingsEditState.Dirty;
+        True(!shouldBlockNav, "global settings dirty does not block page switching between General/Privacy/Shortcuts");
+        True(shouldBlockClose, "global settings dirty blocks window closing until saved or reverted");
+
+        // 5. Reverting or saving global settings rebuilds baseline and restores clean state
+        settingsState = StateOf(Form(networkEnabled: true, autoCopy: false));
+        Equal(SettingsEditState.Clean, settingsState, "reverting the edit converges back onto Clean");
+        shouldBlockClose = isEditorDirty || settingsState == SettingsEditState.Dirty;
+        True(!shouldBlockClose, "rebuilt baseline allows clean close");
+    }
+
+    /// <summary>
+    /// Regression for the failed-save recovery: a save that throws must leave
+    /// the live window Dirty (save bar back, route hint intact) - never stuck
+    /// in Saving/Loading - and reverting the edits must still return it to
+    /// Clean afterwards. Exercises the real window, not enum variables.
+    /// </summary>
+    private static void FailedSaveRecoversToDirtyThenClean()
+    {
+        ProfileManager.ResetForTests();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-savefail-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        ProfileManager.ConfigPathOverride = Path.Combine(dir, "product-config.json");
+        CoreBridge.Initialize();
+        // SettingsWindow resolves its nav styles from the app-level theme
+        // dictionary; bootstrap the same Application the screenshot pass uses.
+        if (Application.Current is null)
+        {
+            var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            app.Resources.MergedDictionaries.Add(new ResourceDictionary
+            {
+                Source = new Uri("/PopGlot;component/Themes/Controls.xaml", UriKind.RelativeOrAbsolute),
+            });
+        }
+        else if (Application.Current.Resources.MergedDictionaries.Count == 0)
+        {
+            Application.Current.Resources.MergedDictionaries.Add(new ResourceDictionary
+            {
+                Source = new Uri("/PopGlot;component/Themes/Controls.xaml", UriKind.RelativeOrAbsolute),
+            });
+        }
+        ThemeService.Apply(ThemePreference.Dark);
+        try
+        {
+            var window = new SettingsWindow(
+                ShellSettings.Default, new HistoryStore(Path.Combine(dir, "history.json")))
+            {
+                // Deterministic save failure at hotkey registration - before
+                // any write, so the test cannot touch real settings.
+                ApplyShellSettings = _ => false,
+            };
+
+            Equal(SettingsEditState.Clean, window.EditState, "a freshly loaded window must be Clean");
+
+            // Diverge one route field and one general field from the baseline.
+            var network = window.CaptureSection.NetworkEnabled;
+            var autoCopy = window.GeneralSection.AutoCopy;
+            var networkOriginal = network.IsChecked == true;
+            var autoCopyOriginal = autoCopy.IsChecked == true;
+            network.IsChecked = !networkOriginal;
+            autoCopy.IsChecked = !autoCopyOriginal;
+            Equal(SettingsEditState.Dirty, window.EditState, "edits must mark the form Dirty");
+            True(window.CaptureSection.IsRouteDraftPending, "route edits must show the draft route hint");
+
+            typeof(SettingsWindow).GetMethod("Save_Click",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(window, new object[] { window, new RoutedEventArgs() });
+
+            Equal(SettingsEditState.Dirty, window.EditState,
+                "a failed save must land back on Dirty, never stick in Saving/Loading");
+            True(window.IsDirty, "the save bar must return after a failed save");
+            True(window.SaveButton.IsEnabled, "the save action must be usable again after a failed save");
+            True(window.CaptureSection.IsRouteDraftPending,
+                "a failed save must not clear the route draft hint");
+
+            // Reverting both fields converges onto the baseline - this is the
+            // transition the old Loading-stuck bug made impossible.
+            autoCopy.IsChecked = autoCopyOriginal;
+            network.IsChecked = networkOriginal;
+            Equal(SettingsEditState.Clean, window.EditState,
+                "reverting every edit after a failed save must return Clean");
+            True(!window.CaptureSection.IsRouteDraftPending,
+                "the route hint must clear once the route converges with the baseline");
+        }
+        finally
+        {
+            ProfileManager.ResetForTests();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     private static void ShortcutRecordingSuspendsGlobalShortcuts()
     {
         var appDir = Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows");
@@ -1520,6 +1932,108 @@ internal static class Program
         Equal("draft-secret", handler.Headers["x-goog-api-key"]);
         Equal(1, result.Models.Count);
         Equal("gemini-flash", result.Models[0].Id);
+    }
+
+    private static void ModelRecommendationUiTests()
+    {
+        // 1. Preference handler does not alter editor snapshot or dirty state
+        var snapBefore = ServiceEditorSnapshot.CreateNormalized(
+            "OpenAI", "OpenAiCompatible", "https://api.openai.com/v1",
+            "/chat/completions", "/chat/completions", "gpt-4o-mini", "gpt-4o-mini",
+            "", "2023-06-01", true, true, true, false, "").Serialize();
+
+        var snapAfterPrefChange = ServiceEditorSnapshot.CreateNormalized(
+            "OpenAI", "OpenAiCompatible", "https://api.openai.com/v1",
+            "/chat/completions", "/chat/completions", "gpt-4o-mini", "gpt-4o-mini",
+            "", "2023-06-01", true, true, true, false, "").Serialize();
+
+        Equal(snapBefore, snapAfterPrefChange, "Preference change must not alter editor snapshot");
+        Equal(false, ServicesSection.HasEditorChanges(snapBefore, snapAfterPrefChange), "Preference change must remain clean (not dirty)");
+
+        // 2. Chip selection updates model text and produces a dirty snapshot
+        var snapAfterChipSelect = ServiceEditorSnapshot.CreateNormalized(
+            "OpenAI", "OpenAiCompatible", "https://api.openai.com/v1",
+            "/chat/completions", "/chat/completions", "gpt-4o", "gpt-4o-mini",
+            "", "2023-06-01", true, true, true, false, "").Serialize();
+
+        True(ServicesSection.HasEditorChanges(snapAfterChipSelect, snapBefore), "Selecting a chip must change model and mark dirty");
+
+        // 3. Recommendation chip count capped at maximum 3 eligible candidates
+        var manyModels = new List<ModelDescriptor>
+        {
+            new("gpt-4o-mini", CapabilityState.Supported, CapabilityState.Supported, "Catalog"),
+            new("gpt-4o", CapabilityState.Supported, CapabilityState.Supported, "Catalog"),
+            new("chatgpt-4o-latest", CapabilityState.Supported, CapabilityState.Supported, "Catalog"),
+            new("gpt-4-turbo", CapabilityState.Supported, CapabilityState.Supported, "Catalog"),
+            new("gpt-3.5-turbo", CapabilityState.Supported, CapabilityState.Supported, "Catalog"),
+        };
+        var recResult = ModelRecommendationService.Recommend(new ModelRecommendationRequest(
+            ProviderType.OpenAiCompatible,
+            false,
+            manyModels,
+            ModelTargetUsage.Text,
+            ModelPreference.Balanced));
+
+        var topChips = recResult.Candidates.Where(c => c.IsEligible).Take(3).ToList();
+        Equal(3, topChips.Count, "Top recommendation chips must be at most 3");
+
+        // 4. Evidence badge mapping priority and neutral unknown
+        // Priority: LocalBenchmark (with metric) > CatalogExplicit > FamilyHeuristics > Unknown
+        // Without benchmark metric: LocalBenchmark flag must NEVER display "本机实测"
+        var tierNoMetric = ServicesSection.ResolveEvidenceTier(
+            RecommendationEvidenceSource.LocalBenchmark | RecommendationEvidenceSource.CatalogExplicit,
+            hasBenchmarkMetric: false);
+        Equal(ServicesSection.EvidenceBadgeTier.CatalogExplicit, tierNoMetric, "Without benchmark metric, CatalogExplicit wins over LocalBenchmark");
+        Equal("官方声明", ServicesSection.GetEvidenceBadgeText(tierNoMetric));
+
+        var tierWithMetric = ServicesSection.ResolveEvidenceTier(
+            RecommendationEvidenceSource.LocalBenchmark | RecommendationEvidenceSource.CatalogExplicit,
+            hasBenchmarkMetric: true);
+        Equal(ServicesSection.EvidenceBadgeTier.LocalBenchmark, tierWithMetric, "With benchmark metric, LocalBenchmark wins");
+        Equal("本机实测", ServicesSection.GetEvidenceBadgeText(tierWithMetric));
+
+        var tierCatalog = ServicesSection.ResolveEvidenceTier(RecommendationEvidenceSource.CatalogExplicit, false);
+        Equal(ServicesSection.EvidenceBadgeTier.CatalogExplicit, tierCatalog);
+        Equal("官方声明", ServicesSection.GetEvidenceBadgeText(tierCatalog));
+
+        var tierHeuristic = ServicesSection.ResolveEvidenceTier(RecommendationEvidenceSource.FamilyHeuristics, false);
+        Equal(ServicesSection.EvidenceBadgeTier.FamilyHeuristics, tierHeuristic);
+        Equal("系列推断", ServicesSection.GetEvidenceBadgeText(tierHeuristic));
+
+        var tierUnknown = ServicesSection.ResolveEvidenceTier(RecommendationEvidenceSource.FallbackUnknown, false);
+        Equal(ServicesSection.EvidenceBadgeTier.Unknown, tierUnknown);
+        Equal("未声明", ServicesSection.GetEvidenceBadgeText(tierUnknown));
+
+        var (unknownText, unknownBg, unknownFg, unknownBorder) = ServicesSection.ResolveEvidenceBadgeVisualKeys(
+            RecommendationEvidenceSource.FallbackUnknown, false);
+        Equal("未声明", unknownText);
+        Equal("SurfaceMutedBrush", unknownBg);
+        Equal("TextTertiaryBrush", unknownFg);
+        Equal("BorderSubtleBrush", unknownBorder);
+
+        // 5. Unknown capability / current model preservation without catalog
+        var uncataloguedModel = new ModelDescriptor("custom-enterprise-model", CapabilityState.Unknown, CapabilityState.Unknown, "Fallback");
+        var uncataloguedResult = ModelRecommendationService.Recommend(new ModelRecommendationRequest(
+            ProviderType.OpenAiCompatible,
+            false,
+            [uncataloguedModel],
+            ModelTargetUsage.Text,
+            ModelPreference.Balanced,
+            CurrentModelId: "custom-enterprise-model"));
+
+        var eval = uncataloguedResult.Candidates.FirstOrDefault(c => c.Model.Id == "custom-enterprise-model");
+        True(eval is not null, "Current uncatalogued model must be preserved in candidates");
+        True(eval!.IsCurrentSelected, "IsCurrentSelected must be true");
+        Equal(ModelTier.Unknown, eval.Tier, "Uncatalogued tier must be Unknown");
+
+        // 6. Recommendation is computed regardless of health state (not gated by health/test connection)
+        var healthIgnorantResult = ModelRecommendationService.Recommend(new ModelRecommendationRequest(
+            ProviderType.OpenAiCompatible,
+            false,
+            [new ModelDescriptor("gpt-4o-mini", CapabilityState.Supported, CapabilityState.Supported, "Catalog")],
+            ModelTargetUsage.Text,
+            ModelPreference.Balanced));
+        True(healthIgnorantResult.Candidates.Count > 0, "Recommendations are generated regardless of service connection health");
     }
 
     /// <summary>
@@ -1804,14 +2318,18 @@ internal static class Program
         var servicesXaml = File.ReadAllText(Path.Combine(appDir, "Sections", "ServicesSection.xaml"));
 
         // The main window is a work surface only: translate + library, plus a
-        // quiet footer with the settings entry. No control center, no save bar.
+        // quiet footer. No control center, no save bar.
         foreach (var surface in new[] { "TranslateSection", "LibrarySection" })
         {
             True(mainXaml.Contains(surface), $"the main window must host {surface}");
         }
         True(mainXaml.Contains("NavTranslate"), "translate navigation must exist");
         True(mainXaml.Contains("NavLibrary"), "library navigation must exist");
-        True(mainXaml.Contains("SettingsButton"), "the settings entry must exist");
+        True(mainXaml.Contains("NavSettingsButton"), "the sidebar settings entry must exist");
+        True(!mainXaml.Contains("x:Name=\"SettingsButton\""),
+            "the old footer settings entry must not duplicate the sidebar one");
+        True(Regex.Matches(mainXaml, "AutomationProperties.Name=\"打开设置\"").Count == 1,
+            "exactly one control may carry the 打开设置 automation name in the main window");
         True(!mainXaml.Contains("ControlCenterHost"), "the control center host must be gone");
         True(!mainXaml.Contains("NavControl"), "the control center nav must be gone");
         True(!mainXaml.Contains("保存设置"), "the main window must not carry the global save bar");
@@ -1865,22 +2383,14 @@ internal static class Program
         True(lightMatches.Count > 0, "LightTokens must be defined");
     }
 
-    private static void RenderScreenshotsAndMeasureBaseline()
+    private static void EnsureApplication()
     {
-        var projectRoot = FindProjectRoot();
-        var outDir = Path.Combine(projectRoot, "artifacts", "screenshots");
-        Directory.CreateDirectory(outDir);
-
         if (Application.Current is null)
         {
-            var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown };
             try
             {
-                var dict = new ResourceDictionary
-                {
-                    Source = new Uri("/PopGlot;component/Themes/Controls.xaml", UriKind.RelativeOrAbsolute)
-                };
-                app.Resources.MergedDictionaries.Add(dict);
+                app.InitializeComponent();
             }
             catch
             {
@@ -1890,23 +2400,17 @@ internal static class Program
         }
         else
         {
-            if (Application.Current.Resources.MergedDictionaries.Count == 0)
-            {
-                try
-                {
-                    var dict = new ResourceDictionary
-                    {
-                        Source = new Uri("/PopGlot;component/Themes/Controls.xaml", UriKind.RelativeOrAbsolute)
-                    };
-                    Application.Current.Resources.MergedDictionaries.Add(dict);
-                }
-                catch
-                {
-                    // Fallback
-                }
-            }
             ThemeService.Apply(ThemePreference.Dark);
         }
+    }
+
+    private static void RenderScreenshotsAndMeasureBaseline()
+    {
+        var projectRoot = FindProjectRoot();
+        var outDir = Path.Combine(projectRoot, "artifacts", "screenshots");
+        Directory.CreateDirectory(outDir);
+
+        EnsureApplication();
 
         var history = new HistoryStore();
         var vocab = new VocabularyStore();
@@ -2102,33 +2606,47 @@ internal static class Program
         }
     }
 
-    private static void RunSta(string name, Action test)
+    private static void RunSta(string name, Action test) => RunStaBatch((name, test));
+
+    /// <summary>
+    /// Runs several UI-bound tests on ONE STA thread with individual
+    /// reporting. WPF Application resources are thread-affine: a test that
+    /// needs the bootstrapped Application must run on the very thread that
+    /// created it.
+    /// </summary>
+    private static void RunStaBatch(params (string Name, Action Test)[] tests)
     {
-        Exception? caught = null;
+        var caught = new Exception?[tests.Length];
         var thread = new Thread(() =>
         {
-            try
+            for (var i = 0; i < tests.Length; i++)
             {
-                test();
-            }
-            catch (Exception ex)
-            {
-                caught = ex;
+                try
+                {
+                    tests[i].Test();
+                }
+                catch (Exception ex)
+                {
+                    caught[i] = ex;
+                }
             }
         });
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         thread.Join();
 
-        if (caught is null)
+        for (var i = 0; i < tests.Length; i++)
         {
-            _passed++;
-            Console.WriteLine($"PASS {name}");
-        }
-        else
-        {
-            _failed++;
-            Console.WriteLine($"FAIL {name}: {caught.Message}");
+            if (caught[i] is null)
+            {
+                _passed++;
+                Console.WriteLine($"PASS {tests[i].Name}");
+            }
+            else
+            {
+                _failed++;
+                Console.WriteLine($"FAIL {tests[i].Name}: {caught[i]!.Message}");
+            }
         }
     }
 
@@ -2253,5 +2771,1975 @@ internal static class Program
     {
         public bool Disposed { get; private set; }
         public void Dispose() => Disposed = true;
+    }
+
+    // ================= TranslationStreamBuffer tests =================
+
+    private static async Task StreamBufferConcurrentMultiProducerOrderAndZeroLossAsync()
+    {
+        const int producerCount = 8;
+        const int deltasPerProducer = 500;
+        using var buffer = new TranslationStreamBuffer("session-conc", "req-conc", 1);
+
+        var tasks = new Task[producerCount];
+        for (var p = 0; p < producerCount; p++)
+        {
+            var producerId = p;
+            tasks[p] = Task.Run(() =>
+            {
+                for (var i = 0; i < deltasPerProducer; i++)
+                {
+                    var token = $"[P{producerId}:{i:D4}]";
+                    var ok = buffer.TryAppend(token);
+                    if (!ok)
+                    {
+                        throw new InvalidOperationException($"Producer {producerId} failed at token {i}");
+                    }
+                }
+            });
+        }
+
+        await Task.WhenAll(tasks);
+        buffer.Complete();
+
+        Equal(producerCount * deltasPerProducer, (int)buffer.DeltaCount, "Total delta count must match all producers");
+        var fullText = buffer.GetAccumulatedText();
+        Equal(buffer.CharCount, (long)fullText.Length, "Buffer CharCount must match accumulated text length");
+
+        // Verify each producer's sequential order is strictly monotonically increasing in accumulated text
+        for (var p = 0; p < producerCount; p++)
+        {
+            var lastIndex = -1;
+            for (var i = 0; i < deltasPerProducer; i++)
+            {
+                var token = $"[P{p}:{i:D4}]";
+                var index = fullText.IndexOf(token, StringComparison.Ordinal);
+                True(index >= 0, $"Token {token} must exist in full text");
+                True(index > lastIndex, $"Token {token} at {index} must appear strictly after previous token at {lastIndex}");
+                lastIndex = index;
+            }
+        }
+    }
+
+    private static async Task StreamBufferHighFrequency10kDeltaDrainAsync()
+    {
+        const int totalDeltas = 10000;
+        using var buffer = new TranslationStreamBuffer("session-10k", "req-10k", 1);
+
+        var drainedSb = new StringBuilder();
+        var drainCount = 0;
+
+        var producerTask = Task.Run(async () =>
+        {
+            for (var i = 0; i < totalDeltas; i++)
+            {
+                var delta = $"d{i}_";
+                var ok = buffer.TryAppend(delta);
+                if (!ok)
+                {
+                    throw new InvalidOperationException($"TryAppend failed at {i}");
+                }
+                if (i % 250 == 0)
+                {
+                    await Task.Yield();
+                }
+            }
+            buffer.Complete();
+        });
+
+        var consumerTask = Task.Run(async () =>
+        {
+            while (true)
+            {
+                var chunk = buffer.DrainText();
+                if (chunk.Length > 0)
+                {
+                    drainedSb.Append(chunk);
+                    drainCount++;
+                }
+
+                if (buffer.IsCompleted)
+                {
+                    // Perform final drain to guarantee zero tail loss
+                    var tail = buffer.DrainText();
+                    if (tail.Length > 0)
+                    {
+                        drainedSb.Append(tail);
+                        drainCount++;
+                    }
+                    break;
+                }
+
+                await Task.Yield();
+            }
+        });
+
+        await Task.WhenAll(producerTask, consumerTask);
+
+        Equal(totalDeltas, (int)buffer.DeltaCount, "10k deltas counted");
+        Equal(buffer.CharCount, (long)drainedSb.Length, "Drained chars must match char count");
+        True(buffer.FlushCount > 0, "Flush count should be positive");
+
+        var expectedSb = new StringBuilder();
+        for (var i = 0; i < totalDeltas; i++)
+        {
+            expectedSb.Append($"d{i}_");
+        }
+        Equal(expectedSb.ToString(), drainedSb.ToString(), "All 10k deltas drained without loss or corruption");
+    }
+
+    private static void StreamBufferHardLimitAbortsWithoutSilentDrop()
+    {
+        // 1. Test Char limit
+        {
+            using var buffer = new TranslationStreamBuffer("sess-lim", "req-lim", 1, maxChars: 50, maxBytes: 1000);
+            var ok1 = buffer.TryAppend("12345678901234567890"); // 20 chars
+            True(ok1, "First 20 chars should succeed");
+            var ok2 = buffer.TryAppend("12345678901234567890"); // 20 chars (40 total)
+            True(ok2, "Second 20 chars should succeed");
+
+            // Exceeds 50 (40 + 20 = 60 > 50)
+            var ok3 = buffer.TryAppend("12345678901234567890");
+            True(!ok3, "Third append must return false due to maxChars limit");
+            True(buffer.IsAborted, "Buffer must transition to Aborted state");
+            Equal(40L, buffer.CharCount, "CharCount must stay at 40 without partial silent drop");
+
+            // Pending text before overflow must still be safely drainable
+            var drained = buffer.DrainText();
+            Equal("1234567890123456789012345678901234567890", drained, "Pending text up to limit must be preserved");
+
+            // Subsequent appends must be rejected
+            var ok4 = buffer.TryAppend("more");
+            True(!ok4, "Append after abort must return false");
+        }
+
+        // 2. Test Byte limit with UTF-8 multi-byte
+        {
+            using var buffer = new TranslationStreamBuffer("sess-byte", "req-byte", 1, maxChars: 1000, maxBytes: 20);
+            // "你好世界" is 4 CJK chars, 12 UTF-8 bytes
+            var ok1 = buffer.TryAppendUtf8(Encoding.UTF8.GetBytes("你好世界"));
+            True(ok1, "First 12 bytes UTF-8 append should succeed");
+
+            // Another "你好世界" is 12 bytes (total 24 > 20)
+            var ok2 = buffer.TryAppendUtf8(Encoding.UTF8.GetBytes("你好世界"));
+            True(!ok2, "Second append must return false due to maxBytes limit");
+            True(buffer.IsAborted, "Buffer must transition to Aborted state");
+            Equal(12L, buffer.ByteCount, "ByteCount must stay at 12 without corruption");
+
+            var drained = buffer.DrainText();
+            Equal("你好世界", drained, "Pending text up to byte limit must be preserved");
+        }
+    }
+
+    private static void StreamBufferCompleteFinalDrainZeroTailLoss()
+    {
+        using var buffer = new TranslationStreamBuffer("sess-tail", "req-tail", 1);
+        buffer.TryAppend("Hello, ");
+        buffer.TryAppend("world!");
+
+        True(buffer.IsActive, "Buffer is active");
+        var completed = buffer.Complete();
+        True(completed, "First Complete() returns true");
+        True(buffer.IsCompleted, "Buffer is completed");
+        True(!buffer.IsActive, "Buffer is no longer active");
+
+        // Attempting to append after completion is rejected
+        var appendedAfter = buffer.TryAppend("extra");
+        True(!appendedAfter, "Append after complete returns false");
+
+        // Final drain receives all remaining pending text
+        var batch = buffer.DrainBatch();
+        Equal("Hello, world!", batch.Text, "Final drain must retrieve all tail text");
+        Equal(2L, batch.DeltaCount, "Delta count is 2");
+        Equal(13L, batch.AccumulatedCharCount, "Char count is 13");
+        True(batch.State == TranslationStreamState.Completed, "Drain batch shows completed state");
+
+        // Subsequent drain is empty
+        var empty = buffer.DrainText();
+        Equal(string.Empty, empty, "Subsequent drain should be empty");
+
+        // Complete is idempotent
+        var secondComplete = buffer.Complete();
+        True(!secondComplete, "Subsequent Complete() returns false");
+    }
+
+    private static void StreamBufferEmptyDeltaHandling()
+    {
+        using var buffer = new TranslationStreamBuffer("sess-empty", "req-empty", 1);
+
+        True(buffer.TryAppend(string.Empty), "Empty string append should succeed");
+        True(buffer.TryAppend((string?)null), "Null string append should succeed");
+        True(buffer.TryAppend(ReadOnlySpan<char>.Empty), "Empty char span append should succeed");
+        True(buffer.TryAppendUtf8(ReadOnlySpan<byte>.Empty), "Empty byte span append should succeed");
+        True(buffer.TryAppendUtf8(IntPtr.Zero, 0), "Zero IntPtr append should succeed");
+
+        Equal(0L, buffer.DeltaCount, "Empty appends should not increment delta count");
+        Equal(0L, buffer.CharCount, "Empty appends should not increment char count");
+        Equal(0L, buffer.ByteCount, "Empty appends should not increment byte count");
+        True(!buffer.HasPending, "Buffer has no pending text");
+
+        True(buffer.TryAppend("real"), "Real delta succeeds");
+        Equal(1L, buffer.DeltaCount, "Delta count is 1");
+        Equal(4L, buffer.CharCount, "Char count is 4");
+
+        buffer.Complete();
+        True(!buffer.TryAppend(string.Empty), "Empty append after completion returns false");
+    }
+
+    private static void StreamBufferUnicodeAndUtf8MultiByteSupport()
+    {
+        using var buffer = new TranslationStreamBuffer("sess-uni", "req-uni", 1);
+
+        var utf8Snippet = Encoding.UTF8.GetBytes("【翻译测试】🚀 ⟦PG_TOKEN_001⟧ → café résumé & 𠮷野家");
+        True(buffer.TryAppendUtf8(utf8Snippet), "TryAppendUtf8 with CJK, emojis and tokens");
+
+        // Test large payload exceeding stackalloc limit (>256 chars) to exercise ArrayPool path
+        var largeText = new string('★', 500);
+        var largeUtf8 = Encoding.UTF8.GetBytes(largeText);
+        True(buffer.TryAppendUtf8(largeUtf8), "TryAppendUtf8 with large payload");
+
+        // Test native pointer overload
+        var nativeSnippet = "Native pointer UTF-8 payload: 汉字测试";
+        var nativeBytes = Encoding.UTF8.GetBytes(nativeSnippet);
+        var nativePtr = Marshal.AllocHGlobal(nativeBytes.Length);
+        try
+        {
+            Marshal.Copy(nativeBytes, 0, nativePtr, nativeBytes.Length);
+            var ok = buffer.TryAppendUtf8(nativePtr, nativeBytes.Length);
+            True(ok, "TryAppendUtf8 via native pointer");
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(nativePtr);
+        }
+
+        var expectedCombined = "【翻译测试】🚀 ⟦PG_TOKEN_001⟧ → café résumé & 𠮷野家" + largeText + nativeSnippet;
+        var accumulated = buffer.GetAccumulatedText();
+        Equal(expectedCombined, accumulated, "Accumulated text matches combined unicode string");
+
+        var drained = buffer.DrainText();
+        Equal(expectedCombined, drained, "Drained text matches combined unicode string");
+    }
+
+    private static void StreamBufferLifecycleAndIdempotence()
+    {
+        // 1. Idempotent Complete
+        using (var buffer = new TranslationStreamBuffer("sess-idem1", "req-idem1", 1))
+        {
+            var results = new bool[8];
+            Parallel.For(0, 8, i =>
+            {
+                results[i] = buffer.Complete();
+            });
+
+            var trueCount = results.Count(r => r);
+            Equal(1, trueCount, "Exactly one Complete() call must return true");
+            True(buffer.IsCompleted, "Buffer must be in Completed state");
+        }
+
+        // 2. Idempotent Abort
+        using (var buffer = new TranslationStreamBuffer("sess-idem2", "req-idem2", 1))
+        {
+            var results = new bool[8];
+            Parallel.For(0, 8, i =>
+            {
+                results[i] = buffer.Abort($"abort-thread-{i}");
+            });
+
+            var trueCount = results.Count(r => r);
+            Equal(1, trueCount, "Exactly one Abort() call must return true");
+            True(buffer.IsAborted, "Buffer must be in Aborted state");
+        }
+
+        // 3. Reset and Reuse
+        using (var buffer = new TranslationStreamBuffer("sess-reset", "req-reset", 1))
+        {
+            buffer.TryAppend("initial-delta");
+            buffer.Complete();
+            True(buffer.IsCompleted, "State is completed");
+
+            buffer.Reset();
+            True(buffer.IsActive, "Reset returns state to Active");
+            Equal(0L, buffer.DeltaCount, "Delta count reset");
+            Equal(0L, buffer.CharCount, "Char count reset");
+            Equal(0L, buffer.FlushCount, "Flush count reset");
+            Equal(string.Empty, buffer.DrainText(), "Pending text reset");
+
+            var ok = buffer.TryAppend("after-reset");
+            True(ok, "TryAppend succeeds after Reset");
+            Equal("after-reset", buffer.DrainText(), "Drain returns new text after Reset");
+        }
+
+        // 4. Dispose idempotence
+        var dispBuffer = new TranslationStreamBuffer("sess-disp", "req-disp", 1);
+        dispBuffer.Dispose();
+        dispBuffer.Dispose();
+        True(dispBuffer.IsDisposed, "Buffer is disposed");
+        True(!dispBuffer.TryAppend("test"), "Append on disposed buffer returns false");
+    }
+
+    private static void StreamBufferSessionEpochFencingAndTtftMetrics()
+    {
+        var startTimestamp = Stopwatch.GetTimestamp();
+        using var buffer = new TranslationStreamBuffer("session-alpha", "req-beta", epoch: 7);
+
+        // Fencing
+        True(buffer.IsSessionMatch("session-alpha", 7), "Matching session and epoch must pass");
+        True(!buffer.IsSessionMatch("session-alpha", 6), "Stale epoch must fail");
+        True(!buffer.IsSessionMatch("session-other", 7), "Mismatched session id must fail");
+
+        // TTFT before first delta
+        True(!buffer.HasFirstDelta, "HasFirstDelta should be false before any delta");
+        True(buffer.GetTtft(startTimestamp) == null, "TTFT should be null before any delta");
+        True(buffer.GetTtftMilliseconds(startTimestamp) == null, "TTFT ms should be null before any delta");
+
+        Thread.Sleep(2);
+
+        // First delta records TTFT timestamp
+        buffer.TryAppend("chunk1");
+        True(buffer.HasFirstDelta, "HasFirstDelta should be true after first delta");
+        var firstTicks = buffer.FirstDeltaTimestampTicks;
+        True(firstTicks > 0, "FirstDeltaTimestampTicks must be positive");
+
+        var ttft = buffer.GetTtft(startTimestamp);
+        True(ttft.HasValue && ttft.Value >= TimeSpan.Zero, "TTFT duration must be >= 0");
+
+        var ttftMs = buffer.GetTtftMilliseconds(startTimestamp);
+        True(ttftMs.HasValue && ttftMs.Value >= 0.0, "TTFT ms must be >= 0");
+
+        // Subsequent deltas must NOT overwrite first delta timestamp
+        Thread.Sleep(2);
+        buffer.TryAppend("chunk2");
+        Equal(firstTicks, buffer.FirstDeltaTimestampTicks, "FirstDeltaTimestampTicks must remain fixed on subsequent deltas");
+    }
+
+    private static void StreamBufferCallbackThunkHandlesChineseUtf8()
+    {
+        using var buffer = new TranslationStreamBuffer("session-thunk1", "req-thunk1", epoch: 1);
+        var handle = GCHandle.Alloc(buffer);
+        try
+        {
+            var userData = GCHandle.ToIntPtr(handle);
+            var text = "你好，流式翻译世界！🚀 UTF-8 多字节测试。";
+            var bytes = Encoding.UTF8.GetBytes(text);
+            var ptr = Marshal.AllocHGlobal(bytes.Length);
+            try
+            {
+                Marshal.Copy(bytes, 0, ptr, bytes.Length);
+
+                // Call ProcessStreamDelta (event_type = 1 for POPGLOT_STREAM_EVENT_TEXT_DELTA_V1)
+                var result = CoreBridge.ProcessStreamDelta(userData, 1, ptr, (nuint)bytes.Length);
+                Equal(0, result, "ProcessStreamDelta must return 0 to continue streaming");
+
+                var drained = buffer.DrainText();
+                Equal(text, drained, "Drained text must match original UTF-8 text");
+                Equal((long)text.Length, buffer.CharCount, "Char count must match");
+                Equal((long)bytes.Length, buffer.ByteCount, "Byte count must match");
+                Equal(1L, buffer.DeltaCount, "Delta count must be 1");
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(ptr);
+            }
+        }
+        finally
+        {
+            if (handle.IsAllocated)
+            {
+                handle.Free();
+            }
+        }
+    }
+
+    private static void StreamBufferCallbackThunkAbortsAndBackpressures()
+    {
+        // 1. Manually aborted buffer returns 1 (abort signal)
+        using (var buffer = new TranslationStreamBuffer("session-abort1", "req-abort1", epoch: 1))
+        {
+            buffer.Abort("User stopped");
+            var handle = GCHandle.Alloc(buffer);
+            try
+            {
+                var userData = GCHandle.ToIntPtr(handle);
+                var text = "delta-after-abort";
+                var bytes = Encoding.UTF8.GetBytes(text);
+                var ptr = Marshal.AllocHGlobal(bytes.Length);
+                try
+                {
+                    Marshal.Copy(bytes, 0, ptr, bytes.Length);
+                    var result = CoreBridge.ProcessStreamDelta(userData, 1, ptr, (nuint)bytes.Length);
+                    Equal(1, result, "ProcessStreamDelta on aborted buffer must return 1 to abort FFI stream");
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(ptr);
+                }
+            }
+            finally
+            {
+                if (handle.IsAllocated)
+                {
+                    handle.Free();
+                }
+            }
+        }
+
+        // 2. Hard limit breach triggers abort and returns 1
+        using (var limitedBuffer = new TranslationStreamBuffer("session-limit", "req-limit", epoch: 1, maxChars: 5, maxBytes: 10))
+        {
+            var handle = GCHandle.Alloc(limitedBuffer);
+            try
+            {
+                var userData = GCHandle.ToIntPtr(handle);
+                var text = "1234567890_exceeding_chars";
+                var bytes = Encoding.UTF8.GetBytes(text);
+                var ptr = Marshal.AllocHGlobal(bytes.Length);
+                try
+                {
+                    Marshal.Copy(bytes, 0, ptr, bytes.Length);
+                    var result = CoreBridge.ProcessStreamDelta(userData, 1, ptr, (nuint)bytes.Length);
+                    Equal(1, result, "ProcessStreamDelta on hard limit exceed must return 1");
+                    True(limitedBuffer.IsAborted, "Buffer must transition to Aborted state");
+                    True(limitedBuffer.AbortReason?.Contains("Hard limit exceeded") == true, "Abort reason must be set");
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(ptr);
+                }
+            }
+            finally
+            {
+                if (handle.IsAllocated)
+                {
+                    handle.Free();
+                }
+            }
+        }
+    }
+
+    private static void StreamBufferCallbackThunkInvalidUserDataHandledSafely()
+    {
+        var text = "sample delta";
+        var bytes = Encoding.UTF8.GetBytes(text);
+        var ptr = Marshal.AllocHGlobal(bytes.Length);
+        try
+        {
+            Marshal.Copy(bytes, 0, ptr, bytes.Length);
+
+            // 1. Null user_data returns 0
+            var resNull = CoreBridge.ProcessStreamDelta(IntPtr.Zero, 1, ptr, (nuint)bytes.Length);
+            Equal(0, resNull, "Null userData must safely return 0 without throwing");
+
+            // 2. Freed GCHandle returns 1 gracefully
+            var tempBuffer = new TranslationStreamBuffer("sess-freed", "req-freed", 1);
+            var freedHandle = GCHandle.Alloc(tempBuffer);
+            var freedPtr = GCHandle.ToIntPtr(freedHandle);
+            freedHandle.Free();
+            var resFreed = CoreBridge.ProcessStreamDelta(freedPtr, 1, ptr, (nuint)bytes.Length);
+            Equal(1, resFreed, "Freed GCHandle must safely return 1 without crashing");
+
+            // 3. Non-delta eventType on active buffer
+            using var buffer = new TranslationStreamBuffer("sess-events", "req-events", 1);
+            var handle = GCHandle.Alloc(buffer);
+            try
+            {
+                var userData = GCHandle.ToIntPtr(handle);
+                var resUnknownEvent = CoreBridge.ProcessStreamDelta(userData, 99, ptr, (nuint)bytes.Length);
+                Equal(0, resUnknownEvent, "Unknown event type on active buffer returns 0");
+
+                // 4. Payload overflow
+                var resOverflow = CoreBridge.ProcessStreamDelta(userData, 1, ptr, unchecked((nuint)long.MaxValue));
+                Equal(1, resOverflow, "Overflow payload length returns 1 and aborts");
+                True(buffer.IsAborted, "Buffer aborted on overflow payload");
+            }
+            finally
+            {
+                if (handle.IsAllocated) handle.Free();
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(ptr);
+        }
+    }
+
+    private static void FinalEnvelopeDeserializationAndErrorChecking()
+    {
+        // 1. Success Envelope deserializes to TranslationResponse
+        var successJson = """
+            {
+                "ok": true,
+                "data": {
+                    "result": {
+                        "translated_text": "你好，世界！",
+                        "transcription": "Hello, world!",
+                        "explanation": "标准问候语",
+                        "protected_terms": ["world"],
+                        "warnings": [],
+                        "phonetic": "nǐ hǎo"
+                    },
+                    "diagnostics": {
+                        "request_id": "req-streaming-123",
+                        "provider_type": "OpenAiCompatible",
+                        "endpoint": "https://api.openai.com/v1",
+                        "attempts": 1,
+                        "status_code": 200,
+                        "elapsed_ms": 250
+                    }
+                },
+                "error": null
+            }
+            """;
+
+        var response = CoreBridge.EnsureSuccess<TranslationResponse>(successJson);
+        Equal("你好，世界！", response.Result.TranslatedText, "TranslatedText matches");
+        Equal("Hello, world!", response.Result.Transcription, "Transcription matches");
+        Equal("标准问候语", response.Result.Explanation, "Explanation matches");
+        Equal("nǐ hǎo", response.Result.Phonetic, "Phonetic matches");
+        Equal("req-streaming-123", response.Diagnostics.RequestId, "RequestId matches");
+        Equal(ProviderType.OpenAiCompatible, response.Diagnostics.ProviderType, "ProviderType matches");
+
+        // 2. Failure Envelope throws with exact error message
+        var failureJson = """
+            {
+                "ok": false,
+                "data": null,
+                "error": "API 请求被限流 (HTTP 429 Too Many Requests)"
+            }
+            """;
+
+        var thrown = false;
+        try
+        {
+            CoreBridge.EnsureSuccess<TranslationResponse>(failureJson);
+        }
+        catch (InvalidOperationException ex)
+        {
+            thrown = true;
+            True(ex.Message.Contains("API 请求被限流"), "Exception message must contain the exact core error");
+        }
+        True(thrown, "EnsureSuccess must throw on ok: false envelope");
+
+        // 3. Null or malformed Envelope throws
+        var malformedThrown = false;
+        try
+        {
+            CoreBridge.EnsureSuccess<TranslationResponse>("{}");
+        }
+        catch (InvalidOperationException)
+        {
+            malformedThrown = true;
+        }
+        True(malformedThrown, "EnsureSuccess must throw on empty/missing data envelope");
+    }
+
+    private static void StreamSessionPropertiesAndLifecycle()
+    {
+        using var buffer = new TranslationStreamBuffer("session-wrap", "req-wrap", epoch: 3);
+        var tcs = new TaskCompletionSource<TranslationResponse>();
+        var session = new TranslationStreamSession(buffer, tcs.Task);
+
+        Equal(buffer, session.Buffer, "Session buffer must match provided buffer");
+        Equal(tcs.Task, session.Completion, "Session completion task must match");
+        True(!session.Completion.IsCompleted, "Completion task is pending");
+
+        var dummyResponse = new TranslationResponse(
+            new TranslationResult("已翻译", "", "", [], []),
+            new ProviderDiagnostics("req-wrap", ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 100));
+
+        tcs.SetResult(dummyResponse);
+        True(session.Completion.IsCompletedSuccessfully, "Completion task resolved successfully");
+        Equal("已翻译", session.Completion.Result.Result.TranslatedText, "Result translated text matches");
+    }
+
+    // ================= Coordinator streaming and lifecycle tests =================
+
+    private sealed class SynchronousProgress<T> : IProgress<T>
+    {
+        private readonly Action<T> _handler;
+        public SynchronousProgress(Action<T> handler) => _handler = handler ?? throw new ArgumentNullException(nameof(handler));
+        public void Report(T value) => _handler(value);
+    }
+
+    private sealed class FakeHistoryRepository : IHistoryRepository
+    {
+        public List<TranslationHistoryEntry> Entries { get; } = new();
+
+        public IReadOnlyList<TranslationHistoryEntry> Load() => Entries;
+
+        public HistoryAddResult TryAdd(TranslationHistoryEntry entry, bool enabled)
+        {
+            if (!enabled) return HistoryAddResult.Disabled;
+            Entries.Add(entry);
+            return HistoryAddResult.Stored;
+        }
+
+        public bool Remove(Guid id) => Entries.RemoveAll(e => e.Id == id) > 0;
+        public bool Clear() { Entries.Clear(); return true; }
+        public string ExportToCsv() => string.Empty;
+        public string ExportToMarkdown() => string.Empty;
+    }
+
+    private sealed class FakeTranslationExecutor : ITranslationExecutor
+    {
+        public ProviderSettings Settings { get; set; } = CoreBridge.GetSettings() with
+        {
+            ProviderType = ProviderType.OpenAiCompatible,
+            TextModel = "fake-model",
+            NetworkEnabled = true,
+            SafeDevMode = false,
+            Mode = TranslationMode.Auto,
+        };
+
+        public ProviderRoute? TextRoute { get; set; }
+        public ProviderRoute? VisionRoute { get; set; }
+        public ResolvedRoute? ScreenshotRoute { get; set; }
+        public string? ApiKey { get; set; } = "fake-api-key";
+        public bool IsOcrSupported { get; set; } = true;
+        public string OcrRecognizedText { get; set; } = "Recognized Text From OCR";
+        public int OcrCallCount { get; set; }
+
+        public Func<string?, string, string, string, string, long, CancellationToken, TranslationStreamSession>? OnStreamText { get; set; }
+        public Func<ProviderSettings, string, string, string, string, string, long, CancellationToken, TranslationStreamSession>? OnStreamTextDraft { get; set; }
+        public Func<ProviderSettings, string, string, byte[], string, string, string, long, CancellationToken, TranslationStreamSession>? OnStreamVisionDraft { get; set; }
+        public Func<string, string, string, CancellationToken, Task<TranslationResponse>>? OnTranslateFree { get; set; }
+
+        public ProviderSettings GetSettings() => Settings;
+
+        public (ProviderRoute? Text, ProviderRoute? Vision) ResolveRoutes() => (TextRoute, VisionRoute);
+
+        public ResolvedRoute ResolveScreenshotRoute(ProviderSettings settings, bool ocrAvailable)
+        {
+            if (ScreenshotRoute is not null) return ScreenshotRoute;
+            return new ResolvedRoute(TextRoute, VisionRoute, ScreenshotPipeline.LocalOcr, false, "Auto local OCR");
+        }
+
+        public string? LoadApiKey(string target) => ApiKey;
+
+        public Task<string> RecognizeOcrTextAsync(byte[] imageBytes, string sourceLang, CancellationToken cancellationToken = default)
+        {
+            OcrCallCount++;
+            return Task.FromResult(OcrRecognizedText);
+        }
+
+        public TranslationStreamSession StreamText(
+            string? apiKey,
+            string source,
+            string sourceLang,
+            string targetLang,
+            string sessionId,
+            long epoch,
+            CancellationToken cancellationToken)
+        {
+            if (OnStreamText is not null)
+            {
+                return OnStreamText(apiKey, source, sourceLang, targetLang, sessionId, epoch, cancellationToken);
+            }
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+            return new TranslationStreamSession(buffer, tcs.Task);
+        }
+
+        public TranslationStreamSession StreamTextDraft(
+            ProviderSettings draftSettings,
+            string apiKey,
+            string source,
+            string sourceLang,
+            string targetLang,
+            string sessionId,
+            long epoch,
+            CancellationToken cancellationToken)
+        {
+            if (OnStreamTextDraft is not null)
+            {
+                return OnStreamTextDraft(draftSettings, apiKey, source, sourceLang, targetLang, sessionId, epoch, cancellationToken);
+            }
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+            return new TranslationStreamSession(buffer, tcs.Task);
+        }
+
+        public TranslationStreamSession StreamVisionDraft(
+            ProviderSettings draftSettings,
+            string textApiKey,
+            string visionApiKey,
+            byte[] image,
+            string sourceLang,
+            string targetLang,
+            string sessionId,
+            long epoch,
+            CancellationToken cancellationToken)
+        {
+            if (OnStreamVisionDraft is not null)
+            {
+                return OnStreamVisionDraft(draftSettings, textApiKey, visionApiKey, image, sourceLang, targetLang, sessionId, epoch, cancellationToken);
+            }
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+            return new TranslationStreamSession(buffer, tcs.Task);
+        }
+
+        public Task<TranslationResponse> TranslateFreeAsync(
+            string source,
+            string sourceLang,
+            string targetLang,
+            CancellationToken cancellationToken)
+        {
+            if (OnTranslateFree is not null)
+            {
+                return OnTranslateFree(source, sourceLang, targetLang, cancellationToken);
+            }
+            return Task.FromResult(new TranslationResponse(
+                new TranslationResult(
+                    TranslatedText: "免费翻译结果: " + source,
+                    Transcription: string.Empty,
+                    Explanation: string.Empty,
+                    ProtectedTerms: [],
+                    Warnings: []),
+                new ProviderDiagnostics(
+                    RequestId: FreeTranslateService.RequestId,
+                    ProviderType: ProviderType.OpenAiCompatible,
+                    Endpoint: "https://free.example.com",
+                    Attempts: 1,
+                    StatusCode: 200,
+                    ElapsedMs: 10)));
+        }
+    }
+
+    private static async Task CoordinatorDeltaArrivesBeforeCompletionAsync()
+    {
+        var history = new FakeHistoryRepository();
+        var executor = new FakeTranslationExecutor();
+        var updates = new List<TranslationStreamUpdate>();
+        var progressLock = new object();
+        var progress = new SynchronousProgress<TranslationStreamUpdate>(u =>
+        {
+            lock (progressLock) updates.Add(u);
+        });
+
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(20);
+                buffer.TryAppend("Hello ");
+                await Task.Delay(60);
+                buffer.TryAppend("World");
+                await Task.Delay(60);
+                buffer.Complete();
+                tcs.SetResult(new TranslationResponse(
+                    new TranslationResult("Hello World", "", "", [], []),
+                    new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 140)));
+            });
+
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        var coordinator = new TranslationCoordinator(history: history, executor: executor);
+        var session = await coordinator.TranslateTextAsync("你好", "zh", "en", TranslationInputSource.Selection, progress: progress, epoch: 101);
+
+        Equal("Hello World", session.TranslatedText, "Session translated text must match full result");
+        Equal(TranslationSessionStage.Completed, session.Stage, "Final stage must be Completed");
+
+        lock (progressLock)
+        {
+            True(updates.Count >= 2, $"Expected at least 2 stream updates, got {updates.Count}");
+            Equal(101L, updates[0].Epoch, "Epoch must propagate to first update");
+            Equal(TranslationStreamUpdateKind.Delta, updates[0].Kind, "First update must be Delta");
+            Equal("Hello ", updates[0].Delta, "First delta text must match");
+            Equal("Hello ", updates[0].AccumulatedText, "First accumulated text must match");
+            True(updates[0].IsPartial, "Stream update during pump must be partial");
+        }
+    }
+
+    private static async Task CoordinatorThrottlingMergesDeltasAsync()
+    {
+        var executor = new FakeTranslationExecutor();
+        var updates = new List<TranslationStreamUpdate>();
+        var progressLock = new object();
+        var progress = new SynchronousProgress<TranslationStreamUpdate>(u =>
+        {
+            lock (progressLock) updates.Add(u);
+        });
+
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+
+            _ = Task.Run(async () =>
+            {
+                for (int i = 0; i < 20; i++)
+                {
+                    buffer.TryAppend($"[{i}]");
+                    await Task.Delay(2);
+                }
+                await Task.Delay(100);
+                buffer.Complete();
+                var full = string.Concat(Enumerable.Range(0, 20).Select(i => $"[{i}]"));
+                tcs.SetResult(new TranslationResponse(
+                    new TranslationResult(full, "", "", [], []),
+                    new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 150)));
+            });
+
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        var coordinator = new TranslationCoordinator(executor: executor);
+        var session = await coordinator.TranslateTextAsync("test", "en", "zh", TranslationInputSource.Selection, progress: progress);
+
+        var expectedFull = string.Concat(Enumerable.Range(0, 20).Select(i => $"[{i}]"));
+        Equal(expectedFull, session.TranslatedText, "All 20 rapid chunks must be present without character loss");
+
+        lock (progressLock)
+        {
+            True(updates.Count < 20, $"Batch throttling must merge 20 deltas into fewer updates, got {updates.Count}");
+            True(updates.Count > 0, "At least one update must be reported");
+        }
+    }
+
+    private static async Task CoordinatorFinalDrainDeliversTailAsync()
+    {
+        var executor = new FakeTranslationExecutor();
+        var updates = new List<TranslationStreamUpdate>();
+        var progressLock = new object();
+        var progress = new SynchronousProgress<TranslationStreamUpdate>(u =>
+        {
+            lock (progressLock) updates.Add(u);
+        });
+
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+
+            _ = Task.Run(async () =>
+            {
+                buffer.TryAppend("chunk1");
+                await Task.Delay(50);
+                buffer.TryAppend("tail_chunk");
+                buffer.Complete();
+                tcs.SetResult(new TranslationResponse(
+                    new TranslationResult("chunk1tail_chunk", "", "", [], []),
+                    new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 60)));
+            });
+
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        var coordinator = new TranslationCoordinator(executor: executor);
+        var session = await coordinator.TranslateTextAsync("test", "en", "zh", TranslationInputSource.Selection, progress: progress);
+
+        Equal("chunk1tail_chunk", session.TranslatedText, "Session must contain final tail chunk");
+        lock (progressLock)
+        {
+            Equal("chunk1tail_chunk", updates.Last().AccumulatedText, "Last update must contain final tail chunk");
+        }
+    }
+
+    private static async Task CoordinatorFinalCalibrationReplacesTextAsync()
+    {
+        var executor = new FakeTranslationExecutor();
+        var coordinator = new TranslationCoordinator(executor: executor);
+
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+
+            _ = Task.Run(async () =>
+            {
+                buffer.TryAppend("raw stream text with ⟦PG_0001⟧ placeholder");
+                await Task.Delay(50);
+                buffer.Complete();
+                tcs.SetResult(new TranslationResponse(
+                    new TranslationResult(
+                        TranslatedText: "calibrated text with <https://example.com> restored",
+                        Transcription: "transcription",
+                        Explanation: "detailed explanation",
+                        ProtectedTerms: ["<https://example.com>"],
+                        Warnings: []),
+                    new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 60)));
+            });
+
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        var session = await coordinator.TranslateTextAsync("source", "en", "zh", TranslationInputSource.Selection);
+
+        Equal("calibrated text with <https://example.com> restored", session.TranslatedText, "Final text must be calibrated from response");
+        Equal("detailed explanation", session.Explanation, "Explanation must be populated from final response");
+        Equal(1, session.ProtectedTerms.Count, "Protected terms must be populated");
+        Equal(TranslationSessionStage.Completed, session.Stage);
+    }
+
+    private static async Task CoordinatorErrorAndCancellationPreservePartialAndNoHistoryAsync()
+    {
+        var history = new FakeHistoryRepository();
+        var executor = new FakeTranslationExecutor();
+        var coordinator = new TranslationCoordinator(history: history, executor: executor);
+
+        // 1. Cancellation test
+        using var cts = new CancellationTokenSource();
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+
+            _ = Task.Run(async () =>
+            {
+                buffer.TryAppend("partial cancellation text");
+                await Task.Delay(50);
+                cts.Cancel();
+                tcs.SetCanceled(cts.Token);
+            });
+
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        var cancelledSession = await coordinator.TranslateTextAsync("cancel me", "en", "zh", TranslationInputSource.Selection, cancellationToken: cts.Token);
+
+        Equal(TranslationSessionStage.Cancelled, cancelledSession.Stage, "Stage must be Cancelled");
+        Equal("partial cancellation text", cancelledSession.TranslatedText, "Partial text must be preserved on cancellation");
+        Equal(0, history.Entries.Count, "History must NOT be written on cancellation");
+
+        // 2. Error test
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+
+            _ = Task.Run(async () =>
+            {
+                buffer.TryAppend("partial error text");
+                await Task.Delay(50);
+                tcs.SetException(new InvalidOperationException("API 请求被限流 (429 Too Many Requests)"));
+            });
+
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        var failedSession = await coordinator.TranslateTextAsync("error me", "en", "zh", TranslationInputSource.Selection);
+
+        Equal(TranslationSessionStage.Failed, failedSession.Stage, "Stage must be Failed");
+        Equal("partial error text", failedSession.TranslatedText, "Partial text must be preserved on error");
+        True(failedSession.Error is not null, "Error must be classified");
+        Equal(TranslationErrorKind.RateLimited, failedSession.Error!.Kind, "Error must be classified as RateLimited");
+        Equal(0, history.Entries.Count, "History must NOT be written on failure");
+    }
+
+    private static async Task CoordinatorSuccessfulTranslationWritesHistoryOnceAsync()
+    {
+        var history = new FakeHistoryRepository();
+        var executor = new FakeTranslationExecutor();
+        var coordinator = new TranslationCoordinator(history: history, executor: executor);
+
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+
+            _ = Task.Run(async () =>
+            {
+                buffer.TryAppend("Translated success");
+                await Task.Delay(50);
+                buffer.Complete();
+                tcs.SetResult(new TranslationResponse(
+                    new TranslationResult("Translated success", "", "", [], []),
+                    new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 60)));
+            });
+
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        var session = await coordinator.TranslateTextAsync("Hello world", "en", "zh", TranslationInputSource.Selection);
+
+        Equal(TranslationSessionStage.Completed, session.Stage);
+        Equal(1, history.Entries.Count, "History must be written exactly once on success");
+        Equal("Hello world", history.Entries[0].Source);
+        Equal("Translated success", history.Entries[0].Translation);
+        Equal("划词", history.Entries[0].SourceKind);
+    }
+
+    private static async Task CoordinatorFreeSingleShotAsync()
+    {
+        var prevLoader = OutboundPolicy.SettingsLoader;
+        try
+        {
+            OutboundPolicy.SettingsLoader = () => ShellSettingsStore.Load() with
+            {
+                FreeEngineConsent = FreeEngineConsent.Allowed,
+                HistoryEnabled = true,
+            };
+            var history = new FakeHistoryRepository();
+            var executor = new FakeTranslationExecutor
+            {
+                ApiKey = null,
+                TextRoute = null,
+                VisionRoute = null,
+                Settings = CoreBridge.GetSettings() with
+                {
+                    ProviderType = ProviderType.OpenAiCompatible,
+                    TextModel = "",
+                    VisionModel = "",
+                    NetworkEnabled = true,
+                    SafeDevMode = false,
+                }
+            };
+            var coordinator = new TranslationCoordinator(history: history, executor: executor);
+            var updates = new List<TranslationStreamUpdate>();
+            var progressLock = new object();
+            var progress = new SynchronousProgress<TranslationStreamUpdate>(u =>
+            {
+                lock (progressLock) updates.Add(u);
+            });
+
+            executor.OnTranslateFree = (source, sourceLang, targetLang, ct) =>
+            {
+                return Task.FromResult(new TranslationResponse(
+                    new TranslationResult("内置免费引擎译文", "", "", [], []),
+                    new ProviderDiagnostics(FreeTranslateService.RequestId, ProviderType.OpenAiCompatible, "https://free.example.com", 1, 200, 30)));
+            };
+
+            var session = await coordinator.TranslateTextAsync("Free text", "en", "zh", TranslationInputSource.Manual, progress: progress);
+
+            Equal(TranslationSessionStage.Completed, session.Stage);
+            Equal("内置免费引擎", session.PipelineLabel);
+            Equal("内置免费引擎译文", session.TranslatedText);
+            Equal(1, history.Entries.Count, "History must be written once for free engine");
+
+            lock (progressLock)
+            {
+                Equal(2, updates.Count, "Free engine should emit Reset then Delta");
+                Equal(TranslationStreamUpdateKind.Reset, updates[0].Kind);
+                Equal(TranslationStreamUpdateKind.Delta, updates[1].Kind);
+                Equal("内置免费引擎译文", updates[1].Delta);
+            }
+        }
+        finally
+        {
+            OutboundPolicy.SettingsLoader = prevLoader;
+        }
+    }
+
+    private static async Task CoordinatorVisionWithDeltaFailureDoesNotOcrFallbackAsync()
+    {
+        var executor = new FakeTranslationExecutor();
+        var dummyProfile = new ProviderProfile
+        {
+            Id = "vision-test",
+            SupportsVision = true,
+            VisionModel = "vision-model",
+            ApiBaseUrl = "https://api.openai.com",
+        };
+        var visionRoute = new ProviderRoute(dummyProfile, "fake-target");
+        executor.VisionRoute = visionRoute;
+        executor.ScreenshotRoute = new ResolvedRoute(null, visionRoute, ScreenshotPipeline.VisionDirect, true, "Vision direct");
+        executor.Settings = executor.Settings with { Mode = TranslationMode.Auto };
+
+        executor.OnStreamVisionDraft = (draftSettings, textKey, visionKey, img, sLang, tLang, sessionId, epoch, ct) =>
+        {
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+
+            _ = Task.Run(async () =>
+            {
+                buffer.TryAppend("partial vision delta 1");
+                await Task.Delay(50);
+                tcs.SetException(new InvalidOperationException("Vision network stream interrupted"));
+            });
+
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        var coordinator = new TranslationCoordinator(executor: executor);
+        var dummyImage = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+        var session = await coordinator.TranslateScreenshotAsync(dummyImage, "en", "zh");
+
+        Equal(TranslationSessionStage.Failed, session.Stage, "Stage must be Failed");
+        Equal("partial vision delta 1", session.TranslatedText, "Partial vision text must be preserved");
+        Equal(0, executor.OcrCallCount, "OCR fallback must NOT be called when vision already emitted deltas");
+    }
+
+    private static async Task CoordinatorVisionZeroDeltaFailureFallsBackToOcrAsync()
+    {
+        var history = new FakeHistoryRepository();
+        var executor = new FakeTranslationExecutor();
+        var dummyVisionProfile = new ProviderProfile
+        {
+            Id = "vision-test",
+            SupportsVision = true,
+            VisionModel = "vision-model",
+            ApiBaseUrl = "https://api.openai.com",
+        };
+        var dummyTextProfile = new ProviderProfile
+        {
+            Id = "text-test",
+            SupportsText = true,
+            TextModel = "text-model",
+            ApiBaseUrl = "https://api.openai.com",
+        };
+        var visionRoute = new ProviderRoute(dummyVisionProfile, "fake-vision-target");
+        var textRoute = new ProviderRoute(dummyTextProfile, "fake-text-target");
+        executor.VisionRoute = visionRoute;
+        executor.TextRoute = textRoute;
+        executor.ScreenshotRoute = new ResolvedRoute(textRoute, visionRoute, ScreenshotPipeline.VisionDirect, true, "Vision direct");
+        executor.Settings = executor.Settings with { Mode = TranslationMode.Auto };
+        executor.OcrRecognizedText = "OCR Text From Image";
+
+        executor.OnStreamVisionDraft = (draftSettings, textKey, visionKey, img, sLang, tLang, sessionId, epoch, ct) =>
+        {
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(30);
+                tcs.SetException(new InvalidOperationException("Vision service unavailable"));
+            });
+
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        executor.OnStreamTextDraft = (draftSettings, apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+
+            _ = Task.Run(async () =>
+            {
+                buffer.TryAppend("Fallback OCR Translation");
+                await Task.Delay(50);
+                buffer.Complete();
+                tcs.SetResult(new TranslationResponse(
+                    new TranslationResult("Fallback OCR Translation", "OCR Text From Image", "", [], []),
+                    new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 50)));
+            });
+
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        var coordinator = new TranslationCoordinator(history: history, executor: executor);
+        var dummyImage = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+        var session = await coordinator.TranslateScreenshotAsync(dummyImage, "en", "zh");
+
+        Equal(TranslationSessionStage.Completed, session.Stage);
+        Equal(1, executor.OcrCallCount, "OCR fallback MUST be invoked when vision fails with zero deltas");
+        Equal("OCR Text From Image", session.SourceText);
+        Equal("Fallback OCR Translation", session.TranslatedText);
+        Equal("本地 OCR", session.PipelineLabel);
+        True(session.RoutingReason?.Contains("已回退到本地 OCR") ?? false, "Routing reason must note fallback");
+        Equal(1, history.Entries.Count, "History must be written once");
+    }
+
+    private static async Task CoordinatorEpochPropagationAsync()
+    {
+        var executor = new FakeTranslationExecutor();
+        var coordinator = new TranslationCoordinator(executor: executor);
+
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+
+            _ = Task.Run(async () =>
+            {
+                buffer.TryAppend("Delta with epoch");
+                await Task.Delay(50);
+                buffer.Complete();
+                tcs.SetResult(new TranslationResponse(
+                    new TranslationResult("Delta with epoch", "", "", [], []),
+                    new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 50)));
+            });
+
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        var updatesEpoch7 = new List<TranslationStreamUpdate>();
+        var progress7 = new SynchronousProgress<TranslationStreamUpdate>(u => updatesEpoch7.Add(u));
+        await coordinator.TranslateTextAsync("text", "en", "zh", TranslationInputSource.Selection, progress: progress7, epoch: 7);
+
+        True(updatesEpoch7.Count > 0, "Updates must be produced");
+        True(updatesEpoch7.All(u => u.Epoch == 7), "All updates must carry epoch 7");
+
+        var updatesEpoch88 = new List<TranslationStreamUpdate>();
+        var progress88 = new SynchronousProgress<TranslationStreamUpdate>(u => updatesEpoch88.Add(u));
+        await coordinator.TranslateTextAsync("text", "en", "zh", TranslationInputSource.Selection, progress: progress88, epoch: 88);
+
+        True(updatesEpoch88.Count > 0, "Updates must be produced");
+        True(updatesEpoch88.All(u => u.Epoch == 88), "All updates must carry epoch 88");
+    }
+
+    private static async Task CoordinatorStageOrderAsync()
+    {
+        var executor = new FakeTranslationExecutor();
+        var coordinator = new TranslationCoordinator(executor: executor);
+        var observedStages = new List<TranslationSessionStage>();
+
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(20);
+                buffer.TryAppend("stage test delta");
+                await Task.Delay(50);
+                buffer.Complete();
+                tcs.SetResult(new TranslationResponse(
+                    new TranslationResult("stage test delta", "", "", [], []),
+                    new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 70)));
+            });
+
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        var session = await coordinator.TranslateTextAsync(
+            "stage order test",
+            "en",
+            "zh",
+            TranslationInputSource.Selection,
+            onStageChanged: stage => observedStages.Add(stage));
+
+        Equal(TranslationSessionStage.Completed, session.Stage);
+
+        Equal(5, observedStages.Count, $"Expected 5 stages, got {observedStages.Count}: {string.Join(" -> ", observedStages)}");
+        Equal(TranslationSessionStage.Routing, observedStages[0]);
+        Equal(TranslationSessionStage.Translating, observedStages[1]);
+        Equal(TranslationSessionStage.Streaming, observedStages[2]);
+        Equal(TranslationSessionStage.Finalizing, observedStages[3]);
+        Equal(TranslationSessionStage.Completed, observedStages[4]);
+    }
+
+    // ================= QuickSearch Streaming & State Machine Tests =================
+
+    private static void QuickSearchEpochAndQueryFencing()
+    {
+        var state = new QuickSearchState();
+        Equal(0, state.CurrentEpoch);
+        Equal(QuickSearchUiStage.Idle, state.Stage);
+
+        // Start search for "apple"
+        state.StartNewSearch("apple");
+        Equal(1, state.CurrentEpoch);
+        Equal("apple", state.CurrentQuery);
+        Equal(QuickSearchUiStage.Streaming, state.Stage);
+        True(state.IsResultVisible, "Result should be marked visible on search start");
+        True(state.IsStreamLayerVisible, "Stream layer should be visible");
+        True(!state.IsRichBoxVisible, "RichBox should be hidden during stream");
+        True(state.IsStreamIndicatorVisible, "Stream indicator should be visible");
+        True(!state.CanCopy, "Copy should be disabled during stream");
+        True(!state.CanSpeak, "Speak should be disabled during stream");
+        True(!state.CanStar, "Star should be disabled during stream");
+
+        // Stale epoch update should be rejected
+        var staleUpdate = new TranslationStreamUpdate("s1", 0, TranslationStreamUpdateKind.Delta, "ping", "ping", 4);
+        var acceptedStale = state.OnStreamUpdate(staleUpdate, "apple");
+        True(!acceptedStale, "Stale epoch update must be rejected");
+        Equal(string.Empty, state.AccumulatedText);
+
+        // Mismatched query update should be rejected
+        var mismatchUpdate = new TranslationStreamUpdate("s1", 1, TranslationStreamUpdateKind.Delta, "ping", "ping", 4);
+        var acceptedMismatch = state.OnStreamUpdate(mismatchUpdate, "banana");
+        True(!acceptedMismatch, "Mismatched query update must be rejected");
+        Equal(string.Empty, state.AccumulatedText);
+
+        // Valid update should be accepted
+        var validUpdate = new TranslationStreamUpdate("s1", 1, TranslationStreamUpdateKind.Delta, "苹", "苹", 1, TimeSpan.FromMilliseconds(50));
+        var acceptedValid = state.OnStreamUpdate(validUpdate, "apple");
+        True(acceptedValid, "Valid matching stream update must be accepted");
+        Equal("苹", state.AccumulatedText);
+        True(state.StatusText.Contains("TTFT 50 ms"), "Status should show TTFT metric");
+
+        // Subsequent valid update
+        var validUpdate2 = new TranslationStreamUpdate("s1", 1, TranslationStreamUpdateKind.Delta, "果", "苹果", 2);
+        True(state.OnStreamUpdate(validUpdate2, "apple"), "Second delta should be accepted");
+        Equal("苹果", state.AccumulatedText);
+
+        // User edits query in SearchBox -> invalidates current stream and bumps epoch
+        state.OnQueryTextChanged("apple pie");
+        Equal(2, state.CurrentEpoch);
+        Equal("apple pie", state.CurrentQuery);
+        True(!state.IsProgressVisible, "Progress should hide on query edit");
+        True(!state.IsStreamIndicatorVisible, "Indicator should hide on query edit");
+
+        // Old stream update (epoch 1) must now be rejected
+        var lateOldUpdate = new TranslationStreamUpdate("s1", 1, TranslationStreamUpdateKind.Delta, " extra", "苹果 extra", 8);
+        True(!state.OnStreamUpdate(lateOldUpdate, "apple pie"), "Late chunk from epoch 1 must be rejected");
+        Equal("苹果", state.AccumulatedText); // Untouched by epoch 1 update
+
+        // Starting another search increments epoch again
+        state.StartNewSearch("banana");
+        Equal(3, state.CurrentEpoch);
+        Equal("banana", state.CurrentQuery);
+        Equal(string.Empty, state.AccumulatedText);
+    }
+
+    private static void QuickSearchPartialActionGate()
+    {
+        var state = new QuickSearchState();
+        state.StartNewSearch("test word");
+        var epoch = state.CurrentEpoch;
+
+        // Streaming deltas
+        state.OnStreamUpdate(new TranslationStreamUpdate("s1", epoch, TranslationStreamUpdateKind.Delta, "测试", "测试", 2), "test word");
+        True(!state.CanCopy, "Copy should be blocked while streaming");
+        True(!state.CanSpeak, "Speak should be blocked while streaming");
+        True(!state.CanStar, "Star should be blocked while streaming");
+        True(!state.IsIncompleteBadgeVisible, "Incomplete badge should be hidden during normal stream");
+
+        // Reset kind
+        state.OnStreamUpdate(new TranslationStreamUpdate("s1", epoch, TranslationStreamUpdateKind.Reset, "", "", 0), "test word");
+        Equal(string.Empty, state.AccumulatedText);
+        True(!state.CanStar, "Star must remain blocked on reset");
+
+        // Delta after reset
+        state.OnStreamUpdate(new TranslationStreamUpdate("s1", epoch, TranslationStreamUpdateKind.Delta, "测试词", "测试词", 3), "test word");
+        Equal("测试词", state.AccumulatedText);
+
+        // Finalizing stage
+        state.OnStageChanged(TranslationSessionStage.Finalizing, epoch, "test word");
+        Equal(QuickSearchUiStage.Finalizing, state.Stage);
+        True(!state.IsStreamIndicatorVisible, "Indicator hidden during finalizing");
+        True(!state.CanStar, "Star blocked during finalizing");
+
+        // 1) Test Completed session
+        var completedSession = new TranslationSession
+        {
+            Stage = TranslationSessionStage.Completed,
+            TranslatedText = "测试词（完整）",
+            Phonetic = "tɛst wɜːd",
+            Explanation = "名词，测试词汇",
+            PipelineLabel = "OpenAI",
+            Timing = new TranslationSessionTiming(0, 5, 200, 205),
+        };
+        state.OnSessionCompleted(completedSession, epoch, "test word");
+        Equal(QuickSearchUiStage.Completed, state.Stage);
+        True(state.CanStar, "Star MUST be enabled on Completed session");
+        True(state.CanCopy, "Copy MUST be enabled on Completed session");
+        True(state.CanSpeak, "Speak MUST be enabled on Completed session");
+        True(state.IsRichBoxVisible, "RichBox visible on completed");
+        True(!state.IsStreamLayerVisible, "Stream layer hidden on completed");
+        True(!state.IsIncompleteBadgeVisible, "Incomplete badge hidden on completed");
+        Equal("测试词（完整）", state.FinalRenderedText);
+
+        // 2) Test Partial session
+        state.StartNewSearch("partial test");
+        epoch = state.CurrentEpoch;
+        state.OnStreamUpdate(new TranslationStreamUpdate("s2", epoch, TranslationStreamUpdateKind.Delta, "部分", "部分", 2), "partial test");
+
+        var partialSession = new TranslationSession
+        {
+            Stage = TranslationSessionStage.Partial,
+            TranslatedText = "部分译文...",
+            Warnings = ["响应可能不完整"],
+            Timing = new TranslationSessionTiming(0, 2, 100, 102),
+        };
+        state.OnSessionCompleted(partialSession, epoch, "partial test");
+        Equal(QuickSearchUiStage.Partial, state.Stage);
+        True(!state.CanStar, "Star MUST be disabled for Partial session");
+        True(state.CanCopy, "Copy is available for partial text");
+        True(state.CanSpeak, "Speak is available for partial text");
+        True(state.IsIncompleteBadgeVisible, "Incomplete badge MUST be visible for Partial session");
+        True(state.IsStreamLayerVisible, "Stream layer visible for partial");
+        True(!state.IsRichBoxVisible, "RichBox hidden for partial");
+
+        // 3) Test Failed session with accumulated partial text
+        state.StartNewSearch("fail test");
+        epoch = state.CurrentEpoch;
+        state.OnStreamUpdate(new TranslationStreamUpdate("s3", epoch, TranslationStreamUpdateKind.Delta, "半截文字", "半截文字", 4), "fail test");
+
+        var failedSession = new TranslationSession
+        {
+            Stage = TranslationSessionStage.Failed,
+            Error = new TranslationError(TranslationErrorKind.ServerError, "模型连接中断"),
+        };
+        state.OnSessionCompleted(failedSession, epoch, "fail test");
+        Equal(QuickSearchUiStage.Failed, state.Stage);
+        True(!state.CanStar, "Star MUST be disabled for Failed session");
+        True(state.CanCopy, "Copy allowed for retained partial text");
+        True(state.IsIncompleteBadgeVisible, "Incomplete badge visible on failed with partial");
+        Equal("半截文字", state.AccumulatedText);
+        True(state.StatusText.Contains("已保留部分内容"), "Status text should note partial retention");
+
+        // 4) Test Cancelled session with accumulated partial text
+        state.StartNewSearch("cancel test");
+        epoch = state.CurrentEpoch;
+        state.OnStreamUpdate(new TranslationStreamUpdate("s4", epoch, TranslationStreamUpdateKind.Delta, "取消前内容", "取消前内容", 5), "cancel test");
+
+        state.OnCancelled(epoch, "cancel test");
+        Equal(QuickSearchUiStage.Cancelled, state.Stage);
+        True(!state.CanStar, "Star MUST be disabled for Cancelled session");
+        True(state.CanCopy, "Copy allowed for retained partial text");
+        True(state.IsIncompleteBadgeVisible, "Incomplete badge visible on cancelled with partial");
+        Equal("取消前内容", state.AccumulatedText);
+        True(state.StatusText.Contains("译文不完整"), "Status text should label incomplete");
+    }
+
+    private static void QuickSearchClosedGuard()
+    {
+        var state = new QuickSearchState();
+        state.StartNewSearch("closed test");
+        var epoch = state.CurrentEpoch;
+
+        state.OnStreamUpdate(new TranslationStreamUpdate("s1", epoch, TranslationStreamUpdateKind.Delta, "流式内容", "流式内容", 4), "closed test");
+        Equal("流式内容", state.AccumulatedText);
+
+        // Window closes / deactivates
+        state.OnClose();
+        True(state.IsClosed, "State must be marked as closed");
+        Equal(string.Empty, state.AccumulatedText);
+        Equal(string.Empty, state.FinalRenderedText);
+        True(!state.CanStar, "Star must be disabled on close");
+        True(!state.CanCopy, "Copy must be disabled on close");
+        True(!state.CanSpeak, "Speak must be disabled on close");
+        True(!state.IsResultVisible, "Result should be hidden on close");
+
+        // Any subsequent stream updates or callbacks must be rejected
+        var update = new TranslationStreamUpdate("s1", epoch, TranslationStreamUpdateKind.Delta, "更多", "流式内容更多", 6);
+        True(!state.OnStreamUpdate(update, "closed test"), "Update after close must be dropped");
+
+        var session = new TranslationSession
+        {
+            Stage = TranslationSessionStage.Completed,
+            TranslatedText = "已完成",
+        };
+        True(!state.OnSessionCompleted(session, epoch, "closed test"), "Session completion after close must be dropped");
+        True(!state.OnStageChanged(TranslationSessionStage.Finalizing, epoch, "closed test"), "Stage change after close must be dropped");
+        True(!state.OnCancelled(epoch, "closed test"), "Cancellation after close must be dropped");
+        True(!state.OnException(new Exception("test"), epoch, "closed test"), "Exception after close must be dropped");
+    }
+
+    private static void QuickSearchMinHeightAndHeadlessContract()
+    {
+        // MinHeight contracts
+        Equal(68.0, QuickSearchState.ResultAreaMinHeight);
+        Equal(24.0, QuickSearchState.ResultStreamMinHeight);
+
+        // Headless rendering lifecycle: verify zero token FlowDoc reconstruction
+        var state = new QuickSearchState();
+        state.StartNewSearch("streaming markdown text");
+        var epoch = state.CurrentEpoch;
+
+        var chunks = new[] { "# 标题\n", "这是 **", "加粗** ", "和 `代码`。" };
+        var sb = new StringBuilder();
+
+        foreach (var chunk in chunks)
+        {
+            sb.Append(chunk);
+            var update = new TranslationStreamUpdate("s1", epoch, TranslationStreamUpdateKind.Delta, chunk, sb.ToString(), sb.Length);
+            True(state.OnStreamUpdate(update, "streaming markdown text"), "Stream update accepted");
+
+            // Plain text stream layer stays visible, RichBox stays collapsed during streaming tokens
+            True(state.IsStreamLayerVisible, "Stream layer must stay visible across all token deltas");
+            True(!state.IsRichBoxVisible, "RichBox must NOT be visible during streaming");
+            Equal(sb.ToString(), state.AccumulatedText);
+        }
+
+        // Final completion -> only now switch to RichBox
+        var finalSession = new TranslationSession
+        {
+            Stage = TranslationSessionStage.Completed,
+            TranslatedText = sb.ToString(),
+            PipelineLabel = "DeepSeek",
+            Timing = new TranslationSessionTiming(0, 5, 300, 305),
+        };
+        True(state.OnSessionCompleted(finalSession, epoch, "streaming markdown text"), "Completed accepted");
+        True(!state.IsStreamLayerVisible, "Stream layer hidden on completed");
+        True(state.IsRichBoxVisible, "RichBox visible on completed");
+        Equal(sb.ToString(), state.FinalRenderedText);
+    }
+
+    private static void QuickSearchComponentLifecycleAndStreamContracts()
+    {
+        EnsureApplication();
+        var qsHistory = new HistoryStore();
+        var qsVocab = new VocabularyStore();
+        var quickSearch = new QuickSearchWindow(qsHistory, qsVocab);
+
+        // Control type, accessibility, and visual sizing contracts
+        True(quickSearch.StreamBox is TextBox, "StreamBox must be a TextBox for scrolling");
+        Equal(true, quickSearch.StreamBox.IsReadOnly);
+        Equal(false, quickSearch.StreamBox.Focusable);
+        Equal(ScrollBarVisibility.Auto, quickSearch.StreamBox.VerticalScrollBarVisibility);
+        Equal(TextWrapping.Wrap, quickSearch.StreamBox.TextWrapping);
+        Equal(15.0, quickSearch.StreamBox.FontSize);
+        Equal(220.0, quickSearch.StreamBox.MaxHeight);
+
+        True(quickSearch.RichBox is RichTextBox, "RichBox must be a RichTextBox for markdown formatting");
+        Equal(15.0, quickSearch.RichBox.FontSize);
+        Equal(220.0, quickSearch.RichBox.MaxHeight);
+        Equal(ScrollBarVisibility.Auto, quickSearch.RichBox.VerticalScrollBarVisibility);
+
+        Equal(AutomationLiveSetting.Polite, AutomationProperties.GetLiveSetting(quickSearch.FooterStatusBlock));
+        Equal("翻译状态", AutomationProperties.GetName(quickSearch.FooterStatusBlock));
+        Equal(AutomationLiveSetting.Off, AutomationProperties.GetLiveSetting(quickSearch.StreamBox));
+    }
+
+    // ================= TranslateSection Streaming & State Machine Tests =================
+
+    private static void TranslateSectionEpochFencing()
+    {
+        var state = TranslateUiState.Initial;
+        Equal(0L, state.Epoch);
+        Equal(TranslateUiPhase.Idle, state.Phase);
+        True(state.IsTranslateButtonEnabled, "Translate button enabled initially");
+        True(!state.AreResultActionsEnabled, "Result actions disabled initially");
+
+        // Start translation at epoch 1
+        state = TranslateSectionReducer.StartTranslation(state, 1);
+        Equal(1L, state.Epoch);
+        Equal(TranslateUiPhase.Preparing, state.Phase);
+        Equal("连接中", state.StatusText);
+        Equal("连接中", state.BadgeText);
+        True(!state.IsTranslateButtonEnabled, "Translate button disabled during preparing");
+        True(state.IsProgressVisible, "Progress visible during preparing");
+        True(!state.IsStreamLayerVisible, "Stream layer hidden during preparing");
+        True(state.IsFinalLayerVisible, "Final layer visible (placeholder) during preparing");
+        True(!state.IsStreamIndicatorVisible, "Stream indicator hidden during preparing");
+        True(!state.AreResultActionsEnabled, "Result actions disabled during preparing");
+
+        // Stage update with stale epoch 0 must be ignored
+        var stagedOld = TranslateSectionReducer.ApplyStage(state, TranslationSessionStage.Streaming, 0);
+        Equal(TranslateUiPhase.Preparing, stagedOld.Phase, "Stale epoch stage update must be ignored");
+
+        // Stage update with matching epoch 1
+        state = TranslateSectionReducer.ApplyStage(state, TranslationSessionStage.Streaming, 1);
+        Equal(TranslateUiPhase.Streaming, state.Phase);
+        Equal("正在生成", state.StatusText);
+        Equal("正在生成", state.BadgeText);
+        True(state.IsStreamIndicatorVisible, "Indicator visible in Streaming stage");
+
+        // Stage update to Finalizing
+        state = TranslateSectionReducer.ApplyStage(state, TranslationSessionStage.Finalizing, 1);
+        Equal(TranslateUiPhase.Finalizing, state.Phase);
+        Equal("正在整理", state.StatusText);
+        Equal("正在整理", state.BadgeText);
+        True(state.IsStreamIndicatorVisible, "Indicator visible in Finalizing stage");
+
+        // Stream update with stale epoch 0 must be ignored
+        var staleUpdate = new TranslationStreamUpdate("s1", 0, TranslationStreamUpdateKind.Delta, "stale text", "stale text", 10);
+        var stateAfterStale = TranslateSectionReducer.ApplyStreamUpdate(state, staleUpdate, 0);
+        Equal(string.Empty, stateAfterStale.StreamText, "Stale stream update must not mutate stream text");
+
+        // Stream update with matching epoch 1
+        var validUpdate = new TranslationStreamUpdate("s1", 1, TranslationStreamUpdateKind.Delta, "Hello", "Hello World", 11);
+        state = TranslateSectionReducer.ApplyStreamUpdate(state, validUpdate, 1);
+        Equal(TranslateUiPhase.Streaming, state.Phase);
+        Equal("Hello World", state.StreamText);
+        True(state.IsStreamLayerVisible, "Stream layer visible when delta arrives");
+        True(!state.IsFinalLayerVisible, "Final layer hidden while streaming");
+        True(!state.AreResultActionsEnabled, "Result actions disabled while streaming");
+
+        // Stale completion must be ignored
+        var completedSession = new TranslationSession
+        {
+            Stage = TranslationSessionStage.Completed,
+            TranslatedText = "Stale Full Translation",
+            PipelineLabel = "OpenAI",
+        };
+        var staleCompletionState = TranslateSectionReducer.ApplyCompletion(state, completedSession, 0);
+        Equal(string.Empty, staleCompletionState.FinalText, "Stale completion must be ignored");
+
+        // Valid completion
+        state = TranslateSectionReducer.ApplyCompletion(state, completedSession, 1);
+        Equal(TranslateUiPhase.Completed, state.Phase);
+        Equal("Stale Full Translation", state.FinalText);
+        True(!state.IsStreamLayerVisible, "Stream layer hidden on completion");
+        True(state.IsFinalLayerVisible, "Final layer visible on completion");
+        True(!state.IsStreamIndicatorVisible, "Indicator hidden on completion");
+        True(!state.IsProgressVisible, "Progress hidden on completion");
+        True(state.IsTranslateButtonEnabled, "Translate button re-enabled on completion");
+        True(state.AreResultActionsEnabled, "Result actions enabled on completion");
+        True(!state.IsPartialIncomplete, "Completed state is not partial");
+    }
+
+    private static void TranslateSectionResetAndDelta()
+    {
+        var state = TranslateUiState.Initial;
+        state = TranslateSectionReducer.StartTranslation(state, 10);
+
+        // 1) First Delta
+        var delta1 = new TranslationStreamUpdate("s10", 10, TranslationStreamUpdateKind.Delta, "Part 1 ", "Part 1 ", 7);
+        state = TranslateSectionReducer.ApplyStreamUpdate(state, delta1, 10);
+        Equal(TranslateUiPhase.Streaming, state.Phase);
+        Equal("Part 1 ", state.StreamText);
+        True(state.IsStreamLayerVisible, "Stream layer visible");
+        True(!state.IsFinalLayerVisible, "Final layer hidden");
+        True(state.IsStreamIndicatorVisible, "Stream indicator visible");
+        True(!state.AreResultActionsEnabled, "Actions disabled during delta");
+
+        // 2) Reset update (e.g. Free engine fallback or buffer reset)
+        var resetUpdate = new TranslationStreamUpdate("s10", 10, TranslationStreamUpdateKind.Reset, "", "", 0);
+        state = TranslateSectionReducer.ApplyStreamUpdate(state, resetUpdate, 10);
+        Equal(TranslateUiPhase.Preparing, state.Phase);
+        Equal(string.Empty, state.StreamText, "StreamText cleared on reset");
+        True(!state.IsStreamLayerVisible, "Stream layer hidden on reset");
+        True(!state.IsStreamIndicatorVisible, "Stream indicator hidden on reset");
+        Equal("连接中", state.StatusText);
+        Equal("连接中", state.BadgeText);
+        True(!state.AreResultActionsEnabled, "Actions remain disabled on reset");
+
+        // 3) Delta after reset displays accumulated text directly
+        var delta2 = new TranslationStreamUpdate("s10", 10, TranslationStreamUpdateKind.Delta, "Brand new", "Brand new translation", 21);
+        state = TranslateSectionReducer.ApplyStreamUpdate(state, delta2, 10);
+        Equal(TranslateUiPhase.Streaming, state.Phase);
+        Equal("Brand new translation", state.StreamText);
+        True(state.IsStreamLayerVisible, "Stream layer visible again after delta");
+        True(state.IsStreamIndicatorVisible, "Stream indicator visible again");
+    }
+
+    private static void TranslateSectionActionGatingAndPartialRetention()
+    {
+        // 1) Successful final opens actions
+        var state = TranslateUiState.Initial;
+        state = TranslateSectionReducer.StartTranslation(state, 20);
+        state = TranslateSectionReducer.ApplyStreamUpdate(state, new TranslationStreamUpdate("s20", 20, TranslationStreamUpdateKind.Delta, "a", "abc", 3), 20);
+        True(!state.AreResultActionsEnabled, "Actions blocked during streaming");
+
+        var successSession = new TranslationSession
+        {
+            Stage = TranslationSessionStage.Completed,
+            TranslatedText = "abc calibrated",
+            PipelineLabel = "DeepSeek",
+            Explanation = "Some notes",
+        };
+        state = TranslateSectionReducer.ApplyCompletion(state, successSession, 20);
+        Equal(TranslateUiPhase.Completed, state.Phase);
+        True(state.AreResultActionsEnabled, "Actions MUST be enabled for Completed session");
+        True(state.IsTranslateButtonEnabled, "Translate button enabled");
+        True(state.IsExplanationVisible, "Explanation visible");
+        Equal("Some notes", state.ExplanationText);
+        True(!state.IsPartialIncomplete, "Not partial");
+
+        // 2) Partial session retains text and GATES actions
+        state = TranslateUiState.Initial;
+        state = TranslateSectionReducer.StartTranslation(state, 21);
+        state = TranslateSectionReducer.ApplyStreamUpdate(state, new TranslationStreamUpdate("s21", 21, TranslationStreamUpdateKind.Delta, "partial", "partial output", 14), 21);
+
+        var partialSession = new TranslationSession
+        {
+            Stage = TranslationSessionStage.Partial,
+            TranslatedText = "partial output",
+            Warnings = ["Truncated response"],
+        };
+        state = TranslateSectionReducer.ApplyCompletion(state, partialSession, 21);
+        Equal(TranslateUiPhase.Partial, state.Phase);
+        True(!state.AreResultActionsEnabled, "Actions MUST be disabled for Partial session");
+        True(state.IsPartialIncomplete, "Marked as partial incomplete");
+        Equal("内容不完整", state.BadgeText);
+        Equal("partial output", state.FinalText);
+        True(!state.IsStreamLayerVisible, "Stream layer collapsed for final display");
+        True(state.IsFinalLayerVisible, "Final layer visible");
+
+        // 3) Cancelled session with accumulated stream text retains partial text and GATES actions
+        state = TranslateUiState.Initial;
+        state = TranslateSectionReducer.StartTranslation(state, 22);
+        state = TranslateSectionReducer.ApplyStreamUpdate(state, new TranslationStreamUpdate("s22", 22, TranslationStreamUpdateKind.Delta, "streamed before cancel", "streamed before cancel", 22), 22);
+
+        var cancelSession = new TranslationSession
+        {
+            Stage = TranslationSessionStage.Cancelled,
+        };
+        state = TranslateSectionReducer.ApplyCompletion(state, cancelSession, 22);
+        Equal(TranslateUiPhase.Partial, state.Phase);
+        True(!state.AreResultActionsEnabled, "Actions MUST be disabled on cancel with partial");
+        True(state.IsPartialIncomplete, "Marked as partial incomplete");
+        Equal("内容不完整", state.BadgeText);
+        Equal("streamed before cancel", state.FinalText);
+
+        // 4) Failed session with accumulated stream text retains partial text and GATES actions
+        state = TranslateUiState.Initial;
+        state = TranslateSectionReducer.StartTranslation(state, 23);
+        state = TranslateSectionReducer.ApplyStreamUpdate(state, new TranslationStreamUpdate("s23", 23, TranslationStreamUpdateKind.Delta, "streamed before fail", "streamed before fail", 20), 23);
+
+        var failSession = new TranslationSession
+        {
+            Stage = TranslationSessionStage.Failed,
+            Error = new TranslationError(TranslationErrorKind.ServerError, "Server error 500"),
+        };
+        state = TranslateSectionReducer.ApplyCompletion(state, failSession, 23);
+        Equal(TranslateUiPhase.Partial, state.Phase);
+        True(!state.AreResultActionsEnabled, "Actions MUST be disabled on fail with partial");
+        True(state.IsPartialIncomplete, "Marked as partial incomplete");
+        Equal("内容不完整", state.BadgeText);
+        Equal("streamed before fail", state.FinalText);
+
+        // 5) Exception with accumulated stream text retains partial text and GATES actions
+        state = TranslateUiState.Initial;
+        state = TranslateSectionReducer.StartTranslation(state, 24);
+        state = TranslateSectionReducer.ApplyStreamUpdate(state, new TranslationStreamUpdate("s24", 24, TranslationStreamUpdateKind.Delta, "streamed before exc", "streamed before exc", 19), 24);
+
+        state = TranslateSectionReducer.ApplyError(state, new HttpRequestException("Connection lost"), 24);
+        Equal(TranslateUiPhase.Partial, state.Phase);
+        True(!state.AreResultActionsEnabled, "Actions MUST be disabled on exception with partial");
+        True(state.IsPartialIncomplete, "Marked as partial incomplete");
+        Equal("内容不完整", state.BadgeText);
+        Equal("streamed before exc", state.FinalText);
+
+        // 6) Cancelled session without stream text
+        state = TranslateUiState.Initial;
+        state = TranslateSectionReducer.StartTranslation(state, 25);
+        state = TranslateSectionReducer.ApplyCompletion(state, new TranslationSession { Stage = TranslationSessionStage.Cancelled }, 25);
+        Equal(TranslateUiPhase.Cancelled, state.Phase);
+        True(!state.AreResultActionsEnabled, "Actions MUST be disabled on plain cancel");
+        True(!state.IsPartialIncomplete, "Not partial");
+        Equal("已取消", state.BadgeText);
+    }
+
+    private static void TranslateSectionComponentLifecycleAndStreamContracts()
+    {
+        EnsureApplication();
+        var history = new HistoryStore();
+        var vocab = new VocabularyStore();
+        var coordinator = new TranslationCoordinator(history, vocab);
+
+        var section = new TranslateSection();
+        section.Initialize(coordinator, vocab);
+
+        // Initial contract
+        Equal(TranslateUiPhase.Idle, section.CurrentState.Phase);
+        Equal(Visibility.Visible, section.ResultBox.Visibility);
+        Equal(Visibility.Collapsed, section.StreamResultBox.Visibility);
+        Equal(Visibility.Collapsed, section.StreamIndicator.Visibility);
+        Equal(false, section.StreamResultBox.Focusable);
+        Equal(true, section.StreamResultBox.IsReadOnly);
+        Equal(ScrollBarVisibility.Auto, section.StreamResultBox.VerticalScrollBarVisibility);
+        Equal(TextWrapping.Wrap, section.StreamResultBox.TextWrapping);
+        Equal(14.5, section.StreamResultBox.FontSize);
+        Equal(14.5, section.ResultBox.FontSize);
+
+        Equal(AutomationLiveSetting.Polite, AutomationProperties.GetLiveSetting(section.StatusBlock));
+        Equal("翻译状态", AutomationProperties.GetName(section.StatusBlock));
+        Equal(AutomationLiveSetting.Off, AutomationProperties.GetLiveSetting(section.StreamResultBox));
+
+        // FocusTranslate with existing translation
+        section.FocusTranslate("Initial source text", existingTranslation: "Existing translated text");
+        Equal("Initial source text", section.InputBox.Text);
+        Equal("Existing translated text", section.ResultBox.Text);
+        Equal(true, section.CurrentState.AreResultActionsEnabled);
+    }
+
+    // ================= TranslationPanel Streaming & State Machine Tests =================
+
+    private static void TranslationPanelEpochAndLifetimeFencing()
+    {
+        var gate = new TranslationPanelStreamGate();
+        Equal(0L, gate.CurrentEpoch);
+        Equal(TranslationPanelStage.Idle, gate.Stage);
+        True(!gate.CanPerformResultActions, "Actions disabled initially");
+        True(!gate.ShouldTriggerAutoCopy(true), "AutoCopy disabled initially");
+
+        // Begin operation 1
+        var (epoch1, opId1) = gate.BeginNewOperation();
+        Equal(1L, epoch1);
+        Equal(1, opId1);
+        Equal(TranslationPanelStage.Preparing, gate.Stage);
+        Equal(string.Empty, gate.StreamedText);
+        True(!gate.CanPerformResultActions, "Actions disabled during preparing");
+        True(!gate.ShouldTriggerAutoCopy(true), "AutoCopy disabled during preparing");
+
+        // Stale epoch update must be rejected
+        var staleUpdate = new TranslationStreamUpdate("s1", 0, TranslationStreamUpdateKind.Delta, "stale", "stale", 5);
+        True(!gate.ShouldAcceptUpdate(0, isClosed: false), "ShouldAcceptUpdate must return false for stale epoch");
+        True(!gate.ApplyUpdate(staleUpdate), "ApplyUpdate must reject stale epoch update");
+        Equal(string.Empty, gate.StreamedText);
+        Equal(TranslationPanelStage.Preparing, gate.Stage);
+
+        // Matching epoch update is accepted
+        var validUpdate = new TranslationStreamUpdate("s1", 1, TranslationStreamUpdateKind.Delta, "Hello", "Hello", 5);
+        True(gate.ShouldAcceptUpdate(1, isClosed: false), "ShouldAcceptUpdate accepts matching epoch");
+        True(gate.ApplyUpdate(validUpdate), "ApplyUpdate accepts valid update");
+        Equal(TranslationPanelStage.Streaming, gate.Stage);
+        Equal("Hello", gate.StreamedText);
+        True(!gate.CanPerformResultActions, "Actions disabled during streaming");
+        True(!gate.ShouldTriggerAutoCopy(true), "AutoCopy disabled during streaming");
+
+        // New operation bumps epoch to 2
+        var (epoch2, opId2) = gate.BeginNewOperation();
+        Equal(2L, epoch2);
+        Equal(2, opId2);
+        Equal(TranslationPanelStage.Preparing, gate.Stage);
+        Equal(string.Empty, gate.StreamedText);
+
+        // Late update from epoch 1 must now be rejected
+        var lateUpdate = new TranslationStreamUpdate("s1", 1, TranslationStreamUpdateKind.Delta, " World", "Hello World", 11);
+        True(!gate.ShouldAcceptUpdate(1, isClosed: false), "Late epoch 1 update must be rejected");
+        True(!gate.ApplyUpdate(lateUpdate), "ApplyUpdate rejects late epoch 1 update");
+        Equal(string.Empty, gate.StreamedText);
+
+        // Update with epoch 2 is accepted
+        var update2 = new TranslationStreamUpdate("s2", 2, TranslationStreamUpdateKind.Delta, "Bonjour", "Bonjour", 7);
+        True(gate.ApplyUpdate(update2), "Epoch 2 update accepted");
+        Equal("Bonjour", gate.StreamedText);
+
+        // Closed window rejects updates
+        True(!gate.ShouldAcceptUpdate(2, isClosed: true), "Closed window must reject updates");
+    }
+
+    private static void TranslationPanelResetAndDelta()
+    {
+        var gate = new TranslationPanelStreamGate();
+        var (epoch, _) = gate.BeginNewOperation();
+
+        // 1) First delta
+        var delta1 = new TranslationStreamUpdate("s1", epoch, TranslationStreamUpdateKind.Delta, "Part 1 ", "Part 1 ", 7);
+        True(gate.ApplyUpdate(delta1), "First delta applied");
+        Equal(TranslationPanelStage.Streaming, gate.Stage);
+        Equal("Part 1 ", gate.StreamedText);
+        True(!gate.CanPerformResultActions, "Actions blocked during delta");
+
+        // 2) Reset update (e.g. Free engine fallback or OCR reset)
+        var resetUpdate = new TranslationStreamUpdate("s1", epoch, TranslationStreamUpdateKind.Reset, "", "", 0);
+        True(gate.ApplyUpdate(resetUpdate), "Reset update applied");
+        Equal(TranslationPanelStage.Preparing, gate.Stage);
+        Equal(string.Empty, gate.StreamedText, "StreamedText cleared on reset");
+        True(!gate.CanPerformResultActions, "Actions remain blocked on reset");
+
+        // 3) Delta after reset displays accumulated text directly
+        var delta2 = new TranslationStreamUpdate("s1", epoch, TranslationStreamUpdateKind.Delta, "Fresh output", "Fresh output", 12);
+        True(gate.ApplyUpdate(delta2), "Second delta applied");
+        Equal(TranslationPanelStage.Streaming, gate.Stage);
+        Equal("Fresh output", gate.StreamedText);
+
+        // 4) Stage change to finalizing
+        gate.OnStageChanged(TranslationSessionStage.Finalizing);
+        Equal(TranslationPanelStage.Finalizing, gate.Stage);
+        True(!gate.CanPerformResultActions, "Actions blocked during finalizing");
+        True(!gate.ShouldTriggerAutoCopy(true), "AutoCopy blocked during finalizing");
+
+        // 5) Completed
+        gate.OnCompleted("Fresh output calibrated");
+        Equal(TranslationPanelStage.Completed, gate.Stage);
+        Equal("Fresh output calibrated", gate.StreamedText);
+        True(gate.CanPerformResultActions, "Actions open on completion");
+        True(gate.ShouldTriggerAutoCopy(true), "AutoCopy enabled on completion");
+        True(!gate.ShouldTriggerAutoCopy(false), "AutoCopy respects setting flag");
+    }
+
+    private static void TranslationPanelActionGatingAndPartialRetention()
+    {
+        // 1) Successful final opens actions
+        var gate = new TranslationPanelStreamGate();
+        var (epoch, _) = gate.BeginNewOperation();
+        gate.ApplyUpdate(new TranslationStreamUpdate("s1", epoch, TranslationStreamUpdateKind.Delta, "abc", "abc", 3));
+        True(!gate.CanPerformResultActions, "Actions blocked during streaming");
+
+        gate.OnCompleted("abc calibrated");
+        Equal(TranslationPanelStage.Completed, gate.Stage);
+        True(gate.CanPerformResultActions, "Actions enabled on Completed");
+        True(gate.ShouldTriggerAutoCopy(true), "AutoCopy allowed on Completed");
+        True(!gate.HasPartialText, "Completed is not partial failure");
+        True(gate.GetPartialWarningBanner() is null, "No warning banner on clean completion");
+
+        // 2) Cancelled session with accumulated partial text
+        gate = new TranslationPanelStreamGate();
+        (epoch, _) = gate.BeginNewOperation();
+        gate.ApplyUpdate(new TranslationStreamUpdate("s2", epoch, TranslationStreamUpdateKind.Delta, "streamed before cancel", "streamed before cancel", 22));
+
+        gate.OnCancelled("streamed before cancel");
+        Equal(TranslationPanelStage.CancelledWithPartial, gate.Stage);
+        True(!gate.CanPerformResultActions, "Actions MUST be blocked on CancelledWithPartial");
+        True(!gate.ShouldTriggerAutoCopy(true), "AutoCopy MUST be blocked on CancelledWithPartial");
+        True(gate.HasPartialText, "HasPartialText must be true");
+        Equal("已取消，内容不完整", gate.GetPartialWarningBanner());
+        Equal("streamed before cancel", gate.StreamedText);
+
+        // 3) Failed session with accumulated partial text
+        gate = new TranslationPanelStreamGate();
+        (epoch, _) = gate.BeginNewOperation();
+        gate.ApplyUpdate(new TranslationStreamUpdate("s3", epoch, TranslationStreamUpdateKind.Delta, "streamed before fail", "streamed before fail", 20));
+
+        gate.OnFailed("Connection lost 500", "streamed before fail");
+        Equal(TranslationPanelStage.FailedWithPartial, gate.Stage);
+        True(!gate.CanPerformResultActions, "Actions MUST be blocked on FailedWithPartial");
+        True(!gate.ShouldTriggerAutoCopy(true), "AutoCopy MUST be blocked on FailedWithPartial");
+        True(gate.HasPartialText, "HasPartialText must be true");
+        Equal("生成中断，内容不完整", gate.GetPartialWarningBanner());
+        Equal("streamed before fail", gate.StreamedText);
+
+        // 4) Cancelled session without partial text
+        gate = new TranslationPanelStreamGate();
+        (epoch, _) = gate.BeginNewOperation();
+        gate.OnCancelled(null);
+        Equal(TranslationPanelStage.CancelledWithoutPartial, gate.Stage);
+        True(!gate.CanPerformResultActions, "Actions blocked on CancelledWithoutPartial");
+        True(!gate.HasPartialText, "HasPartialText false");
+        True(gate.GetPartialWarningBanner() is null, "Banner null on plain cancel");
+
+        // 5) Failed session without partial text
+        gate = new TranslationPanelStreamGate();
+        (epoch, _) = gate.BeginNewOperation();
+        gate.OnFailed("Authentication failed 401", null);
+        Equal(TranslationPanelStage.FailedWithoutPartial, gate.Stage);
+        True(!gate.CanPerformResultActions, "Actions blocked on FailedWithoutPartial");
+        True(!gate.HasPartialText, "HasPartialText false");
+        True(gate.GetPartialWarningBanner() is null, "Banner null on plain fail");
+    }
+
+    private static void TranslationPanelComponentLifecycleAndStreamContracts()
+    {
+        EnsureApplication();
+        var history = new HistoryStore();
+        var vocab = new VocabularyStore();
+
+        var panel = new TranslationPanelWindow(
+            new Rect(100, 100, 20, 20),
+            history,
+            () => ShellSettings.Default,
+            null,
+            null,
+            vocab);
+
+        // Initial contracts
+        Equal(false, panel.ResultCopyBtn.IsEnabled);
+        Equal(false, panel.ResultSpeakBtn.IsEnabled);
+        Equal(false, panel.StarToggle.IsEnabled);
+        Equal(Visibility.Collapsed, panel.ResultSkeleton.Visibility);
+        Equal(Visibility.Visible, panel.TranslationTextBox.Visibility);
+        Equal(Visibility.Collapsed, panel.TranslationRichBox.Visibility);
+        Equal(Visibility.Collapsed, panel.StreamIndicatorPill.Visibility);
+
+        Equal(15.0, panel.StreamTextBox.FontSize);
+        Equal(ScrollBarVisibility.Auto, panel.StreamTextBox.VerticalScrollBarVisibility);
+        Equal(true, panel.StreamTextBox.IsReadOnly);
+        Equal(15.0, panel.FinalRichBox.FontSize);
+        Equal(ScrollBarVisibility.Auto, panel.FinalRichBox.VerticalScrollBarVisibility);
+
+        Equal(AutomationLiveSetting.Polite, AutomationProperties.GetLiveSetting(panel.StatusTextBlock));
+        Equal("翻译状态", AutomationProperties.GetName(panel.StatusTextBlock));
+        Equal(AutomationLiveSetting.Off, AutomationProperties.GetLiveSetting(panel.StreamTextBox));
+
+        // MarkdownPresenter font size inheritance and FlowDocument contracts
+        var doc = new FlowDocument { FontSize = 15.0 };
+        MarkdownPresenter.RenderToFlowDocument(doc, "这是 **加粗内容** 和 `代码` 以及普通的后续句子。", Application.Current.Resources);
+        Equal(new Thickness(0), doc.PagePadding);
+        True(doc.Blocks.Count > 0, "Document must have paragraphs");
+        if (doc.Blocks.FirstBlock is Paragraph firstPara)
+        {
+            Equal(22.0, firstPara.LineHeight);
+            foreach (var inline in firstPara.Inlines)
+            {
+                if (inline is Run run)
+                {
+                    // Run must inherit font size from FlowDocument/RichTextBox without hardcoded 14
+                    Equal(DependencyProperty.UnsetValue, run.ReadLocalValue(TextElement.FontSizeProperty));
+                    Equal(15.0, run.FontSize);
+                }
+            }
+        }
+
+        // Friendly error classifications
+        Equal("还差一步：配置模型密钥", TranslationPanelWindow.FriendlyError("API Key missing"));
+        Equal("安全离线模式已开启", TranslationPanelWindow.FriendlyError("安全离线模式已开启"));
+        Equal("翻译请求被限流，请稍后重试", TranslationPanelWindow.FriendlyError("HTTP 429 Too Many Requests"));
+
+        // Line break merging
+        var joined = TranslationPanelWindow.MergeHardLineBreaks("Line one\nline two");
+        Equal("Line one line two", joined);
     }
 }

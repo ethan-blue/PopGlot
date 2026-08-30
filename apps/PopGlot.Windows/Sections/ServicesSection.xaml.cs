@@ -46,9 +46,16 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     private bool _editorDirty;
     private string _editorBaseline = string.Empty;
     private string? _editingProfileId;
+    private ModelPreference _currentPreference = ModelPreference.Balanced;
+    private IReadOnlyList<ModelDescriptor>? _cachedCatalogDescriptors;
 
     /// <summary>Session-scoped connection-test outcomes by profile id ("ok"/"auth"/…).</summary>
     private readonly Dictionary<string, string> _testOutcomes = new();
+
+    /// <summary>
+    /// Tracks vision model state across toggles of the shared-model checkbox.
+    /// </summary>
+    private readonly SharedVisionModelTracker _visionTracker = new();
 
     /// <summary>Action queued behind an unresolved editor draft.</summary>
     private Action? _pendingAfterDraft;
@@ -165,7 +172,14 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         // Editable ComboBoxes surface their inner TextBox via this routed event.
         void WatchCombo(ComboBox combo) => combo.AddHandler(
             System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
-            new TextChangedEventHandler((_, _) => MarkEditorDirty()));
+            new TextChangedEventHandler((_, _) =>
+            {
+                MarkEditorDirty();
+                if (!_loading)
+                {
+                    RefreshRecommendations();
+                }
+            }));
         void WatchToggle(System.Windows.Controls.Primitives.ToggleButton toggle)
         {
             toggle.Checked += (_, _) => MarkEditorDirty();
@@ -216,12 +230,17 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     /// Event-only dirty tracking is unreliable for editable ComboBoxes: WPF
     /// may deliver their inner TextBox change after a programmatic profile
     /// load. Compare the actual form to a saved baseline instead, so merely
-    /// opening or switching an existing service never creates a fake draft.
+    /// opening or switching an existing service never creates a fake draft,
+    /// and refreshes that do not change values (model list fetch, ItemsSource
+    /// rebuilds, connection tests, read-only status text) never dirty either.
+    /// The snapshot is NORMALIZED: line endings, outer whitespace and blank
+    /// header lines are canonicalized, so re-typing the same value with a
+    /// trailing space or CRLF stays clean.
     /// </summary>
     private string CaptureEditorState()
     {
         var providerTag = (ProviderTypeComboBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? string.Empty;
-        return string.Join('\u001f',
+        return ServiceEditorSnapshot.CreateNormalized(
             ServiceNameTextBox.Text,
             providerTag,
             BaseUrlTextBox.Text,
@@ -231,26 +250,50 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             VisionModelCombo.Text,
             ExtraHeadersTextBox.Text,
             AnthropicVersionTextBox.Text,
-            SupportsTextCheckBox.IsChecked == true ? "1" : "0",
-            SupportsVisionCheckBox.IsChecked == true ? "1" : "0",
-            UseTextModelForVisionCheckBox.IsChecked == true ? "1" : "0",
-            AllowInsecureTlsCheckBox.IsChecked == true ? "1" : "0",
-            ApiKeyPasswordBox.Password ?? string.Empty);
+            SupportsTextCheckBox.IsChecked == true,
+            SupportsVisionCheckBox.IsChecked == true,
+            UseTextModelForVisionCheckBox.IsChecked == true,
+            AllowInsecureTlsCheckBox.IsChecked == true,
+            ApiKeyPasswordBox.Password).Serialize();
     }
+
+    /// <summary>Canonical single-line value: CRLF→LF, trimmed, no outer noise.</summary>
+    internal static string NormalizeEditorText(string? text)
+    {
+        var normalized = (text ?? string.Empty).Replace("\r\n", "\n").Replace('\r', '\n');
+        return normalized.Trim();
+    }
+
+    /// <summary>
+    /// Canonical multi-line header block: LF line endings, trimmed lines,
+    /// blank lines dropped — equal to what ParseExtraHeaders would persist.
+    /// </summary>
+    internal static string NormalizeHeaderValue(string? text) => string.Join('\n',
+        NormalizeEditorText(text)
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0));
 
     internal static bool HasEditorChanges(string current, string baseline) =>
         !string.Equals(current, baseline, StringComparison.Ordinal);
 
+    /// <summary>
+    /// Toggling the shared-model checkbox must be reversible: the distinct
+    /// vision model is stashed when sharing is enabled and restored when it
+    /// is disabled, so check → uncheck lands back on the saved state and the
+    /// draft badge disappears on its own.
+    /// </summary>
     private void UseTextModelForVision_Changed(object sender, RoutedEventArgs e)
     {
         var shared = UseTextModelForVisionCheckBox.IsChecked == true;
-        VisionModelCombo.IsEnabled = !shared;
-        VisionModelPanel.Opacity = shared ? 0.62 : 1.0;
-        if (shared)
-        {
-            VisionModelCombo.Text = TextModelCombo.Text.Trim();
-        }
+        var (effectiveVision, enabled) = _visionTracker.OnToggleShared(
+            shared,
+            TextModelCombo.Text,
+            VisionModelCombo.Text);
+        VisionModelCombo.IsEnabled = enabled;
+        VisionModelCombo.Text = effectiveVision;
         MarkEditorDirty();
+        RefreshRecommendations();
     }
 
     private void UpdateEditorDirtyBadge() =>
@@ -346,6 +389,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     {
         var wasLoading = _loading;
         _loading = true;
+        _visionTracker.Reset();
+        _cachedCatalogDescriptors = null;
         try
         {
             ServiceNameTextBox.Text = profile.Name;
@@ -359,7 +404,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 string.Equals(profile.TextModel, profile.VisionModel, StringComparison.Ordinal);
             UseTextModelForVisionCheckBox.IsChecked = sharedModel;
             VisionModelCombo.IsEnabled = !sharedModel;
-            VisionModelPanel.Opacity = sharedModel ? 0.62 : 1.0;
+            _visionTracker.OnLoaded(profile.TextModel, profile.VisionModel);
             UpdateModelSuggestions(profile.ProviderType);
             ExtraHeadersTextBox.Text = string.Join(
                 Environment.NewLine,
@@ -390,6 +435,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             _loading = wasLoading;
         }
+        RefreshRecommendations();
         ClearEditorDirty();
     }
 
@@ -619,7 +665,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             ApplyToCore(config);
             RefreshProfilesList();
             ProfileChanged?.Invoke();
-            StatusChanged?.Invoke($"已将「{profile.Name}」设为默认文字服务，立即生效。", StatusTone.Success);
+            StatusChanged?.Invoke($"已将「{profile.Name}」设为默认文字服务，后续翻译生效。", StatusTone.Success);
         }
         catch (Exception exception)
         {
@@ -725,7 +771,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             ApplyToCore(config);
             RefreshProfilesList();
             ProfileChanged?.Invoke();
-            StatusChanged?.Invoke($"默认文字服务已切换为「{option.Label}」，立即生效。", StatusTone.Success);
+            StatusChanged?.Invoke($"默认文字服务已切换为「{option.Label}」，后续翻译生效。", StatusTone.Success);
         }
         catch (Exception exception)
         {
@@ -749,7 +795,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             ProfileChanged?.Invoke();
             StatusChanged?.Invoke(string.IsNullOrEmpty(option.Id)
                 ? "默认视觉服务将跟随默认文字服务。"
-                : $"默认视觉服务已切换为「{option.Label}」，立即生效。", StatusTone.Info);
+                : $"默认视觉服务已切换为「{option.Label}」，后续翻译生效。", StatusTone.Info);
         }
         catch (Exception exception)
         {
@@ -968,6 +1014,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         };
 
         _loading = true;
+        _cachedCatalogDescriptors = null;
         try
         {
             if (string.IsNullOrWhiteSpace(ServiceNameTextBox.Text) ||
@@ -996,9 +1043,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             AnthropicVersionTextBox.Text = "2023-06-01";
             SupportsTextCheckBox.IsChecked = false;
             SupportsVisionCheckBox.IsChecked = false;
+            _visionTracker.Reset();
             UseTextModelForVisionCheckBox.IsChecked = false;
             VisionModelCombo.IsEnabled = true;
-            VisionModelPanel.Opacity = 1.0;
             CustomProtocolGroup.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
             BaseUrlPanel.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
             // Preset cloud hosts hide the protocol surface entirely; custom and
@@ -1023,6 +1070,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         SetDefaultButton.Visibility = Visibility.Collapsed;
         DeleteServiceButton.Visibility = Visibility.Collapsed;
         UpdateEditorIdentity(ServiceNameTextBox.Text, type, baseUrl, preset == "ollama");
+        RefreshRecommendations();
         MarkEditorDirty();
 
         StatusChanged?.Invoke(note, StatusTone.Info);
@@ -1072,7 +1120,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             VisionEndpointTextBox.Text = endpoint;
         }
+        _cachedCatalogDescriptors = null;
         UpdateModelSuggestions(providerType);
+        RefreshRecommendations();
         ResetModelCatalogStatus();
     }
 
@@ -1124,6 +1174,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private void ApplyModelSuggestions(ModelCatalogResult result)
     {
+        _cachedCatalogDescriptors = result.Models;
         var ids = result.Models.Select(model => model.Id).ToList();
         // Refreshing keeps the current selection; a pick that no longer
         // exists in the catalog is flagged, never silently replaced.
@@ -1149,6 +1200,267 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 $"视觉模型「{currentVision}」存在，但目录未声明图片输入能力；请以供应商文档或连接测试确认，系统不会根据名称猜测。",
                 StatusTone.Warning);
         }
+
+        RefreshRecommendations();
+    }
+
+    private void PreferenceRadio_Checked(object sender, RoutedEventArgs e)
+    {
+        if (_loading || PreferenceSpeedRadio is null || PreferenceBalancedRadio is null || PreferenceQualityRadio is null)
+        {
+            return;
+        }
+
+        var pref = PreferenceSpeedRadio.IsChecked == true
+            ? ModelPreference.Speed
+            : PreferenceQualityRadio.IsChecked == true
+                ? ModelPreference.Quality
+                : ModelPreference.Balanced;
+
+        _currentPreference = pref;
+        RefreshRecommendations();
+    }
+
+    internal void RefreshRecommendations()
+    {
+        if (_loading || TextRecommendationChipsPanel is null || VisionRecommendationChipsPanel is null)
+        {
+            return;
+        }
+
+        var providerType = ProviderType.OpenAiCompatible;
+        if (ProviderTypeComboBox.SelectedItem is ComboBoxItem item &&
+            Enum.TryParse<ProviderType>(item.Tag?.ToString(), out var parsedType))
+        {
+            providerType = parsedType;
+        }
+
+        var isLocal = ProviderSettings.IsLocalBaseUrl(BaseUrlTextBox.Text);
+        var descriptors = GetCandidateDescriptors();
+
+        // 1. Text model recommendation
+        var currentText = TextModelCombo.Text?.Trim();
+        var textRequest = new ModelRecommendationRequest(
+            ProviderType: providerType,
+            IsLocal: isLocal,
+            Models: descriptors,
+            TargetUsage: ModelTargetUsage.Text,
+            Preference: _currentPreference,
+            CurrentModelId: currentText);
+
+        var textResult = ModelRecommendationService.Recommend(textRequest);
+        PopulateRecommendationChips(
+            TextRecommendationChipsPanel,
+            textResult.Candidates.Where(c => c.IsEligible).Take(3),
+            isVision: false);
+
+        var selectedTextEval = textResult.AllEvaluations.FirstOrDefault(e =>
+            !string.IsNullOrWhiteSpace(currentText) &&
+            string.Equals(e.Model.Id?.Trim(), currentText, StringComparison.OrdinalIgnoreCase))
+            ?? textResult.RecommendedModel;
+
+        UpdateRecommendationReason(
+            TextRecommendationReasonRow,
+            TextRecommendationReasonText,
+            TextEvidenceBadge,
+            TextEvidenceBadgeText,
+            selectedTextEval);
+
+        // 2. Vision model recommendation
+        var sharedVision = UseTextModelForVisionCheckBox.IsChecked == true;
+        if (sharedVision)
+        {
+            VisionRecommendationChipsPanel.Children.Clear();
+            if (VisionRecommendationReasonRow is not null)
+            {
+                VisionRecommendationReasonRow.Visibility = Visibility.Collapsed;
+            }
+        }
+        else
+        {
+            var currentVision = VisionModelCombo.Text?.Trim();
+            var visionRequest = new ModelRecommendationRequest(
+                ProviderType: providerType,
+                IsLocal: isLocal,
+                Models: descriptors,
+                TargetUsage: ModelTargetUsage.Vision,
+                Preference: _currentPreference,
+                CurrentModelId: currentVision);
+
+            var visionResult = ModelRecommendationService.Recommend(visionRequest);
+            PopulateRecommendationChips(
+                VisionRecommendationChipsPanel,
+                visionResult.Candidates.Where(c => c.IsEligible).Take(3),
+                isVision: true);
+
+            var selectedVisionEval = visionResult.AllEvaluations.FirstOrDefault(e =>
+                !string.IsNullOrWhiteSpace(currentVision) &&
+                string.Equals(e.Model.Id?.Trim(), currentVision, StringComparison.OrdinalIgnoreCase))
+                ?? visionResult.RecommendedModel;
+
+            UpdateRecommendationReason(
+                VisionRecommendationReasonRow,
+                VisionRecommendationReasonText,
+                VisionEvidenceBadge,
+                VisionEvidenceBadgeText,
+                selectedVisionEval);
+        }
+    }
+
+    private void PopulateRecommendationChips(
+        WrapPanel panel,
+        IEnumerable<ModelCandidateEvaluation> candidates,
+        bool isVision)
+    {
+        panel.Children.Clear();
+        var style = (Style?)(TryFindResource("ModelRecommendationChipStyle") ?? TryFindResource("ModelChipButton"));
+
+        foreach (var candidate in candidates)
+        {
+            var modelId = candidate.Model.Id;
+            var button = new Button
+            {
+                Content = modelId,
+                Tag = modelId,
+                Style = style,
+                ToolTip = candidate.PrimaryReason,
+            };
+
+            var label = isVision ? $"推荐图片模型 {modelId}" : $"推荐文字模型 {modelId}";
+            System.Windows.Automation.AutomationProperties.SetName(button, label);
+
+            if (isVision)
+            {
+                button.Click += (_, _) =>
+                {
+                    if (UseTextModelForVisionCheckBox.IsChecked == true)
+                    {
+                        return;
+                    }
+                    VisionModelCombo.Text = modelId;
+                };
+            }
+            else
+            {
+                button.Click += (_, _) =>
+                {
+                    TextModelCombo.Text = modelId;
+                };
+            }
+
+            panel.Children.Add(button);
+        }
+    }
+
+    private void UpdateRecommendationReason(
+        Grid? reasonRow,
+        TextBlock? reasonText,
+        Border? evidenceBadge,
+        TextBlock? evidenceBadgeText,
+        ModelCandidateEvaluation? evaluation)
+    {
+        if (reasonRow is null || reasonText is null || evidenceBadge is null || evidenceBadgeText is null)
+        {
+            return;
+        }
+
+        if (evaluation is null || string.IsNullOrWhiteSpace(evaluation.PrimaryReason))
+        {
+            reasonRow.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        reasonRow.Visibility = Visibility.Visible;
+        reasonText.Text = evaluation.PrimaryReason;
+        UpdateEvidenceBadge(evidenceBadge, evidenceBadgeText, evaluation.EvidenceSources);
+    }
+
+    private void UpdateEvidenceBadge(Border badgeBorder, TextBlock badgeText, RecommendationEvidenceSource sources)
+    {
+        var (text, bgKey, fgKey, borderKey) = ResolveEvidenceBadgeVisualKeys(sources, hasBenchmarkMetric: false);
+        badgeText.Text = text;
+        if (TryFindResource(fgKey) is Brush fg) badgeText.Foreground = fg;
+        if (TryFindResource(bgKey) is Brush bg) badgeBorder.Background = bg;
+        if (TryFindResource(borderKey) is Brush border) badgeBorder.BorderBrush = border;
+    }
+
+    internal IReadOnlyList<ModelDescriptor> GetCandidateDescriptors()
+    {
+        if (_cachedCatalogDescriptors is { Count: > 0 })
+        {
+            return _cachedCatalogDescriptors;
+        }
+
+        var list = new List<ModelDescriptor>();
+        void AddIfNew(string? id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return;
+            var trimmed = id.Trim();
+            if (list.Any(m => string.Equals(m.Id, trimmed, StringComparison.OrdinalIgnoreCase))) return;
+            list.Add(new ModelDescriptor(trimmed, CapabilityState.Unknown, CapabilityState.Unknown, "Fallback"));
+        }
+
+        AddIfNew(TextModelCombo?.Text);
+        AddIfNew(VisionModelCombo?.Text);
+
+        if (!string.IsNullOrWhiteSpace(_editingProfileId))
+        {
+            var template = ProviderCatalog.Find(_editingProfileId);
+            if (template is not null)
+            {
+                AddIfNew(template.TextModel);
+                AddIfNew(template.VisionModel);
+            }
+        }
+
+        return list;
+    }
+
+    internal enum EvidenceBadgeTier
+    {
+        LocalBenchmark,
+        CatalogExplicit,
+        FamilyHeuristics,
+        Unknown,
+    }
+
+    internal static EvidenceBadgeTier ResolveEvidenceTier(RecommendationEvidenceSource sources, bool hasBenchmarkMetric = false)
+    {
+        if (hasBenchmarkMetric && sources.HasFlag(RecommendationEvidenceSource.LocalBenchmark))
+        {
+            return EvidenceBadgeTier.LocalBenchmark;
+        }
+        if (sources.HasFlag(RecommendationEvidenceSource.CatalogExplicit))
+        {
+            return EvidenceBadgeTier.CatalogExplicit;
+        }
+        if (sources.HasFlag(RecommendationEvidenceSource.FamilyHeuristics))
+        {
+            return EvidenceBadgeTier.FamilyHeuristics;
+        }
+        return EvidenceBadgeTier.Unknown;
+    }
+
+    internal static string GetEvidenceBadgeText(EvidenceBadgeTier tier) => tier switch
+    {
+        EvidenceBadgeTier.LocalBenchmark => "本机实测",
+        EvidenceBadgeTier.CatalogExplicit => "官方声明",
+        EvidenceBadgeTier.FamilyHeuristics => "系列推断",
+        _ => "未声明",
+    };
+
+    internal static (string Text, string BackgroundKey, string ForegroundKey, string BorderBrushKey) ResolveEvidenceBadgeVisualKeys(
+        RecommendationEvidenceSource sources,
+        bool hasBenchmarkMetric = false)
+    {
+        var tier = ResolveEvidenceTier(sources, hasBenchmarkMetric);
+        return tier switch
+        {
+            EvidenceBadgeTier.LocalBenchmark => ("本机实测", "SuccessSoftBrush", "SuccessBrush", "SuccessBrush"),
+            EvidenceBadgeTier.CatalogExplicit => ("官方声明", "AccentSoftBrush", "AccentBrush", "AccentBorderBrush"),
+            EvidenceBadgeTier.FamilyHeuristics => ("系列推断", "SurfaceRaisedBrush", "TextSecondaryBrush", "BorderSubtleBrush"),
+            _ => ("未声明", "SurfaceMutedBrush", "TextTertiaryBrush", "BorderSubtleBrush"),
+        };
     }
 
     internal static string DescribeCapabilityCounts(IReadOnlyList<ModelDescriptor> models)
@@ -1299,7 +1611,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             SetTestResult(StatusTone.Success,
                 $"连接成功 · {host} · HTTP {response.Diagnostics.StatusCode} · {response.Diagnostics.ElapsedMs} ms" +
                 (string.IsNullOrWhiteSpace(draft.TextModel) ? "" : $" · {draft.TextModel}"),
-                "草稿未保存；点「保存并启用」生效。");
+                "草稿未保存；保存并设为默认后才用于后续翻译。连接测试只报告健康状态，不是使用前提。");
             if (_editingProfileId is not null)
             {
                 _testOutcomes[_editingProfileId] = "ok";

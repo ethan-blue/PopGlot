@@ -82,6 +82,9 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         RouteDraftNote.Visibility = pending ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    /// <summary>True while the route card is flagged as a stale draft.</summary>
+    internal bool IsRouteDraftPending => RouteDraftNote.Visibility == Visibility.Visible;
+
     private void RefreshDraftRoutePreview()
     {
         try

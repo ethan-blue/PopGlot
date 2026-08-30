@@ -1,0 +1,30 @@
+{
+  "id": "tech_error_stack_auth",
+  "category": "technical_error_stack",
+  "description": "Technical error stack trace with exception names, file paths, and line numbers",
+  "source_lang": "en",
+  "target_lang": "zh-CN",
+  "input_type": "text",
+  "source_text": "NullReferenceException: Object reference not set to an instance of an object.\n   at PopGlot.Services.AuthService.ValidateToken in C:\\src\\PopGlot\\AuthService.cs:line 142\n   at PopGlot.Controllers.LoginController.Handle in C:\\src\\PopGlot\\LoginController.cs:line 58\nError code: 0x80004003 (E_POINTER)",
+  "include_explanation": true,
+  "protect_tokens": true,
+  "delimiter": "PGMETA-errstack-nonce-99",
+  "synthetic_model_output": "⟦PG_0000⟧: 未将对象引用设置到对象的实例。\n   在 ⟦PG_0001⟧ 位置 ⟦PG_0002⟧:行 142\n   在 ⟦PG_0003⟧ 位置 ⟦PG_0004⟧:行 58\n错误代码：0x80004003 (E_POINTER)\nPGMETA-errstack-nonce-99\n{\"detected_source_lang\":\"en\",\"transcription\":\"\",\"explanation\":\"0x80004003 为 COM 标准的 E_POINTER 空指针错误。\",\"warnings\":[]}",
+  "expected_body": "NullReferenceException: 未将对象引用设置到对象的实例。\n   在 PopGlot.Services.AuthService.ValidateToken 位置 C:\\src\\PopGlot\\AuthService.cs:行 142\n   在 PopGlot.Controllers.LoginController.Handle 位置 C:\\src\\PopGlot\\LoginController.cs:行 58\n错误代码：0x80004003 (E_POINTER)",
+  "expected_metadata": {
+    "detected_source_lang": "en",
+    "transcription": "",
+    "explanation": "0x80004003 为 COM 标准的 E_POINTER 空指针错误。",
+    "warnings": []
+  },
+  "expected_tokens": [
+    "NullReferenceException",
+    "PopGlot.Services.AuthService.ValidateToken",
+    "C:\\src\\PopGlot\\AuthService.cs",
+    "PopGlot.Controllers.LoginController.Handle",
+    "C:\\src\\PopGlot\\LoginController.cs"
+  ],
+  "expected_dropped_tokens": [],
+  "expect_trailer_warning": false,
+  "semantic_evaluation_mode": "live_or_manual_required"
+}

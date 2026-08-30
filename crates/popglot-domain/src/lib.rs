@@ -954,7 +954,7 @@ pub fn restore_tokens(translated: &str, tokens: &[ProtectedToken]) -> RestoredTe
     let mut dropped = Vec::new();
 
     for (index, token) in tokens.iter().enumerate() {
-        let variants = placeholder_variants(&token.placeholder, index);
+        let variants = protected_token_variants(&token.placeholder, index);
         let matched = variants.iter().find(|variant| restored.contains(*variant));
         match matched {
             Some(variant) => restored = restored.replace(variant, &token.original),
@@ -968,7 +968,9 @@ pub fn restore_tokens(translated: &str, tokens: &[ProtectedToken]) -> RestoredTe
     }
 }
 
-fn placeholder_variants(placeholder: &str, index: usize) -> Vec<String> {
+/// Returns the placeholder spellings accepted by [`restore_tokens`].
+#[must_use]
+pub fn protected_token_variants(placeholder: &str, index: usize) -> Vec<String> {
     let ascii = placeholder.replace('⟦', "[").replace('⟧', "]");
     let bare = placeholder.replace(['⟦', '⟧'], "");
     vec![

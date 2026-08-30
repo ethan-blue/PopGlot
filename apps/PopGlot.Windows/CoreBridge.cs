@@ -1,7 +1,9 @@
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using PopGlot.Windows.Services;
 
 namespace PopGlot.Windows;
 
@@ -194,6 +196,182 @@ internal static partial class CoreBridge
             reqId,
             cancellationToken);
     }
+
+    /// <summary>
+    /// Streams text translation through the configured active provider.
+    /// </summary>
+    public static TranslationStreamSession TranslateTextStream(
+        string? apiKey,
+        string source,
+        string sourceLang,
+        string targetLang,
+        string? requestId = null,
+        string? sessionId = null,
+        long epoch = 0,
+        TranslationStreamBuffer? buffer = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+
+        var settings = GetSettings();
+        if (settings.SafeDevMode || !settings.NetworkEnabled)
+        {
+            if (!settings.TargetsLocalRuntime)
+            {
+                throw new InvalidOperationException(
+                    "安全离线模式或网络翻译已禁用；未发送任何在线翻译请求。可在设置中配置本地模型或开启网络。");
+            }
+        }
+
+        var usesConfiguredProvider = !string.IsNullOrWhiteSpace(apiKey) || settings.TargetsLocalRuntime;
+        if (!usesConfiguredProvider)
+        {
+            throw new InvalidOperationException(
+                "尚未配置模型服务；未发送任何请求。可配置 API Key、本地模型地址，或允许内置免费引擎。");
+        }
+
+        var effectiveKey = string.IsNullOrWhiteSpace(apiKey) ? "local" : apiKey;
+        var reqId = requestId ?? Guid.NewGuid().ToString("N");
+        var activeBuffer = buffer ?? new TranslationStreamBuffer(
+            sessionId ?? Guid.NewGuid().ToString("N"),
+            reqId,
+            epoch);
+
+        unsafe
+        {
+            var completionTask = ExecuteStreamRequestAsync(
+                activeBuffer,
+                (cb, userData) => NativeMethods.TranslateTextStreamV1(
+                    effectiveKey, source, sourceLang, targetLang, reqId, cb, userData),
+                reqId,
+                cancellationToken);
+
+            return new TranslationStreamSession(activeBuffer, completionTask);
+        }
+    }
+
+    public static TranslationStreamSession TranslateTextStreamAsync(
+        string? apiKey,
+        string source,
+        string sourceLang,
+        string targetLang,
+        string? requestId = null,
+        string? sessionId = null,
+        long epoch = 0,
+        TranslationStreamBuffer? buffer = null,
+        CancellationToken cancellationToken = default) =>
+        TranslateTextStream(apiKey, source, sourceLang, targetLang, requestId, sessionId, epoch, buffer, cancellationToken);
+
+    /// <summary>
+    /// Streams text translation through an unpersisted settings draft snapshot.
+    /// </summary>
+    public static TranslationStreamSession TranslateTextDraftStream(
+        ProviderSettings draftSettings,
+        string apiKey,
+        string source,
+        string sourceLang,
+        string targetLang,
+        string? requestId = null,
+        string? sessionId = null,
+        long epoch = 0,
+        TranslationStreamBuffer? buffer = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(draftSettings);
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+        var reqId = requestId ?? Guid.NewGuid().ToString("N");
+        var draftJson = JsonSerializer.Serialize(draftSettings, JsonOptions);
+        var effectiveKey = string.IsNullOrWhiteSpace(apiKey) ? "local" : apiKey;
+        var activeBuffer = buffer ?? new TranslationStreamBuffer(
+            sessionId ?? Guid.NewGuid().ToString("N"),
+            reqId,
+            epoch);
+
+        unsafe
+        {
+            var completionTask = ExecuteStreamRequestAsync(
+                activeBuffer,
+                (cb, userData) => NativeMethods.TranslateTextDraftStreamV1(
+                    draftJson, effectiveKey, source, sourceLang, targetLang, reqId, cb, userData),
+                reqId,
+                cancellationToken);
+
+            return new TranslationStreamSession(activeBuffer, completionTask);
+        }
+    }
+
+    public static TranslationStreamSession TranslateTextDraftStreamAsync(
+        ProviderSettings draftSettings,
+        string apiKey,
+        string source,
+        string sourceLang,
+        string targetLang,
+        string? requestId = null,
+        string? sessionId = null,
+        long epoch = 0,
+        TranslationStreamBuffer? buffer = null,
+        CancellationToken cancellationToken = default) =>
+        TranslateTextDraftStream(draftSettings, apiKey, source, sourceLang, targetLang, requestId, sessionId, epoch, buffer, cancellationToken);
+
+    /// <summary>
+    /// Streams screenshot translation through an unpersisted (or stored) vision settings draft.
+    /// </summary>
+    public static TranslationStreamSession TranslateVisionDraftStream(
+        ProviderSettings draftSettings,
+        string textApiKey,
+        string visionApiKey,
+        byte[] image,
+        string sourceLang,
+        string targetLang,
+        string? requestId = null,
+        string? sessionId = null,
+        long epoch = 0,
+        TranslationStreamBuffer? buffer = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(draftSettings);
+        ArgumentNullException.ThrowIfNull(image);
+        if (image.Length == 0 || image.Length > 8 * 1024 * 1024)
+        {
+            throw new ArgumentOutOfRangeException(nameof(image), "截图必须大于 0 且不超过 8 MiB。");
+        }
+
+        var reqId = requestId ?? Guid.NewGuid().ToString("N");
+        var draftJson = JsonSerializer.Serialize(draftSettings, JsonOptions);
+        var imageBase64 = Convert.ToBase64String(image);
+        var effectiveKey = string.IsNullOrWhiteSpace(visionApiKey) ? "local" : visionApiKey;
+        var activeBuffer = buffer ?? new TranslationStreamBuffer(
+            sessionId ?? Guid.NewGuid().ToString("N"),
+            reqId,
+            epoch);
+
+        unsafe
+        {
+            var completionTask = ExecuteStreamRequestAsync(
+                activeBuffer,
+                (cb, userData) => NativeMethods.TranslateVisionDraftStreamV1(
+                    effectiveKey, string.Empty, draftJson, "image/png", imageBase64,
+                    sourceLang, targetLang, reqId, cb, userData),
+                reqId,
+                cancellationToken);
+
+            return new TranslationStreamSession(activeBuffer, completionTask);
+        }
+    }
+
+    public static TranslationStreamSession TranslateVisionDraftStreamAsync(
+        ProviderSettings draftSettings,
+        string textApiKey,
+        string visionApiKey,
+        byte[] image,
+        string sourceLang,
+        string targetLang,
+        string? requestId = null,
+        string? sessionId = null,
+        long epoch = 0,
+        TranslationStreamBuffer? buffer = null,
+        CancellationToken cancellationToken = default) =>
+        TranslateVisionDraftStream(draftSettings, textApiKey, visionApiKey, image, sourceLang, targetLang, requestId, sessionId, epoch, buffer, cancellationToken);
 
     /// <summary>
     /// Translates already-recognized text (e.g. from local OCR) through the
@@ -415,6 +593,108 @@ internal static partial class CoreBridge
         }
     }
 
+    private unsafe delegate nint NativeStreamInvoker(
+        delegate* unmanaged[Cdecl]<nint, int, nint, nuint, int> callback,
+        nint userData);
+
+    private static async Task<TranslationResponse> ExecuteStreamRequestAsync(
+        TranslationStreamBuffer buffer,
+        NativeStreamInvoker nativeStreamingCall,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        var handle = GCHandle.Alloc(buffer);
+        try
+        {
+            var userData = GCHandle.ToIntPtr(handle);
+            return await RunCancellableAsync(
+                () =>
+                {
+                    try
+                    {
+                        string rawJson;
+                        unsafe
+                        {
+                            rawJson = Invoke(() => nativeStreamingCall(&StreamCallbackThunk, userData));
+                        }
+                        var response = EnsureSuccess<TranslationResponse>(rawJson);
+                        buffer.Complete();
+                        return response;
+                    }
+                    catch (Exception ex)
+                    {
+                        buffer.Abort(ex.Message);
+                        throw;
+                    }
+                    finally
+                    {
+                        GC.KeepAlive(buffer);
+                    }
+                },
+                requestId,
+                cancellationToken);
+        }
+        finally
+        {
+            if (handle.IsAllocated)
+            {
+                handle.Free();
+            }
+        }
+    }
+
+    internal static int ProcessStreamDelta(nint userData, int eventType, nint payloadPtr, nuint byteLen)
+    {
+        if (userData == 0)
+        {
+            return 0;
+        }
+
+        try
+        {
+            var handle = GCHandle.FromIntPtr(userData);
+            if (!handle.IsAllocated)
+            {
+                return 1;
+            }
+
+            if (handle.Target is not TranslationStreamBuffer buffer)
+            {
+                return 1;
+            }
+
+            // eventType 1 = POPGLOT_STREAM_EVENT_TEXT_DELTA_V1
+            if (eventType == 1)
+            {
+                if (payloadPtr == 0 || byteLen == 0)
+                {
+                    return buffer.IsActive ? 0 : 1;
+                }
+
+                if (byteLen > int.MaxValue)
+                {
+                    buffer.Abort("Payload length exceeds maximum supported size.");
+                    return 1;
+                }
+
+                bool appended = buffer.TryAppendUtf8(payloadPtr, (int)byteLen);
+                return appended ? 0 : 1;
+            }
+
+            return buffer.IsActive ? 0 : 1;
+        }
+        catch
+        {
+            return 1;
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    internal static int StreamCallbackThunk(nint userData, int eventType, nint payloadPtr, nuint byteLen)
+    {
+        return ProcessStreamDelta(userData, eventType, payloadPtr, byteLen);
+    }
+
     private static string Invoke(Func<nint> nativeCall)
     {
         var pointer = nativeCall();
@@ -434,7 +714,7 @@ internal static partial class CoreBridge
         }
     }
 
-    private static T EnsureSuccess<T>(string json)
+    internal static T EnsureSuccess<T>(string json)
     {
         var response = JsonSerializer.Deserialize<Envelope<T>>(json, JsonOptions)
             ?? throw new InvalidOperationException("PopGlot Core response was empty.");
@@ -476,6 +756,17 @@ internal static partial class CoreBridge
             string targetLang,
             string? requestId);
 
+        [LibraryImport(LibraryName, EntryPoint = "popglot_translate_text_draft_stream_v1", StringMarshalling = StringMarshalling.Utf8)]
+        internal static unsafe partial nint TranslateTextDraftStreamV1(
+            string settingsJson,
+            string apiKey,
+            string source,
+            string? sourceLang,
+            string? targetLang,
+            string? requestId,
+            delegate* unmanaged[Cdecl]<nint, int, nint, nuint, int> callback,
+            nint userData);
+
         [LibraryImport(LibraryName, EntryPoint = "popglot_translate_text_v2", StringMarshalling = StringMarshalling.Utf8)]
         internal static partial nint TranslateTextV2(
             string apiKey,
@@ -483,6 +774,16 @@ internal static partial class CoreBridge
             string sourceLang,
             string targetLang,
             string? requestId);
+
+        [LibraryImport(LibraryName, EntryPoint = "popglot_translate_text_stream_v1", StringMarshalling = StringMarshalling.Utf8)]
+        internal static unsafe partial nint TranslateTextStreamV1(
+            string apiKey,
+            string source,
+            string? sourceLang,
+            string? targetLang,
+            string? requestId,
+            delegate* unmanaged[Cdecl]<nint, int, nint, nuint, int> callback,
+            nint userData);
 
         [LibraryImport(LibraryName, EntryPoint = "popglot_translate_vision_v3", StringMarshalling = StringMarshalling.Utf8)]
         internal static partial nint TranslateVisionV3(
@@ -494,6 +795,19 @@ internal static partial class CoreBridge
             string sourceLang,
             string targetLang,
             string requestId);
+
+        [LibraryImport(LibraryName, EntryPoint = "popglot_translate_vision_draft_stream_v1", StringMarshalling = StringMarshalling.Utf8)]
+        internal static unsafe partial nint TranslateVisionDraftStreamV1(
+            string apiKey,
+            string? visionApiKey,
+            string? settingsJson,
+            string mediaType,
+            string imageBase64,
+            string? sourceLang,
+            string? targetLang,
+            string? requestId,
+            delegate* unmanaged[Cdecl]<nint, int, nint, nuint, int> callback,
+            nint userData);
 
         [LibraryImport(LibraryName, EntryPoint = "popglot_translate_vision_v2", StringMarshalling = StringMarshalling.Utf8)]
         internal static partial nint TranslateVisionV2(

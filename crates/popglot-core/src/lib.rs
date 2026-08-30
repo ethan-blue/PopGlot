@@ -4,7 +4,22 @@
 //! This crate never discovers Windows folders, invokes Win32, or performs a
 //! network request implicitly.
 
+pub mod benchmark;
 pub mod provider;
+pub mod sse;
+pub mod streaming;
+
+pub use benchmark::{
+    BenchmarkFixtureItem, BenchmarkItemResult, BenchmarkSafetyError, BenchmarkSubset,
+    LiveBenchmarkConfig, LiveBenchmarkReport, LiveBenchmarkSafetyFlags, MockBenchmarkExecutor,
+    RealProviderClientExecutor, compute_endpoint_fingerprint, generate_dry_run_report,
+    load_benchmark_fixtures, resolve_benchmark_api_key, resolve_benchmark_api_key_with_lookup,
+    run_live_benchmark, sanitize_error_string,
+};
+pub use provider::{STREAM_PROMPT_VERSION, StreamPrompt, StreamPromptBuilder, StreamPromptError};
+pub use streaming::{
+    StreamingTokenRestorer, TextFirstAssembler, TextFirstResult, TranslationMetadata,
+};
 
 use popglot_domain::{
     LanguagePair, ProviderSettings, RoutingContext, RoutingDecision, TranslationMode,
@@ -265,6 +280,144 @@ impl AppCore {
         .await
     }
 
+    /// Translates selected text through the text-first streaming protocol.
+    /// The callback receives protected tokens already restored and the final
+    /// response always equals the concatenation of visible deltas.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified Provider error for invalid source text, privacy
+    /// gates, cancellation, transport, or stream protocol failures.
+    pub async fn translate_text_stream<F>(
+        &self,
+        api_key: &str,
+        source: &str,
+        languages: &LanguagePair,
+        cancellation: &CancellationToken,
+        on_delta: F,
+    ) -> Result<TranslationResponse, ProviderError>
+    where
+        F: FnMut(&str),
+    {
+        let request_id = format!(
+            "translation-{}",
+            REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        );
+        Self::execute_translate_text_stream_snapshot(
+            &self.settings,
+            &self.provider_client,
+            api_key,
+            source,
+            languages,
+            &request_id,
+            cancellation,
+            on_delta,
+        )
+        .await
+    }
+
+    /// Executes a text-first stream through an immutable settings snapshot.
+    ///
+    /// `on_delta` is called synchronously by the provider stream task. It must
+    /// return promptly; callers that bridge it to a UI must copy data and queue
+    /// it rather than block this network task.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified error for invalid source text, provider failures,
+    /// cancellation, or text-first stream protocol failures.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_translate_text_stream_snapshot<F>(
+        settings: &ProviderSettings,
+        client: &ProviderClient,
+        api_key: &str,
+        source: &str,
+        languages: &LanguagePair,
+        request_id: &str,
+        cancellation: &CancellationToken,
+        mut on_delta: F,
+    ) -> Result<TranslationResponse, ProviderError>
+    where
+        F: FnMut(&str),
+    {
+        let source = source.trim();
+        if source.is_empty() || source.len() > MAX_SOURCE_BYTES {
+            return Err(ProviderError::new(
+                ProviderErrorKind::Configuration,
+                format!(
+                    "选中文本必须大于 0 且不超过 {} KiB。",
+                    MAX_SOURCE_BYTES / 1024
+                ),
+            ));
+        }
+        let provider = provider_for(settings.provider_type);
+        if !settings.protect_code_tokens {
+            let request = TranslationRequest::text(source, languages.clone())
+                .with_explanation(settings.include_explanation);
+            return client
+                .execute_stream(
+                    provider.as_ref(),
+                    settings,
+                    api_key,
+                    request_id,
+                    &request,
+                    None,
+                    cancellation,
+                    on_delta,
+                )
+                .await;
+        }
+        let protected = protect_tokens(source);
+        let request = TranslationRequest::text(protected.sanitized_text, languages.clone())
+            .with_explanation(settings.include_explanation);
+        let mut restorer = StreamingTokenRestorer::new(&protected.tokens);
+        let stream_result = client
+            .execute_stream(
+                provider.as_ref(),
+                settings,
+                api_key,
+                request_id,
+                &request,
+                None,
+                cancellation,
+                |delta| {
+                    let visible = restorer.push(delta);
+                    if !visible.is_empty() {
+                        on_delta(&visible);
+                    }
+                },
+            )
+            .await;
+        // Do not flush buffered data after cancellation: an FFI callback may
+        // have cancelled its request while processing the preceding delta.
+        if cancellation.is_cancelled() {
+            return Err(ProviderError::new(
+                ProviderErrorKind::Cancelled,
+                "翻译请求已取消。",
+            ));
+        }
+        let tail = restorer.finish_delta();
+        if !tail.is_empty() {
+            on_delta(&tail);
+        }
+        let restoration = restorer.finish();
+        let mut response = stream_result?;
+        response.result.translated_text = restoration.text;
+        response.result.protected_terms = protected
+            .tokens
+            .iter()
+            .map(|token| token.original.clone())
+            .collect();
+        if !restoration.dropped_terms.is_empty() {
+            response.result.is_partial = true;
+            response.result.warnings.push(format!(
+                "模型未在译文中保留这些代码元素：{}",
+                restoration.dropped_terms.join("、")
+            ));
+        }
+        Ok(response)
+    }
+
     /// Pure lock-free text translation snapshot execution.
     ///
     /// # Errors
@@ -430,6 +583,67 @@ impl AppCore {
                 request_id,
                 &request,
                 cancellation,
+            )
+            .await
+    }
+
+    /// Executes a vision text-first stream through immutable draft settings.
+    /// The transport and prompt implementation are shared with the non-stream
+    /// snapshot path; only the provider's stream adapter differs.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified error for prohibited image uploads, invalid image
+    /// input, provider failures, cancellation, or stream protocol failures.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_translate_vision_stream_snapshot<F>(
+        settings: &ProviderSettings,
+        client: &ProviderClient,
+        api_key: &str,
+        vision_api_key: &str,
+        media_type: &str,
+        image: Vec<u8>,
+        languages: &LanguagePair,
+        request_id: &str,
+        cancellation: &CancellationToken,
+        on_delta: F,
+    ) -> Result<TranslationResponse, ProviderError>
+    where
+        F: FnMut(&str),
+    {
+        if settings.mode == TranslationMode::LocalOcr {
+            return Err(ProviderError::new(
+                ProviderErrorKind::UnsupportedInput,
+                "当前模式为本地 OCR，截图不应上传；请由外壳使用本地 OCR 后翻译文字。",
+            ));
+        }
+        if !settings.allow_image_upload_in_auto && !settings.targets_local_runtime() {
+            return Err(ProviderError::new(
+                ProviderErrorKind::NetworkDisabled,
+                "隐私设置未授权上传截图；未发送图片。可在设置中勾选“允许截图上传”，或使用本地 OCR 模式。",
+            ));
+        }
+        let (effective_settings, effective_key) =
+            resolve_vision_runtime(settings, api_key, vision_api_key);
+        let provider = provider_for(effective_settings.provider_type);
+        let request = TranslationRequest::vision(
+            ImageInput::Bytes {
+                media_type: media_type.to_owned(),
+                data: image,
+            },
+            languages.clone(),
+        )
+        .with_explanation(effective_settings.include_explanation);
+        client
+            .execute_stream(
+                provider.as_ref(),
+                &effective_settings,
+                &effective_key,
+                request_id,
+                &request,
+                None,
+                cancellation,
+                on_delta,
             )
             .await
     }

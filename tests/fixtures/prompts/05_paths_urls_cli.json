@@ -1,0 +1,31 @@
+{
+  "id": "paths_urls_cli_ops",
+  "category": "paths_urls_cli",
+  "description": "System administration operations containing URLs, Windows paths, POSIX paths, and CLI commands",
+  "source_lang": "en",
+  "target_lang": "zh-CN",
+  "input_type": "text",
+  "source_text": "Download configuration from https://api.popglot.com/config.json to C:\\ProgramData\\PopGlot\\config.json and run popglot.exe --start-daemon --config /etc/popglot/daemon.conf --log-level debug",
+  "include_explanation": false,
+  "protect_tokens": true,
+  "delimiter": "PGMETA-pathurlcli-88888",
+  "synthetic_model_output": "从 ⟦PG_0000⟧ 下载配置到 ⟦PG_0001⟧ 并运行 popglot.exe ⟦PG_0002⟧ ⟦PG_0003⟧ ⟦PG_0004⟧ ⟦PG_0005⟧ debug\nPGMETA-pathurlcli-88888\n{\"detected_source_lang\":\"en\",\"transcription\":\"\",\"explanation\":\"\",\"warnings\":[]}",
+  "expected_body": "从 https://api.popglot.com/config.json 下载配置到 C:\\ProgramData\\PopGlot\\config.json 并运行 popglot.exe --start-daemon --config /etc/popglot/daemon.conf --log-level debug",
+  "expected_metadata": {
+    "detected_source_lang": "en",
+    "transcription": "",
+    "explanation": "",
+    "warnings": []
+  },
+  "expected_tokens": [
+    "https://api.popglot.com/config.json",
+    "C:\\ProgramData\\PopGlot\\config.json",
+    "--start-daemon",
+    "--config",
+    "/etc/popglot/daemon.conf",
+    "--log-level"
+  ],
+  "expected_dropped_tokens": [],
+  "expect_trailer_warning": false,
+  "semantic_evaluation_mode": "live_or_manual_required"
+}

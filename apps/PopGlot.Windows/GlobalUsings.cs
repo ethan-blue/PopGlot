@@ -36,6 +36,7 @@ global using Orientation = System.Windows.Controls.Orientation;
 global using Point = System.Windows.Point;
 global using RadioButton = System.Windows.Controls.RadioButton;
 global using Rectangle = System.Windows.Shapes.Rectangle;
+global using RichTextBox = System.Windows.Controls.RichTextBox;
 global using Size = System.Windows.Size;
 global using TextBox = System.Windows.Controls.TextBox;
 global using TextDataFormat = System.Windows.TextDataFormat;

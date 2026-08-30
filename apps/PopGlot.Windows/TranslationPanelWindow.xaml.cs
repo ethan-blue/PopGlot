@@ -47,9 +47,10 @@ public partial class TranslationPanelWindow : Window
     private readonly Action? _openSettings;
     private readonly Action<string, string?, string?, string?>? _openInMain;
     private readonly TranslationCoordinator _coordinator;
+    private readonly TranslationPanelStreamGate _gate = new();
 
     private CancellationTokenSource? _operation;
-    private Func<CancellationToken, Task>? _retry;
+    private Func<CancellationToken, long, Task>? _retry;
     private byte[]? _screenshot;
     private string _translation = string.Empty;
     private string _sourceKind = "划词";
@@ -97,9 +98,12 @@ public partial class TranslationPanelWindow : Window
         SizeChanged += (_, _) => PositionNearAnchor();
         Closed += (_, _) =>
         {
+            _closing = true;
             TtsService.SpeakingStateChanged -= OnTtsSpeakingStateChanged;
             CancelOperation();
         };
+
+        RenderIdle();
     }
 
     private void OnTtsSpeakingStateChanged(object? sender, bool isSpeaking)
@@ -120,6 +124,11 @@ public partial class TranslationPanelWindow : Window
     private string TargetLanguage =>
         (TargetLangCombo.SelectedItem as LanguageOption)?.Tag ?? "zh-CN";
 
+    internal Border StreamIndicatorPill => StreamIndicator;
+    internal TextBlock StatusTextBlock => StatusText;
+    internal TextBox StreamTextBox => TranslationTextBox;
+    internal RichTextBox FinalRichBox => TranslationRichBox;
+
     // ================= Entry points =================
 
     internal async Task StartSelectionAsync(ClipboardSelectionService selectionService)
@@ -127,7 +136,8 @@ public partial class TranslationPanelWindow : Window
         ArgumentNullException.ThrowIfNull(selectionService);
         _sourceKind = "划词";
         SourceKindLabel.Text = "· 划词";
-        await RunOperationAsync(async cancellation =>
+        _screenshot = null;
+        await RunOperationAsync(async (cancellation, epoch) =>
         {
             RenderState(TranslationSessionState.ReadingSelection);
             SourceLabel.Text = "所选文字";
@@ -141,8 +151,8 @@ public partial class TranslationPanelWindow : Window
             // foreground window away from the app we just sent Ctrl+C to.
             AllowKeyboardInteraction();
 
-            _retry = token => TranslateTextAsync(source, token);
-            await TranslateTextAsync(source, cancellation);
+            _retry = (token, ep) => TranslateTextAsync(source, token, ep);
+            await TranslateTextAsync(source, cancellation, epoch);
         });
     }
 
@@ -154,8 +164,8 @@ public partial class TranslationPanelWindow : Window
         _screenshot = image;
         SourceLabel.Text = "画面文字";
         AllowKeyboardInteraction();
-        _retry = token => TranslateScreenshotAsync(image, token);
-        await RunOperationAsync(cancellation => TranslateScreenshotAsync(image, cancellation));
+        _retry = (token, ep) => TranslateScreenshotAsync(image, token, ep);
+        await RunOperationAsync((cancellation, epoch) => TranslateScreenshotAsync(image, cancellation, epoch));
     }
 
     internal async Task StartScreenshotOcrAsync(byte[] image)
@@ -166,13 +176,14 @@ public partial class TranslationPanelWindow : Window
         _screenshot = image;
         SourceLabel.Text = "画面提取文字";
         AllowKeyboardInteraction();
-        _retry = token => RecognizeOcrAsync(image, token);
-        await RunOperationAsync(cancellation => RecognizeOcrAsync(image, cancellation));
+        _retry = (token, ep) => RecognizeOcrAsync(image, token, ep);
+        await RunOperationAsync((cancellation, epoch) => RecognizeOcrAsync(image, cancellation, epoch));
     }
 
-    private async Task RecognizeOcrAsync(byte[] image, CancellationToken cancellationToken)
+    private async Task RecognizeOcrAsync(byte[] image, CancellationToken cancellationToken, long epoch)
     {
         RenderState(TranslationSessionState.Recognizing);
+        SetResultActionsEnabled(false);
         if (!WindowsOcrService.IsSupported)
         {
             throw new InvalidOperationException("系统未安装 Windows OCR 语言包，无法进行离线文字提取。");
@@ -187,7 +198,9 @@ public partial class TranslationPanelWindow : Window
 
         var formatted = MarkdownPresenter.FormatPangu(recognized.Trim());
         SourceInputBox.Text = formatted;
+        _gate.OnCompleted(formatted);
         SetTranslationContent(formatted, isMarkdown: false);
+        SetResultActionsEnabled(true);
         await TrySetClipboardAsync(formatted);
 
         RenderState(TranslationSessionState.Completed);
@@ -204,16 +217,18 @@ public partial class TranslationPanelWindow : Window
         SourceKindLabel.Text = "· 输入";
         SourceLabel.Text = "原文";
         SourceInputBox.Text = text ?? string.Empty;
+        _screenshot = null;
         AllowKeyboardInteraction();
 
         if (string.IsNullOrWhiteSpace(text))
         {
+            _gate.ResetToIdle();
             RenderIdle();
             SourceInputBox.Focus();
             return;
         }
-        _retry = token => TranslateTextAsync(text, token);
-        await RunOperationAsync(cancellation => TranslateTextAsync(text, cancellation));
+        _retry = (token, ep) => TranslateTextAsync(text, token, ep);
+        await RunOperationAsync((cancellation, epoch) => TranslateTextAsync(text, cancellation, epoch));
     }
 
     internal void ShowImmediateFailure(string message)
@@ -226,26 +241,46 @@ public partial class TranslationPanelWindow : Window
 
     // ================= Operation plumbing =================
 
-    private async Task RunOperationAsync(Func<CancellationToken, Task> operation)
+    private async Task RunOperationAsync(Func<CancellationToken, long, Task> operation)
     {
         CancelOperation();
+        var (epoch, _) = _gate.BeginNewOperation();
         var cancellation = new CancellationTokenSource();
         _operation = cancellation;
         try
         {
-            await operation(cancellation.Token);
+            await operation(cancellation.Token, epoch);
         }
         catch (OperationCanceledException)
         {
-            if (IsVisible)
+            if (!_closing && IsVisible)
             {
-                RenderState(TranslationSessionState.Cancelled);
+                _gate.OnCancelled(_translation);
+                if (_gate.HasPartialText)
+                {
+                    RenderCancelledWithPartial(_translation);
+                }
+                else
+                {
+                    RenderCancelledWithoutPartial();
+                }
                 Progress.Visibility = Visibility.Collapsed;
             }
         }
         catch (Exception exception)
         {
-            RenderFailure(exception.Message);
+            if (!_closing)
+            {
+                _gate.OnFailed(exception.Message, _translation);
+                if (_gate.HasPartialText)
+                {
+                    RenderFailedWithPartial(_translation, exception.Message);
+                }
+                else
+                {
+                    RenderFailure(exception.Message);
+                }
+            }
         }
         finally
         {
@@ -257,31 +292,53 @@ public partial class TranslationPanelWindow : Window
         }
     }
 
-    private async Task TranslateTextAsync(string source, CancellationToken cancellation)
+    private async Task TranslateTextAsync(string source, CancellationToken cancellation, long epoch)
     {
         if (string.IsNullOrWhiteSpace(source))
         {
             return;
         }
-        RenderState(TranslationSessionState.Translating);
+        RenderPreparingState("正在翻译");
         TranslationTextBox.Clear();
         TranslationTextBox.SetValue(Ui.PlaceholderProperty, "正在思考与翻译…");
         ExplanationBox.Visibility = Visibility.Collapsed;
         cancellation.ThrowIfCancellationRequested();
+
+        var progress = new Progress<TranslationStreamUpdate>(update =>
+        {
+            if (!_gate.ShouldAcceptUpdate(update.Epoch, _closing, IsLoaded || IsVisible))
+            {
+                return;
+            }
+            OnStreamUpdate(update);
+        });
 
         var session = await _coordinator.TranslateTextAsync(
             source,
             SourceLanguage,
             TargetLanguage,
             _sourceKind == "划词" ? TranslationInputSource.Selection : TranslationInputSource.Manual,
-            cancellation);
-        ThrowForTerminalState(session, cancellation);
-        await RenderResultAsync(source, session, pipelineNote: string.Empty);
+            cancellationToken: cancellation,
+            onStageChanged: stage =>
+            {
+                if (!_gate.ShouldAcceptUpdate(epoch, _closing, IsLoaded || IsVisible)) return;
+                _gate.OnStageChanged(stage);
+                OnStageChanged(stage);
+            },
+            progress: progress,
+            epoch: epoch);
+
+        if (!_gate.ShouldAcceptUpdate(epoch, _closing, IsLoaded || IsVisible))
+        {
+            return;
+        }
+
+        await HandleSessionResultAsync(source, session, epoch, pipelineNote: string.Empty);
     }
 
-    private async Task TranslateScreenshotAsync(byte[] image, CancellationToken cancellation)
+    private async Task TranslateScreenshotAsync(byte[] image, CancellationToken cancellation, long epoch)
     {
-        RenderState(TranslationSessionState.Recognizing);
+        RenderPreparingState("正在识别画面文字");
         SourceInputBox.Clear();
         SourceInputBox.SetValue(Ui.PlaceholderProperty, $"正在识别截图画面…（{image.Length / 1024.0:0.#} KiB）");
         TranslationTextBox.Clear();
@@ -289,44 +346,235 @@ public partial class TranslationPanelWindow : Window
         ExplanationBox.Visibility = Visibility.Collapsed;
         cancellation.ThrowIfCancellationRequested();
 
+        var progress = new Progress<TranslationStreamUpdate>(update =>
+        {
+            if (!_gate.ShouldAcceptUpdate(update.Epoch, _closing, IsLoaded || IsVisible))
+            {
+                return;
+            }
+            OnStreamUpdate(update);
+        });
+
         var session = await _coordinator.TranslateScreenshotAsync(
-            image, SourceLanguage, TargetLanguage, cancellation);
-        ThrowForTerminalState(session, cancellation);
+            image,
+            SourceLanguage,
+            TargetLanguage,
+            cancellationToken: cancellation,
+            onStageChanged: stage =>
+            {
+                if (!_gate.ShouldAcceptUpdate(epoch, _closing, IsLoaded || IsVisible)) return;
+                _gate.OnStageChanged(stage);
+                OnStageChanged(stage);
+            },
+            progress: progress,
+            epoch: epoch);
+
+        if (!_gate.ShouldAcceptUpdate(epoch, _closing, IsLoaded || IsVisible))
+        {
+            return;
+        }
 
         SourceInputBox.SetValue(Ui.PlaceholderProperty, "输入或粘贴要翻译的文字，按 Enter 翻译，Shift+Enter 换行");
-        TranslationTextBox.SetValue(Ui.PlaceholderProperty, "译文将显示在这里…");
-
-        // The transcription is the text that was actually read from the image;
-        // showing it as the source is what makes the result verifiable.
         var recognized = string.IsNullOrWhiteSpace(session.Transcription)
-            ? "（模型未回传识别文本）"
+            ? (!string.IsNullOrWhiteSpace(session.SourceText) ? session.SourceText : "（模型未回传识别文本）")
             : session.Transcription;
         SourceInputBox.Text = recognized;
-        await RenderResultAsync(recognized, session, pipelineNote: session.RoutingReason ?? string.Empty);
+
+        await HandleSessionResultAsync(recognized, session, epoch, pipelineNote: session.RoutingReason ?? string.Empty);
     }
 
-    /// <summary>
-    /// Surfaces coordinator outcomes through the panel's existing exception
-    /// plumbing: cancellation stays cancellation, everything else fails with a
-    /// message that says what happened and what to do next.
-    /// </summary>
-    private static void ThrowForTerminalState(TranslationSession session, CancellationToken cancellation)
+    private void OnStreamUpdate(TranslationStreamUpdate update)
+    {
+        if (!_gate.ApplyUpdate(update))
+        {
+            return;
+        }
+
+        if (update.Kind == TranslationStreamUpdateKind.Reset)
+        {
+            _translation = string.Empty;
+            TranslationTextBox.Text = string.Empty;
+            ResultSkeleton.Visibility = Visibility.Visible;
+            TranslationTextBox.Visibility = Visibility.Collapsed;
+            TranslationRichBox.Visibility = Visibility.Collapsed;
+            StreamIndicator.Visibility = Visibility.Collapsed;
+            SetResultActionsEnabled(false);
+            return;
+        }
+
+        if (update.Kind == TranslationStreamUpdateKind.Delta)
+        {
+            _translation = update.AccumulatedText ?? string.Empty;
+            if (ResultSkeleton.Visibility == Visibility.Visible)
+            {
+                ResultSkeleton.Visibility = Visibility.Collapsed;
+                TranslationTextBox.Visibility = Visibility.Visible;
+                TranslationRichBox.Visibility = Visibility.Collapsed;
+            }
+            StreamIndicator.Visibility = Visibility.Visible;
+            TranslationTextBox.Text = _translation;
+            TranslationTextBox.CaretIndex = _translation.Length;
+            TranslationTextBox.ScrollToEnd();
+            SetResultActionsEnabled(false);
+            StatusText.Text = "正在生成译文…";
+        }
+    }
+
+    private void OnStageChanged(TranslationSessionStage stage)
+    {
+        switch (stage)
+        {
+            case TranslationSessionStage.OcrRunning:
+                StatusText.Text = "正在识别画面文字";
+                StreamIndicator.Visibility = Visibility.Collapsed;
+                break;
+            case TranslationSessionStage.Routing:
+                StatusText.Text = "正在选择最佳模型";
+                StreamIndicator.Visibility = Visibility.Collapsed;
+                break;
+            case TranslationSessionStage.Translating:
+                StatusText.Text = "正在翻译";
+                StreamIndicator.Visibility = Visibility.Collapsed;
+                break;
+            case TranslationSessionStage.Streaming:
+                StatusText.Text = "正在生成译文…";
+                StreamIndicator.Visibility = Visibility.Visible;
+                break;
+            case TranslationSessionStage.Finalizing:
+                StatusText.Text = "正在整理译文…";
+                StreamIndicator.Visibility = Visibility.Collapsed;
+                break;
+        }
+    }
+
+    private async Task HandleSessionResultAsync(string source, TranslationSession session, long epoch, string pipelineNote)
     {
         if (session.Stage == TranslationSessionStage.Cancelled)
         {
-            throw new OperationCanceledException(cancellation);
+            Progress.Visibility = Visibility.Collapsed;
+            _gate.OnCancelled(session.TranslatedText);
+            if (_gate.HasPartialText)
+            {
+                RenderCancelledWithPartial(session.TranslatedText);
+            }
+            else
+            {
+                RenderCancelledWithoutPartial();
+            }
+            return;
         }
-        if (!session.IsSuccess)
+
+        if (!session.IsSuccess || session.Stage == TranslationSessionStage.Failed)
         {
+            Progress.Visibility = Visibility.Collapsed;
             var message = session.Error?.Message ?? "翻译未完成";
             var suggestion = session.Error?.ActionableSuggestion;
-            throw new InvalidOperationException(string.IsNullOrWhiteSpace(suggestion)
-                ? message
-                : $"{message} {suggestion}");
+            var fullMessage = string.IsNullOrWhiteSpace(suggestion) ? message : $"{message} {suggestion}".Trim();
+            _gate.OnFailed(fullMessage, session.TranslatedText);
+            if (_gate.HasPartialText)
+            {
+                RenderFailedWithPartial(session.TranslatedText, fullMessage);
+            }
+            else
+            {
+                RenderFailure(fullMessage);
+            }
+            return;
         }
+
+        _gate.OnCompleted(session.TranslatedText);
+        await RenderFinalSuccessAsync(source, session, pipelineNote);
     }
 
     // ================= Rendering =================
+
+    private void RenderPreparingState(string status)
+    {
+        StatusText.Text = status;
+        Progress.Visibility = Visibility.Visible;
+        ResultSkeleton.Visibility = Visibility.Visible;
+        TranslationTextBox.Visibility = Visibility.Collapsed;
+        TranslationRichBox.Visibility = Visibility.Collapsed;
+        StreamIndicator.Visibility = Visibility.Collapsed;
+        ExplanationBox.Visibility = Visibility.Collapsed;
+        WarningBox.Visibility = Visibility.Collapsed;
+        TermsList.Visibility = Visibility.Collapsed;
+        PhoneticText.Visibility = Visibility.Collapsed;
+        EngineBadge.Text = "翻译中";
+        SetBadgeTone(failed: false);
+        StatusDot.Background = (Brush)FindResource("AccentBrush");
+        SetResultActionsEnabled(false);
+    }
+
+    private void RenderCancelledWithPartial(string partialText)
+    {
+        _translation = partialText;
+        Progress.Visibility = Visibility.Collapsed;
+        ResultSkeleton.Visibility = Visibility.Collapsed;
+        TranslationRichBox.Visibility = Visibility.Collapsed;
+        TranslationTextBox.Visibility = Visibility.Visible;
+        TranslationTextBox.Text = partialText;
+        StreamIndicator.Visibility = Visibility.Collapsed;
+        SetResultActionsEnabled(false);
+
+        WarningText.Text = "已取消，内容不完整";
+        WarningBox.Visibility = Visibility.Visible;
+        EngineBadge.Text = "已取消";
+        EngineBadge.Foreground = (Brush)FindResource("WarningBrush");
+        StatusDot.Background = (Brush)FindResource("TextTertiaryBrush");
+        StatusText.Text = "翻译已取消 · 内容不完整";
+        RouteText.Text = "已中断";
+        ExplanationBox.Visibility = Visibility.Collapsed;
+        TermsList.Visibility = Visibility.Collapsed;
+        PhoneticText.Visibility = Visibility.Collapsed;
+    }
+
+    private void RenderCancelledWithoutPartial()
+    {
+        _translation = string.Empty;
+        Progress.Visibility = Visibility.Collapsed;
+        ResultSkeleton.Visibility = Visibility.Collapsed;
+        TranslationRichBox.Visibility = Visibility.Collapsed;
+        TranslationTextBox.Visibility = Visibility.Visible;
+        TranslationTextBox.Text = string.Empty;
+        StreamIndicator.Visibility = Visibility.Collapsed;
+        SetResultActionsEnabled(false);
+
+        WarningBox.Visibility = Visibility.Collapsed;
+        EngineBadge.Text = "已取消";
+        EngineBadge.Foreground = (Brush)FindResource("TextTertiaryBrush");
+        StatusDot.Background = (Brush)FindResource("TextTertiaryBrush");
+        StatusText.Text = "翻译已取消";
+        RouteText.Text = string.Empty;
+        ExplanationBox.Visibility = Visibility.Collapsed;
+        TermsList.Visibility = Visibility.Collapsed;
+        PhoneticText.Visibility = Visibility.Collapsed;
+    }
+
+    private void RenderFailedWithPartial(string partialText, string errorMessage)
+    {
+        _translation = partialText;
+        Progress.Visibility = Visibility.Collapsed;
+        ResultSkeleton.Visibility = Visibility.Collapsed;
+        TranslationRichBox.Visibility = Visibility.Collapsed;
+        TranslationTextBox.Visibility = Visibility.Visible;
+        TranslationTextBox.Text = partialText;
+        StreamIndicator.Visibility = Visibility.Collapsed;
+        SetResultActionsEnabled(false);
+
+        WarningText.Text = "生成中断，内容不完整";
+        WarningBox.Visibility = Visibility.Visible;
+        ExplanationText.Text = errorMessage;
+        ExplanationText.Visibility = Visibility.Visible;
+        ExplanationBox.Visibility = Visibility.Visible;
+        EngineBadge.Text = "生成中断";
+        EngineBadge.Foreground = (Brush)FindResource("DangerBrush");
+        StatusDot.Background = (Brush)FindResource("DangerBrush");
+        StatusText.Text = "生成中断 · 内容不完整";
+        RouteText.Text = "可检查网络或设置后重试";
+        TermsList.Visibility = Visibility.Collapsed;
+        PhoneticText.Visibility = Visibility.Collapsed;
+    }
 
     private void RenderIdle()
     {
@@ -334,7 +582,13 @@ public partial class TranslationPanelWindow : Window
         Progress.Visibility = Visibility.Collapsed;
         RouteText.Text = string.Empty;
         StatusDot.Background = (Brush)FindResource("TextTertiaryBrush");
+        ResultSkeleton.Visibility = Visibility.Collapsed;
+        TranslationRichBox.Visibility = Visibility.Collapsed;
+        TranslationTextBox.Visibility = Visibility.Visible;
+        TranslationTextBox.Text = string.Empty;
+        StreamIndicator.Visibility = Visibility.Collapsed;
         TranslationTextBox.SetValue(Ui.PlaceholderProperty, "译文将显示在这里…");
+        SetResultActionsEnabled(false);
     }
 
     private void RenderState(TranslationSessionState state)
@@ -355,6 +609,7 @@ public partial class TranslationPanelWindow : Window
             // glyphs in the selection popup.
             TranslationTextBox.Visibility = Visibility.Collapsed;
             TranslationRichBox.Visibility = Visibility.Collapsed;
+            StreamIndicator.Visibility = Visibility.Collapsed;
         }
 
         StatusDot.Background = state switch
@@ -369,6 +624,7 @@ public partial class TranslationPanelWindow : Window
     {
         _translation = text;
         TranslationTextBox.Text = text;
+        StreamIndicator.Visibility = Visibility.Collapsed;
         if (string.IsNullOrWhiteSpace(text))
         {
             TranslationRichBox.Document.Blocks.Clear();
@@ -396,13 +652,28 @@ public partial class TranslationPanelWindow : Window
         }
     }
 
-    private async Task RenderResultAsync(string source, TranslationSession session, string pipelineNote)
+    private async Task RenderFinalSuccessAsync(string source, TranslationSession session, string pipelineNote)
     {
         var partial = session.Warnings.Count > 0;
-        // A translation the model could not fully verify is never presented as
-        // a plain success — the badge and status say "partial".
-        RenderState(TranslationSessionState.Completed);
-        SetTranslationContent(session.TranslatedText, isMarkdown: true);
+        _translation = session.TranslatedText;
+        Progress.Visibility = Visibility.Collapsed;
+        ResultSkeleton.Visibility = Visibility.Collapsed;
+        StreamIndicator.Visibility = Visibility.Collapsed;
+
+        try
+        {
+            MarkdownPresenter.RenderToFlowDocument(TranslationRichBox.Document, session.TranslatedText, Application.Current?.Resources ?? Resources);
+            TranslationRichBox.Visibility = Visibility.Visible;
+            TranslationTextBox.Visibility = Visibility.Collapsed;
+        }
+        catch
+        {
+            TranslationTextBox.Text = session.TranslatedText;
+            TranslationTextBox.Visibility = Visibility.Visible;
+            TranslationRichBox.Visibility = Visibility.Collapsed;
+        }
+
+        SetResultActionsEnabled(true);
 
         // Phonetic is romanization of the source; it is a distinct field from
         // Transcription so a screenshot's OCR text is never rendered as one.
@@ -420,6 +691,8 @@ public partial class TranslationPanelWindow : Window
 
         EngineBadge.Text = partial ? "部分成功" : session.PipelineLabel ?? "翻译完成";
         SetResultTone(failed: false, partial: partial);
+        StatusDot.Background = (Brush)FindResource("AccentBrush");
+
         var totalMs = session.Timing.TotalElapsedMs + (ulong)Math.Max(0, _inputAcquisitionMs);
         var timingParts = new List<string> { session.PipelineLabel ?? "翻译" };
         if (_inputAcquisitionMs > 0)
@@ -446,7 +719,7 @@ public partial class TranslationPanelWindow : Window
 
         var settings = _shellSettings();
         UpdateStarIcon(_vocabulary?.IsStarred(source) == true);
-        if (settings.CopyTranslationAutomatically && !string.IsNullOrWhiteSpace(_translation))
+        if (_gate.ShouldTriggerAutoCopy(settings.CopyTranslationAutomatically))
         {
             if (await TrySetClipboardAsync(_translation))
             {
@@ -492,6 +765,14 @@ public partial class TranslationPanelWindow : Window
         EngineBadge.Text = "未完成";
         SetBadgeTone(failed: true);
         RouteText.Text = "可检查网络或设置后重试";
+        SetResultActionsEnabled(false);
+    }
+
+    private void SetResultActionsEnabled(bool enabled)
+    {
+        ResultCopyBtn.IsEnabled = enabled;
+        ResultSpeakBtn.IsEnabled = enabled;
+        StarToggle.IsEnabled = enabled;
     }
 
     /// <summary>Keeps the result badge from claiming success in red-dot states.</summary>
@@ -503,8 +784,6 @@ public partial class TranslationPanelWindow : Window
     /// </summary>
     private void SetResultTone(bool failed, bool partial)
     {
-        // The engine label is plain metadata text now; tone comes from the
-        // foreground colour alone.
         var strong = failed ? "DangerBrush" : partial ? "WarningBrush" : "TextTertiaryBrush";
         EngineBadge.Foreground = (Brush)FindResource(strong);
     }
@@ -572,7 +851,7 @@ public partial class TranslationPanelWindow : Window
             {
                 return;
             }
-            retry = token => TranslateTextAsync(text, token);
+            retry = (token, ep) => TranslateTextAsync(text, token, ep);
             _retry = retry;
         }
         await RunOperationAsync(retry);
@@ -580,7 +859,7 @@ public partial class TranslationPanelWindow : Window
 
     private async void ResultCopy_Click(object sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrWhiteSpace(_translation))
+        if (!_gate.CanPerformResultActions || string.IsNullOrWhiteSpace(_translation))
         {
             return;
         }
@@ -658,6 +937,7 @@ public partial class TranslationPanelWindow : Window
     private void SourceClear_Click(object sender, RoutedEventArgs e)
     {
         CancelOperation();
+        _gate.ResetToIdle();
         SourceInputBox.Clear();
         SetTranslationContent(string.Empty);
         _retry = null;
@@ -669,6 +949,7 @@ public partial class TranslationPanelWindow : Window
         WarningBox.Visibility = Visibility.Collapsed;
         EngineBadge.Text = "译文";
         SetBadgeTone(failed: false);
+        SetResultActionsEnabled(false);
         RenderIdle();
         SourceInputBox.Focus();
     }
@@ -752,8 +1033,14 @@ public partial class TranslationPanelWindow : Window
     private void SourceSpeak_Click(object sender, RoutedEventArgs e) =>
         SpeakOrStop(SourceInputBox.Text);
 
-    private void ResultSpeak_Click(object sender, RoutedEventArgs e) =>
+    private void ResultSpeak_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_gate.CanPerformResultActions || string.IsNullOrWhiteSpace(_translation))
+        {
+            return;
+        }
         SpeakOrStop(_translation);
+    }
 
     private static void SpeakOrStop(string? text)
     {
@@ -767,7 +1054,7 @@ public partial class TranslationPanelWindow : Window
 
     private void StarToggle_Click(object sender, RoutedEventArgs e)
     {
-        if (_vocabulary is null) return;
+        if (!_gate.CanPerformResultActions || _vocabulary is null) return;
         var source = SourceInputBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(_translation)) return;
 
@@ -791,9 +1078,6 @@ public partial class TranslationPanelWindow : Window
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e)
     {
-        // Settings is a destination, not a second layer over the transient
-        // translation result. App.ShowSettings closes transient surfaces and
-        // establishes the main/settings ownership relationship.
         _openSettings?.Invoke();
     }
 
@@ -816,8 +1100,8 @@ public partial class TranslationPanelWindow : Window
         }
         _sourceKind = _sourceKind == "截图" ? "截图" : "输入";
         _screenshot = null;
-        _retry = token => TranslateTextAsync(text, token);
-        await RunOperationAsync(cancellation => TranslateTextAsync(text, cancellation));
+        _retry = (token, ep) => TranslateTextAsync(text, token, ep);
+        await RunOperationAsync((cancellation, ep) => TranslateTextAsync(text, cancellation, ep));
     }
 
     private async void Language_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -832,8 +1116,8 @@ public partial class TranslationPanelWindow : Window
         // different OCR engine; text just re-translates.
         if (_screenshot is { } image)
         {
-            _retry = token => TranslateScreenshotAsync(image, token);
-            await RunOperationAsync(cancellation => TranslateScreenshotAsync(image, cancellation));
+            _retry = (token, ep) => TranslateScreenshotAsync(image, token, ep);
+            await RunOperationAsync((cancellation, ep) => TranslateScreenshotAsync(image, cancellation, ep));
             return;
         }
 
@@ -842,8 +1126,8 @@ public partial class TranslationPanelWindow : Window
         {
             return;
         }
-        _retry = token => TranslateTextAsync(text, token);
-        await RunOperationAsync(cancellation => TranslateTextAsync(text, cancellation));
+        _retry = (token, ep) => TranslateTextAsync(text, token, ep);
+        await RunOperationAsync((cancellation, ep) => TranslateTextAsync(text, cancellation, ep));
     }
 
     private async void SwapLangButton_Click(object sender, RoutedEventArgs e)
@@ -878,8 +1162,8 @@ public partial class TranslationPanelWindow : Window
         {
             return;
         }
-        _retry = token => TranslateTextAsync(text, token);
-        await RunOperationAsync(cancellation => TranslateTextAsync(text, cancellation));
+        _retry = (token, ep) => TranslateTextAsync(text, token, ep);
+        await RunOperationAsync((cancellation, ep) => TranslateTextAsync(text, cancellation, ep));
     }
 
     /// <summary>Remembers the pair so the next popup opens the same way.</summary>
@@ -959,13 +1243,11 @@ public partial class TranslationPanelWindow : Window
         if (e.Key == Key.Escape)
         {
             e.Handled = true;
-            // Escape cancels a running request first, and only closes an idle
-            // panel; otherwise a slow request could not be abandoned without
-            // losing the result that was already on screen.
+            // Escape cancels a running request first, and only closes an idle panel;
+            // otherwise a slow request could not be abandoned without losing the partial result.
             if (_operation is { IsCancellationRequested: false })
             {
                 CancelOperation();
-                RenderState(TranslationSessionState.Cancelled);
                 return;
             }
             Close();
@@ -983,7 +1265,7 @@ public partial class TranslationPanelWindow : Window
         // Ctrl+Shift+C: copy translation directly
         if (e.Key == Key.C && (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == (ModifierKeys.Control | ModifierKeys.Shift))
         {
-            if (!string.IsNullOrWhiteSpace(_translation))
+            if (_gate.CanPerformResultActions && !string.IsNullOrWhiteSpace(_translation))
             {
                 e.Handled = true;
                 ResultCopy_Click(this, new RoutedEventArgs());
@@ -1088,7 +1370,9 @@ public partial class TranslationPanelWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        _closing = true;
         TtsService.Stop();
+        CancelOperation();
         base.OnClosed(e);
     }
 

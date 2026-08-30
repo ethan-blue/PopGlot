@@ -11,7 +11,7 @@ jobs:
         os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -23,11 +23,11 @@ jobs:
   windows-shell:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6.0.0
         with:
           dotnet-version: 10.0.x
       - run: dotnet build apps/PopGlot.Windows/PopGlot.Windows.csproj --configuration Release

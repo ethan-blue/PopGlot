@@ -13,7 +13,7 @@
                       ResizeBorderThickness="6" UseAeroCaptionButtons="False" />
     </WindowChrome.WindowChrome>
 
-    <Grid>
+    <Grid Background="{DynamicResource CanvasBrush}">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="176" />
             <ColumnDefinition Width="*" />
@@ -35,14 +35,17 @@
                 </StackPanel>
 
                 <StackPanel Grid.Row="1" Margin="0,24,0,0">
-                    <RadioButton x:Name="NavGeneral" Style="{StaticResource NavButton}"
-                                 GroupName="SettingsNav" IsChecked="True" Content="通用"
-                                 local:Ui.Icon="{StaticResource IconSettings}"
-                                 Checked="SubNav_Checked" Tag="General" />
+                    <!-- The engine page leads and opens by default: picking a
+                         translation engine is the first thing anyone wants
+                         from settings; 通用/快捷键/隐私 come after. -->
                     <RadioButton x:Name="NavProvider" Style="{StaticResource NavButton}"
-                                 GroupName="SettingsNav" Content="服务"
+                                 GroupName="SettingsNav" IsChecked="True" Content="翻译引擎"
                                  local:Ui.Icon="{StaticResource IconProvider}"
                                  Checked="SubNav_Checked" Tag="Provider" />
+                    <RadioButton x:Name="NavGeneral" Style="{StaticResource NavButton}"
+                                 GroupName="SettingsNav" Content="通用"
+                                 local:Ui.Icon="{StaticResource IconSettings}"
+                                 Checked="SubNav_Checked" Tag="General" />
                     <RadioButton x:Name="NavShortcuts" Style="{StaticResource NavButton}"
                                  GroupName="SettingsNav" Content="快捷键"
                                  local:Ui.Icon="{StaticResource IconKeyboard}"
@@ -56,7 +59,7 @@
         </Border>
 
         <!-- ==================== Content ==================== -->
-        <Grid Grid.Column="1">
+        <Grid Grid.Column="1" Background="{DynamicResource CanvasBrush}">
             <Grid.RowDefinitions>
                 <RowDefinition Height="38" />
                 <RowDefinition Height="*" />
@@ -91,7 +94,7 @@
                 <ScrollViewer x:Name="SettingsScroll"
                               VerticalScrollBarVisibility="Auto" Padding="30,8,34,14">
                     <Grid>
-                        <sections:GeneralSection x:Name="GeneralSection" />
+                        <sections:GeneralSection x:Name="GeneralSection" Visibility="Collapsed" />
                         <sections:ShortcutsSection x:Name="ShortcutsSection" Visibility="Collapsed" />
                         <Grid x:Name="PrivacyPageHost" Visibility="Collapsed">
                             <StackPanel>
@@ -101,7 +104,7 @@
                         </Grid>
                     </Grid>
                 </ScrollViewer>
-                <sections:ServicesSection x:Name="ProviderSection" Visibility="Collapsed"
+                <sections:ServicesSection x:Name="ProviderSection"
                                           Margin="30,8,34,14" />
             </Grid>
 
@@ -122,11 +125,20 @@
                     </StackPanel>
                     <StackPanel x:Name="SaveActionsPanel" Orientation="Horizontal"
                                 HorizontalAlignment="Right" Visibility="Collapsed">
-                        <Button Content="放弃修改" Style="{StaticResource GhostButton}"
+                        <!-- High-contrast draft badge: the warning chip cannot
+                             blend into the bar the way a muted pill did. -->
+                        <Border x:Name="UnsavedBadge" Style="{StaticResource StatusPill}"
+                                Background="{DynamicResource WarningSoftBrush}"
+                                BorderBrush="{DynamicResource WarningBrush}"
+                                Padding="9,4" VerticalAlignment="Center">
+                            <TextBlock Text="未保存的修改" FontSize="11.5" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource WarningBrush}" />
+                        </Border>
+                        <Button Content="放弃修改" Margin="10,0,0,0" Style="{StaticResource GhostButton}"
                                 Padding="14,8" Click="Revert_Click" />
                         <Button x:Name="SaveButton" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}"
-                                Padding="22,8" Content="保存设置" Click="Save_Click"
-                                ToolTip="保存快捷键、出网策略与外观偏好。模型服务的增删改在「服务」页即时生效。" />
+                                Padding="22,8" Content="保存" Click="Save_Click"
+                                ToolTip="保存快捷键、出网策略与外观偏好。保存后对后续翻译生效；进行中的翻译继续使用发起时的配置。翻译引擎的增删改在「翻译引擎」页保存后同样只影响后续翻译。" />
                     </StackPanel>
                 </Grid>
             </Border>

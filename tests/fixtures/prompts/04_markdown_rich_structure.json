@@ -1,0 +1,24 @@
+{
+  "id": "markdown_rich_structure_doc",
+  "category": "markdown_rich_structure",
+  "description": "Markdown document containing headers, tables, lists, and fenced code block",
+  "source_lang": "en",
+  "target_lang": "zh-CN",
+  "input_type": "text",
+  "source_text": "# API Gateway Configuration\n\nHere are the supported timeout settings:\n\n| Option | Type | Default | Description |\n| :--- | :--- | :--- | :--- |\n| `connect_timeout` | Duration | `5s` | Connection establishment deadline |\n| `read_timeout` | Duration | `30s` | Body transfer idle deadline |\n\n## Checklist\n- [x] Check network firewall\n- [ ] Update DNS records\n\n```json\n{\n  \"port\": 8080,\n  \"tls_enabled\": true\n}\n```",
+  "include_explanation": false,
+  "protect_tokens": false,
+  "delimiter": "PGMETA-mdtable-nonce-123",
+  "synthetic_model_output": "# API 网关配置\n\n以下是受支持的超时设置：\n\n| Option | Type | Default | Description |\n| :--- | :--- | :--- | :--- |\n| `connect_timeout` | Duration | `5s` | 连接建立截止时间 |\n| `read_timeout` | Duration | `30s` | 响应体传输空闲截止时间 |\n\n## 检查清单\n- [x] 检查网络防火墙\n- [ ] 更新 DNS 记录\n\n```json\n{\n  \"port\": 8080,\n  \"tls_enabled\": true\n}\n```\nPGMETA-mdtable-nonce-123\n{\"detected_source_lang\":\"en\",\"transcription\":\"\",\"explanation\":\"\",\"warnings\":[]}",
+  "expected_body": "# API 网关配置\n\n以下是受支持的超时设置：\n\n| Option | Type | Default | Description |\n| :--- | :--- | :--- | :--- |\n| `connect_timeout` | Duration | `5s` | 连接建立截止时间 |\n| `read_timeout` | Duration | `30s` | 响应体传输空闲截止时间 |\n\n## 检查清单\n- [x] 检查网络防火墙\n- [ ] 更新 DNS 记录\n\n```json\n{\n  \"port\": 8080,\n  \"tls_enabled\": true\n}\n```",
+  "expected_metadata": {
+    "detected_source_lang": "en",
+    "transcription": "",
+    "explanation": "",
+    "warnings": []
+  },
+  "expected_tokens": [],
+  "expected_dropped_tokens": [],
+  "expect_trailer_warning": false,
+  "semantic_evaluation_mode": "live_or_manual_required"
+}

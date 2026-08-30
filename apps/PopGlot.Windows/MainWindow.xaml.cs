@@ -66,7 +66,9 @@ public partial class MainWindow : Window
     private void CloseButton_Click(object sender, RoutedEventArgs e) =>
         Close();
 
-    private void SettingsButton_Click(object sender, RoutedEventArgs e) =>
+    // The sidebar entry is the one settings entry of the main window; the
+    // old footer duplicate was removed so "打开设置" names exactly one control.
+    private void NavSettingsButton_Click(object sender, RoutedEventArgs e) =>
         OpenSettings?.Invoke();
 
     private void UpdateMaximizeButtonGlyph()

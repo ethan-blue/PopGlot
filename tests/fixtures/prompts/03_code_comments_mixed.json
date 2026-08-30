@@ -1,0 +1,24 @@
+{
+  "id": "code_comments_mixed_rust",
+  "category": "code_comments_mixed",
+  "description": "Rust code snippet with English doc comments and variable names",
+  "source_lang": "en",
+  "target_lang": "zh-CN",
+  "input_type": "text",
+  "source_text": "/// Compute the exponential backoff duration for a given retry attempt.\n/// Returns None if the maximum retry count is exceeded.\nfn compute_backoff(attempt_count: u32, max_retries: u32) -> Option<Duration> {\n    // Base slot time in milliseconds\n    let base_millis: u64 = 100;\n    if attempt_count >= max_retries {\n        return None;\n    }\n    let factor = 2_u64.pow(attempt_count);\n    Some(Duration::from_millis(base_millis * factor))\n}",
+  "include_explanation": false,
+  "protect_tokens": false,
+  "delimiter": "PGMETA-codemix-nonce-42",
+  "synthetic_model_output": "/// 计算给定重试次数的指数退避时长。\n/// 如果超过最大重试次数则返回 None。\nfn compute_backoff(attempt_count: u32, max_retries: u32) -> Option<Duration> {\n    // 基础时隙时间（毫秒）\n    let base_millis: u64 = 100;\n    if attempt_count >= max_retries {\n        return None;\n    }\n    let factor = 2_u64.pow(attempt_count);\n    Some(Duration::from_millis(base_millis * factor))\n}\nPGMETA-codemix-nonce-42\n{\"detected_source_lang\":\"en\",\"transcription\":\"\",\"explanation\":\"\",\"warnings\":[]}",
+  "expected_body": "/// 计算给定重试次数的指数退避时长。\n/// 如果超过最大重试次数则返回 None。\nfn compute_backoff(attempt_count: u32, max_retries: u32) -> Option<Duration> {\n    // 基础时隙时间（毫秒）\n    let base_millis: u64 = 100;\n    if attempt_count >= max_retries {\n        return None;\n    }\n    let factor = 2_u64.pow(attempt_count);\n    Some(Duration::from_millis(base_millis * factor))\n}",
+  "expected_metadata": {
+    "detected_source_lang": "en",
+    "transcription": "",
+    "explanation": "",
+    "warnings": []
+  },
+  "expected_tokens": [],
+  "expected_dropped_tokens": [],
+  "expect_trailer_warning": false,
+  "semantic_evaluation_mode": "live_or_manual_required"
+}

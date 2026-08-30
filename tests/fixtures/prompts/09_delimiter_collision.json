@@ -1,0 +1,24 @@
+{
+  "id": "delimiter_collision_prefix",
+  "category": "delimiter_collision",
+  "description": "Stream body containing delimiter lookalike substrings and partial prefixes before the actual dynamic delimiter",
+  "source_lang": "en",
+  "target_lang": "zh-CN",
+  "input_type": "text",
+  "source_text": "The macro PGMETA-OLD-FAKE is deprecated. Please do not use PGMETA- in new code.",
+  "include_explanation": false,
+  "protect_tokens": false,
+  "delimiter": "PGMETA-real-nonce-987654",
+  "synthetic_model_output": "宏 PGMETA-OLD-FAKE 已被弃用。请勿在新的代码中使用 PGMETA- 前缀。\nPGMETA-real-nonce-987654\n{\"detected_source_lang\":\"en\",\"transcription\":\"\",\"explanation\":\"\",\"warnings\":[]}",
+  "expected_body": "宏 PGMETA-OLD-FAKE 已被弃用。请勿在新的代码中使用 PGMETA- 前缀。",
+  "expected_metadata": {
+    "detected_source_lang": "en",
+    "transcription": "",
+    "explanation": "",
+    "warnings": []
+  },
+  "expected_tokens": [],
+  "expected_dropped_tokens": [],
+  "expect_trailer_warning": false,
+  "semantic_evaluation_mode": "live_or_manual_required"
+}

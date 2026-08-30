@@ -15,11 +15,30 @@ internal enum TranslationSessionStage
     OcrRunning,
     Routing,
     Translating,
+    Streaming,
+    Finalizing,
     Completed,
     Partial,
     Failed,
     Cancelled,
 }
+
+internal enum TranslationStreamUpdateKind
+{
+    Delta,
+    Reset,
+}
+
+internal sealed record TranslationStreamUpdate(
+    string SessionId,
+    long Epoch,
+    TranslationStreamUpdateKind Kind,
+    string Delta,
+    string AccumulatedText,
+    long AccumulatedCharCount,
+    TimeSpan? Ttft = null,
+    bool IsPartial = false,
+    string? Message = null);
 
 internal enum TranslationErrorKind
 {
@@ -81,6 +100,22 @@ internal sealed class TranslationSession
     public DateTimeOffset? CompletedAt { get; set; }
 
     public bool IsSuccess => Stage is TranslationSessionStage.Completed or TranslationSessionStage.Partial;
+}
+
+/// <summary>
+/// Encapsulates an active streaming translation session with its fast delta buffer
+/// and final completion response task.
+/// </summary>
+internal sealed class TranslationStreamSession
+{
+    public TranslationStreamBuffer Buffer { get; }
+    public Task<TranslationResponse> Completion { get; }
+
+    public TranslationStreamSession(TranslationStreamBuffer buffer, Task<TranslationResponse> completion)
+    {
+        Buffer = buffer ?? throw new ArgumentNullException(nameof(buffer));
+        Completion = completion ?? throw new ArgumentNullException(nameof(completion));
+    }
 }
 
 internal interface ISettingsService

@@ -4,6 +4,9 @@
 .idea/
 target/
 **/bin/
+# Rust developer CLI binaries are source, not build output.
+!crates/popglot-core/src/bin/
+!crates/popglot-core/src/bin/*.rs
 **/obj/
 *.user
 *.suo

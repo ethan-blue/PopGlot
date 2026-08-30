@@ -6,6 +6,17 @@
 
 API Key 不进入 JSON。每个 Profile 使用自己的 Windows Credential Manager 通用凭据 `PopGlot/provider/{id}`；历史统一目标 `PopGlot/OpenAICompatibleApiKey` 只作为当前活动 Profile 的兼容读取来源，既不会复制到其他服务，也不会被升级删除。
 
+## 0.1.0 架构升级（无 Schema 变更）
+
+在 0.1.0 版本中，PopGlot 引入了全新的流式输出架构（SSE、Text-first 协议、FFI 流式 Callback、Coordinator 缓冲管道）与模型推荐偏好子系统。
+
+**本版本无需执行任何配置 Schema 迁移**：
+- `product-config.json` 保持为 **Schema v6**；
+- `provider-settings.json` 保持为 **Schema v3**；
+- `windows-shell.json` 保持为 **Schema v3**。
+
+流式传输由底层 Provider 与传输层协议自动驱动，各服务已配置的模型名、Base URL、自定义 Header 及 Credential Manager 凭据完全无缝继承；模型推荐偏好使用运行时计算与本地分析，不破坏已有配置文件的向后兼容性。
+
 ## v1 到 v2
 
 旧配置只有 Base URL、文本/视觉模型、模式和安全开关。反序列化时新增字段使用默认值：

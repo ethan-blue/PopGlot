@@ -1,0 +1,24 @@
+{
+  "id": "prose_autumn",
+  "category": "prose",
+  "description": "Ordinary literary prose translation without machine tokens",
+  "source_lang": "en",
+  "target_lang": "zh-CN",
+  "input_type": "text",
+  "source_text": "The autumn wind blows gently across the golden fields, carrying the quiet scent of fallen leaves and the distant promise of winter.",
+  "include_explanation": true,
+  "protect_tokens": false,
+  "delimiter": "PGMETA-prose-nonce-98765",
+  "synthetic_model_output": "秋风轻轻拂过金黄色的田野，带来了落叶的幽香，也带来了远方冬日的预兆。\nPGMETA-prose-nonce-98765\n{\"detected_source_lang\":\"en\",\"transcription\":\"\",\"explanation\":\"‘distant promise’ 在此处译为‘远方冬日的预兆’以契合文学抒情语境。\",\"warnings\":[]}",
+  "expected_body": "秋风轻轻拂过金黄色的田野，带来了落叶的幽香，也带来了远方冬日的预兆。",
+  "expected_metadata": {
+    "detected_source_lang": "en",
+    "transcription": "",
+    "explanation": "‘distant promise’ 在此处译为‘远方冬日的预兆’以契合文学抒情语境。",
+    "warnings": []
+  },
+  "expected_tokens": [],
+  "expected_dropped_tokens": [],
+  "expect_trailer_warning": false,
+  "semantic_evaluation_mode": "live_or_manual_required"
+}

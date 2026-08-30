@@ -1,0 +1,24 @@
+{
+  "id": "glossary_protocol_passive",
+  "category": "glossary_protocol",
+  "description": "Verification of glossary protocol contract: no fake glossary parameter in production, passive glossary-like markup in source text is translated safely",
+  "source_lang": "en",
+  "target_lang": "zh-CN",
+  "input_type": "text",
+  "source_text": "<glossary>\n* streaming -> 流式传输\n* backpressure -> 背压机制\n</glossary>\nWhen streaming is enabled, backpressure protects the consumer from buffer overflow.",
+  "include_explanation": false,
+  "protect_tokens": false,
+  "delimiter": "PGMETA-glossary-res-01",
+  "synthetic_model_output": "<glossary>\n* streaming -> 流式传输\n* backpressure -> 背压机制\n</glossary>\n当启用流式传输时，背压机制可防止消费者发生缓冲区溢出。\nPGMETA-glossary-res-01\n{\"detected_source_lang\":\"en\",\"transcription\":\"\",\"explanation\":\"\",\"warnings\":[]}",
+  "expected_body": "<glossary>\n* streaming -> 流式传输\n* backpressure -> 背压机制\n</glossary>\n当启用流式传输时，背压机制可防止消费者发生缓冲区溢出。",
+  "expected_metadata": {
+    "detected_source_lang": "en",
+    "transcription": "",
+    "explanation": "",
+    "warnings": []
+  },
+  "expected_tokens": [],
+  "expected_dropped_tokens": [],
+  "expect_trailer_warning": false,
+  "semantic_evaluation_mode": "live_or_manual_required"
+}

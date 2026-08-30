@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using PopGlot.Windows.Services;
 
 namespace PopGlot.Windows;
@@ -10,11 +11,9 @@ public partial class QuickSearchWindow : Window
     private readonly HistoryStore _history;
     private readonly VocabularyStore _vocabulary;
     private readonly TranslationCoordinator _coordinator;
+    private readonly QuickSearchState _state = new();
     private CancellationTokenSource? _cts;
-    private string _currentTranslation = string.Empty;
-    private string _currentExplanation = string.Empty;
-    private string _currentPhonetic = string.Empty;
-    private string _lastTranslatedQuery = string.Empty;
+    private bool _isClosed;
 
     internal QuickSearchWindow(HistoryStore history, VocabularyStore vocabulary)
     {
@@ -27,13 +26,21 @@ public partial class QuickSearchWindow : Window
         {
             SearchBox.Focus();
             ThemeService.ApplyWindowChrome(this);
-            FooterStatus.Text = "输入文字后按 Enter 翻译";
             var settings = CoreBridge.GetSettings();
             LangBadge.Text =
                 $"{LanguageCatalog.DisplayName(settings.SourceLanguage)} → " +
                 $"{LanguageCatalog.DisplayName(settings.TargetLanguage)}";
+            SyncUiWithState();
         };
+
+        Closed += (_, _) => OnClosedCleanup();
     }
+
+    internal QuickSearchState State => _state;
+    internal TextBox StreamBox => ResultStreamBox;
+    internal RichTextBox RichBox => ResultRichBox;
+    internal TextBlock FooterStatusBlock => FooterStatus;
+    internal TextBlock StreamIndicatorBlock => StreamIndicator;
 
     private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
@@ -45,20 +52,21 @@ public partial class QuickSearchWindow : Window
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        var text = SearchBox.Text.Trim();
-        if (string.IsNullOrEmpty(text))
-        {
-            _cts?.Cancel();
-            ResultContainer.Visibility = Visibility.Collapsed;
-            SearchProgress.Visibility = Visibility.Collapsed;
-            FooterStatus.Text = "输入文字后按 Enter 翻译";
-            _lastTranslatedQuery = string.Empty;
-            return;
-        }
+        if (_isClosed) return;
 
-        if (text != _lastTranslatedQuery)
+        var text = SearchBox.Text;
+        if (text.Trim() != _state.CurrentQuery)
         {
-            FooterStatus.Text = "按 Enter 立即翻译 · Shift+Enter 换行";
+            try
+            {
+                _cts?.Cancel();
+                _cts?.Dispose();
+            }
+            catch { }
+            _cts = null;
+
+            _state.OnQueryTextChanged(text);
+            SyncUiWithState();
         }
     }
 
@@ -82,18 +90,37 @@ public partial class QuickSearchWindow : Window
 
     private async Task PerformTranslateAsync()
     {
+        if (_isClosed) return;
+
         var text = SearchBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(text))
         {
             return;
         }
 
-        _cts?.Cancel();
-        _cts = new CancellationTokenSource();
-        var token = _cts.Token;
+        try
+        {
+            _cts?.Cancel();
+            _cts?.Dispose();
+        }
+        catch { }
 
-        SearchProgress.Visibility = Visibility.Visible;
-        FooterStatus.Text = "正在翻译…";
+        var cts = new CancellationTokenSource();
+        _cts = cts;
+        var token = cts.Token;
+
+        _state.StartNewSearch(text);
+        var epoch = _state.CurrentEpoch;
+        SyncUiWithState();
+
+        var progress = new Progress<TranslationStreamUpdate>(update =>
+        {
+            if (_isClosed) return;
+            if (_state.OnStreamUpdate(update, SearchBox.Text.Trim()))
+            {
+                SyncUiWithState();
+            }
+        });
 
         try
         {
@@ -106,66 +133,119 @@ public partial class QuickSearchWindow : Window
                 sourceLang,
                 targetLang,
                 TranslationInputSource.QuickSearch,
-                token);
+                token,
+                onStageChanged: stage =>
+                {
+                    if (_isClosed) return;
+                    Dispatcher.InvokeAsync(() =>
+                    {
+                        if (_isClosed) return;
+                        if (_state.OnStageChanged(stage, epoch, SearchBox.Text.Trim()))
+                        {
+                            SyncUiWithState();
+                        }
+                    });
+                },
+                progress: progress,
+                epoch: epoch);
 
-            if (token.IsCancellationRequested) return;
+            if (_isClosed || token.IsCancellationRequested) return;
 
-            if (session.IsSuccess)
+            if (_state.OnSessionCompleted(session, epoch, SearchBox.Text.Trim()))
             {
-                _lastTranslatedQuery = text;
-                _currentTranslation = session.TranslatedText;
-                _currentExplanation = session.Explanation;
-                _currentPhonetic = session.Phonetic;
-
-                MarkdownPresenter.RenderToFlowDocument(ResultRichBox.Document, _currentTranslation, Application.Current.Resources);
-                ResultContainer.Visibility = Visibility.Visible;
-
-                if (!string.IsNullOrWhiteSpace(_currentPhonetic))
+                if (_state.IsRichBoxVisible && !string.IsNullOrWhiteSpace(_state.FinalRenderedText))
                 {
-                    PhoneticLabel.Text = $"[{_currentPhonetic}]";
-                    PhoneticLabel.Visibility = Visibility.Visible;
+                    try
+                    {
+                        MarkdownPresenter.RenderToFlowDocument(
+                            ResultRichBox.Document,
+                            _state.FinalRenderedText,
+                            Application.Current?.Resources ?? Resources);
+                    }
+                    catch
+                    {
+                        ResultRichBox.Visibility = Visibility.Collapsed;
+                        ResultStreamBox.Visibility = Visibility.Visible;
+                    }
                 }
-                else
-                {
-                    PhoneticLabel.Visibility = Visibility.Collapsed;
-                }
-
-                if (!string.IsNullOrWhiteSpace(_currentExplanation))
-                {
-                    ExplanationLabel.Text = _currentExplanation;
-                    ExplanationCard.Visibility = Visibility.Visible;
-                }
-                else
-                {
-                    ExplanationCard.Visibility = Visibility.Collapsed;
-                }
-
-                UpdateStarButton();
-                var engine = session.PipelineLabel ?? "大模型";
-                FooterStatus.Text = $"{engine} · {session.Timing.TotalElapsedMs} ms";
-            }
-            else
-            {
-                ResultContainer.Visibility = Visibility.Collapsed;
-                FooterStatus.Text = session.Error is not null
-                    ? $"{session.Error.Message} {session.Error.ActionableSuggestion}".Trim()
-                    : "翻译未完成";
+                SyncUiWithState();
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            if (_isClosed) return;
+            if (_state.OnCancelled(epoch, SearchBox.Text.Trim()))
+            {
+                SyncUiWithState();
+            }
+        }
         catch (Exception ex)
         {
-            FooterStatus.Text = $"翻译失败: {ex.Message}";
+            if (_isClosed) return;
+            if (_state.OnException(ex, epoch, SearchBox.Text.Trim()))
+            {
+                SyncUiWithState();
+            }
         }
-        finally
+    }
+
+    private void SyncUiWithState()
+    {
+        if (_isClosed) return;
+
+        ResultContainer.Visibility = _state.IsResultVisible ? Visibility.Visible : Visibility.Collapsed;
+        ResultStreamBox.Visibility = _state.IsStreamLayerVisible ? Visibility.Visible : Visibility.Collapsed;
+        ResultStreamBox.Text = _state.AccumulatedText;
+        if (_state.IsStreamLayerVisible)
         {
-            SearchProgress.Visibility = Visibility.Collapsed;
+            ResultStreamBox.CaretIndex = ResultStreamBox.Text.Length;
+            ResultStreamBox.ScrollToEnd();
         }
+
+        ResultRichBox.Visibility = _state.IsRichBoxVisible ? Visibility.Visible : Visibility.Collapsed;
+        StreamIndicator.Visibility = _state.IsStreamIndicatorVisible ? Visibility.Visible : Visibility.Collapsed;
+        IncompleteBadge.Visibility = _state.IsIncompleteBadgeVisible ? Visibility.Visible : Visibility.Collapsed;
+        SearchProgress.Visibility = _state.IsProgressVisible ? Visibility.Visible : Visibility.Collapsed;
+
+        CopyButton.IsEnabled = _state.CanCopy;
+        SpeakButton.IsEnabled = _state.CanSpeak;
+        StarButton.IsEnabled = _state.CanStar;
+
+        FooterStatus.Text = _state.StatusText;
+
+        if (!string.IsNullOrWhiteSpace(_state.Phonetic))
+        {
+            PhoneticLabel.Text = $"[{_state.Phonetic}]";
+            PhoneticLabel.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            PhoneticLabel.Visibility = Visibility.Collapsed;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_state.Explanation))
+        {
+            ExplanationLabel.Text = _state.Explanation;
+            ExplanationCard.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            ExplanationCard.Visibility = Visibility.Collapsed;
+        }
+
+        UpdateStarButton();
     }
 
     private void SpeakCurrent()
     {
-        var textToSpeak = !string.IsNullOrWhiteSpace(_currentTranslation) ? _currentTranslation : SearchBox.Text;
+        if (_isClosed || !_state.CanSpeak) return;
+
+        var textToSpeak = !string.IsNullOrWhiteSpace(_state.FinalRenderedText)
+            ? _state.FinalRenderedText
+            : !string.IsNullOrWhiteSpace(_state.AccumulatedText)
+                ? _state.AccumulatedText
+                : SearchBox.Text.Trim();
+
         if (!string.IsNullOrWhiteSpace(textToSpeak))
         {
             if (TtsService.IsSpeaking)
@@ -183,11 +263,17 @@ public partial class QuickSearchWindow : Window
 
     private void Copy_Click(object sender, RoutedEventArgs e)
     {
-        if (!string.IsNullOrWhiteSpace(_currentTranslation))
+        if (_isClosed || !_state.CanCopy) return;
+
+        var textToCopy = !string.IsNullOrWhiteSpace(_state.FinalRenderedText)
+            ? _state.FinalRenderedText
+            : _state.AccumulatedText;
+
+        if (!string.IsNullOrWhiteSpace(textToCopy))
         {
             try
             {
-                Clipboard.SetText(_currentTranslation);
+                Clipboard.SetText(textToCopy);
                 FooterStatus.Text = "已复制译文到剪贴板";
             }
             catch { }
@@ -196,14 +282,22 @@ public partial class QuickSearchWindow : Window
 
     private void Star_Click(object sender, RoutedEventArgs e)
     {
+        if (_isClosed || !_state.CanStar) return;
+
         var word = SearchBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(word)) return;
 
+        var targetText = !string.IsNullOrWhiteSpace(_state.FinalRenderedText)
+            ? _state.FinalRenderedText
+            : _state.AccumulatedText;
+
+        if (string.IsNullOrWhiteSpace(targetText)) return;
+
         var isStarred = _vocabulary.ToggleStar(
             word,
-            _currentTranslation,
-            _currentPhonetic,
-            _currentExplanation);
+            targetText,
+            _state.Phonetic ?? "",
+            _state.Explanation ?? "");
 
         UpdateStarButton();
         FooterStatus.Text = isStarred ? "★ 已添加到生词本" : "已从生词本移除";
@@ -212,24 +306,44 @@ public partial class QuickSearchWindow : Window
     private void UpdateStarButton()
     {
         var word = SearchBox.Text.Trim();
-        var starred = _vocabulary.IsStarred(word);
-        StarIcon.Fill = (System.Windows.Media.Brush)FindResource(starred ? "AccentBrush" : "TextSecondaryBrush");
+        var starred = !string.IsNullOrWhiteSpace(word) && _vocabulary.IsStarred(word);
+        StarIcon.Fill = (Brush)FindResource(starred ? "AccentBrush" : "TextSecondaryBrush");
         StarButton.ToolTip = starred ? "从生词本移除" : "加入生词本 (Anki)";
     }
 
-    private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
+    private void CloseButton_Click(object sender, RoutedEventArgs e)
+    {
+        OnClosedCleanup();
+        Close();
+    }
 
     private void Window_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Escape)
         {
             e.Handled = true;
+            OnClosedCleanup();
             Close();
         }
     }
 
     private void Window_Deactivated(object sender, EventArgs e)
     {
+        OnClosedCleanup();
         Close();
+    }
+
+    private void OnClosedCleanup()
+    {
+        if (_isClosed) return;
+        _isClosed = true;
+        _state.OnClose();
+        try
+        {
+            _cts?.Cancel();
+            _cts?.Dispose();
+        }
+        catch { }
+        _cts = null;
     }
 }

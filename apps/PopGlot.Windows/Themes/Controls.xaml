@@ -307,7 +307,7 @@
         <Setter Property="FontWeight" Value="Medium" />
         <Setter Property="Background" Value="{DynamicResource SurfaceMutedBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="Padding" Value="16,8" />
         <Setter Property="Cursor" Value="Hand" />
@@ -331,7 +331,7 @@
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Surface" Property="Background" Value="{DynamicResource SurfaceHoverBrush}" />
-                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
+                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource AccentBorderBrush}" />
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
                             <Setter TargetName="Surface" Property="Background" Value="{DynamicResource SurfacePressedBrush}" />
@@ -483,6 +483,58 @@
     </Style>
 
     <!--
+        Sidebar action entry: a Button that shares the NavButton look but is
+        not part of the page radio group — used for the settings entry pinned
+        at the bottom of the main window rail, so it reads as the same class
+        of navigation as 翻译/资料库 without stealing their selection.
+    -->
+    <Style x:Key="NavActionButton" TargetType="Button">
+        <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
+        <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Margin" Value="0,2" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid>
+                        <Border x:Name="Surface" Background="Transparent" CornerRadius="9" Height="40" />
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0">
+                            <Path x:Name="Glyph" Width="16" Height="16" Stretch="Uniform"
+                                  Fill="{TemplateBinding Foreground}"
+                                  Data="{Binding (local:Ui.Icon), RelativeSource={RelativeSource TemplatedParent}}"
+                                  VerticalAlignment="Center" />
+                            <TextBlock Text="{TemplateBinding Content}" Margin="11,0,0,0"
+                                       Foreground="{TemplateBinding Foreground}"
+                                       FontSize="{TemplateBinding FontSize}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Surface" Property="Background" Value="{DynamicResource SurfaceHoverBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Surface" Property="Background" Value="{DynamicResource SurfacePressedBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
+                            <Setter Property="Opacity" Value="0.65" />
+                            <Setter Property="Cursor" Value="Arrow" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!--
         HotkeyRecorder derives from Button, and an implicit style keyed on
         Button does not reach subclasses — without this the recorder fell back
         to the raw system look while everything around it was themed.
@@ -511,7 +563,7 @@
         <Setter Property="CaretBrush" Value="{DynamicResource AccentBrush}" />
         <Setter Property="SelectionBrush" Value="{DynamicResource AccentBrush}" />
         <Setter Property="SelectionOpacity" Value="0.32" />
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="Padding" Value="11,9" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
@@ -543,15 +595,14 @@
                         </Grid>
                     </Border>
                     <ControlTemplate.Triggers>
-                        <MultiTrigger>
-                            <MultiTrigger.Conditions>
-                                <Condition Property="local:Ui.HasText" Value="False" />
-                                <Condition Property="IsFocused" Value="False" />
-                            </MultiTrigger.Conditions>
+                        <!-- The watermark stays while focused: it only leaves
+                             once real text exists, so an empty field always
+                             explains itself even with the caret in it. -->
+                        <Trigger Property="local:Ui.HasText" Value="False">
                             <Setter TargetName="Placeholder" Property="Visibility" Value="Visible" />
-                        </MultiTrigger>
+                        </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
+                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource AccentBorderBrush}" />
                         </Trigger>
                         <Trigger Property="IsKeyboardFocusWithin" Value="True">
                             <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
@@ -580,7 +631,7 @@
 
     <Style x:Key="FlatRichTextBox" TargetType="RichTextBox">
         <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
-        <Setter Property="FontSize" Value="14.5" />
+        <Setter Property="FontSize" Value="15" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="CaretBrush" Value="{DynamicResource AccentBrush}" />
@@ -599,7 +650,7 @@
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="CaretBrush" Value="{DynamicResource AccentBrush}" />
         <Setter Property="SelectionBrush" Value="{DynamicResource AccentBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="Padding" Value="11,9" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
@@ -629,15 +680,11 @@
                         </Grid>
                     </Border>
                     <ControlTemplate.Triggers>
-                        <MultiTrigger>
-                            <MultiTrigger.Conditions>
-                                <Condition Property="local:Ui.HasText" Value="False" />
-                                <Condition Property="IsFocused" Value="False" />
-                            </MultiTrigger.Conditions>
+                        <Trigger Property="local:Ui.HasText" Value="False">
                             <Setter TargetName="Placeholder" Property="Visibility" Value="Visible" />
-                        </MultiTrigger>
+                        </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
+                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource AccentBorderBrush}" />
                         </Trigger>
                         <Trigger Property="IsKeyboardFocusWithin" Value="True">
                             <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
@@ -682,11 +729,11 @@
 
     <ControlTemplate x:Key="ComboToggleTemplate" TargetType="ToggleButton">
         <Border x:Name="Surface" Background="{DynamicResource InputBrush}"
-                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
+                BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1"
                 CornerRadius="{StaticResource ControlRadius}" />
         <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
+                <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource AccentBorderBrush}" />
             </Trigger>
             <Trigger Property="IsChecked" Value="True">
                 <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
@@ -880,6 +927,49 @@
                         </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                        </Trigger>
+                        <Trigger Property="HasContent" Value="False">
+                            <Setter TargetName="Label" Property="Margin" Value="0" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.45" />
+                            <Setter Property="Cursor" Value="Arrow" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="RadioButton">
+        <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <StackPanel Orientation="Horizontal" Background="Transparent">
+                        <Border x:Name="Outer" Width="16" Height="16" CornerRadius="8"
+                                Background="{DynamicResource InputBrush}"
+                                BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1"
+                                VerticalAlignment="Center">
+                            <Ellipse x:Name="Dot" Width="8" Height="8"
+                                     Fill="{DynamicResource AccentBrush}"
+                                     Opacity="0" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ContentPresenter x:Name="Label" Margin="8,0,0,0" VerticalAlignment="Center"
+                                          RecognizesAccessKey="True" />
+                    </StackPanel>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Outer" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            <Setter TargetName="Dot" Property="Opacity" Value="1" />
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Outer" Property="BorderBrush" Value="{DynamicResource AccentBorderBrush}" />
                         </Trigger>
                         <Trigger Property="HasContent" Value="False">
                             <Setter TargetName="Label" Property="Margin" Value="0" />

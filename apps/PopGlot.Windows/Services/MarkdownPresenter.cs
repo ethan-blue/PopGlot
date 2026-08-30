@@ -37,6 +37,7 @@ internal static partial class MarkdownPresenter
     {
         ArgumentNullException.ThrowIfNull(document);
         document.Blocks.Clear();
+        document.PagePadding = new Thickness(0);
 
         if (string.IsNullOrWhiteSpace(markdownText))
         {
@@ -194,7 +195,6 @@ internal static partial class MarkdownPresenter
                 inlines.Add(new Run(part)
                 {
                     Foreground = textPrimaryBrush,
-                    FontSize = 14,
                 });
             }
         }

@@ -5,18 +5,308 @@ using PopGlot.Windows.Services;
 
 namespace PopGlot.Windows.Sections;
 
+internal enum TranslateUiPhase
+{
+    Idle,
+    Preparing,
+    Streaming,
+    Finalizing,
+    Completed,
+    Partial,
+    Failed,
+    Cancelled,
+}
+
+internal sealed record TranslateUiState(
+    long Epoch = 0,
+    TranslateUiPhase Phase = TranslateUiPhase.Idle,
+    string StreamText = "",
+    string FinalText = "",
+    string StatusText = "就绪",
+    string BadgeText = "等待输入",
+    string ExplanationText = "",
+    bool IsStreamLayerVisible = false,
+    bool IsFinalLayerVisible = true,
+    bool IsStreamIndicatorVisible = false,
+    bool IsProgressVisible = false,
+    bool AreResultActionsEnabled = false,
+    bool IsTranslateButtonEnabled = true,
+    bool IsExplanationVisible = false,
+    bool IsPartialIncomplete = false)
+{
+    public static TranslateUiState Initial => new(
+        Epoch: 0,
+        Phase: TranslateUiPhase.Idle,
+        StreamText: string.Empty,
+        FinalText: string.Empty,
+        StatusText: "就绪",
+        BadgeText: "等待输入",
+        ExplanationText: string.Empty,
+        IsStreamLayerVisible: false,
+        IsFinalLayerVisible: true,
+        IsStreamIndicatorVisible: false,
+        IsProgressVisible: false,
+        AreResultActionsEnabled: false,
+        IsTranslateButtonEnabled: true,
+        IsExplanationVisible: false,
+        IsPartialIncomplete: false);
+}
+
+internal static class TranslateSectionReducer
+{
+    public static TranslateUiState StartTranslation(TranslateUiState current, long epoch)
+    {
+        return current with
+        {
+            Epoch = epoch,
+            Phase = TranslateUiPhase.Preparing,
+            StreamText = string.Empty,
+            FinalText = string.Empty,
+            StatusText = "连接中",
+            BadgeText = "连接中",
+            ExplanationText = string.Empty,
+            IsStreamLayerVisible = false,
+            IsFinalLayerVisible = true,
+            IsStreamIndicatorVisible = false,
+            IsProgressVisible = true,
+            AreResultActionsEnabled = false,
+            IsTranslateButtonEnabled = false,
+            IsExplanationVisible = false,
+            IsPartialIncomplete = false,
+        };
+    }
+
+    public static TranslateUiState ApplyStage(TranslateUiState current, TranslationSessionStage stage, long epoch)
+    {
+        if (current.Epoch != epoch) return current;
+
+        return stage switch
+        {
+            TranslationSessionStage.Routing or TranslationSessionStage.Translating =>
+                current.Phase == TranslateUiPhase.Preparing
+                    ? current with { StatusText = "连接中", BadgeText = "连接中" }
+                    : current,
+            TranslationSessionStage.Streaming =>
+                current with
+                {
+                    Phase = TranslateUiPhase.Streaming,
+                    StatusText = "正在生成",
+                    BadgeText = "正在生成",
+                    IsStreamIndicatorVisible = true,
+                    AreResultActionsEnabled = false,
+                },
+            TranslationSessionStage.Finalizing =>
+                current with
+                {
+                    Phase = TranslateUiPhase.Finalizing,
+                    StatusText = "正在整理",
+                    BadgeText = "正在整理",
+                    IsStreamIndicatorVisible = true,
+                    AreResultActionsEnabled = false,
+                },
+            _ => current,
+        };
+    }
+
+    public static TranslateUiState ApplyStreamUpdate(TranslateUiState current, TranslationStreamUpdate update, long epoch)
+    {
+        if (current.Epoch != epoch || update.Epoch != epoch) return current;
+
+        if (update.Kind == TranslationStreamUpdateKind.Reset)
+        {
+            return current with
+            {
+                StreamText = string.Empty,
+                Phase = TranslateUiPhase.Preparing,
+                IsStreamLayerVisible = false,
+                IsStreamIndicatorVisible = false,
+                StatusText = "连接中",
+                BadgeText = "连接中",
+                AreResultActionsEnabled = false,
+            };
+        }
+
+        if (update.Kind == TranslationStreamUpdateKind.Delta)
+        {
+            return current with
+            {
+                Phase = TranslateUiPhase.Streaming,
+                StreamText = update.AccumulatedText,
+                IsStreamLayerVisible = true,
+                IsFinalLayerVisible = false,
+                IsStreamIndicatorVisible = true,
+                StatusText = "正在生成",
+                BadgeText = "正在生成",
+                AreResultActionsEnabled = false,
+            };
+        }
+
+        return current;
+    }
+
+    public static TranslateUiState ApplyCompletion(TranslateUiState current, TranslationSession session, long epoch)
+    {
+        if (current.Epoch != epoch) return current;
+
+        var notes = new List<string>();
+        if (!string.IsNullOrWhiteSpace(session.Explanation))
+        {
+            notes.Add(session.Explanation.Trim());
+        }
+        notes.AddRange(session.Warnings);
+        var explanation = string.Join("\n", notes);
+
+        if (session.Stage == TranslationSessionStage.Completed)
+        {
+            return current with
+            {
+                Phase = TranslateUiPhase.Completed,
+                FinalText = session.TranslatedText,
+                IsStreamLayerVisible = false,
+                IsFinalLayerVisible = true,
+                IsStreamIndicatorVisible = false,
+                IsProgressVisible = false,
+                IsTranslateButtonEnabled = true,
+                AreResultActionsEnabled = true,
+                BadgeText = session.PipelineLabel ?? "完成",
+                StatusText = $"完成 · {session.Timing.TotalElapsedMs} ms",
+                ExplanationText = explanation,
+                IsExplanationVisible = notes.Count > 0,
+                IsPartialIncomplete = false,
+            };
+        }
+
+        if (session.Stage == TranslationSessionStage.Partial)
+        {
+            var text = !string.IsNullOrEmpty(session.TranslatedText) ? session.TranslatedText : current.StreamText;
+            return current with
+            {
+                Phase = TranslateUiPhase.Partial,
+                FinalText = text,
+                IsStreamLayerVisible = false,
+                IsFinalLayerVisible = true,
+                IsStreamIndicatorVisible = false,
+                IsProgressVisible = false,
+                IsTranslateButtonEnabled = true,
+                AreResultActionsEnabled = false,
+                BadgeText = "内容不完整",
+                StatusText = $"内容不完整 · {session.Timing.TotalElapsedMs} ms · 见下方说明",
+                ExplanationText = explanation,
+                IsExplanationVisible = notes.Count > 0,
+                IsPartialIncomplete = true,
+            };
+        }
+
+        if (session.Stage == TranslationSessionStage.Cancelled)
+        {
+            var hasPartial = !string.IsNullOrWhiteSpace(current.StreamText);
+            return current with
+            {
+                Phase = hasPartial ? TranslateUiPhase.Partial : TranslateUiPhase.Cancelled,
+                FinalText = hasPartial ? current.StreamText : string.Empty,
+                IsStreamLayerVisible = false,
+                IsFinalLayerVisible = true,
+                IsStreamIndicatorVisible = false,
+                IsProgressVisible = false,
+                IsTranslateButtonEnabled = true,
+                AreResultActionsEnabled = false,
+                BadgeText = hasPartial ? "内容不完整" : "已取消",
+                StatusText = hasPartial ? "内容不完整 · 已取消" : "已取消。",
+                ExplanationText = string.Empty,
+                IsExplanationVisible = false,
+                IsPartialIncomplete = hasPartial,
+            };
+        }
+
+        // Failed / Error
+        var message = session.Error?.Message ?? "翻译未完成";
+        var suggestion = session.Error?.ActionableSuggestion;
+        var failExplanation = string.IsNullOrWhiteSpace(suggestion) ? message : $"{message}\n{suggestion}";
+        var hasPartialFail = !string.IsNullOrWhiteSpace(current.StreamText);
+
+        return current with
+        {
+            Phase = hasPartialFail ? TranslateUiPhase.Partial : TranslateUiPhase.Failed,
+            FinalText = hasPartialFail ? current.StreamText : TranslationPanelWindow.FriendlyError(message),
+            IsStreamLayerVisible = false,
+            IsFinalLayerVisible = true,
+            IsStreamIndicatorVisible = false,
+            IsProgressVisible = false,
+            IsTranslateButtonEnabled = true,
+            AreResultActionsEnabled = false,
+            BadgeText = hasPartialFail ? "内容不完整" : "未完成",
+            StatusText = hasPartialFail
+                ? $"内容不完整 · {message}"
+                : (string.IsNullOrWhiteSpace(suggestion) ? message : $"{message} {suggestion}"),
+            ExplanationText = failExplanation,
+            IsExplanationVisible = true,
+            IsPartialIncomplete = hasPartialFail,
+        };
+    }
+
+    public static TranslateUiState ApplyError(TranslateUiState current, Exception exception, long epoch)
+    {
+        if (current.Epoch != epoch) return current;
+
+        if (exception is OperationCanceledException)
+        {
+            var hasPartial = !string.IsNullOrWhiteSpace(current.StreamText);
+            return current with
+            {
+                Phase = hasPartial ? TranslateUiPhase.Partial : TranslateUiPhase.Cancelled,
+                FinalText = hasPartial ? current.StreamText : string.Empty,
+                IsStreamLayerVisible = false,
+                IsFinalLayerVisible = true,
+                IsStreamIndicatorVisible = false,
+                IsProgressVisible = false,
+                IsTranslateButtonEnabled = true,
+                AreResultActionsEnabled = false,
+                BadgeText = hasPartial ? "内容不完整" : "已取消",
+                StatusText = hasPartial ? "内容不完整 · 已取消" : "已取消。",
+                ExplanationText = string.Empty,
+                IsExplanationVisible = false,
+                IsPartialIncomplete = hasPartial,
+            };
+        }
+
+        var hasPartialErr = !string.IsNullOrWhiteSpace(current.StreamText);
+        return current with
+        {
+            Phase = hasPartialErr ? TranslateUiPhase.Partial : TranslateUiPhase.Failed,
+            FinalText = hasPartialErr ? current.StreamText : TranslationPanelWindow.FriendlyError(exception.Message),
+            IsStreamLayerVisible = false,
+            IsFinalLayerVisible = true,
+            IsStreamIndicatorVisible = false,
+            IsProgressVisible = false,
+            IsTranslateButtonEnabled = true,
+            AreResultActionsEnabled = false,
+            BadgeText = hasPartialErr ? "内容不完整" : "未完成",
+            StatusText = hasPartialErr ? $"内容不完整 · 翻译失败：{exception.Message}" : $"翻译失败：{exception.Message}",
+            ExplanationText = exception.Message,
+            IsExplanationVisible = true,
+            IsPartialIncomplete = hasPartialErr,
+        };
+    }
+}
+
 public partial class TranslateSection : System.Windows.Controls.UserControl
 {
     private TranslationCoordinator? _coordinator;
     private VocabularyStore? _vocabulary;
     private CancellationTokenSource? _translateOperation;
+    private long _currentEpoch;
+    private TranslateUiState _currentState = TranslateUiState.Initial;
     private bool _languageChangeSuspended = true;
+    private bool _isUnloaded;
 
     public TranslateSection()
     {
         InitializeComponent();
         TranslateSourceLang.ItemsSource = LanguageCatalog.Sources;
         TranslateTargetLang.ItemsSource = LanguageCatalog.Targets;
+
+        Loaded += OnLoaded;
+        Unloaded += OnUnloaded;
 
         // Start from the persisted language pair; both this workbench and the
         // floating panel keep the pair in sync through core settings.
@@ -33,6 +323,20 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             TranslateTargetLang.SelectedItem = LanguageCatalog.ResolveTarget("zh-CN");
         }
         _languageChangeSuspended = false;
+        ApplyState(_currentState);
+    }
+
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        _isUnloaded = false;
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        _isUnloaded = true;
+        _translateOperation?.Cancel();
+        _translateOperation?.Dispose();
+        _translateOperation = null;
     }
 
     internal void Initialize(TranslationCoordinator coordinator, VocabularyStore? vocabulary)
@@ -47,8 +351,12 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     internal ComboBox TargetLangCombo => TranslateTargetLang;
     internal TextBox InputBox => TranslateInput;
     internal TextBox ResultBox => TranslateResult;
+    internal TextBox StreamResultBox => TranslateStreamResult;
+    internal Border StreamIndicator => TranslateStreamIndicator;
     internal TextBlock ExplanationText => TranslateExplanation;
     internal ScrollViewer ExplanationBox => TranslateExplanationBox;
+    internal TranslateUiState CurrentState => _currentState;
+    internal long CurrentEpoch => _currentEpoch;
 
     /// <summary>Compact mode drops secondary hints; panes stay side by side.</summary>
     internal void SetCompact(bool compact)
@@ -82,6 +390,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             return;
         }
 
+        var epoch = Interlocked.Increment(ref _currentEpoch);
         _translateOperation?.Cancel();
         _translateOperation?.Dispose();
         var operation = new CancellationTokenSource();
@@ -90,78 +399,102 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         var sourceLang = Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto);
         var targetLang = Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN");
 
-        TranslateButton.IsEnabled = false;
-        TranslateProgress.Visibility = Visibility.Visible;
-        TranslateStatus.Text = "正在翻译…";
-        TranslateEngineBadge.Text = "翻译中";
+        ApplyState(TranslateSectionReducer.StartTranslation(_currentState, epoch));
+
+        var progress = new Progress<TranslationStreamUpdate>(update =>
+        {
+            if (_isUnloaded) return;
+            if (epoch != _currentEpoch || _translateOperation != operation || operation.IsCancellationRequested)
+            {
+                return;
+            }
+            ApplyState(TranslateSectionReducer.ApplyStreamUpdate(_currentState, update, epoch));
+        });
 
         try
         {
             var session = await _coordinator.TranslateTextAsync(
-                source, sourceLang, targetLang, TranslationInputSource.Manual, operation.Token);
-
-            if (session.IsSuccess)
-            {
-                TranslateResult.Text = session.TranslatedText;
-                TranslateEngineBadge.Text = session.PipelineLabel ?? "已翻译";
-                TranslateStatus.Text = session.Stage == TranslationSessionStage.Partial
-                    ? $"部分完成 · {session.Timing.TotalElapsedMs} ms · 见下方说明"
-                    : $"完成 · {session.Timing.TotalElapsedMs} ms";
-
-                var notes = new List<string>();
-                if (!string.IsNullOrWhiteSpace(session.Explanation))
+                source,
+                sourceLang,
+                targetLang,
+                TranslationInputSource.Manual,
+                operation.Token,
+                onStageChanged: stage =>
                 {
-                    notes.Add(session.Explanation.Trim());
-                }
-                notes.AddRange(session.Warnings);
-                TranslateExplanation.Text = string.Join("\n", notes);
-                TranslateExplanationBox.Visibility = notes.Count == 0
-                    ? Visibility.Collapsed
-                    : Visibility.Visible;
-            }
-            else if (session.Stage == TranslationSessionStage.Cancelled)
+                    if (_isUnloaded) return;
+                    _ = Dispatcher.InvokeAsync(() =>
+                    {
+                        if (_isUnloaded || epoch != _currentEpoch || _translateOperation != operation || operation.IsCancellationRequested)
+                        {
+                            return;
+                        }
+                        ApplyState(TranslateSectionReducer.ApplyStage(_currentState, stage, epoch));
+                    });
+                },
+                progress: progress,
+                epoch: epoch);
+
+            if (_isUnloaded || epoch != _currentEpoch || _translateOperation != operation)
             {
-                TranslateStatus.Text = "已取消。";
-                TranslateEngineBadge.Text = "已取消";
+                return;
             }
-            else
-            {
-                var message = session.Error?.Message ?? "翻译未完成";
-                var suggestion = session.Error?.ActionableSuggestion;
-                TranslateEngineBadge.Text = "未完成";
-                TranslateStatus.Text = string.IsNullOrWhiteSpace(suggestion)
-                    ? message
-                    : $"{message} {suggestion}";
-                TranslateResult.Text = TranslationPanelWindow.FriendlyError(message);
-                TranslateExplanation.Text = string.IsNullOrWhiteSpace(suggestion)
-                    ? message
-                    : $"{message}\n{suggestion}";
-                TranslateExplanationBox.Visibility = Visibility.Visible;
-            }
+
+            ApplyState(TranslateSectionReducer.ApplyCompletion(_currentState, session, epoch));
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException ex)
         {
-            TranslateStatus.Text = "已取消。";
-            TranslateEngineBadge.Text = "已取消";
+            if (_isUnloaded || epoch != _currentEpoch) return;
+            ApplyState(TranslateSectionReducer.ApplyError(_currentState, ex, epoch));
         }
-        catch (Exception exception)
+        catch (Exception ex)
         {
-            TranslateEngineBadge.Text = "未完成";
-            TranslateStatus.Text = $"翻译失败：{exception.Message}";
-            TranslateResult.Text = TranslationPanelWindow.FriendlyError(exception.Message);
-            TranslateExplanation.Text = exception.Message;
-            TranslateExplanationBox.Visibility = Visibility.Visible;
+            if (_isUnloaded || epoch != _currentEpoch) return;
+            ApplyState(TranslateSectionReducer.ApplyError(_currentState, ex, epoch));
         }
         finally
         {
-            TranslateButton.IsEnabled = true;
-            TranslateProgress.Visibility = Visibility.Collapsed;
             if (ReferenceEquals(_translateOperation, operation))
             {
                 _translateOperation = null;
             }
             operation.Dispose();
         }
+    }
+
+    private void ApplyState(TranslateUiState state)
+    {
+        _currentState = state;
+        if (_isUnloaded) return;
+
+        TranslateButton.IsEnabled = state.IsTranslateButtonEnabled;
+        TranslateProgress.Visibility = state.IsProgressVisible ? Visibility.Visible : Visibility.Collapsed;
+        TranslateStreamIndicator.Visibility = state.IsStreamIndicatorVisible ? Visibility.Visible : Visibility.Collapsed;
+
+        TranslateStreamResult.Visibility = state.IsStreamLayerVisible ? Visibility.Visible : Visibility.Collapsed;
+        TranslateResult.Visibility = state.IsFinalLayerVisible ? Visibility.Visible : Visibility.Collapsed;
+
+        if (state.IsStreamLayerVisible)
+        {
+            TranslateStreamResult.Text = state.StreamText;
+            TranslateStreamResult.CaretIndex = TranslateStreamResult.Text.Length;
+            TranslateStreamResult.ScrollToEnd();
+        }
+
+        if (state.IsFinalLayerVisible)
+        {
+            TranslateResult.Text = state.FinalText;
+        }
+
+        TranslateEngineBadge.Text = state.BadgeText;
+        TranslateStatus.Text = state.StatusText;
+
+        TranslateResultSpeakButton.IsEnabled = state.AreResultActionsEnabled;
+        TranslateResultCopyButton.IsEnabled = state.AreResultActionsEnabled;
+        TranslateStarButton.IsEnabled = state.AreResultActionsEnabled;
+        TranslateSwapButton.IsEnabled = state.AreResultActionsEnabled;
+
+        TranslateExplanation.Text = state.ExplanationText;
+        TranslateExplanationBox.Visibility = state.IsExplanationVisible ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void TranslateInput_TextChanged(object sender, TextChangedEventArgs e) =>
@@ -224,8 +557,8 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         if (!string.IsNullOrWhiteSpace(TranslateResult.Text))
         {
             TranslateInput.Text = TranslateResult.Text;
-            TranslateResult.Clear();
-            TranslateExplanationBox.Visibility = Visibility.Collapsed;
+            var epoch = Interlocked.Increment(ref _currentEpoch);
+            ApplyState(TranslateUiState.Initial with { Epoch = epoch });
         }
     }
 
@@ -305,11 +638,11 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     private void TranslateClear_Click(object sender, RoutedEventArgs e)
     {
         _translateOperation?.Cancel();
+        _translateOperation?.Dispose();
+        _translateOperation = null;
+        var epoch = Interlocked.Increment(ref _currentEpoch);
+        ApplyState(TranslateUiState.Initial with { Epoch = epoch });
         TranslateInput.Clear();
-        TranslateResult.Clear();
-        TranslateExplanationBox.Visibility = Visibility.Collapsed;
-        TranslateEngineBadge.Text = "等待输入";
-        TranslateStatus.Text = "就绪";
         TranslateInput.Focus();
     }
 
@@ -342,9 +675,15 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         }
         if (existingTranslation is not null)
         {
-            TranslateResult.Text = existingTranslation;
-            TranslateEngineBadge.Text = "已展开的译文";
-            TranslateStatus.Text = "已从浮窗展开，未重新翻译。";
+            var epoch = Interlocked.Increment(ref _currentEpoch);
+            ApplyState(TranslateUiState.Initial with
+            {
+                Epoch = epoch,
+                FinalText = existingTranslation,
+                BadgeText = "已展开的译文",
+                StatusText = "已从浮窗展开，未重新翻译。",
+                AreResultActionsEnabled = true,
+            });
         }
         TranslateInput.Focus();
         TranslateInput.CaretIndex = TranslateInput.Text.Length;

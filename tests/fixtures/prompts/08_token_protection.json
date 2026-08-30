@@ -1,0 +1,28 @@
+{
+  "id": "token_protection_stream_variants",
+  "category": "token_protection",
+  "description": "Token protection with multiple placeholders and model variants across stream chunk boundaries",
+  "source_lang": "en",
+  "target_lang": "zh-CN",
+  "input_type": "text",
+  "source_text": "NullReferenceException at C:\\src\\App.cs --verbose",
+  "include_explanation": false,
+  "protect_tokens": true,
+  "delimiter": "PGMETA-tokprotect-12345",
+  "synthetic_model_output": "⟦PG_0000⟧ 发生在 [PG_0001] 参数为 <PG_0002>\nPGMETA-tokprotect-12345\n{\"detected_source_lang\":\"en\",\"transcription\":\"\",\"explanation\":\"\",\"warnings\":[]}",
+  "expected_body": "NullReferenceException 发生在 C:\\src\\App.cs 参数为 --verbose",
+  "expected_metadata": {
+    "detected_source_lang": "en",
+    "transcription": "",
+    "explanation": "",
+    "warnings": []
+  },
+  "expected_tokens": [
+    "NullReferenceException",
+    "C:\\src\\App.cs",
+    "--verbose"
+  ],
+  "expected_dropped_tokens": [],
+  "expect_trailer_warning": false,
+  "semantic_evaluation_mode": "live_or_manual_required"
+}

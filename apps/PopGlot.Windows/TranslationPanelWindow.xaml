@@ -224,6 +224,13 @@
                                 <!-- Engine name as metadata text, not a coloured badge. -->
                                 <TextBlock x:Name="EngineBadge" FontSize="11" FontWeight="SemiBold"
                                            Foreground="{DynamicResource TextTertiaryBrush}" Text="译文" />
+                                <Border x:Name="StreamIndicator" Visibility="Collapsed"
+                                        Margin="8,0,0,0" Padding="6,2" CornerRadius="4"
+                                        Background="{DynamicResource AccentSoftBrush}">
+                                    <TextBlock Text="生成中" FontSize="11"
+                                               Foreground="{DynamicResource AccentBrush}"
+                                               VerticalAlignment="Center" />
+                                </Border>
                                 <TextBlock x:Name="PhoneticText" FontSize="11.5" Margin="8,0,0,0"
                                            Foreground="{DynamicResource TextTertiaryBrush}"
                                            FontFamily="{StaticResource MonoFontFamily}"
@@ -266,6 +273,10 @@
                                                     <Setter TargetName="Glyph" Property="Fill"
                                                             Value="{DynamicResource AccentBrush}" />
                                                 </Trigger>
+                                                <Trigger Property="IsEnabled" Value="False">
+                                                    <Setter TargetName="Surface" Property="Opacity" Value="0.45" />
+                                                    <Setter Property="Cursor" Value="Arrow" />
+                                                </Trigger>
                                             </ControlTemplate.Triggers>
                                         </ControlTemplate>
                                     </ToggleButton.Template>
@@ -273,17 +284,18 @@
                             </StackPanel>
                         </Grid>
 
-                        <Grid>
+                        <Grid MinHeight="68">
                             <TextBox x:Name="TranslationTextBox" Style="{StaticResource FlatTextBox}"
                                      FontSize="15" TextWrapping="Wrap" IsReadOnly="True"
-                                     MaxHeight="340" VerticalScrollBarVisibility="Auto"
+                                     MinHeight="68" MaxHeight="340" VerticalScrollBarVisibility="Auto"
                                      local:Ui.Placeholder="译文将显示在这里…"
                                      Foreground="{DynamicResource TextPrimaryBrush}" />
                             <RichTextBox x:Name="TranslationRichBox" Style="{StaticResource FlatRichTextBox}"
-                                         MaxHeight="340" VerticalScrollBarVisibility="Auto"
+                                         FontSize="15"
+                                         MinHeight="68" MaxHeight="340" VerticalScrollBarVisibility="Auto"
                                          Visibility="Collapsed" />
                             <!-- Skeleton shown while a request is in flight. -->
-                            <StackPanel x:Name="ResultSkeleton" Margin="2,6,0,0"
+                            <StackPanel x:Name="ResultSkeleton" Margin="2,6,0,0" Height="68"
                                         Visibility="Collapsed" IsHitTestVisible="False">
                                 <Border Height="12" Width="230" HorizontalAlignment="Left"
                                         Background="{DynamicResource SurfacePressedBrush}" CornerRadius="6" />
@@ -337,7 +349,9 @@
                         <TextBlock x:Name="StatusText" FontSize="11.5" VerticalAlignment="Center"
                                    Margin="7,0,0,0"
                                    Foreground="{DynamicResource TextTertiaryBrush}"
-                                   TextTrimming="CharacterEllipsis" MaxWidth="360" />
+                                   TextTrimming="CharacterEllipsis" MaxWidth="360"
+                                   AutomationProperties.LiveSetting="Polite"
+                                   AutomationProperties.Name="翻译状态" />
                     </StackPanel>
                     <TextBlock x:Name="RouteText" FontSize="11.5" VerticalAlignment="Center"
                                HorizontalAlignment="Right"

@@ -1,0 +1,19 @@
+{
+  "id": "bad_metadata_corrupt_json",
+  "category": "bad_missing_metadata",
+  "description": "Trailer delimiter is present but metadata payload is corrupted/invalid JSON",
+  "source_lang": "en",
+  "target_lang": "zh-CN",
+  "input_type": "text",
+  "source_text": "Operation completed successfully.",
+  "include_explanation": false,
+  "protect_tokens": false,
+  "delimiter": "PGMETA-corrupttrail-999",
+  "synthetic_model_output": "操作已成功完成。\nPGMETA-corrupttrail-999\n{invalid json content: \"unclosed quote}",
+  "expected_body": "操作已成功完成。",
+  "expected_metadata": null,
+  "expected_tokens": [],
+  "expected_dropped_tokens": [],
+  "expect_trailer_warning": true,
+  "semantic_evaluation_mode": "live_or_manual_required"
+}

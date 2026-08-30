@@ -76,7 +76,7 @@
                 <StackPanel>
                     <Border Background="{DynamicResource SurfaceRaisedBrush}" CornerRadius="10"
                             BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                            Padding="14,12">
+                            Padding="14,12" MinHeight="68">
                         <StackPanel>
                             <Grid Margin="0,0,0,8">
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -85,6 +85,16 @@
                                                FontFamily="{StaticResource MonoFontFamily}"
                                                VerticalAlignment="Center" Visibility="Collapsed"
                                                TextTrimming="CharacterEllipsis" MaxWidth="240" />
+                                    <TextBlock x:Name="StreamIndicator" FontSize="11.5"
+                                               Foreground="{DynamicResource AccentBrush}"
+                                               FontWeight="SemiBold"
+                                               VerticalAlignment="Center" Visibility="Collapsed"
+                                               Margin="6,0,0,0" Text="生成中…" />
+                                    <TextBlock x:Name="IncompleteBadge" FontSize="11.5"
+                                               Foreground="{DynamicResource WarningBrush}"
+                                               FontWeight="SemiBold"
+                                               VerticalAlignment="Center" Visibility="Collapsed"
+                                               Margin="6,0,0,0" Text="[未完成]" />
                                 </StackPanel>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                     <Button x:Name="SpeakButton" Style="{StaticResource IconButton}" Width="24" Height="22"
@@ -112,8 +122,27 @@
                                 </StackPanel>
                             </Grid>
 
+                            <!-- Plain text streaming layer (zero token-by-token FlowDoc rebuild) -->
+                            <TextBox x:Name="ResultStreamBox"
+                                     Style="{StaticResource FlatTextBox}"
+                                     FontSize="15"
+                                     Foreground="{DynamicResource TextPrimaryBrush}"
+                                     TextWrapping="Wrap"
+                                     AcceptsReturn="True"
+                                     IsReadOnly="True"
+                                     Focusable="False"
+                                     IsHitTestVisible="True"
+                                     MinHeight="24"
+                                     MaxHeight="220"
+                                     VerticalScrollBarVisibility="Auto"
+                                     Visibility="Collapsed"
+                                     AutomationProperties.Name="流式翻译中" />
+
+                            <!-- RichTextBox for final one-off Markdown rendering -->
                             <RichTextBox x:Name="ResultRichBox" Style="{StaticResource FlatRichTextBox}"
-                                         FontSize="15" MaxHeight="220" VerticalScrollBarVisibility="Auto" />
+                                         FontSize="15" MaxHeight="220" VerticalScrollBarVisibility="Auto"
+                                         MinHeight="24"
+                                         Visibility="Collapsed" />
                         </StackPanel>
                     </Border>
 
@@ -133,7 +162,9 @@
                     CornerRadius="0,0,11,11">
                 <Grid>
                     <TextBlock x:Name="FooterStatus" FontSize="11" Foreground="{DynamicResource TextTertiaryBrush}"
-                               VerticalAlignment="Center" Text="输入文字后按 Enter 翻译" />
+                               VerticalAlignment="Center" Text="输入文字后按 Enter 翻译"
+                               AutomationProperties.LiveSetting="Polite"
+                               AutomationProperties.Name="翻译状态" />
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                         <TextBlock Text="Enter 翻译 · Ctrl+R 朗读 · Esc 退出" FontSize="11"
                                    Foreground="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center" />

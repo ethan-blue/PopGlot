@@ -1,0 +1,24 @@
+{
+  "id": "vision_transcription_dialog",
+  "category": "vision_transcription",
+  "description": "Visual translation request where image text transcription is delivered in the trailer metadata",
+  "source_lang": "en",
+  "target_lang": "zh-CN",
+  "input_type": "vision",
+  "source_text": "",
+  "include_explanation": true,
+  "protect_tokens": false,
+  "delimiter": "PGMETA-visiontrans-888",
+  "synthetic_model_output": "连接失败：远程主机强迫关闭了一个现有的连接。\n请检查网络设置或联系系统管理员。\nPGMETA-visiontrans-888\n{\"detected_source_lang\":\"en\",\"transcription\":\"Connection failed: An existing connection was forcibly closed by the remote host.\\nPlease check network settings or contact system administrator.\",\"explanation\":\"WSAECONNRESET (10054) 常见于服务器超时或重置连接。\",\"warnings\":[]}",
+  "expected_body": "连接失败：远程主机强迫关闭了一个现有的连接。\n请检查网络设置或联系系统管理员。",
+  "expected_metadata": {
+    "detected_source_lang": "en",
+    "transcription": "Connection failed: An existing connection was forcibly closed by the remote host.\nPlease check network settings or contact system administrator.",
+    "explanation": "WSAECONNRESET (10054) 常见于服务器超时或重置连接。",
+    "warnings": []
+  },
+  "expected_tokens": [],
+  "expected_dropped_tokens": [],
+  "expect_trailer_warning": false,
+  "semantic_evaluation_mode": "live_or_manual_required"
+}

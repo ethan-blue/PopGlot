@@ -1,6 +1,6 @@
 # PopGlot 版本规则
 
-> 生效日期：2026-08-30。当前版本：**0.0.2**。
+> 生效日期：2026-08-31。当前版本：**0.1.0**。
 
 ## 历史修正
 
@@ -8,17 +8,27 @@
 不符合任何已发布的版本序列，已于 2026-08-29 撤回（本地与远端 tag 均已删除），
 `0.3.x` 编号永不复用。版本序列自此从 **0.0.1** 重新开始，之后只做增量递增。
 
-## 版本格式
+## 版本格式与当前版本说明
 
-`MAJOR.MINOR.PATCH`，例如 `0.0.2`。
+`MAJOR.MINOR.PATCH`，当前为 `0.1.0`。
 
 | 段 | 何时递增 | 示例 |
 |----|----------|------|
 | PATCH（0.0.x） | 缺陷修复、视觉微调、小改进。每次发布 +1，**绝不跳跃** | 0.0.1 → 0.0.2 |
-| MINOR（0.x.0） | 大功能批次：信息架构调整、新子系统（如模型目录、新翻译线路）、配置 schema 变更 | 0.0.x → 0.1.0 |
+| MINOR（0.x.0） | 大功能批次：信息架构调整、新子系统（如流式架构、模型推荐、基准评测）、配置 schema 变更 | 0.0.2 → 0.1.0 |
 | MAJOR（1.0.0） | 正式公开发布承诺（稳定性契约、安装包分发、自动更新）。当前不设时间表 | 0.x → 1.0.0 |
 
-规则：
+### 为何 0.1.0 定位为 MINOR
+
+从 `0.0.2` 升级至 `0.1.0` 是因为本版本引入了多项重大新架构与子系统：
+1. **全新流式翻译架构**：Core 层轻量增量 SSE 解析器、Text-first + 随机 Trailer 组装协议、FFI 流式 Callback 桥接、C# 短锁缓冲协调器与 UI Stream-Final 双层平滑渲染；
+2. **智能模型推荐偏好体系**：基于 Provider 目录事实、模型家族启发式规则与本地基准的多层级推荐（Speed/Balanced/Quality）；
+3. **翻译基准评测子系统**：包含高重现性离线流式评测（`stream_benchmark`）与双开关安全在线评测（`live_provider_bench`）；
+4. **设置交互与主题可访问性全面加固**：Dirty 纯值比较、侧栏同级设置入口、WCAG 2.1 AA 级对比度审计。
+
+虽然本版本向下完全兼容现有配置 Schema（无需数据迁移），但由于引入了完整的新流式线路与新子系统，严格符合 SemVer MINOR（0.x.0）的升级标准。
+
+## 规则
 
 1. **只递增，不回退、不跳跃、不重排**。每个已打 tag 的编号永久占用。
 2. 0.x 阶段允许配置 schema 不兼容变更，但必须附带自动迁移
@@ -38,10 +48,10 @@
 
 ## 发布清单
 
-1. 更新 `apps/PopGlot.Windows/PopGlot.Windows.csproj` 的 `<Version>`。
-2. 同步更新 `Cargo.toml` 的 `[workspace.package] version`。
+1. 更新 `apps/PopGlot.Windows/PopGlot.Windows.csproj` 的 `<Version>` 为 `0.1.0`。
+2. 同步更新 `Cargo.toml` 的 `[workspace.package] version` 为 `0.1.0`。
 3. 在 `CHANGELOG.md` 顶部新增对应版本条目（新增/变更/修复/迁移/风险）。
-4. 全量验证：运行 `scripts/verify.ps1`（包含 `cargo fmt`、`cargo test`、`cargo clippy`、`dotnet build`、68 项 Windows 逻辑测试全部通过）。
+4. 全量验证：运行 `scripts/verify.ps1`（包含 `cargo fmt`、`cargo test`、`cargo clippy`、`dotnet build`、113 项 Windows 逻辑测试全部通过）。
 5. 运行四方版本一致性本地检查，确保 Release Tag、csproj、Cargo.toml 与 CHANGELOG.md 版本一致。
 6. 构建发布产物并生成校验和：
    ```bash
@@ -51,7 +61,7 @@
    ```
 7. 提交所有改动，打 annotated tag：
    ```bash
-   git tag -a v0.0.2 -m "PopGlot 0.0.2"
+   git tag -a v0.1.0 -m "PopGlot 0.1.0"
    ```
 8. 推送（需要远端时）：`git push origin main --tags`。
    GitHub Actions release 工作流将自动校验四方版本、打包并附带 `.zip.sha256` 校验和。

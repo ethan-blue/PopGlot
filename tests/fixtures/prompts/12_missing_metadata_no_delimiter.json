@@ -1,0 +1,19 @@
+{
+  "id": "missing_metadata_no_delimiter",
+  "category": "bad_missing_metadata",
+  "description": "Model output finishes cleanly without emitting any trailer delimiter or metadata",
+  "source_lang": "en",
+  "target_lang": "zh-CN",
+  "input_type": "text",
+  "source_text": "System ready.",
+  "include_explanation": false,
+  "protect_tokens": false,
+  "delimiter": "PGMETA-nodelim-7777777",
+  "synthetic_model_output": "系统就绪。",
+  "expected_body": "系统就绪。",
+  "expected_metadata": null,
+  "expected_tokens": [],
+  "expected_dropped_tokens": [],
+  "expect_trailer_warning": true,
+  "semantic_evaluation_mode": "live_or_manual_required"
+}

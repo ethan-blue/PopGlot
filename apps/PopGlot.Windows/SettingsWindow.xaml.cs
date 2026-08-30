@@ -9,9 +9,30 @@ using PopGlot.Windows.Services;
 namespace PopGlot.Windows;
 
 /// <summary>
-/// The dedicated settings window: general, services, shortcuts, and privacy
-/// live here — never inside the main window. It is the only surface with the
-/// save bar, and the save/revert buttons appear only while a draft exists.
+/// Lifecycle of the settings form. Transitions are driven by comparing the
+/// live form against the saved baseline — never by one-way flags — so editing
+/// a value back to its saved state returns the window to Clean on its own.
+/// </summary>
+internal enum SettingsEditState
+{
+    /// <summary>Programmatic load in progress; change events are ignored.</summary>
+    Loading,
+
+    /// <summary>The form matches the persisted baseline exactly.</summary>
+    Clean,
+
+    /// <summary>The form differs from the baseline; the save bar is shown.</summary>
+    Dirty,
+
+    /// <summary>A save is committing; re-entrant edits and close are refused.</summary>
+    Saving,
+}
+
+/// <summary>
+/// The dedicated settings window: the translation engine, general, shortcuts,
+/// and privacy pages live here — never inside the main window. It is the only
+/// surface with the save bar, and the save/revert buttons appear only while a
+/// draft exists.
 /// </summary>
 public partial class SettingsWindow : Window
 {
@@ -19,9 +40,17 @@ public partial class SettingsWindow : Window
     private readonly VocabularyStore? _vocabulary;
     private ShellSettings _shellSettings;
     private bool _loading = true;
-    private bool _isDirty;
+    private SettingsEditState _state = SettingsEditState.Loading;
     private string _settingsBaseline = string.Empty;
+    private string _routeBaseline = string.Empty;
+    private bool _routePendingShown;
     private readonly EventHandler _themeChangedHandler;
+
+    /// <summary>True while the form differs from the saved baseline.</summary>
+    internal bool IsDirty => _state == SettingsEditState.Dirty;
+
+    /// <summary>The lifecycle state of the settings form (Loading/Clean/Dirty/Saving).</summary>
+    internal SettingsEditState EditState => _state;
 
     internal SettingsWindow(ShellSettings shellSettings, HistoryStore history, VocabularyStore? vocabulary = null)
     {
@@ -39,14 +68,12 @@ public partial class SettingsWindow : Window
         ProviderSection.ProfileChanged += () =>
         {
             CaptureSection.RefreshRoutePreview();
-            SetStatus("模型服务已更新，立即生效。", StatusTone.Info);
+            // Running requests keep the snapshot they started with; only
+            // translations started afterwards see the new service.
+            SetStatus("模型服务已更新，后续翻译生效。", StatusTone.Info);
         };
         CaptureSection.StatusChanged += SetStatus;
-        CaptureSection.ProviderDirty += () =>
-        {
-            MarkDirty();
-            CaptureSection.SetRouteDraftPending(true);
-        };
+        CaptureSection.ProviderDirty += EvaluateDraftState;
         CaptureSection.SidebarChanged += () => _shellSettings = CaptureSection.CurrentShellSettings;
         DataSection.StatusChanged += SetStatus;
         DataSection.DataCleared += () => LocalDataCleared?.Invoke();
@@ -54,6 +81,7 @@ public partial class SettingsWindow : Window
         HookDirtyTracking();
         LoadAll();
         _loading = false;
+        ShowPage("Provider");
 
         ThemeService.ApplyWindowChrome(this);
         ThemeService.ThemeChanged += _themeChangedHandler;
@@ -101,17 +129,69 @@ public partial class SettingsWindow : Window
         Watch(DataSection.HistoryEnabled);
     }
 
-    private void MarkDirtyHandler(object sender, RoutedEventArgs e) => MarkDirty();
+    private void MarkDirtyHandler(object sender, RoutedEventArgs e) => EvaluateDraftState();
 
-    private void MarkDirty()
+    /// <summary>
+    /// Recomputes the form state from the live draft. Pure comparison against
+    /// the saved baseline: a value edited back to its saved form clears the
+    /// dirty flag (and the route-draft hint) on its own — no flag is ever
+    /// latched on by an event.
+    /// </summary>
+    private void EvaluateDraftState()
     {
-        if (_loading)
+        if (_loading || _state is SettingsEditState.Loading or SettingsEditState.Saving)
         {
             return;
         }
-        _isDirty = !string.Equals(CaptureSettingsDraft(), _settingsBaseline, StringComparison.Ordinal);
-        UpdateSaveBar();
+        RecomputeStateFromDraft();
     }
+
+    /// <summary>
+    /// Guard-free snapshot recompute: applies whatever the live draft says to
+    /// the state machine, the save bar and the route hint. This is the
+    /// recovery path for a failed save, where the state may still say
+    /// <see cref="SettingsEditState.Saving"/> and the ordinary guards in
+    /// <see cref="EvaluateDraftState"/> would refuse to run — leaving the
+    /// window stuck. A failed save keeps real edits at Dirty; a form rolled
+    /// back onto the baseline returns to Clean.
+    /// </summary>
+    private void RecomputeStateFromDraft()
+    {
+        _state = StateFromDraft(CaptureSettingsDraft(), _settingsBaseline);
+        UpdateSaveBar();
+        UpdateRouteDraftPending();
+    }
+
+    /// <summary>
+    /// The route preview hint is driven by the same snapshot comparison,
+    /// restricted to the four fields the screenshot route actually reads.
+    /// Toggling one of them back to its saved value drops the hint; the card
+    /// then returns to showing the live route instead of a stale draft.
+    /// </summary>
+    private void UpdateRouteDraftPending()
+    {
+        var pending = HasDraftChanges(CaptureRouteDraft(), _routeBaseline);
+        CaptureSection.SetRouteDraftPending(pending);
+        if (_routePendingShown && !pending)
+        {
+            // The draft converged back onto the saved route: repaint the card
+            // as the actual current route again.
+            CaptureSection.RefreshRoutePreview();
+        }
+        _routePendingShown = pending;
+    }
+
+    /// <summary>Ordinal draft comparison; both sides are canonical snapshots.</summary>
+    internal static bool HasDraftChanges(string current, string baseline) =>
+        !string.Equals(current, baseline, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Pure state decision shared by the live form and the logic tests: the
+    /// state is whatever the draft says against the baseline — Dirty when
+    /// they differ, Clean when they match. No window state is read here.
+    /// </summary>
+    internal static SettingsEditState StateFromDraft(string current, string baseline) =>
+        HasDraftChanges(current, baseline) ? SettingsEditState.Dirty : SettingsEditState.Clean;
 
     private IEnumerable<HotkeyRecorder> ShortcutRecorders()
     {
@@ -121,31 +201,52 @@ public partial class SettingsWindow : Window
         yield return ShortcutsSection.ShowWindowHotkey;
     }
 
-    private string CaptureSettingsDraft() => string.Join('\u001f',
-        ShortcutsSection.SelectionHotkey.BindingValue?.Serialize() ?? string.Empty,
-        ShortcutsSection.ScreenshotHotkey.BindingValue?.Serialize() ?? string.Empty,
-        ShortcutsSection.CloseHotkey.BindingValue?.Serialize() ?? string.Empty,
-        ShortcutsSection.ShowWindowHotkey.BindingValue?.Serialize() ?? string.Empty,
-        DataSection.HistoryEnabled.IsChecked == true ? "1" : "0",
-        GeneralSection.CloseOnFocusLoss.IsChecked == true ? "1" : "0",
-        GeneralSection.AutoCopy.IsChecked == true ? "1" : "0",
-        GeneralSection.StartWithWindows.IsChecked == true ? "1" : "0",
-        GeneralSection.IncludeExplanation.IsChecked == true ? "1" : "0",
-        GeneralSection.ProtectTokens.IsChecked == true ? "1" : "0",
-        Helpers.SelectedEnum(GeneralSection.ThemeCombo, ThemePreference.System).ToString(),
-        CaptureSection.NetworkEnabled.IsChecked == true ? "1" : "0",
-        CaptureSection.SafeMode.IsChecked == true ? "1" : "0",
-        CaptureSection.AllowImageUpload.IsChecked == true ? "1" : "0",
-        Helpers.SelectedEnum(CaptureSection.ModeCombo, TranslationMode.Auto).ToString());
+    private string CaptureSettingsDraft() =>
+        SettingsFormSnapshot.Create(
+            ShortcutsSection.SelectionHotkey.BindingValue?.Serialize(),
+            ShortcutsSection.ScreenshotHotkey.BindingValue?.Serialize(),
+            ShortcutsSection.CloseHotkey.BindingValue?.Serialize(),
+            ShortcutsSection.ShowWindowHotkey.BindingValue?.Serialize(),
+            DataSection.HistoryEnabled.IsChecked == true,
+            GeneralSection.CloseOnFocusLoss.IsChecked == true,
+            GeneralSection.AutoCopy.IsChecked == true,
+            GeneralSection.StartWithWindows.IsChecked == true,
+            GeneralSection.IncludeExplanation.IsChecked == true,
+            GeneralSection.ProtectTokens.IsChecked == true,
+            Helpers.SelectedEnum(GeneralSection.ThemeCombo, ThemePreference.System).ToString(),
+            CaptureRouteDraftSnapshot()).Serialize();
 
-    private void UpdateSaveBar() =>
-        SaveActionsPanel.Visibility = _isDirty ? Visibility.Visible : Visibility.Collapsed;
+    private RouteDraftSnapshot CaptureRouteDraftSnapshot() =>
+        RouteDraftSnapshot.Create(
+            CaptureSection.NetworkEnabled.IsChecked == true,
+            CaptureSection.SafeMode.IsChecked == true,
+            CaptureSection.AllowImageUpload.IsChecked == true,
+            Helpers.SelectedEnum(CaptureSection.ModeCombo, TranslationMode.Auto).ToString());
+
+    /// <summary>Only the four fields the screenshot route resolves from.</summary>
+    private string CaptureRouteDraft() => CaptureRouteDraftSnapshot().Serialize();
+
+    /// <summary>
+    /// The save bar mirrors the state machine: hidden while Clean, badge plus
+    /// enabled actions while Dirty, locked with feedback while Saving.
+    /// </summary>
+    private void UpdateSaveBar()
+    {
+        var showActions = _state is SettingsEditState.Dirty or SettingsEditState.Saving;
+        SaveActionsPanel.Visibility = showActions ? Visibility.Visible : Visibility.Collapsed;
+        UnsavedBadge.Visibility = _state == SettingsEditState.Dirty
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        SaveButton.IsEnabled = _state == SettingsEditState.Dirty;
+        SaveButton.Content = _state == SettingsEditState.Saving ? "正在保存…" : "保存";
+    }
 
     // ================= Loading =================
 
     private void LoadAll()
     {
         _loading = true;
+        _state = SettingsEditState.Loading;
         try
         {
             LoadShellSettings(_shellSettings);
@@ -160,9 +261,15 @@ public partial class SettingsWindow : Window
         {
             _loading = false;
         }
-        _isDirty = false;
+        // Rebuild both baselines from the freshly loaded form: everything the
+        // loader wrote is by definition the saved state, so programmatic
+        // assignment (theme included) can never register as a draft.
         _settingsBaseline = CaptureSettingsDraft();
+        _routeBaseline = CaptureRouteDraft();
+        _routePendingShown = false;
+        _state = SettingsEditState.Clean;
         UpdateSaveBar();
+        CaptureSection.SetRouteDraftPending(false);
     }
 
     private void LoadShellSettings(ShellSettings settings)
@@ -218,10 +325,11 @@ public partial class SettingsWindow : Window
         ShowPage((sender as RadioButton)?.Tag as string);
     }
 
-    private void ShowPage(string? tag)
+    // Internal for the logic tests: page browsing must never dirty the form.
+    internal void ShowPage(string? tag)
     {
-        // Leaving the services page with an unsaved editor draft is resolved
-        // inline: snap back to the services entry and show the draft guard
+        // Leaving the engine page with an unsaved editor draft is resolved
+        // inline: snap back to the engine entry and show the draft guard
         // bar; the requested page opens once the draft is settled. No
         // system dialog.
         if (tag != "Provider" &&
@@ -230,17 +338,17 @@ public partial class SettingsWindow : Window
         {
             NavProvider.IsChecked = true;
             ProviderSection.BeginDraftGuard(
-                "切换设置页前请先处理服务草稿。",
+                "切换设置页前，请先保存或放弃这个翻译引擎的未保存修改。",
                 () => Dispatcher.BeginInvoke(() => ShowPage(tag)));
             return;
         }
 
         var page = tag switch
         {
-            "Provider" => "Provider",
+            "General" => "General",
             "Shortcuts" => "Shortcuts",
             "Privacy" => "Privacy",
-            _ => "General",
+            _ => "Provider",
         };
 
         GeneralSection.Visibility = Visibility.Collapsed;
@@ -276,6 +384,12 @@ public partial class SettingsWindow : Window
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
+        if (_state != SettingsEditState.Dirty)
+        {
+            return; // Nothing to commit; also refuses re-entry while Saving.
+        }
+        _state = SettingsEditState.Saving;
+        UpdateSaveBar();
         try
         {
             // ===== Validation phase: nothing is persisted below this point. =====
@@ -339,16 +453,20 @@ public partial class SettingsWindow : Window
             }
             else
             {
-                SetStatus("设置已保存。", StatusTone.Success);
+                SetStatus("设置已保存，后续翻译生效。", StatusTone.Success);
             }
 
             _shellSettings = shellSettings;
             CaptureSection.SetShellSettings(shellSettings);
             CaptureSection.RefreshRoutePreview();
-            CaptureSection.SetRouteDraftPending(false);
-            _isDirty = false;
+            // The commit landed: rebuild the baselines from the saved form so
+            // the state machine returns to Clean on evidence, not on trust.
             _settingsBaseline = CaptureSettingsDraft();
+            _routeBaseline = CaptureRouteDraft();
+            _routePendingShown = false;
+            _state = SettingsEditState.Clean;
             UpdateSaveBar();
+            CaptureSection.SetRouteDraftPending(false);
 
             if (CaptureSection.SafeMode.IsChecked == true || CaptureSection.NetworkEnabled.IsChecked != true)
             {
@@ -359,13 +477,24 @@ public partial class SettingsWindow : Window
         {
             SetStatus($"保存失败：{exception.Message}", StatusTone.Error);
         }
+        finally
+        {
+            if (_state == SettingsEditState.Saving)
+            {
+                // Nothing was committed (or the commit threw): recompute the
+                // state straight from the live draft. Real edits still in the
+                // form return to Dirty — the save bar comes back — and a form
+                // rolled back onto the baseline returns to Clean. The draft
+                // itself decides; no guard may keep the window stuck.
+                RecomputeStateFromDraft();
+            }
+        }
     }
 
     private void Revert_Click(object sender, RoutedEventArgs e)
     {
         ProviderSection.ReloadEditorFromSaved();
         LoadAll();
-        CaptureSection.SetRouteDraftPending(false);
         SetStatus("已放弃未保存的修改。", StatusTone.Info);
     }
 
@@ -444,20 +573,25 @@ public partial class SettingsWindow : Window
     {
         // Resolve drafts inside the window instead of a system dialog: keep
         // the window open, land on the relevant surface, and say what to do.
+        if (_state == SettingsEditState.Saving)
+        {
+            e.Cancel = true;
+            return;
+        }
         if (ProviderSection.IsEditorDirty)
         {
             e.Cancel = true;
             ShowPage("Provider");
             ProviderSection.BeginDraftGuard(
-                "关闭设置前请先处理服务草稿。",
+                "关闭设置前，请先保存或放弃这个翻译引擎的未保存修改。",
                 () => Dispatcher.BeginInvoke(Close));
             return;
         }
-        if (_isDirty)
+        if (_state == SettingsEditState.Dirty)
         {
             e.Cancel = true;
             UpdateSaveBar();
-            SetStatus("有未保存的修改：点「保存设置」提交，或「放弃修改」后再关闭。", StatusTone.Warning);
+            SetStatus("有未保存的修改：点「保存」提交，或「放弃修改」后再关闭。", StatusTone.Warning);
             return;
         }
         SetHotkeysSuspended?.Invoke(false);
