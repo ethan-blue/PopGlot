@@ -643,6 +643,21 @@ internal static class Program
     /// P0 privacy acceptance: offline controls block remote traffic, while a
     /// provider explicitly hosted on loopback remains executable.
     /// </summary>
+    /// <summary>
+    /// The mock counts accepted connections only after the userspace accept
+    /// loop runs, which can lag the kernel-completed handshake by seconds on a
+    /// loaded CI runner — poll instead of asserting the instant a request fails.
+    /// </summary>
+    private static async Task WaitUntilConnectionAsync(int count, int minimum, string message)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (Volatile.Read(ref count) < minimum && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(100);
+        }
+        True(Volatile.Read(ref count) >= minimum, message);
+    }
+
     private static async Task OfflineModeSendsNothing()
     {
         CoreBridge.Initialize();
@@ -688,7 +703,7 @@ internal static class Program
                 "hello offline", "en", "zh-CN", TranslationInputSource.Manual, CancellationToken.None);
             Equal(TranslationSessionStage.Failed, offline.Stage); // mock closes without a valid body
             Equal(false, offline.OutboundOccurred);
-            True(Volatile.Read(ref connectionCount) >= 1, "safe mode must still reach loopback");
+            await WaitUntilConnectionAsync(connectionCount, 1, "safe mode must still reach loopback");
 
             // Network Off follows the same locality contract.
             CoreBridge.SaveSettings(original with
@@ -700,7 +715,7 @@ internal static class Program
             var networkOff = await coordinator.TranslateTextAsync(
                 "hello offline", "en", "zh-CN", TranslationInputSource.QuickSearch, CancellationToken.None);
             Equal(TranslationSessionStage.Failed, networkOff.Stage);
-            True(Volatile.Read(ref connectionCount) >= 2, "network off must still reach loopback");
+            await WaitUntilConnectionAsync(connectionCount, 2, "network off must still reach loopback");
 
             // Sanity: normal online mode reaches the same local endpoint too.
             CoreBridge.SaveSettings(original with
@@ -712,7 +727,7 @@ internal static class Program
             var permitted = await coordinator.TranslateTextAsync(
                 "hello permitted", "en", "zh-CN", TranslationInputSource.Manual, CancellationToken.None);
             Equal(TranslationSessionStage.Failed, permitted.Stage); // the mock's empty reply parses as an error
-            True(Volatile.Read(ref connectionCount) >= 1, "sanity: permitted traffic must reach the mock");
+            await WaitUntilConnectionAsync(connectionCount, 3, "sanity: permitted traffic must reach the mock");
         }
         finally
         {
