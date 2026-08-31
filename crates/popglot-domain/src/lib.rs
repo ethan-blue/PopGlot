@@ -20,6 +20,8 @@ pub enum TranslationMode {
     Auto,
     LocalOcr,
     VisionDirect,
+    /// 视觉模型仅负责识别截图文字，译文由文本模型生成。
+    VisionOcr,
 }
 
 /// Persisted non-secret provider settings.
@@ -739,7 +741,7 @@ pub fn select_route(context: &RoutingContext) -> RoutingDecision {
             "forced_local_ocr",
             "已按设置使用本地 OCR；截图不会上传给视觉模型。",
         ),
-        TranslationMode::VisionDirect => {
+        TranslationMode::VisionDirect | TranslationMode::VisionOcr => {
             if !context.vision_configured {
                 local_or_blocked(
                     context,

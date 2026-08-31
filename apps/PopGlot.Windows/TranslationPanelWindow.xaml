@@ -215,9 +215,11 @@
                 </Grid>
 
                 <!-- ── Segment 3: Result card ── -->
-                <Border Background="{DynamicResource SurfaceMutedBrush}"
+                <!-- 与上方原文卡同底色同内边距：译文卡此前是灰底+更大内边距，
+                     翻译完成瞬间卡片观感突变，看起来像界面跳动。 -->
+                <Border Background="{DynamicResource InputBrush}"
                         CornerRadius="10" BorderBrush="{DynamicResource BorderSubtleBrush}"
-                        BorderThickness="1" Padding="14,12">
+                        BorderThickness="1" Padding="12,10">
                     <StackPanel>
                         <Grid Margin="0,0,0,8">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -343,19 +345,29 @@
 
                 <!-- Footer Status Bar -->
                 <Grid Margin="3,10,3,0">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Left">
-                        <Border x:Name="StatusDot" Width="7" Height="7" CornerRadius="4"
-                                Background="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center" />
-                        <TextBlock x:Name="StatusText" FontSize="11.5" VerticalAlignment="Center"
-                                   Margin="7,0,0,0"
+                    <!-- 两列布局：状态文字在左（弹性收缩），耗时/路由在右（固定
+                         需求宽度）。此前两段文字共用一行且右侧不限宽，长耗时串
+                         会直接压到左侧状态文字上。 -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Border x:Name="StatusDot" Width="7" Height="7" CornerRadius="4"
+                                    Background="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center" />
+                            <TextBlock x:Name="StatusText" FontSize="11.5" VerticalAlignment="Center"
+                                       Margin="7,0,0,0"
+                                       Foreground="{DynamicResource TextTertiaryBrush}"
+                                       TextTrimming="CharacterEllipsis"
+                                       AutomationProperties.LiveSetting="Polite"
+                                       AutomationProperties.Name="翻译状态" />
+                        </StackPanel>
+                        <TextBlock x:Name="RouteText" Grid.Column="1" FontSize="11.5" VerticalAlignment="Center"
+                                   Margin="16,0,0,0" MaxWidth="230" TextTrimming="CharacterEllipsis"
                                    Foreground="{DynamicResource TextTertiaryBrush}"
-                                   TextTrimming="CharacterEllipsis" MaxWidth="360"
-                                   AutomationProperties.LiveSetting="Polite"
-                                   AutomationProperties.Name="翻译状态" />
-                    </StackPanel>
-                    <TextBlock x:Name="RouteText" FontSize="11.5" VerticalAlignment="Center"
-                               HorizontalAlignment="Right"
-                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                   ToolTip="{Binding RelativeSource={RelativeSource Self}, Path=Text}" />
+                    </Grid>
                 </Grid>
                 </StackPanel>
             </ScrollViewer>

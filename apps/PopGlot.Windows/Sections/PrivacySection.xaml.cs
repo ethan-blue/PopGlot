@@ -113,6 +113,7 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         var pipeline = route.ScreenshotPipeline switch
         {
             ScreenshotPipeline.VisionDirect => "视觉模型",
+            ScreenshotPipeline.VisionOcr => "视觉识别 + 文本模型",
             ScreenshotPipeline.LocalOcr => "本地 OCR",
             _ => "不可用",
         };

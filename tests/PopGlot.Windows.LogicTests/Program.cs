@@ -101,6 +101,7 @@ internal static class Program
         Run("model recommendation pure heuristics, benchmark matching and evidence rules", ModelRecommendationTestsHelper.RunAllTests);
         Run("model recommendation UI pure helpers, evidence badge mapping and preference stability", ModelRecommendationUiTests);
         Run("caption buttons really render their icons", CaptionButtonsRenderTheirIcons);
+        Run("menu item styles never bind invalid MenuItem roles", MenuItemStylesHaveValidRoles);
         Run("page transitions have no text-damaging animations", NoTextDamagingPageTransitions);
         Run("text windows are opaque for ClearType", TextWindowsAreOpaque);
         Run("daily flows never open system dialogs", DailyFlowsUseInlineConfirmations);
@@ -1170,6 +1171,24 @@ internal static class Program
     }
 
     // ================= Fourth round: product-defect structural guards =================
+
+    /// <summary>
+    /// MenuItem 隐式样式曾用 Trigger Role="Separator" —— MenuItemRole 枚举
+    /// 没有该值，首个 MenuItem 解析隐式样式时抛 XamlParseException 直接
+    /// 崩溃进程（右下角快速切换菜单一打开就闪退）。分隔线必须由
+    /// Separator 控件的隐式样式渲染。
+    /// </summary>
+    private static void MenuItemStylesHaveValidRoles()
+    {
+        var controlsXaml = File.ReadAllText(Path.Combine(
+            FindProjectRoot(), "apps", "PopGlot.Windows", "Themes", "Controls.xaml"));
+        True(
+            !Regex.IsMatch(controlsXaml, @"Trigger\s+Property=""Role""\s+Value=""Separator"""),
+            "MenuItem 样式不得用 Role=Separator 触发器；MenuItemRole 枚举没有该值，会在首次加载隐式样式时崩溃");
+        True(
+            controlsXaml.Contains("<Style TargetType=\"Separator\">"),
+            "菜单分隔线应由 Separator 的隐式样式渲染");
+    }
 
     /// <summary>
     /// The caption template must render the Ui.Icon geometry itself — the old
@@ -3391,7 +3410,20 @@ internal static class Program
             Mode = TranslationMode.Auto,
         };
 
-        public ProviderRoute? TextRoute { get; set; }
+        public ProviderRoute? TextRoute { get; set; } = new(
+            new ProviderProfile
+            {
+                Id = "fake-profile",
+                Name = "Fake",
+                ApiBaseUrl = "https://api.example.com/v1",
+                // TextModel 故意留空：模拟「档案存在但模型未配置、凭据在
+                // 全局设置」的旧形态，让协调器走 StreamText 分支（与真实
+                // 旧版安装由 SeedFromLiveSettings 合成档案后的行为一致）。
+                TextModel = string.Empty,
+                SupportsText = true,
+                CredentialTarget = "PopGlot/provider/fake",
+            },
+            "PopGlot/provider/fake");
         public ProviderRoute? VisionRoute { get; set; }
         public ResolvedRoute? ScreenshotRoute { get; set; }
         public string? ApiKey { get; set; } = "fake-api-key";

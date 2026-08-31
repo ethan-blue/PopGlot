@@ -1176,7 +1176,7 @@ public partial class TranslationPanelWindow : Window
             {
                 return;
             }
-            CoreBridge.SaveSettings(settings with
+            _ = CoreBridge.SaveSettingsAsync(settings with
             {
                 SourceLanguage = SourceLanguage,
                 TargetLanguage = TargetLanguage,
@@ -1373,6 +1373,10 @@ public partial class TranslationPanelWindow : Window
         _closing = true;
         TtsService.Stop();
         CancelOperation();
+        // 面板关闭后重试不再可能发生：释放截图与重试闭包（闭包本身
+        // 捕获同一份 PNG 字节数组），避免已关闭面板长期钉住数 MB 内存。
+        _screenshot = null;
+        _retry = null;
         base.OnClosed(e);
     }
 

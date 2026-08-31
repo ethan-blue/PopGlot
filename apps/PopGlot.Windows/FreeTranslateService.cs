@@ -225,7 +225,12 @@ internal static class FreeTranslateService
     {
         if (Cache.Count >= CacheCapacity)
         {
-            Cache.Clear();
+            // 淘汰单个条目而不是清空整个缓存，保留其他翻译的命中。
+            var victim = Cache.Keys.FirstOrDefault();
+            if (victim is not null)
+            {
+                Cache.TryRemove(victim, out _);
+            }
         }
         Cache[key] = value;
     }
@@ -240,6 +245,9 @@ internal static class FreeTranslateService
     private static Task<FreeEngineHealth>? _healthProbe;
     private static FreeEngineHealth _lastHealth;
     private static int _probeSequence;
+
+    /// <summary>Most recent probe outcome; never triggers a network call.</summary>
+    public static FreeEngineHealth LastHealth => _lastHealth;
 
     /// <summary>
     /// Whether the free engine currently reaches a working endpoint. Cached

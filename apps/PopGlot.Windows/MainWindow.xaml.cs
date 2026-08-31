@@ -1,6 +1,8 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using ContextMenu = System.Windows.Controls.ContextMenu;
+using MenuItem = System.Windows.Controls.MenuItem;
 using PopGlot.Windows.Sections;
 using PopGlot.Windows.Services;
 
@@ -91,9 +93,11 @@ public partial class MainWindow : Window
         try
         {
             var settings = CoreBridge.GetSettings();
-            // Multi-service: the key may live on any profile's own credential
-            // target, never assume the legacy default slot.
-            var hasKey = CredentialStore.HasApiKey(ProfileManager.ResolveActiveCredentialTarget());
+            // 以实际生效的引擎配置为准（快速切换器可选「内置免费引擎」，
+            // 此时即使凭据库里有残留 key 也不算配置了模型服务）。
+            var activeProfile = ProfileManager.Load().TryGetActiveProfile();
+            var hasKey = activeProfile is not null &&
+                CredentialStore.HasApiKey(ProfileManager.ResolveCredentialTargetFor(activeProfile));
             var consent = ShellSettingsStore.Load().FreeEngineConsent;
             var (summary, tone) = DescribeEngine(settings, hasKey, consent);
             if (UsesFreeEngine(settings, hasKey, consent))
@@ -134,12 +138,18 @@ public partial class MainWindow : Window
         !settings.TargetsLocalRuntime &&
         consent != FreeEngineConsent.Denied;
 
-    /// <summary>Probes the free engine and paints the result into the footer.</summary>
+    /// <summary>
+    /// Probes the free engine and paints the result into the footer — but only
+    /// when the free engine is the active text route. With a configured
+    /// provider the footer must keep showing the active model; the probe
+    /// result is still cached and surfaces in the switcher menu.
+    /// </summary>
     private async Task UpdateFreeEngineHealthAsync(bool force)
     {
         try
         {
-            if (force)
+            var paintsFooter = IsActiveRouteFreeEngine();
+            if (force && paintsFooter)
             {
                 EngineSummary.Text = "免费引擎 · 检测中…";
             }
@@ -147,6 +157,10 @@ public partial class MainWindow : Window
             if (!System.Windows.Application.Current.Dispatcher.CheckAccess())
             {
                 return; // window may be gone; RefreshEngineStatus will repaint next time
+            }
+            if (!paintsFooter)
+            {
+                return;
             }
             if (health.Ok)
             {
@@ -158,7 +172,8 @@ public partial class MainWindow : Window
             {
                 EngineSummary.Text = "免费引擎不可用";
                 EngineDot.Background = (Brush)FindResource("WarningBrush");
-                EngineHealthButton.ToolTip = $"免费引擎检测失败：{health.Error} · 点击重新检测";
+                EngineHealthButton.ToolTip =
+                    $"免费引擎检测失败：{health.Error} · 点击重新检测；仍不可用会直接打开设置，可配置自己的模型服务";
             }
         }
         catch (Exception)
@@ -167,8 +182,194 @@ public partial class MainWindow : Window
         }
     }
 
-    private void EngineHealthButton_Click(object sender, RoutedEventArgs e) =>
-        _ = UpdateFreeEngineHealthAsync(force: true);
+    private bool IsActiveRouteFreeEngine()
+    {
+        try
+        {
+            var settings = CoreBridge.GetSettings();
+            var activeProfile = ProfileManager.Load().TryGetActiveProfile();
+            var hasKey = activeProfile is not null &&
+                CredentialStore.HasApiKey(ProfileManager.ResolveCredentialTargetFor(activeProfile));
+            var consent = ShellSettingsStore.Load().FreeEngineConsent;
+            return UsesFreeEngine(settings, hasKey, consent);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private async void EngineHealthButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button)
+        {
+            return;
+        }
+        ShowEngineSwitchMenu(button);
+        // 打开菜单的同时后台刷新一次免费引擎探测，让菜单里的状态尽量新鲜。
+        await UpdateFreeEngineHealthAsync(force: true);
+    }
+
+    /// <summary>
+    /// 右下角快速切换器：点击即列出已配置的文字/图片引擎，选中立即生效，
+    /// 不再需要绕进设置页。免费引擎是兜底线路，只展示状态不可选。
+    /// </summary>
+    private void ShowEngineSwitchMenu(Button anchor)
+    {
+        CoreProductConfig config;
+        try
+        {
+            config = ProfileManager.Load();
+        }
+        catch (Exception exception)
+        {
+            SetStatus($"无法加载引擎列表：{exception.Message}", StatusTone.Error);
+            return;
+        }
+
+        var menu = new ContextMenu();
+        var activeId = config.TryGetActiveProfile()?.Id;
+        var currentVisionId = config.VisionProfileId;
+
+        menu.Items.Add(MakeMenuHeader("文字引擎"));
+        var textProfiles = config.Profiles.Where(p => p.SupportsText).ToList();
+        if (textProfiles.Count == 0)
+        {
+            menu.Items.Add(MakeDisabledItem("尚未配置引擎"));
+        }
+        foreach (var profile in textProfiles)
+        {
+            var id = profile.Id;
+            var isActive = profile.Id == activeId;
+            var item = new MenuItem
+            {
+                Header = $"{profile.Name} · {profile.TextModel}" + (isActive ? "（当前）" : string.Empty),
+                FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
+                Icon = isActive ? MakeActiveCheck() : null,
+            };
+            item.Click += (_, _) => SwitchTextEngine(id);
+            menu.Items.Add(item);
+        }
+
+        // 免费引擎是可显式选择的文字线路（仅文字；截图视觉线路不变），
+        // 并附带最近一次探测结果，选中前就知道通不通。
+        var freeActive = config.PreferFreeEngine;
+        var freeState = FreeTranslateService.LastHealth.Ok
+            ? $"可用 · {FreeTranslateService.LastHealth.LatencyMs} ms"
+            : "当前不可用";
+        var freeItem = new MenuItem
+        {
+            Header = $"内置免费引擎 · {freeState} · 仅文字" + (freeActive ? "（当前）" : string.Empty),
+            FontWeight = freeActive ? FontWeights.SemiBold : FontWeights.Normal,
+            Icon = freeActive ? MakeActiveCheck() : null,
+        };
+        freeItem.Click += async (_, _) => await SwitchToFreeEngineAsync();
+        menu.Items.Add(freeItem);
+
+        menu.Items.Add(new Separator());
+        menu.Items.Add(MakeMenuHeader("图片引擎"));
+        var followActive = string.IsNullOrEmpty(currentVisionId);
+        var visionFollow = new MenuItem
+        {
+            Header = "跟随文字引擎" + (followActive ? "（当前）" : string.Empty),
+            FontWeight = followActive ? FontWeights.SemiBold : FontWeights.Normal,
+            Icon = followActive ? MakeActiveCheck() : null,
+        };
+        visionFollow.Click += (_, _) => SwitchVisionEngine(null);
+        menu.Items.Add(visionFollow);
+        foreach (var profile in config.Profiles.Where(p =>
+                     p.SupportsVision && !string.IsNullOrWhiteSpace(p.VisionModel)))
+        {
+            var id = profile.Id;
+            var isActive = profile.Id == currentVisionId;
+            var item = new MenuItem
+            {
+                Header = $"{profile.Name} · {profile.VisionModel}" + (isActive ? "（当前）" : string.Empty),
+                FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
+                Icon = isActive ? MakeActiveCheck() : null,
+            };
+            item.Click += (_, _) => SwitchVisionEngine(id);
+            menu.Items.Add(item);
+        }
+
+        menu.Items.Add(new Separator());
+        var manage = new MenuItem { Header = "管理引擎…" };
+        manage.Click += (_, _) => OpenSettings?.Invoke();
+        menu.Items.Add(manage);
+        var reprobe = new MenuItem { Header = "重新检测免费引擎" };
+        reprobe.Click += async (_, _) => await UpdateFreeEngineHealthAsync(force: true);
+        menu.Items.Add(reprobe);
+
+        menu.PlacementTarget = anchor;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        menu.PlacementRectangle = new Rect(0, 0, anchor.ActualWidth, anchor.ActualHeight);
+        menu.IsOpen = true;
+    }
+
+    private static TextBlock MakeActiveCheck() => new()
+    {
+        Text = "✓",
+        FontSize = 13,
+        FontWeight = FontWeights.Bold,
+        Foreground = (Brush)Application.Current.FindResource("AccentBrush"),
+    };
+
+    private static System.Windows.Controls.MenuItem MakeMenuHeader(string text) => new()
+    {
+        Header = text,
+        IsEnabled = false,
+        FontWeight = FontWeights.SemiBold,
+    };
+
+    private static System.Windows.Controls.MenuItem MakeDisabledItem(string text) => new()
+    {
+        Header = text,
+        IsEnabled = false,
+    };
+
+    private async void SwitchTextEngine(string profileId)
+    {
+        SetStatus("正在切换文字引擎…", StatusTone.Info);
+        // 持久化走后台：写盘（含杀软扫描）在 UI 线程上会造成窗口卡死。
+        var (ok, error) = await Task.Run(() =>
+        {
+            var success = ProfileManager.TrySwitchActiveProfile(profileId, out var message);
+            return (success, message);
+        });
+        SetStatus(ok ? "已切换文字引擎，后续翻译生效。" : error,
+            ok ? StatusTone.Success : StatusTone.Error);
+        RefreshEngineStatus();
+    }
+
+    private async void SwitchVisionEngine(string? profileId)
+    {
+        SetStatus("正在切换图片引擎…", StatusTone.Info);
+        var (ok, error) = await Task.Run(() =>
+        {
+            var success = ProfileManager.TrySwitchVisionProfile(profileId, out var message);
+            return (success, message);
+        });
+        SetStatus(
+            ok
+                ? (profileId is null ? "图片引擎已改为跟随文字引擎。" : "已切换图片引擎，后续截图翻译生效。")
+                : error,
+            ok ? StatusTone.Success : StatusTone.Error);
+        RefreshEngineStatus();
+    }
+
+    private async Task SwitchToFreeEngineAsync()
+    {
+        SetStatus("正在切换到内置免费引擎…", StatusTone.Info);
+        var (ok, error) = await Task.Run(() =>
+        {
+            var success = ProfileManager.TrySwitchToFreeEngine(out var message);
+            return (success, message);
+        });
+        SetStatus(
+            ok ? "已切换到内置免费引擎（仅文字翻译）。" : error,
+            ok ? StatusTone.Success : StatusTone.Error);
+        RefreshEngineStatus();
+    }
 
     private static (string Summary, StatusTone Tone) DescribeEngine(
         ProviderSettings settings, bool hasKey, FreeEngineConsent consent)
@@ -193,37 +394,21 @@ public partial class MainWindow : Window
     }
 
     private static string DescribeUploadNote(ProviderSettings settings, bool hasKey)
-
     {
-
         try
-
         {
-
             // Use the same profile resolver as screenshot execution. The Rust
-
             // legacy planner only sees mirrored settings and can describe a
-
             // different vision route than the one the user selected.
-
             var route = ProfileManager.ResolveRoute(settings, WindowsOcrService.IsSupported);
-
-            return route.ScreenshotPipeline == ScreenshotPipeline.VisionDirect
-
+            return route.ScreenshotPipeline is ScreenshotPipeline.VisionDirect or ScreenshotPipeline.VisionOcr
                 ? route.MayUploadImage ? "截图会发送到所选视觉服务" : "本地视觉服务，图片不离开本机"
-
                 : "截图不上传，使用本地 OCR";
-
         }
-
         catch (Exception)
-
         {
-
             return settings.TargetsLocalRuntime ? "本地模型" : "在线文本服务";
-
         }
-
     }
 
 
@@ -262,7 +447,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void ContentGrid_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        var compact = e.NewSize.Width < 900;
+        var compact = e.NewSize.Width < 880;
         TranslateSection.SetCompact(compact);
     }
 
@@ -338,6 +523,9 @@ public partial class MainWindow : Window
         {
             e.Cancel = true;
             Hide();
+            // 主窗口驻留托盘后释放工作集：隐藏状态下不需要保住渲染页，
+            // 任务管理器中的内存随之回落，重新显示时自动调回。
+            App.TrimWorkingSet();
             // The "still running" balloon shows at most once per install:
             // in-memory for this run, persisted so later runs never nag.
             if (!_closeHintShown && !ShellSettingsStore.Load().CloseHintShown)

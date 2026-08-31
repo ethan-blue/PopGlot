@@ -145,7 +145,7 @@ internal static partial class ThemeService
     //   SurfaceMuted secondary/read-only areas, list backgrounds
     //   SurfaceRaised popups, dropdown menus, floating overlays
     //   Input        editable controls
-    // Accent (indigo) is the brand only — success/warning/danger are separate
+    // Accent (azure blue) is the brand only — success/warning/danger are separate
     // hues, so "online/OK/default" never borrows the brand colour.
     //
     // Contrast budget (audited by tests/PopGlot.Windows.LogicTests via
@@ -166,12 +166,18 @@ internal static partial class ThemeService
         ("InputBrush", "#0E1014"),
         ("BorderSubtleBrush", "#2A303D"),
         ("BorderStrongBrush", "#626C82"),
-        ("AccentBrush", "#8A8FFF"),
-        ("AccentHoverBrush", "#A3A7FF"),
-        ("AccentPressedBrush", "#7376EE"),
-        ("AccentTextBrush", "#0B0C21"),
-        ("AccentSoftBrush", "#262850"),
-        ("AccentBorderBrush", "#6E74B8"),
+        ("AccentBrush", "#4D9FFF"),
+        ("AccentHoverBrush", "#6BABFF"),
+        ("AccentPressedBrush", "#3D82E8"),
+        ("AccentTextBrush", "#071224"),
+        ("AccentSoftBrush", "#152C4E"),
+        ("AccentBorderBrush", "#5E96E0"),
+        // 主按钮用品牌蓝系（深一档，配白字）：既保留品牌色又保证按钮
+        // 文字 AA 级对比；浅色 Accent 只用于强调/链接/选中。
+        ("PrimaryBrush", "#2563EB"),
+        ("PrimaryHoverBrush", "#1F55C7"),
+        ("PrimaryPressedBrush", "#1A47A8"),
+        ("PrimaryTextBrush", "#FFFFFF"),
         ("TextPrimaryBrush", "#EEF0F4"),
         ("TextSecondaryBrush", "#A3A9B4"),
         ("TextTertiaryBrush", "#8A93A2"),
@@ -197,12 +203,16 @@ internal static partial class ThemeService
         ("InputBrush", "#FFFFFF"),
         ("BorderSubtleBrush", "#D5DAE1"),
         ("BorderStrongBrush", "#8590A0"),
-        ("AccentBrush", "#5457E5"),
-        ("AccentHoverBrush", "#4548D6"),
-        ("AccentPressedBrush", "#3A3CC4"),
+        ("AccentBrush", "#1A63D8"),
+        ("AccentHoverBrush", "#1554BC"),
+        ("AccentPressedBrush", "#1147A0"),
         ("AccentTextBrush", "#FFFFFF"),
-        ("AccentSoftBrush", "#EDEDFE"),
-        ("AccentBorderBrush", "#7D82E8"),
+        ("AccentSoftBrush", "#E4EEFC"),
+        ("AccentBorderBrush", "#6D9FE5"),
+        ("PrimaryBrush", "#1A63D8"),
+        ("PrimaryHoverBrush", "#1554BC"),
+        ("PrimaryPressedBrush", "#1147A0"),
+        ("PrimaryTextBrush", "#FFFFFF"),
         ("TextPrimaryBrush", "#15171C"),
         ("TextSecondaryBrush", "#4D545F"),
         ("TextTertiaryBrush", "#656F7C"),

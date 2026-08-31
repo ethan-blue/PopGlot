@@ -100,6 +100,7 @@ internal sealed class ConfirmButton
             _armed = true;
             _button.Content = _armedContent;
             _button.Background = (Brush)_button.FindResource("DangerSoftBrush");
+            _button.Foreground = (Brush)_button.FindResource("DangerBrush");
             _timer.Start();
             return;
         }
@@ -117,6 +118,7 @@ internal sealed class ConfirmButton
         _armed = false;
         _button.Content = _normalContent;
         _button.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
+        _button.ClearValue(System.Windows.Controls.Control.ForegroundProperty);
     }
 }
 

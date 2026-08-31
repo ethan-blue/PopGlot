@@ -60,6 +60,9 @@ public static class ThemeAuditHelper
 
         // Accent text on accent button: >= 4.5:1
         AssertRatio(name, "AccentTextBrush", map["AccentTextBrush"], "AccentBrush", map["AccentBrush"], 4.5);
+
+        // Primary button: token text colour on the neutral primary fill: >= 4.5:1
+        AssertRatio(name, "PrimaryTextBrush", map["PrimaryTextBrush"], "PrimaryBrush", map["PrimaryBrush"], 4.5);
     }
 
     private static void AssertRatio(

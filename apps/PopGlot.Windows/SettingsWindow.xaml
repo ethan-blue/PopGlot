@@ -113,17 +113,22 @@
                     BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
                     Padding="30,11">
                 <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <Border x:Name="StatusDot" Width="7" Height="7" CornerRadius="4"
                                 Background="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center" />
                         <TextBlock x:Name="StatusTextBlock" Margin="9,0,0,0" FontSize="12"
-                                   VerticalAlignment="Center" MaxWidth="560"
+                                   VerticalAlignment="Center"
                                    TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                    AutomationProperties.LiveSetting="Polite"
                                    AutomationProperties.Name="状态"
                                    Foreground="{DynamicResource TextSecondaryBrush}" Text="就绪" />
                     </StackPanel>
-                    <StackPanel x:Name="SaveActionsPanel" Orientation="Horizontal"
+                    <StackPanel x:Name="SaveActionsPanel" Grid.Column="1" Orientation="Horizontal"
                                 HorizontalAlignment="Right" Visibility="Collapsed">
                         <!-- High-contrast draft badge: the warning chip cannot
                              blend into the bar the way a muted pill did. -->

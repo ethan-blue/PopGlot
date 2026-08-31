@@ -81,6 +81,7 @@
                   SelectionChanged="ModeComboBox_SelectionChanged">
             <ComboBoxItem Tag="LocalOcr">本地 OCR + 文本模型（推荐，最快、最省 Token、零截图上传）</ComboBoxItem>
             <ComboBoxItem Tag="Auto">本地优先自动（默认本地 OCR，仅在授权后需要时走视觉模型）</ComboBoxItem>
+            <ComboBoxItem Tag="VisionOcr">视觉识别 + 文本模型（无 OCR 语言包时识别更准，译文由文本模型流式生成）</ComboBoxItem>
             <ComboBoxItem Tag="VisionDirect">视觉模型直译（端到端多模态理解）</ComboBoxItem>
         </ComboBox>
 

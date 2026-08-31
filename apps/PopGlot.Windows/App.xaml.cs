@@ -473,6 +473,9 @@ public partial class App : Application
     {
         _activePanel?.Close();
         _activePanel = null;
+        // 面板关闭后把截图/渲染留下的临时页换出，避免常驻内存随使用次数
+        // 只增不减。真实分配不受影响，需要时系统会自动调页回来。
+        TrimWorkingSet();
     }
 
     private void CloseActiveOverlay()
@@ -685,7 +688,11 @@ public partial class App : Application
         }
         if (_settingsWindow is not null)
         {
+            // 退出路径必须绕过未保存草稿守卫：OnClosing 取消关闭会与
+            // Shutdown 纠缠导致退出卡死（设置页开着自定义模型时最明显）。
+            _settingsWindow.ForceClose = true;
             _settingsWindow.Close();
+            _settingsWindow = null;
         }
         Shutdown();
     }
@@ -729,6 +736,31 @@ public partial class App : Application
         [LibraryImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static partial bool ClientToScreen(nint window, ref NativePoint point);
+
+        [LibraryImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static partial bool SetProcessWorkingSetSize(nint process, nint minimum, nint maximum);
+
+        [LibraryImport("kernel32.dll")]
+        internal static partial nint GetCurrentProcess();
+    }
+
+    /// <summary>
+    /// 把进程工作集交还给系统（-1,-1 语义）。不改变已分配内存，只把暂不
+    /// 使用的页换出；常驻托盘、面板关闭后调用可显著降低任务管理器里的
+    /// 内存读数，需要时系统会自动把页调回。
+    /// </summary>
+    internal static void TrimWorkingSet()
+    {
+        try
+        {
+            _ = NativeMethods.SetProcessWorkingSetSize(
+                NativeMethods.GetCurrentProcess(), (nint)(-1), (nint)(-1));
+        }
+        catch (Exception)
+        {
+            // Best effort only; failure to trim must never affect UX.
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)]

@@ -1449,17 +1449,21 @@ fn parse_openai_chat_stream_event(
         .pointer("/choices/0/delta/content")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if value
+    let finished = value
         .pointer("/choices/0/finish_reason")
         .and_then(Value::as_str)
-        .is_some()
-    {
+        .is_some();
+    if !delta.is_empty() {
+        return Ok(Some(if finished {
+            ProviderStreamEvent::TextDeltaCompleted(delta.to_owned())
+        } else {
+            ProviderStreamEvent::TextDelta(delta.to_owned())
+        }));
+    }
+    if finished {
         return Ok(Some(ProviderStreamEvent::Completed));
     }
     let usage = openai_usage(&value);
-    if !delta.is_empty() {
-        return Ok(Some(ProviderStreamEvent::TextDelta(delta.to_owned())));
-    }
     if let Some((input, output, total)) = usage {
         return Ok(Some(ProviderStreamEvent::Usage {
             input,
@@ -2298,6 +2302,28 @@ mod tests {
 
     fn vision_request() -> TranslationRequest {
         TranslationRequest::vision(image(), LanguagePair::new("auto", "zh-CN"))
+    }
+
+    #[test]
+    fn chat_stream_final_chunk_keeps_delta_with_finish_reason() {
+        // Many OpenAI-compatible relays put the last content piece in the
+        // same frame as finish_reason; the delta must not be dropped.
+        let data = r#"{"choices":[{"delta":{"content":"你好"},"finish_reason":"stop"}]}"#;
+        match parse_openai_chat_stream_event(data) {
+            Ok(Some(ProviderStreamEvent::TextDeltaCompleted(text))) => {
+                assert_eq!(text, "你好");
+            }
+            other => panic!("expected TextDeltaCompleted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn chat_stream_finish_only_chunk_completes_without_delta() {
+        let data = r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#;
+        assert_eq!(
+            parse_openai_chat_stream_event(data),
+            Ok(Some(ProviderStreamEvent::Completed))
+        );
     }
 
     #[test]

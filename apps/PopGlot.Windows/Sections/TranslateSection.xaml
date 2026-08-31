@@ -107,7 +107,9 @@
             </Button>
 
             <!-- ================= Right: Target Pane (the result is the focus) ================= -->
-            <Border Grid.Column="2" Background="{DynamicResource SurfaceMutedBrush}"
+            <!-- 与左侧原文栏同底色同边框：左右卡片此前一白一灰，完成翻译时
+                 右侧观感与输入时不一致。 -->
+            <Border Grid.Column="2" Background="{DynamicResource InputBrush}"
                     CornerRadius="10" BorderBrush="{DynamicResource BorderSubtleBrush}"
                     BorderThickness="1" Padding="14,12">
                 <Grid>
@@ -163,6 +165,7 @@
                             <TextBlock x:Name="TranslateStatus" Style="{StaticResource Metadata}"
                                        Margin="10,0,0,0" VerticalAlignment="Center"
                                        MaxWidth="300" TextTrimming="CharacterEllipsis" Text="就绪"
+                                       ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                        AutomationProperties.LiveSetting="Polite"
                                        AutomationProperties.Name="翻译状态" />
                         </StackPanel>

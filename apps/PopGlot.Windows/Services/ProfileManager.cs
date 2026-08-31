@@ -155,6 +155,8 @@ internal enum ScreenshotPipeline
     Unavailable,
     LocalOcr,
     VisionDirect,
+    /// 视觉模型识别截图文字，译文由文本模型流式生成。
+    VisionOcr,
 }
 
 /// <summary>
@@ -180,6 +182,7 @@ internal sealed class CoreProductConfig
         SchemaVersion = source.SchemaVersion;
         ActiveProfileId = source.ActiveProfileId;
         VisionProfileId = source.VisionProfileId;
+        PreferFreeEngine = source.PreferFreeEngine;
         Profiles = source.Profiles.Select(p => new ProviderProfile(p)).ToList();
     }
 
@@ -188,6 +191,12 @@ internal sealed class CoreProductConfig
     public int SchemaVersion { get; set; } = 6;
     public string ActiveProfileId { get; set; } = string.Empty;
     public string? VisionProfileId { get; set; }
+
+    /// <summary>
+    /// 用户在快速切换器里显式选择了内置免费引擎作为文字线路：即使配置了
+    /// 其它服务，文字翻译也走免费引擎（仅文字；截图的视觉线路不受影响）。
+    /// </summary>
+    public bool PreferFreeEngine { get; set; }
     public List<ProviderProfile> Profiles { get; set; } = [];
 
     /// <summary>
@@ -196,8 +205,10 @@ internal sealed class CoreProductConfig
     /// provider, no model and no capability.
     /// </summary>
     public ProviderProfile? TryGetActiveProfile() =>
-        Profiles.FirstOrDefault(p => p.Id == ActiveProfileId && p.SupportsText) ??
-        Profiles.FirstOrDefault(p => p.SupportsText);
+        PreferFreeEngine
+            ? null
+            : Profiles.FirstOrDefault(p => p.Id == ActiveProfileId && p.SupportsText) ??
+              Profiles.FirstOrDefault(p => p.SupportsText);
 
     /// <summary>
     /// The explicit default vision service, or the text service when vision
@@ -545,6 +556,168 @@ internal static class ProfileManager
     }
 
     /// <summary>
+    /// Mirrors the default text profile (plus an optional same-protocol vision
+    /// profile) into the core so the running app uses it immediately. Shared
+    /// by the settings page and the footer quick switcher so both paths can
+    /// never diverge.
+    /// </summary>
+    public static void ApplyActiveToCore(CoreProductConfig config)
+    {
+        var current = CoreBridge.GetSettings();
+        var textProfile = config.TryGetActiveProfile();
+        if (textProfile is null)
+        {
+            // Nothing configured: keep user preferences but drop every
+            // provider detail, so the core can never mistake an empty setup
+            // for an OpenAI service.
+            CoreBridge.SaveSettings(current with
+            {
+                ProviderType = ProviderType.OpenAiCompatible,
+                ApiBaseUrl = "https://api.openai.com/v1",
+                TextEndpoint = "/chat/completions",
+                VisionEndpoint = "/chat/completions",
+                TextModel = string.Empty,
+                VisionModel = string.Empty,
+                ExtraHeaders = new Dictionary<string, string>(),
+                SupportsText = true,
+                SupportsVision = false,
+                VisionProvider = null,
+            });
+            return;
+        }
+
+        var settings = textProfile.ToProviderSettings(current);
+        var visionProfile = config.TryGetVisionProfile();
+        if (visionProfile is not null && visionProfile.SupportsVision &&
+            !string.IsNullOrWhiteSpace(visionProfile.VisionModel))
+        {
+            // Never fold by host/protocol. The selected vision profile is an
+            // independent route even when it happens to share the same URL.
+            settings = settings with
+            {
+                SupportsVision = true,
+                VisionProvider = new VisionProviderOverride(
+                    visionProfile.ProviderType,
+                    visionProfile.ApiBaseUrl,
+                    visionProfile.VisionEndpoint,
+                    visionProfile.VisionModel,
+                    visionProfile.ExtraHeaders,
+                    visionProfile.AnthropicVersion,
+                    visionProfile.AllowInsecureTls),
+            };
+        }
+        else
+        {
+            settings = settings with { SupportsVision = false, VisionProvider = null };
+        }
+        CoreBridge.SaveSettings(settings);
+    }
+
+    /// <summary>
+    /// One-click text engine switch for the footer quick switcher. Validates
+    /// readiness (key for cloud services, model and base URL) before saving,
+    /// then applies to the core so the next translation uses it.
+    /// </summary>
+    public static bool TrySwitchActiveProfile(string profileId, out string error)
+    {
+        var config = Load();
+        var profile = config.Profiles.FirstOrDefault(p => p.Id == profileId);
+        if (profile is null)
+        {
+            error = "该引擎已不存在，请刷新列表。";
+            return false;
+        }
+        if (!profile.SupportsText)
+        {
+            error = $"「{profile.Name}」未配置文字模型，不能作为文字引擎。";
+            return false;
+        }
+        if (!IsProfileExecutable(profile, out var notReady))
+        {
+            error = $"无法切换到「{profile.Name}」：{notReady}。";
+            return false;
+        }
+        config.ActiveProfileId = profile.Id;
+        config.PreferFreeEngine = false;
+        Save(config);
+        ApplyActiveToCore(config);
+        error = string.Empty;
+        return true;
+    }
+
+    /// <summary>
+    /// 把内置免费引擎选为当前文字线路（仅文字；截图的视觉线路不变）。
+    /// 先按出网策略校验：安全离线/断网/已拒绝授权时明确拒绝。
+    /// </summary>
+    public static bool TrySwitchToFreeEngine(out string error)
+    {
+        var settings = CoreBridge.GetSettings();
+        if (!OutboundPolicy.AllowsFreeEngine(settings, out var denial))
+        {
+            error = denial is null
+                ? "当前策略不允许使用免费引擎。"
+                : $"{denial.Message} {denial.ActionableSuggestion}".Trim();
+            return false;
+        }
+        var config = Load();
+        config.PreferFreeEngine = true;
+        Save(config);
+        ApplyActiveToCore(config);
+        error = string.Empty;
+        return true;
+    }
+
+    /// <summary>
+    /// One-click vision engine switch. Pass null to make vision follow the
+    /// text service again.
+    /// </summary>
+    public static bool TrySwitchVisionProfile(string? profileId, out string error)
+    {
+        var config = Load();
+        if (profileId is not null)
+        {
+            var profile = config.Profiles.FirstOrDefault(p => p.Id == profileId);
+            if (profile is null)
+            {
+                error = "该引擎已不存在，请刷新列表。";
+                return false;
+            }
+            if (!profile.SupportsVision || string.IsNullOrWhiteSpace(profile.VisionModel))
+            {
+                error = $"「{profile.Name}」未配置图片模型，不能作为图片引擎。";
+                return false;
+            }
+        }
+        config.VisionProfileId = profileId;
+        Save(config);
+        ApplyActiveToCore(config);
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool IsProfileExecutable(ProviderProfile profile, out string notReady)
+    {
+        if (string.IsNullOrWhiteSpace(profile.TextModel))
+        {
+            notReady = "缺少文字模型";
+            return false;
+        }
+        if (string.IsNullOrWhiteSpace(profile.ApiBaseUrl))
+        {
+            notReady = "缺少 Base URL";
+            return false;
+        }
+        if (!ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl) &&
+            !CredentialStore.HasApiKey(profile.CredentialTarget))
+        {
+            notReady = "尚未配置密钥";
+            return false;
+        }
+        notReady = string.Empty;
+        return true;
+    }
+
+    /// <summary>
     /// Deletes a profile from the configuration and updates active/vision defaults.
     /// </summary>
     public static bool TryDeleteProfile(
@@ -670,6 +843,28 @@ internal static class ProfileManager
                             : "所选图片服务当前被网络或安全模式阻止。");
         }
 
+        // 视觉识别 + 文本翻译：需要视觉服务可用，且有一条可执行的文字
+        // 线路来承接译文。缺任何一段都明确阻断，不静默降级。
+        if (settings.Mode == TranslationMode.VisionOcr)
+        {
+            if (visionUsable && providers.Vision is not null && providers.Text is not null)
+            {
+                return new(providers.Text, providers.Vision, ScreenshotPipeline.VisionOcr,
+                    visionLeavesDevice,
+                    visionLeavesDevice
+                        ? "已授权视觉模型识别截图文字（截图将上传），译文由文本模型流式生成。"
+                        : "本地视觉服务识别截图文字，译文由文本模型流式生成，图片不离开本机。");
+            }
+            return new(providers.Text, providers.Vision, ScreenshotPipeline.Unavailable, false,
+                providers.Vision is null
+                    ? "未配置可用的图片服务：视觉识别需要先选择图片模型。"
+                    : !visionUsable && visionLeavesDevice && !settings.AllowImageUploadInAuto
+                        ? "所选图片服务为远程服务，但当前未允许截图离开设备。"
+                        : providers.Text is null
+                            ? "视觉识别 + 文本翻译需要同时配置图片模型与文字模型。"
+                            : "所选图片服务当前被网络或安全模式阻止。");
+        }
+
         if (settings.Mode == TranslationMode.Auto && localOcrAvailable)
         {
             return new(providers.Text, providers.Vision, ScreenshotPipeline.LocalOcr, false,
@@ -678,14 +873,18 @@ internal static class ProfileManager
 
         if (visionUsable)
         {
+            // 自动模式下本地 OCR 不可用：云端视觉服务优先「识别 + 文本
+            // 翻译」两段式（译文由文本模型流式输出，通常更快更稳）；本
+            // 地视觉服务保持直译，一次调用即可，图片也不离开本机。
+            if (visionLeavesDevice && providers.Text is not null && providers.Vision is not null)
+            {
+                return new(providers.Text, providers.Vision, ScreenshotPipeline.VisionOcr, true,
+                    "本地 OCR 不可用；已授权视觉模型识别截图（截图将上传），译文由文本模型生成。");
+            }
             return new(providers.Text, providers.Vision, ScreenshotPipeline.VisionDirect, visionLeavesDevice,
-                settings.Mode == TranslationMode.VisionDirect
-                    ? visionLeavesDevice
-                        ? "已授权由独立视觉服务直接读取并翻译截图。"
-                        : "独立本地视觉服务将直接读取并翻译截图，图片不离开本机。"
-                    : visionLeavesDevice
-                        ? "本地 OCR 不可用；已授权回退到独立视觉服务并上传截图。"
-                        : "本地 OCR 不可用；将回退到本地视觉服务，图片不离开本机。");
+                visionLeavesDevice
+                    ? "本地 OCR 不可用；已授权回退到独立视觉服务并上传截图。"
+                    : "本地 OCR 不可用；将回退到本地视觉服务，图片不离开本机。");
         }
 
         if (localOcrAvailable)

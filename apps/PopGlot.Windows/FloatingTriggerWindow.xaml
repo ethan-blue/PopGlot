@@ -6,13 +6,14 @@
         Topmost="True" ShowActivated="False" ShowInTaskbar="False" ResizeMode="NoResize"
         WindowStartupLocation="Manual" Opacity="0" UseLayoutRounding="True"
         MouseLeftButtonDown="Window_MouseLeftButtonDown"
-        MouseEnter="Window_MouseEnter" MouseLeave="Window_MouseLeave">
+        MouseEnter="Window_MouseEnter" MouseLeave="Window_MouseLeave"
+        AutomationProperties.Name="翻译选中内容">
 
     <Grid Margin="6">
         <Border x:Name="ButtonSurface" Width="30" Height="30" CornerRadius="15"
                 Background="{DynamicResource SurfaceBrush}"
                 BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1.5"
-                Cursor="Hand">
+                Cursor="Hand" ToolTip="点击翻译当前选中内容">
             <Border.Effect>
                 <DropShadowEffect BlurRadius="12" ShadowDepth="3" Opacity="0.35" Color="#000000" />
             </Border.Effect>

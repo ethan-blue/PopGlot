@@ -62,6 +62,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     private ConfirmButton? _deleteConfirm;
     private ConfirmButton? _clearKeyConfirm;
     private bool _compactEditor;
+    private readonly System.Windows.Threading.DispatcherTimer _recommendationDebounce;
 
     /// <summary>Raised when the section needs to show a status message.</summary>
     internal event Action<string, StatusTone>? StatusChanged;
@@ -79,6 +80,17 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     {
         InitializeComponent();
         HookEditorDirtyTracking();
+        // 模型输入每次按键都重建推荐 chips 会造成持续 GC 压力；合并为
+        // 停顿 250ms 后的一次刷新，预设/协议切换仍走立即刷新。
+        _recommendationDebounce = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(250),
+        };
+        _recommendationDebounce.Tick += (_, _) =>
+        {
+            _recommendationDebounce.Stop();
+            RefreshRecommendations();
+        };
         _deleteConfirm = ConfirmButton.Attach(DeleteServiceButton, "确认删除？", DeleteSelectedProfile);
         _clearKeyConfirm = ConfirmButton.Attach(ClearKeyButton, "确认清除？", ClearKeyForCurrentProfile);
     }
@@ -177,7 +189,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 MarkEditorDirty();
                 if (!_loading)
                 {
-                    RefreshRecommendations();
+                    // 按键级重建推荐 chips 的开销不小，走防抖合并。
+                    _recommendationDebounce.Stop();
+                    _recommendationDebounce.Start();
                 }
             }));
         void WatchToggle(System.Windows.Controls.Primitives.ToggleButton toggle)
@@ -661,6 +675,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 return;
             }
             config.ActiveProfileId = profile.Id;
+            config.PreferFreeEngine = false;
             ProfileManager.Save(config);
             ApplyToCore(config);
             RefreshProfilesList();
@@ -767,6 +782,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             var config = ProfileManager.Load();
             config.ActiveProfileId = option.Id;
+            config.PreferFreeEngine = false;
             ProfileManager.Save(config);
             ApplyToCore(config);
             RefreshProfilesList();
@@ -804,60 +820,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     }
 
     /// <summary>
-    /// Mirrors the default text profile (plus an optional same-protocol vision
-    /// profile) into the core so the running app uses it now.
+    /// Mirrors the active profile into the core via the shared implementation
+    /// (also used by the footer quick switcher) so both paths stay identical.
     /// </summary>
-    private static void ApplyToCore(CoreProductConfig config)
-    {
-        var current = CoreBridge.GetSettings();
-        var textProfile = config.TryGetActiveProfile();
-        if (textProfile is null)
-        {
-            // Nothing configured: keep user preferences but drop every
-            // provider detail, so the core can never mistake an empty setup
-            // for an OpenAI service.
-            CoreBridge.SaveSettings(current with
-            {
-                ProviderType = ProviderType.OpenAiCompatible,
-                ApiBaseUrl = "https://api.openai.com/v1",
-                TextEndpoint = "/chat/completions",
-                VisionEndpoint = "/chat/completions",
-                TextModel = string.Empty,
-                VisionModel = string.Empty,
-                ExtraHeaders = new Dictionary<string, string>(),
-                SupportsText = true,
-                SupportsVision = false,
-                VisionProvider = null,
-            });
-            return;
-        }
-
-        var settings = textProfile.ToProviderSettings(current);
-        var visionProfile = config.TryGetVisionProfile();
-        if (visionProfile is not null && visionProfile.SupportsVision &&
-            !string.IsNullOrWhiteSpace(visionProfile.VisionModel))
-        {
-            // Never fold by host/protocol. The selected vision profile is an
-            // independent route even when it happens to share the same URL.
-            settings = settings with
-            {
-                SupportsVision = true,
-                VisionProvider = new VisionProviderOverride(
-                    visionProfile.ProviderType,
-                    visionProfile.ApiBaseUrl,
-                    visionProfile.VisionEndpoint,
-                    visionProfile.VisionModel,
-                    visionProfile.ExtraHeaders,
-                    visionProfile.AnthropicVersion,
-                    visionProfile.AllowInsecureTls),
-            };
-        }
-        else
-        {
-            settings = settings with { SupportsVision = false, VisionProvider = null };
-        }
-        CoreBridge.SaveSettings(settings);
-    }
+    private static void ApplyToCore(CoreProductConfig config) =>
+        ProfileManager.ApplyActiveToCore(config);
 
     internal void SelectProfileInList(string profileId)
     {
@@ -1071,7 +1038,17 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         DeleteServiceButton.Visibility = Visibility.Collapsed;
         UpdateEditorIdentity(ServiceNameTextBox.Text, type, baseUrl, preset == "ollama");
         RefreshRecommendations();
-        MarkEditorDirty();
+        if (_isAdding)
+        {
+            // 新建流程里应用预设只是进入第二步，用户还没有真正配置任何
+            // 内容：此时把预设状态当作新的干净基线，返回/关闭不再弹出
+            // 「未保存修改」守卫。编辑既有服务时保持原判脏逻辑。
+            ClearEditorDirty();
+        }
+        else
+        {
+            MarkEditorDirty();
+        }
 
         StatusChanged?.Invoke(note, StatusTone.Info);
         if (isCustom)
@@ -1991,6 +1968,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             if (isFirstService || wasActive)
             {
                 config.ActiveProfileId = draft.Id;
+                config.PreferFreeEngine = false;
             }
 
             try

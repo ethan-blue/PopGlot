@@ -23,6 +23,7 @@ internal static partial class CoreBridge
     };
 
     private static readonly Lock SettingsGate = new();
+    private static readonly SemaphoreSlim SaveQueue = new(1, 1);
     private static ProviderSettings? _cachedSettings;
 
     public static void Initialize()
@@ -74,6 +75,23 @@ internal static partial class CoreBridge
         }
     }
 
+    /// <summary>
+    /// 后台线程执行设置持久化（Rust 侧写盘含 flush+rename，慢磁盘/杀软
+    /// 扫描时可达秒级）。排队串行以保持调用顺序，UI 线程只发起不等待。
+    /// </summary>
+    public static async Task SaveSettingsAsync(ProviderSettings settings)
+    {
+        await SaveQueue.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await Task.Run(() => SaveSettings(settings)).ConfigureAwait(false);
+        }
+        finally
+        {
+            SaveQueue.Release();
+        }
+    }
+
     /// <summary>Asks the core which screenshot pipeline the settings imply.</summary>
     public static RoutingDecision PlanScreenshotRoute(bool localOcrAvailable, bool credentialPresent) =>
         EnsureSuccess<RoutingDecision>(Invoke(() => NativeMethods.PlanScreenshotRoute(
@@ -106,7 +124,7 @@ internal static partial class CoreBridge
         return RunCancellableAsync(
             () => EnsureSuccess<TranslationResponse>(Invoke(
                 () => NativeMethods.TranslateVisionV3(
-                    effectiveKey, string.Empty, draftJson, "image/png", imageBase64,
+                    effectiveKey, effectiveKey, draftJson, "image/png", imageBase64,
                     sourceLang, targetLang, reqId))),
             reqId,
             cancellationToken);
@@ -350,7 +368,7 @@ internal static partial class CoreBridge
             var completionTask = ExecuteStreamRequestAsync(
                 activeBuffer,
                 (cb, userData) => NativeMethods.TranslateVisionDraftStreamV1(
-                    effectiveKey, string.Empty, draftJson, "image/png", imageBase64,
+                    effectiveKey, effectiveKey, draftJson, "image/png", imageBase64,
                     sourceLang, targetLang, reqId, cb, userData),
                 reqId,
                 cancellationToken);
@@ -834,6 +852,8 @@ internal enum TranslationMode
     Auto,
     LocalOcr,
     VisionDirect,
+    /// 视觉模型识别截图文字，译文由文本模型翻译。
+    VisionOcr,
 }
 
 internal enum ProviderType

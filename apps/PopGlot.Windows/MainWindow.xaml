@@ -103,33 +103,41 @@
             <Border Grid.Row="2" Background="{DynamicResource SidebarBrush}"
                     BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
                     Padding="24,5">
+                <!-- 两列布局：状态占弹性列（超长省略），引擎切换器固定右列，
+                     不再互相挤压重叠。 -->
                 <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <Border x:Name="StatusDot" Width="6" Height="6" CornerRadius="3"
+                        <Border x:Name="StatusDot" Width="7" Height="7" CornerRadius="3.5"
                                 Background="{DynamicResource AccentBrush}" VerticalAlignment="Center" />
-                        <TextBlock x:Name="StatusTextBlock" Margin="8,0,0,0" FontSize="11"
-                                   VerticalAlignment="Center" MaxWidth="560"
+                        <TextBlock x:Name="StatusTextBlock" Margin="8,0,0,0" FontSize="11.5"
+                                   VerticalAlignment="Center"
                                    TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                    AutomationProperties.LiveSetting="Polite"
                                    AutomationProperties.Name="状态"
                                    Foreground="{DynamicResource TextSecondaryBrush}" Text="就绪" />
                     </StackPanel>
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                        <Button x:Name="EngineHealthButton" Style="{StaticResource GhostButton}"
-                                VerticalAlignment="Center" Margin="0,0,8,0"
-                                Padding="7,4" AutomationProperties.Name="翻译引擎状态"
-                                ToolTip="翻译引擎连通性 · 点击重新检测"
-                                Click="EngineHealthButton_Click">
-                            <StackPanel Orientation="Horizontal">
-                                <Border x:Name="EngineDot" Width="6" Height="6" CornerRadius="3"
-                                        Background="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center" />
-                                <TextBlock x:Name="EngineSummary" Margin="7,0,2,0" FontSize="11"
-                                           VerticalAlignment="Center" MaxWidth="400"
-                                           TextTrimming="CharacterEllipsis"
-                                           Foreground="{DynamicResource TextTertiaryBrush}" Text="内置免费引擎" />
-                            </StackPanel>
-                        </Button>
-                    </StackPanel>
+                    <Button x:Name="EngineHealthButton" Grid.Column="1" Style="{StaticResource GhostButton}"
+                            VerticalAlignment="Center"
+                            Padding="9,4" AutomationProperties.Name="翻译引擎与快速切换"
+                            ToolTip="点击快速切换文字/图片引擎；查看免费引擎状态"
+                            Click="EngineHealthButton_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <Border x:Name="EngineDot" Width="7" Height="7" CornerRadius="3.5"
+                                    Background="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center" />
+                            <TextBlock x:Name="EngineSummary" Margin="7,0,4,0" FontSize="11.5"
+                                       VerticalAlignment="Center" MaxWidth="320"
+                                       TextTrimming="CharacterEllipsis"
+                                       ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" Text="内置免费引擎" />
+                            <Path Width="9" Height="5" Stretch="Uniform" VerticalAlignment="Center"
+                                  Fill="{DynamicResource TextTertiaryBrush}" Data="M 0 0 L 5 5 L 10 0 Z" />
+                        </StackPanel>
+                    </Button>
                 </Grid>
             </Border>
         </Grid>

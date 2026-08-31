@@ -14,13 +14,34 @@
             <Setter Property="Padding" Value="0" />
             <Setter Property="Margin" Value="0,0,0,8" />
             <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ListBoxItem">
-                        <ContentPresenter />
+                        <!-- 内容由行卡片自绘；这里只补键盘焦点与选中态，
+                             否则方向键导航完全不可见。 -->
+                        <Border x:Name="RowBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="10">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="RowBorder" Property="BorderBrush"
+                                        Value="{DynamicResource AccentBorderBrush}" />
+                                <Setter TargetName="RowBorder" Property="Background"
+                                        Value="{DynamicResource SurfaceMutedBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="RowBorder" Property="Background"
+                                        Value="{DynamicResource SurfaceHoverBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -36,7 +57,7 @@
         <Style x:Key="EditorTextField" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
             <Setter Property="Height" Value="40" />
             <Setter Property="MinWidth" Value="0" />
-            <Setter Property="Padding" Value="12,0" />
+            <Setter Property="Padding" Value="11,0" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
         <Style x:Key="EditorComboField" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
@@ -46,7 +67,7 @@
         <Style x:Key="EditorPasswordField" TargetType="PasswordBox" BasedOn="{StaticResource {x:Type PasswordBox}}">
             <Setter Property="Height" Value="40" />
             <Setter Property="MinWidth" Value="0" />
-            <Setter Property="Padding" Value="12,0" />
+            <Setter Property="Padding" Value="11,0" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
         <Style x:Key="EditorSectionTitle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
@@ -199,12 +220,19 @@
                                                       Fill="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                             </Border>
                                             <StackPanel Grid.Column="1" Margin="9,0,10,0" VerticalAlignment="Center">
-                                                <StackPanel Orientation="Horizontal">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
                                                     <TextBlock Text="{Binding Name}" FontSize="13.5" FontWeight="SemiBold"
-                                                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                                                    <Border Visibility="{Binding IsDefaultBadge}" Style="{StaticResource StatusPill}"
-                                                            Margin="8,0,0,0" Padding="6,1"><TextBlock Text="文字默认" FontSize="10" /></Border>
-                                                </StackPanel>
+                                                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                                               ToolTip="{Binding Name}" />
+                                                    <Border Grid.Column="1" Visibility="{Binding IsDefaultBadge}" Style="{StaticResource StatusPill}"
+                                                            Margin="8,0,0,0" Padding="6,1" VerticalAlignment="Center">
+                                                        <TextBlock Text="文字默认" FontSize="11" />
+                                                    </Border>
+                                                </Grid>
                                                 <TextBlock Text="{Binding Summary}" Style="{StaticResource Caption}"
                                                            Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
                                             </StackPanel>
@@ -425,6 +453,7 @@
                                         <CheckBox x:Name="UseTextModelForVisionCheckBox"
                                                   Content="同一模型同时用于文字与图片"
                                                   Margin="2,10,0,0"
+                                                  Style="{StaticResource SwitchCheckBox}"
                                                   Checked="UseTextModelForVision_Changed"
                                                   Unchecked="UseTextModelForVision_Changed" />
                                         <TextBlock Text="配置了文字模型即启用文字路线；配置了图片模型即启用图片路线，不需要额外测试或能力开关。"
@@ -475,7 +504,8 @@
                                                     <!-- Kept hidden for schema/editor compatibility; runtime roles are derived from model fields. -->
                                                     <CheckBox x:Name="SupportsTextCheckBox" Visibility="Collapsed"/>
                                                     <CheckBox x:Name="SupportsVisionCheckBox" Visibility="Collapsed"/>
-                                                    <CheckBox x:Name="AllowInsecureTlsCheckBox" Content="信任自签名 TLS 证书" Margin="0,2,0,0"/>
+                                                    <CheckBox x:Name="AllowInsecureTlsCheckBox" Content="信任自签名 TLS 证书" Margin="0,4,0,0"
+                                                  Style="{StaticResource SwitchCheckBox}"/>
                                                     <TextBlock Text="仅用于你信任的本地或私有服务。" Style="{StaticResource Caption}" Margin="24,4,0,0"/>
                                                 </StackPanel>
                                             </Grid>
@@ -488,15 +518,17 @@
 
                     <Border x:Name="DraftGuardBar" Grid.Row="2" Visibility="Collapsed" Margin="0,10,0,0" Padding="12,10" CornerRadius="8"
                             Background="{DynamicResource WarningSoftBrush}" BorderBrush="{DynamicResource WarningBrush}" BorderThickness="1.5">
-                        <Grid>
-                            <TextBlock x:Name="DraftGuardText" VerticalAlignment="Center" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource WarningBrush}" FontSize="12.5" TextTrimming="CharacterEllipsis"/>
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                <Button x:Name="DraftSaveButton" Content="保存并继续" Style="{StaticResource PrimaryButton}" Padding="13,6" Click="DraftSave_Click"/>
-                                <Button x:Name="DraftDiscardButton" Content="放弃修改" Style="{StaticResource GhostButton}" Padding="11,6" Margin="8,0,0,0" Click="DraftDiscard_Click"/>
-                                <Button x:Name="DraftCancelButton" Content="取消" Style="{StaticResource GhostButton}" Padding="11,6" Margin="8,0,0,0" Click="DraftCancel_Click"/>
+                        <!-- 说明文字独占一行并可换行：旧布局把文字和三个按钮
+                             挤在同一行，窄面板上按钮直接压在省略号文字上。 -->
+                        <StackPanel>
+                            <TextBlock x:Name="DraftGuardText" FontWeight="SemiBold" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource WarningBrush}" FontSize="12.5"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                                <Button x:Name="DraftCancelButton" Content="取消" Style="{StaticResource GhostButton}" Click="DraftCancel_Click"/>
+                                <Button x:Name="DraftDiscardButton" Content="放弃修改" Style="{StaticResource GhostButton}" Margin="8,0,0,0" Click="DraftDiscard_Click"/>
+                                <Button x:Name="DraftSaveButton" Content="保存并继续" Style="{StaticResource PrimaryButton}" Margin="8,0,0,0" Click="DraftSave_Click"/>
                             </StackPanel>
-                        </Grid>
+                        </StackPanel>
                     </Border>
 
                     <Border x:Name="EditorActionBar" Grid.Row="3" Margin="0,10,0,0" Padding="0,10,0,0" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0">

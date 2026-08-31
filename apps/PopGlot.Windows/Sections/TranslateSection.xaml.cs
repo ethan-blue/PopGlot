@@ -491,7 +491,6 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         TranslateResultSpeakButton.IsEnabled = state.AreResultActionsEnabled;
         TranslateResultCopyButton.IsEnabled = state.AreResultActionsEnabled;
         TranslateStarButton.IsEnabled = state.AreResultActionsEnabled;
-        TranslateSwapButton.IsEnabled = state.AreResultActionsEnabled;
 
         TranslateExplanation.Text = state.ExplanationText;
         TranslateExplanationBox.Visibility = state.IsExplanationVisible ? Visibility.Visible : Visibility.Collapsed;
@@ -524,7 +523,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             {
                 return;
             }
-            CoreBridge.SaveSettings(settings with
+            _ = CoreBridge.SaveSettingsAsync(settings with
             {
                 SourceLanguage = source,
                 TargetLanguage = target,

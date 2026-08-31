@@ -177,8 +177,12 @@ internal sealed class TranslationCoordinator
 
             var settings = _executor.GetSettings();
             var (textRoute, _) = _executor.ResolveRoutes();
+            // 没有生效的引擎档案（未配置，或快速切换器选了免费引擎）时，
+            // 绝不从旧版默认凭据槽取 key：残留 key 会把空模型名的请求
+            // 打到 Provider 上然后报「尚未配置文本模型」。旧版单服务安装
+            // 由 ProfileManager 合成档案，不依赖这个回退。
             var textApiKey = textRoute is null
-                ? _executor.LoadApiKey(ProfileManager.ResolveActiveCredentialTarget())
+                ? null
                 : _executor.LoadApiKey(textRoute.CredentialTarget);
             var textRuntimeSettings = textRoute?.Profile.ToProviderSettings(settings);
             var isLocal = textRuntimeSettings?.TargetsLocalRuntime ?? settings.TargetsLocalRuntime;
@@ -422,7 +426,8 @@ internal sealed class TranslationCoordinator
             var pipelineLabel = "本地 OCR";
             var routingReason = route.ExplanationZh;
 
-            if (route.ScreenshotPipeline == ScreenshotPipeline.VisionDirect && visionRoute is not null)
+            if (route.ScreenshotPipeline is ScreenshotPipeline.VisionDirect or ScreenshotPipeline.VisionOcr &&
+                visionRoute is not null)
             {
                 session.Stage = TranslationSessionStage.Translating;
                 onStageChanged?.Invoke(session.Stage);
@@ -464,6 +469,50 @@ internal sealed class TranslationCoordinator
                     pipelineLabel = visionRuntimeSettings.TargetsLocalRuntime
                         ? "本地视觉模型"
                         : "视觉模型 · 独立服务";
+
+                    // 两段式：视觉模型只取它的 transcription（识别原文），
+                    // 译文交给文本模型流式生成。视觉调用自己的译文被丢弃。
+                    if (route.ScreenshotPipeline == ScreenshotPipeline.VisionOcr)
+                    {
+                        var recognized = response.Result.Transcription?.Trim();
+                        if (string.IsNullOrWhiteSpace(recognized))
+                        {
+                            throw new InvalidOperationException(
+                                "视觉模型没有返回识别文字，无法交给文本模型翻译。可改用「视觉模型直译」，或换识别更稳的图片模型。");
+                        }
+
+                        progress?.Report(new TranslationStreamUpdate(
+                            SessionId: session.SessionId,
+                            Epoch: epoch,
+                            Kind: TranslationStreamUpdateKind.Reset,
+                            Delta: string.Empty,
+                            AccumulatedText: string.Empty,
+                            AccumulatedCharCount: 0));
+
+                        session.SourceText = recognized;
+                        session.Transcription = recognized;
+                        session.Stage = TranslationSessionStage.Translating;
+                        onStageChanged?.Invoke(session.Stage);
+
+                        var textStopwatch = Stopwatch.StartNew();
+                        response = await TranslateRecognizedTextAsync(
+                            session,
+                            recognized,
+                            sourceLang,
+                            targetLang,
+                            settings,
+                            textRuntimeSettings,
+                            textApiKey,
+                            epoch,
+                            progress,
+                            onStageChanged,
+                            cancellationToken);
+                        textStopwatch.Stop();
+                        networkElapsedMs += (ulong)textStopwatch.ElapsedMilliseconds;
+                        pipelineLabel = visionRuntimeSettings.TargetsLocalRuntime
+                            ? "本地视觉识别 + 文本模型"
+                            : "视觉识别 + 文本模型";
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -599,74 +648,19 @@ internal sealed class TranslationCoordinator
                 onStageChanged?.Invoke(session.Stage);
 
                 var localNetStopwatch = Stopwatch.StartNew();
-                var localStartTicks = Stopwatch.GetTimestamp();
 
-                if (textRuntimeSettings is not null &&
-                    (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))
-                {
-                    var textStream = _executor.StreamTextDraft(
-                        textRuntimeSettings,
-                        textApiKey ?? string.Empty,
-                        recognized,
-                        sourceLang,
-                        targetLang,
-                        session.SessionId,
-                        epoch,
-                        cancellationToken);
-                    response = await PumpStreamAsync(
-                        textStream,
-                        session,
-                        epoch,
-                        localStartTicks,
-                        progress,
-                        onStageChanged,
-                        cancellationToken);
-                }
-                else if (!string.IsNullOrWhiteSpace(textApiKey) || (textRuntimeSettings?.TargetsLocalRuntime ?? false))
-                {
-                    var textStream = _executor.StreamText(
-                        textApiKey,
-                        recognized,
-                        sourceLang,
-                        targetLang,
-                        session.SessionId,
-                        epoch,
-                        cancellationToken);
-                    response = await PumpStreamAsync(
-                        textStream,
-                        session,
-                        epoch,
-                        localStartTicks,
-                        progress,
-                        onStageChanged,
-                        cancellationToken);
-                }
-                else
-                {
-                    if (!OutboundPolicy.AllowsFreeEngine(settings, out var freeDenial))
-                    {
-                        throw new InvalidOperationException(
-                            freeDenial is null ? "未允许出网翻译。" : $"{freeDenial.Message} {freeDenial.ActionableSuggestion}".Trim());
-                    }
-
-                    response = await _executor.TranslateFreeAsync(recognized, sourceLang, targetLang, cancellationToken);
-                    progress?.Report(new TranslationStreamUpdate(
-                        SessionId: session.SessionId,
-                        Epoch: epoch,
-                        Kind: TranslationStreamUpdateKind.Reset,
-                        Delta: string.Empty,
-                        AccumulatedText: string.Empty,
-                        AccumulatedCharCount: 0));
-                    progress?.Report(new TranslationStreamUpdate(
-                        SessionId: session.SessionId,
-                        Epoch: epoch,
-                        Kind: TranslationStreamUpdateKind.Delta,
-                        Delta: response.Result.TranslatedText,
-                        AccumulatedText: response.Result.TranslatedText,
-                        AccumulatedCharCount: response.Result.TranslatedText.Length,
-                        Ttft: Stopwatch.GetElapsedTime(localStartTicks, Stopwatch.GetTimestamp()),
-                        IsPartial: true));
-                }
+                response = await TranslateRecognizedTextAsync(
+                    session,
+                    recognized,
+                    sourceLang,
+                    targetLang,
+                    settings,
+                    textRuntimeSettings,
+                    textApiKey,
+                    epoch,
+                    progress,
+                    onStageChanged,
+                    cancellationToken);
 
                 localNetStopwatch.Stop();
                 networkElapsedMs = (ulong)localNetStopwatch.ElapsedMilliseconds;
@@ -729,6 +723,82 @@ internal sealed class TranslationCoordinator
             onStageChanged?.Invoke(session.Stage);
             return session;
         }
+    }
+
+    /// <summary>
+    /// 把已识别的截图文字送入统一文字翻译线路：优先文本服务草稿流，其次
+    /// 全局文本设置，最后按授权使用内置免费引擎。本地 OCR 与视觉识别两
+    /// 条管线在此汇合，避免两份几乎相同的分支漂移。
+    /// </summary>
+    private async Task<TranslationResponse> TranslateRecognizedTextAsync(
+        TranslationSession session,
+        string recognized,
+        string sourceLang,
+        string targetLang,
+        ProviderSettings settings,
+        ProviderSettings? textRuntimeSettings,
+        string? textApiKey,
+        long epoch,
+        IProgress<TranslationStreamUpdate>? progress,
+        Action<TranslationSessionStage>? onStageChanged,
+        CancellationToken cancellationToken)
+    {
+        var startTicks = Stopwatch.GetTimestamp();
+
+        if (textRuntimeSettings is not null &&
+            (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))
+        {
+            var textStream = _executor.StreamTextDraft(
+                textRuntimeSettings,
+                textApiKey ?? string.Empty,
+                recognized,
+                sourceLang,
+                targetLang,
+                session.SessionId,
+                epoch,
+                cancellationToken);
+            return await PumpStreamAsync(
+                textStream, session, epoch, startTicks, progress, onStageChanged, cancellationToken);
+        }
+
+        if (!string.IsNullOrWhiteSpace(textApiKey) || (textRuntimeSettings?.TargetsLocalRuntime ?? false))
+        {
+            var textStream = _executor.StreamText(
+                textApiKey!,
+                recognized,
+                sourceLang,
+                targetLang,
+                session.SessionId,
+                epoch,
+                cancellationToken);
+            return await PumpStreamAsync(
+                textStream, session, epoch, startTicks, progress, onStageChanged, cancellationToken);
+        }
+
+        if (!OutboundPolicy.AllowsFreeEngine(settings, out var freeDenial))
+        {
+            throw new InvalidOperationException(
+                freeDenial is null ? "未允许出网翻译。" : $"{freeDenial.Message} {freeDenial.ActionableSuggestion}".Trim());
+        }
+
+        var response = await _executor.TranslateFreeAsync(recognized, sourceLang, targetLang, cancellationToken);
+        progress?.Report(new TranslationStreamUpdate(
+            SessionId: session.SessionId,
+            Epoch: epoch,
+            Kind: TranslationStreamUpdateKind.Reset,
+            Delta: string.Empty,
+            AccumulatedText: string.Empty,
+            AccumulatedCharCount: 0));
+        progress?.Report(new TranslationStreamUpdate(
+            SessionId: session.SessionId,
+            Epoch: epoch,
+            Kind: TranslationStreamUpdateKind.Delta,
+            Delta: response.Result.TranslatedText,
+            AccumulatedText: response.Result.TranslatedText,
+            AccumulatedCharCount: response.Result.TranslatedText.Length,
+            Ttft: Stopwatch.GetElapsedTime(startTicks, Stopwatch.GetTimestamp()),
+            IsPartial: true));
+        return response;
     }
 
     private static async Task<TranslationResponse> PumpStreamAsync(

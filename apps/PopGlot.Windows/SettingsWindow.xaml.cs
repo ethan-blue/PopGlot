@@ -534,14 +534,14 @@ public partial class SettingsWindow : Window
             StatusTone.Success => "SuccessBrush",
             StatusTone.Warning => "WarningBrush",
             StatusTone.Error => "DangerBrush",
-            _ => "TextSecondaryBrush",
+            _ => "AccentBrush",
         });
         StatusDot.Background = (Brush)FindResource(tone switch
         {
             StatusTone.Success => "SuccessBrush",
             StatusTone.Warning => "WarningBrush",
             StatusTone.Error => "DangerBrush",
-            _ => "TextTertiaryBrush",
+            _ => "AccentBrush",
         });
     }
 
@@ -569,10 +569,21 @@ public partial class SettingsWindow : Window
         MaximizeBtn.ToolTip = WindowState == WindowState.Maximized ? "向下还原" : "最大化";
     }
 
+    /// <summary>
+    /// App 退出时强制关闭：跳过未保存草稿守卫，否则 OnClosing 取消关闭
+    /// 与 Shutdown 相互纠缠会让进程卡死在退出路径上。
+    /// </summary>
+    internal bool ForceClose { get; set; }
+
     protected override void OnClosing(CancelEventArgs e)
     {
         // Resolve drafts inside the window instead of a system dialog: keep
         // the window open, land on the relevant surface, and say what to do.
+        if (ForceClose)
+        {
+            base.OnClosing(e);
+            return;
+        }
         if (_state == SettingsEditState.Saving)
         {
             e.Cancel = true;
