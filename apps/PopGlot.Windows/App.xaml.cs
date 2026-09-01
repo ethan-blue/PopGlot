@@ -83,6 +83,14 @@ public partial class App : Application
             _hotkeyOwner = CreateHotkeyOwnerWindow();
             _hotkeys = new HotkeyService(_hotkeyOwner);
             _hotkeys.Pressed += (_, action) => HandleHotkey(action);
+            _hotkeys.RegistrationFailed += (_, conflict) =>
+            {
+                Notify(
+                    "快捷键恢复失败",
+                    conflict ?? "快捷键已被其他程序占用。请在「设置 → 快捷键」中修改。",
+                    Forms.ToolTipIcon.Warning);
+                _mainWindow?.ShowShortcutConflict(conflict ?? "未知快捷键");
+            };
 
             CreateTrayIcon();
             StartShowWindowListener();

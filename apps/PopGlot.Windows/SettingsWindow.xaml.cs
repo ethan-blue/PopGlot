@@ -382,7 +382,7 @@ public partial class SettingsWindow : Window
 
     // ================= Save / revert =================
 
-    private void Save_Click(object sender, RoutedEventArgs e)
+    private async void Save_Click(object sender, RoutedEventArgs e)
     {
         if (_state != SettingsEditState.Dirty)
         {
@@ -425,7 +425,7 @@ public partial class SettingsWindow : Window
             var previousCoreSettings = CoreBridge.GetSettings();
             try
             {
-                CoreBridge.SaveSettings(policySettings);
+                await CoreBridge.SaveSettingsAsync(policySettings);
             }
             catch (Exception commitException)
             {
@@ -436,12 +436,12 @@ public partial class SettingsWindow : Window
 
             try
             {
-                ShellSettingsStore.Save(shellSettings);
+                await Task.Run(() => ShellSettingsStore.Save(shellSettings));
             }
             catch (Exception commitException)
             {
                 // Roll back everything the commit already touched.
-                CoreBridge.SaveSettings(previousCoreSettings);
+                await CoreBridge.SaveSettingsAsync(previousCoreSettings);
                 _ = ApplyShellSettings?.Invoke(_shellSettings);
                 throw new InvalidOperationException(
                     $"设置未能写入磁盘（{commitException.Message}）。已回滚本次全部修改。");

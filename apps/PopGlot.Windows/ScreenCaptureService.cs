@@ -18,6 +18,9 @@ internal static class ScreenCaptureService
     private const int MaxEncodedBytes = 8 * 1024 * 1024;
     private const int MinimumSide = 6;
 
+    public static Task<byte[]> CapturePngAsync(Rect pixelBounds) =>
+        Task.Run(() => CapturePng(pixelBounds));
+
     public static byte[] CapturePng(Rect pixelBounds)
     {
         var x = SafeToInt(Math.Floor(pixelBounds.X));

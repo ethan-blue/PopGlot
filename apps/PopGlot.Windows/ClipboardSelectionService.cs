@@ -103,12 +103,15 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
     private const ushort VkC = 0x43;
     private const int ClipboardAttempts = 6;
 
+    private static readonly TimeSpan ClipboardOperationTimeout = TimeSpan.FromMilliseconds(1000);
+    private static readonly SemaphoreSlim ClipboardWorkerGate = new(1, 1);
+
     internal static int InputStructureSize => Marshal.SizeOf<NativeInput>();
 
     public uint SequenceNumber => NativeMethods.GetClipboardSequenceNumber();
 
     public Task<IClipboardSnapshot> CaptureAsync() => RetryClipboardAsync(() =>
-        Task.FromResult<IClipboardSnapshot>(ClipboardSnapshot.Capture()));
+        RunInStaAsync<IClipboardSnapshot>(ClipboardSnapshot.Capture, ClipboardOperationTimeout));
 
     public async Task SendCopyAsync()
     {
@@ -157,10 +160,11 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
     }
 
     public Task<string?> ReadTextAsync() => RetryClipboardAsync(() =>
-        Task.FromResult(
+        RunInStaAsync(() =>
             Clipboard.ContainsText(TextDataFormat.UnicodeText)
                 ? Clipboard.GetText(TextDataFormat.UnicodeText)
-                : null));
+                : null,
+            ClipboardOperationTimeout));
 
     public Task RestoreAsync(IClipboardSnapshot snapshot)
     {
@@ -168,11 +172,79 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
         {
             throw new ArgumentException("Unsupported clipboard snapshot.", nameof(snapshot));
         }
-        return RetryClipboardAsync(() =>
+        return RetryClipboardAsync(() => RunInStaAsync(() =>
         {
             clipboardSnapshot.Restore();
-            return Task.FromResult(true);
-        });
+            return true;
+        }, ClipboardOperationTimeout));
+    }
+
+    internal static async Task<T> RunInStaAsync<T>(Func<T> action, TimeSpan timeout)
+    {
+        // A timed-out OLE call cannot be cancelled safely in-process. Keep the
+        // gate owned by the worker until the native call really returns so
+        // repeated hotkeys can never accumulate abandoned STA threads.
+        if (!await ClipboardWorkerGate.WaitAsync(TimeSpan.FromMilliseconds(100)).ConfigureAwait(false))
+        {
+            throw new InvalidOperationException("上一次剪贴板操作仍未响应，已取消本次划词。请关闭占用剪贴板的程序后重试。");
+        }
+
+        var workerStarted = false;
+        try
+        {
+            var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+            // If the caller has already timed out, still observe a later worker
+            // fault so an abandoned OLE provider cannot surface as an
+            // UnobservedTaskException during finalization.
+            _ = tcs.Task.ContinueWith(
+                static completed => _ = completed.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    tcs.TrySetResult(action());
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+                finally
+                {
+                    ClipboardWorkerGate.Release();
+                }
+            })
+            {
+                IsBackground = true,
+                Name = "PopGlot-Clipboard-Worker",
+            };
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            workerStarted = true;
+
+            using var cts = new CancellationTokenSource();
+            var delayTask = Task.Delay(timeout, cts.Token);
+            var completedTask = await Task.WhenAny(tcs.Task, delayTask).ConfigureAwait(false);
+
+            if (completedTask == tcs.Task)
+            {
+                cts.Cancel();
+                return await tcs.Task.ConfigureAwait(false);
+            }
+
+            throw new TimeoutException($"剪贴板操作在 {timeout.TotalMilliseconds}ms 内未响应。可能由于其他应用（如远程桌面或 Office 延迟渲染）未响应。");
+        }
+        finally
+        {
+            // Once started, only the worker may release the gate. Releasing it
+            // on caller timeout would permit another permanently blocked STA.
+            if (!workerStarted)
+            {
+                ClipboardWorkerGate.Release();
+            }
+        }
     }
 
     private static async Task<T> RetryClipboardAsync<T>(Func<Task<T>> operation)
@@ -182,12 +254,18 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
         {
             try
             {
-                return await operation();
+                return await operation().ConfigureAwait(false);
             }
-            catch (COMException exception)
+            catch (TimeoutException)
+            {
+                // Never retry on hard timeout: fail immediately to avoid stacking hung threads
+                throw;
+            }
+            catch (Exception exception) when (
+                exception is COMException or ExternalException)
             {
                 lastError = exception;
-                await Task.Delay(12 * (attempt + 1));
+                await Task.Delay(15 * (attempt + 1)).ConfigureAwait(false);
             }
         }
         throw new InvalidOperationException("剪贴板正被其他应用占用，请稍后重试。", lastError);
@@ -275,19 +353,30 @@ internal sealed class ClipboardSnapshot : IClipboardSnapshot
 
     public static ClipboardSnapshot Capture()
     {
+        // Fail-closed: Never swallow exceptions when inspecting the clipboard.
+        // If GetDataObject or GetFormats fails, throw to abort selection translation
+        // BEFORE sending synthetic Ctrl+C. Returning an empty snapshot on failure
+        // would cause Restore() to call Clipboard.Clear(), wiping the user's data!
         var source = Clipboard.GetDataObject();
         if (source is null)
         {
             return new ClipboardSnapshot([]);
         }
 
-        var formats = new List<(string Format, object Data)>();
-        foreach (var format in source.GetFormats(autoConvert: false))
+        var formatNames = source.GetFormats(autoConvert: false);
+        if (formatNames is null || formatNames.Length == 0)
+        {
+            return new ClipboardSnapshot([]);
+        }
+
+        var formats = new List<(string Format, object Data)>(formatNames.Length);
+        foreach (var format in formatNames)
         {
             var data = source.GetData(format, autoConvert: false);
             if (data is null)
             {
-                continue;
+                throw new InvalidOperationException(
+                    $"剪贴板格式“{format}”无法完整读取；为保护原内容，本次划词已取消。");
             }
             formats.Add((format, CloneClipboardValue(data, format)));
         }

@@ -169,7 +169,14 @@ internal static class Program
             ("translate section component lifecycle and stream contracts", TranslateSectionComponentLifecycleAndStreamContracts),
             ("translation panel component lifecycle and stream contracts", TranslationPanelComponentLifecycleAndStreamContracts),
             ("render screenshots and measure performance baseline", RenderScreenshotsAndMeasureBaseline),
-            ("a failed save recovers to dirty then clean", FailedSaveRecoversToDirtyThenClean));
+            ("a failed save recovers to dirty then clean", FailedSaveRecoversToDirtyThenClean),
+            ("hotkey service suspension and retention behavior", HotkeyServiceSuspensionAndRetentionBehavior));
+
+        await RunAsync("clipboard isolation and hard timeout resilience", ClipboardIsolationAndHardTimeoutAsync);
+        await RunAsync("clipboard snapshot fail closed behavior", ClipboardSnapshotFailClosedBehaviorAsync);
+        await RunAsync("screen capture async execution off UI thread", ScreenCaptureAsyncExecution);
+        Run("hotkey service atomicity and failure visibility", HotkeyServiceAtomicityAndFailureVisibility);
+        Run("release workflow specifies self-contained", ReleaseWorkflowSpecifiesSelfContained);
 
         if (Environment.GetEnvironmentVariable("POPGLOT_SMOKE_FREE") == "1")
         {
@@ -1111,7 +1118,7 @@ internal static class Program
             FindProjectRoot(), "apps", "PopGlot.Windows", "SettingsWindow.xaml.cs"));
         var validate = source.IndexOf("shellSettings.ValidateHotkeys()", StringComparison.Ordinal);
         var register = source.IndexOf("ApplyShellSettings(shellSettings)", StringComparison.Ordinal);
-        var coreSave = source.IndexOf("CoreBridge.SaveSettings(policySettings)", StringComparison.Ordinal);
+        var coreSave = source.IndexOf("CoreBridge.SaveSettingsAsync(policySettings)", StringComparison.Ordinal);
         var shellSave = source.IndexOf("ShellSettingsStore.Save(shellSettings)", StringComparison.Ordinal);
         True(validate >= 0, "hotkey validation must exist in the save flow");
         True(register > validate, "hotkey registration must follow validation");
@@ -4774,4 +4781,165 @@ internal static class Program
         var joined = TranslationPanelWindow.MergeHardLineBreaks("Line one\nline two");
         Equal("Line one line two", joined);
     }
+
+    private static async Task ClipboardIsolationAndHardTimeoutAsync()
+    {
+        // 1. Adapter source code must use RunInStaAsync and TimeoutException handling
+        var adapterCode = File.ReadAllText(Path.Combine(
+            FindProjectRoot(), "apps", "PopGlot.Windows", "ClipboardSelectionService.cs"));
+        True(adapterCode.Contains("RunInStaAsync"), "WindowsSelectionClipboardAdapter must isolate clipboard operations onto STA worker threads");
+        True(adapterCode.Contains("ClipboardOperationTimeout"), "WindowsSelectionClipboardAdapter must enforce a bounded hard timeout");
+        True(adapterCode.Contains("catch (TimeoutException)"), "WindowsSelectionClipboardAdapter must fail immediately on timeout");
+        True(adapterCode.Contains("PopGlot-Clipboard-Worker"), "WindowsSelectionClipboardAdapter worker thread must have dedicated name");
+
+        // 2. A caller timeout must not release the concurrency gate while the
+        // underlying STA action is still alive. This caps an uninterruptible
+        // OLE hang at one quarantined worker instead of one thread per hotkey.
+        await ThrowsAsync<TimeoutException>(() =>
+            WindowsSelectionClipboardAdapter.RunInStaAsync(
+                () => { Thread.Sleep(350); return true; },
+                TimeSpan.FromMilliseconds(25)));
+        var busy = await ThrowsAsync<InvalidOperationException>(() =>
+            WindowsSelectionClipboardAdapter.RunInStaAsync(
+                () => true,
+                TimeSpan.FromMilliseconds(25)));
+        True(busy.Message.Contains("上一次剪贴板操作", StringComparison.Ordinal),
+            "a timed-out live worker must keep later operations fenced");
+
+        await Task.Delay(275);
+        True(await WindowsSelectionClipboardAdapter.RunInStaAsync(
+                () => true,
+                TimeSpan.FromMilliseconds(250)),
+            "the gate must recover after the timed-out worker actually exits");
+    }
+
+    private static async Task ScreenCaptureAsyncExecution()
+    {
+        // 1. ScreenCaptureService must expose CapturePngAsync
+        var code = File.ReadAllText(Path.Combine(
+            FindProjectRoot(), "apps", "PopGlot.Windows", "ScreenCaptureService.cs"));
+        True(code.Contains("CapturePngAsync(Rect pixelBounds)"), "ScreenCaptureService must expose CapturePngAsync");
+        True(code.Contains("Task.Run(() => CapturePng(pixelBounds))"), "ScreenCaptureService must offload to background thread");
+
+        var overlayCode = File.ReadAllText(Path.Combine(
+            FindProjectRoot(), "apps", "PopGlot.Windows", "CaptureOverlayWindow.xaml.cs"));
+        True(overlayCode.Contains("await ScreenCaptureService.CapturePngAsync(pixelRect)"),
+            "CaptureOverlayWindow must await ScreenCaptureService.CapturePngAsync off UI thread");
+
+        // 2. Minimum bounds and invalid rectangle checks
+        var smallEx = await ThrowsAsync<InvalidOperationException>(() =>
+            ScreenCaptureService.CapturePngAsync(new Rect(0, 0, 2, 2)));
+        True(smallEx.Message.Contains("选区太小"), "Error message must indicate bounds too small");
+
+        var largeEx = await ThrowsAsync<InvalidOperationException>(() =>
+            ScreenCaptureService.CapturePngAsync(new Rect(0, 0, 10000, 10000)));
+        True(largeEx.Message.Contains("1600 万像素"), "Error message must indicate 16MP limit");
+    }
+
+    private static void HotkeyServiceAtomicityAndFailureVisibility()
+    {
+        var serviceCode = File.ReadAllText(Path.Combine(
+            FindProjectRoot(), "apps", "PopGlot.Windows", "HotkeyService.cs"));
+        True(serviceCode.Contains("RegistrationFailed"), "HotkeyService must expose RegistrationFailed event");
+        True(serviceCode.Contains("newlyRegistered"), "HotkeyService must track newly registered keys for rollback");
+        True(serviceCode.Contains("UnregisterHotKey"), "HotkeyService must unregister on partial conflict");
+
+        var appCode = File.ReadAllText(Path.Combine(
+            FindProjectRoot(), "apps", "PopGlot.Windows", "App.xaml.cs"));
+        True(appCode.Contains("RegistrationFailed +="), "App must subscribe to RegistrationFailed");
+        True(appCode.Contains("ShowShortcutConflict"), "App must surface conflict to user interface");
+    }
+
+    private static void ReleaseWorkflowSpecifiesSelfContained()
+    {
+        var releaseYml = File.ReadAllText(Path.Combine(
+            FindProjectRoot(), ".github", "workflows", "release.yml"));
+        True(releaseYml.Contains("--self-contained true"),
+            "release.yml must publish self-contained package to eliminate target runtime dependency");
+        True(!releaseYml.Contains("--self-contained false"),
+            "release.yml must not use framework-dependent --self-contained false");
+    }
+
+    private static void HotkeyServiceSuspensionAndRetentionBehavior()
+    {
+        EnsureApplication();
+        var targetWindow = new Window();
+        var competitorWindow = new Window();
+        using var service = new HotkeyService(targetWindow);
+        using var competitor = new HotkeyService(competitorWindow);
+
+        var hotkeys = new Dictionary<HotkeyAction, HotkeyBinding>
+        {
+            [HotkeyAction.TranslateSelection] = new(
+                HotkeyBinding.ModControl | HotkeyBinding.ModAlt | HotkeyBinding.ModShift,
+                0x7C), // F13
+            [HotkeyAction.CaptureScreen] = new(
+                HotkeyBinding.ModControl | HotkeyBinding.ModAlt | HotkeyBinding.ModShift,
+                0x7D), // F14
+        };
+
+        // 1. Initial registration
+        True(service.TryRegisterAll(hotkeys, out var initialConflict),
+            $"test hotkeys must register: {initialConflict}");
+        Equal(2, service.CurrentHotkeys.Count, "CurrentHotkeys must track configured hotkeys");
+
+        // 2. Suspension toggling
+        service.SetSuspended(true);
+        True(service.IsSuspended, "IsSuspended must be true when suspended");
+        Equal(0, service.RegisteredHotkeys.Count, "Registered hotkeys must be cleared when suspended");
+
+        // 3. Another owner grabs F13 while the target is suspended. Resume must
+        // fail atomically, retain the desired configuration, and remain retryable.
+        var competingSet = new Dictionary<HotkeyAction, HotkeyBinding>
+        {
+            [HotkeyAction.ShowWindow] = hotkeys[HotkeyAction.TranslateSelection],
+        };
+        True(competitor.TryRegisterAll(competingSet, out var competingConflict),
+            $"competitor must register the released hotkey: {competingConflict}");
+        True(!service.SetSuspended(false, out var resumeConflict),
+            "resume must report a real OS registration conflict");
+        True(!string.IsNullOrWhiteSpace(resumeConflict), "resume conflict must be visible");
+        True(service.IsSuspended, "failed resume must remain retryable");
+        Equal(0, service.RegisteredHotkeys.Count, "failed resume must roll back partial registrations");
+        Equal(2, service.CurrentHotkeys.Count, "CurrentHotkeys must be preserved across suspension/restore attempts");
+
+        // 4. Releasing the conflict must allow the very next resume to restore
+        // the full set without rebuilding the service.
+        competitor.Dispose();
+        True(service.SetSuspended(false, out var retryConflict),
+            $"resume must recover after the conflict disappears: {retryConflict}");
+        True(!service.IsSuspended, "successful retry must leave suspension");
+        Equal(2, service.RegisteredHotkeys.Count, "successful retry must restore the complete set");
+    }
+
+    private static async Task ClipboardSnapshotFailClosedBehaviorAsync()
+    {
+        // 1. If adapter capture fails, ReadSelectionAsync must fail-closed before sending Ctrl+C
+        var throwingAdapter = new FailingCaptureClipboardAdapter();
+        var service = new ClipboardSelectionService(throwingAdapter);
+        await ThrowsAsync<InvalidOperationException>(() => service.ReadSelectionAsync(CancellationToken.None));
+        True(!throwingAdapter.SendCopyCalled, "SendCopy must NEVER be called if snapshot capture fails");
+        True(!throwingAdapter.RestoreCalled, "Restore must NEVER be called if capture fails");
+    }
+
+    private sealed class FailingCaptureClipboardAdapter : ISelectionClipboardAdapter
+    {
+        public bool SendCopyCalled { get; private set; }
+        public bool RestoreCalled { get; private set; }
+        public uint SequenceNumber => 10;
+        public Task<IClipboardSnapshot> CaptureAsync() =>
+            throw new InvalidOperationException("Failed to access clipboard");
+        public Task SendCopyAsync()
+        {
+            SendCopyCalled = true;
+            return Task.CompletedTask;
+        }
+        public Task<string?> ReadTextAsync() => Task.FromResult<string?>("sample");
+        public Task RestoreAsync(IClipboardSnapshot snapshot)
+        {
+            RestoreCalled = true;
+            return Task.CompletedTask;
+        }
+    }
+
 }

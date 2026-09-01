@@ -30,6 +30,11 @@ internal sealed partial class HotkeyService : IDisposable
     }
 
     public event EventHandler<HotkeyAction>? Pressed;
+    public event EventHandler<string>? RegistrationFailed;
+
+    public IReadOnlyDictionary<HotkeyAction, HotkeyBinding> CurrentHotkeys => _current;
+    public bool IsSuspended => _suspended;
+    public IReadOnlyDictionary<int, HotkeyAction> RegisteredHotkeys => _registered;
 
     /// <summary>
     /// Applies a whole set atomically: on any failure the previously working
@@ -47,12 +52,20 @@ internal sealed partial class HotkeyService : IDisposable
         if (RegisterSet(hotkeys, out conflict))
         {
             _current = new Dictionary<HotkeyAction, HotkeyBinding>(hotkeys);
+            _suspended = false;
             return true;
         }
 
         UnregisterAll();
-        _ = RegisterSet(previous, out _);
         _current = previous;
+        if (!RegisterSet(previous, out var restoreConflict))
+        {
+            _suspended = true;
+            var detail = $"{conflict}。且恢复原快捷键也失败（{restoreConflict}）";
+            RegistrationFailed?.Invoke(this, detail);
+            return false;
+        }
+        _suspended = false;
         return false;
     }
 
@@ -62,27 +75,44 @@ internal sealed partial class HotkeyService : IDisposable
     /// action (selection translation synthesizes Ctrl+C) before the recorder
     /// can accept the same combination.
     /// </summary>
-    public void SetSuspended(bool suspended)
+    public bool SetSuspended(bool suspended, out string? conflict)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_suspended == suspended)
-        {
-            return;
-        }
-        _suspended = suspended;
         if (suspended)
         {
             UnregisterAll();
-            return;
+            _suspended = true;
+            conflict = null;
+            return true;
         }
-        _ = RegisterSet(_current, out _);
+
+        if (!_suspended && _registered.Count > 0)
+        {
+            conflict = null;
+            return true;
+        }
+
+        UnregisterAll();
+        if (!RegisterSet(_current, out conflict))
+        {
+            _suspended = true;
+            RegistrationFailed?.Invoke(this, conflict ?? "快捷键恢复失败");
+            return false;
+        }
+
+        _suspended = false;
+        conflict = null;
+        return true;
     }
+
+    public void SetSuspended(bool suspended) => SetSuspended(suspended, out _);
 
     private bool RegisterSet(
         IReadOnlyDictionary<HotkeyAction, HotkeyBinding> hotkeys,
         out string? conflict)
     {
         var id = FirstHotkeyId;
+        var newlyRegistered = new List<int>();
         foreach (var (action, binding) in hotkeys)
         {
             if (!NativeMethods.RegisterHotKey(
@@ -91,11 +121,18 @@ internal sealed partial class HotkeyService : IDisposable
                     binding.Modifiers | NativeMethods.ModNoRepeat,
                     binding.VirtualKey))
             {
+                // Roll back any partially registered hotkeys from this attempt
+                foreach (var regId in newlyRegistered)
+                {
+                    NativeMethods.UnregisterHotKey(_source.Handle, regId);
+                    _registered.Remove(regId);
+                }
                 conflict =
                     $"{ShellSettings.ActionName(action)}：{binding.DisplayName} 已被其他程序占用";
                 return false;
             }
             _registered[id] = action;
+            newlyRegistered.Add(id);
             id++;
         }
         conflict = null;

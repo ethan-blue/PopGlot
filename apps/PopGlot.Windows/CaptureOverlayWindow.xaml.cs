@@ -164,7 +164,7 @@ public partial class CaptureOverlayWindow : Window
             await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Render);
             await Task.Delay(16);
 
-            var png = ScreenCaptureService.CapturePng(pixelRect);
+            var png = await ScreenCaptureService.CapturePngAsync(pixelRect);
             Close();
             Captured?.Invoke(this, new ScreenCapture(pixelRect, png, isOcrOnly));
         }
