@@ -1,6 +1,6 @@
 # PopGlot 版本规则
 
-> 生效日期：2026-08-31。当前版本：**0.1.0**。
+> 生效日期：2026-08-31。当前版本：**0.1.2**。
 
 ## 历史修正
 
@@ -10,7 +10,7 @@
 
 ## 版本格式与当前版本说明
 
-`MAJOR.MINOR.PATCH`，当前为 `0.1.0`。
+`MAJOR.MINOR.PATCH`，当前为 `0.1.2`。
 
 | 段 | 何时递增 | 示例 |
 |----|----------|------|
@@ -48,20 +48,20 @@
 
 ## 发布清单
 
-1. 更新 `apps/PopGlot.Windows/PopGlot.Windows.csproj` 的 `<Version>` 为 `0.1.0`。
-2. 同步更新 `Cargo.toml` 的 `[workspace.package] version` 为 `0.1.0`。
+1. 更新 `apps/PopGlot.Windows/PopGlot.Windows.csproj` 的 `<Version>` 为待发布版本。
+2. 同步更新 `Cargo.toml` 的 `[workspace.package] version` 为同一版本。
 3. 在 `CHANGELOG.md` 顶部新增对应版本条目（新增/变更/修复/迁移/风险）。
-4. 全量验证：运行 `scripts/verify.ps1`（包含 `cargo fmt`、`cargo test`、`cargo clippy`、`dotnet build`、113 项 Windows 逻辑测试全部通过）。
+4. 全量验证：运行 `scripts/verify.ps1`（包含 `cargo fmt`、`cargo test`、`cargo clippy`、`dotnet build` 与 Windows 逻辑测试）。
 5. 运行四方版本一致性本地检查，确保 Release Tag、csproj、Cargo.toml 与 CHANGELOG.md 版本一致。
 6. 构建发布产物并生成校验和：
    ```bash
    dotnet publish apps/PopGlot.Windows/PopGlot.Windows.csproj -c Release -r win-x64 \
-     --self-contained false -o dist/release
+     --self-contained true -o dist/release
    cp target/release/popglot_ffi.dll dist/release/
    ```
 7. 提交所有改动，打 annotated tag：
    ```bash
-   git tag -a v0.1.0 -m "PopGlot 0.1.0"
+   git tag -a vX.Y.Z -m "PopGlot X.Y.Z"
    ```
 8. 推送（需要远端时）：`git push origin main --tags`。
    GitHub Actions release 工作流将自动校验四方版本、打包并附带 `.zip.sha256` 校验和。
