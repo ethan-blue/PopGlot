@@ -14,6 +14,14 @@ target/
 *.log
 artifacts/
 
+# Ad-hoc local dumps from debugging sessions (CI log captures, zip experiments,
+# redirected test output, accidental Windows device-name files).
+joblog*.txt
+jobs.json
+rel.zip
+test_output.*
+NUL
+
 # Local secrets and provider overrides must never be committed.
 appsettings.local.json
 *.secrets.json
