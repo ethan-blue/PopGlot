@@ -106,6 +106,23 @@ public partial class TranslationPanelWindow : Window
         RenderIdle();
     }
 
+
+    private void FitInitialHeightToSource(string? source)
+    {
+        if (_userMoved)
+        {
+            return;
+        }
+
+        var length = source?.Trim().Length ?? 0;
+        Height = length switch
+        {
+            <= 80 => 320,
+            <= 420 => 360,
+            _ => 420,
+        };
+    }
+
     private void OnTtsSpeakingStateChanged(object? sender, bool isSpeaking)
     {
         Dispatcher.BeginInvoke(() =>
@@ -146,6 +163,7 @@ public partial class TranslationPanelWindow : Window
             inputTimer.Stop();
             _inputAcquisitionMs = inputTimer.ElapsedMilliseconds;
             SourceInputBox.Text = source;
+            FitInitialHeightToSource(source);
 
             // Only now take focus: activating earlier would have moved the
             // foreground window away from the app we just sent Ctrl+C to.
@@ -217,6 +235,7 @@ public partial class TranslationPanelWindow : Window
         SourceKindLabel.Text = "· 输入";
         SourceLabel.Text = "原文";
         SourceInputBox.Text = text ?? string.Empty;
+        FitInitialHeightToSource(text);
         _screenshot = null;
         AllowKeyboardInteraction();
 
@@ -300,7 +319,7 @@ public partial class TranslationPanelWindow : Window
         }
         RenderPreparingState("正在翻译");
         TranslationTextBox.Clear();
-        TranslationTextBox.SetValue(Ui.PlaceholderProperty, "正在思考与翻译…");
+        TranslationTextBox.SetValue(Ui.PlaceholderProperty, "正在翻译…");
         ExplanationBox.Visibility = Visibility.Collapsed;
         cancellation.ThrowIfCancellationRequested();
 
@@ -374,7 +393,7 @@ public partial class TranslationPanelWindow : Window
             return;
         }
 
-        SourceInputBox.SetValue(Ui.PlaceholderProperty, "输入或粘贴要翻译的文字，按 Enter 翻译，Shift+Enter 换行");
+        SourceInputBox.SetValue(Ui.PlaceholderProperty, "输入文本，Enter 翻译，Shift+Enter 换行");
         var recognized = string.IsNullOrWhiteSpace(session.Transcription)
             ? (!string.IsNullOrWhiteSpace(session.SourceText) ? session.SourceText : "（模型未回传识别文本）")
             : session.Transcription;
@@ -412,11 +431,26 @@ public partial class TranslationPanelWindow : Window
                 TranslationRichBox.Visibility = Visibility.Collapsed;
             }
             StreamIndicator.Visibility = Visibility.Visible;
-            TranslationTextBox.Text = _translation;
-            TranslationTextBox.CaretIndex = _translation.Length;
-            TranslationTextBox.ScrollToEnd();
+            // Stick-to-bottom: follow the stream only while the reader sits at
+            // the bottom, so scrolling up to re-read is never overridden.
+            var stickToBottom = Ui.IsScrolledToBottom(Ui.FindScrollViewer(TranslationTextBox));
+            // Append only the new suffix: reassigning Text wholesale on every
+            // pump tick forces a full re-layout and makes the bottom edge
+            // strobe while the window hugs its growing content.
+            if (_translation.StartsWith(TranslationTextBox.Text, StringComparison.Ordinal))
+            {
+                TranslationTextBox.AppendText(_translation[TranslationTextBox.Text.Length..]);
+            }
+            else
+            {
+                TranslationTextBox.Text = _translation;
+            }
+            if (stickToBottom)
+            {
+                TranslationTextBox.ScrollToEnd();
+            }
             SetResultActionsEnabled(false);
-            StatusText.Text = "正在生成译文…";
+            StatusText.Text = "正在生成…";
         }
     }
 
@@ -437,7 +471,7 @@ public partial class TranslationPanelWindow : Window
                 StreamIndicator.Visibility = Visibility.Collapsed;
                 break;
             case TranslationSessionStage.Streaming:
-                StatusText.Text = "正在生成译文…";
+                StatusText.Text = "正在生成…";
                 StreamIndicator.Visibility = Visibility.Visible;
                 break;
             case TranslationSessionStage.Finalizing:
@@ -493,6 +527,7 @@ public partial class TranslationPanelWindow : Window
         StatusText.Text = status;
         Progress.Visibility = Visibility.Visible;
         ResultSkeleton.Visibility = Visibility.Visible;
+        TranslationTextBox.Foreground = (Brush)FindResource("TextPrimaryBrush");
         TranslationTextBox.Visibility = Visibility.Collapsed;
         TranslationRichBox.Visibility = Visibility.Collapsed;
         StreamIndicator.Visibility = Visibility.Collapsed;
@@ -513,6 +548,7 @@ public partial class TranslationPanelWindow : Window
         ResultSkeleton.Visibility = Visibility.Collapsed;
         TranslationRichBox.Visibility = Visibility.Collapsed;
         TranslationTextBox.Visibility = Visibility.Visible;
+        TranslationTextBox.Foreground = (Brush)FindResource("TextPrimaryBrush");
         TranslationTextBox.Text = partialText;
         StreamIndicator.Visibility = Visibility.Collapsed;
         SetResultActionsEnabled(false);
@@ -521,7 +557,7 @@ public partial class TranslationPanelWindow : Window
         WarningBox.Visibility = Visibility.Visible;
         EngineBadge.Text = "已取消";
         EngineBadge.Foreground = (Brush)FindResource("WarningBrush");
-        StatusDot.Background = (Brush)FindResource("TextTertiaryBrush");
+        StatusDot.Background = (Brush)FindResource("WarningBrush");
         StatusText.Text = "翻译已取消 · 内容不完整";
         RouteText.Text = "已中断";
         ExplanationBox.Visibility = Visibility.Collapsed;
@@ -536,6 +572,7 @@ public partial class TranslationPanelWindow : Window
         ResultSkeleton.Visibility = Visibility.Collapsed;
         TranslationRichBox.Visibility = Visibility.Collapsed;
         TranslationTextBox.Visibility = Visibility.Visible;
+        TranslationTextBox.Foreground = (Brush)FindResource("TextPrimaryBrush");
         TranslationTextBox.Text = string.Empty;
         StreamIndicator.Visibility = Visibility.Collapsed;
         SetResultActionsEnabled(false);
@@ -558,6 +595,7 @@ public partial class TranslationPanelWindow : Window
         ResultSkeleton.Visibility = Visibility.Collapsed;
         TranslationRichBox.Visibility = Visibility.Collapsed;
         TranslationTextBox.Visibility = Visibility.Visible;
+        TranslationTextBox.Foreground = (Brush)FindResource("TextPrimaryBrush");
         TranslationTextBox.Text = partialText;
         StreamIndicator.Visibility = Visibility.Collapsed;
         SetResultActionsEnabled(false);
@@ -565,6 +603,7 @@ public partial class TranslationPanelWindow : Window
         WarningText.Text = "生成中断，内容不完整";
         WarningBox.Visibility = Visibility.Visible;
         ExplanationText.Text = errorMessage;
+        ExplanationText.Foreground = (Brush)FindResource("TextSecondaryBrush");
         ExplanationText.Visibility = Visibility.Visible;
         ExplanationBox.Visibility = Visibility.Visible;
         EngineBadge.Text = "生成中断";
@@ -578,12 +617,13 @@ public partial class TranslationPanelWindow : Window
 
     private void RenderIdle()
     {
-        StatusText.Text = "输入文字后按 Enter 开始翻译";
+        StatusText.Text = "输入后按 Enter 翻译";
         Progress.Visibility = Visibility.Collapsed;
         RouteText.Text = string.Empty;
         StatusDot.Background = (Brush)FindResource("TextTertiaryBrush");
         ResultSkeleton.Visibility = Visibility.Collapsed;
         TranslationRichBox.Visibility = Visibility.Collapsed;
+        TranslationTextBox.Foreground = (Brush)FindResource("TextPrimaryBrush");
         TranslationTextBox.Visibility = Visibility.Visible;
         TranslationTextBox.Text = string.Empty;
         StreamIndicator.Visibility = Visibility.Collapsed;
@@ -659,6 +699,8 @@ public partial class TranslationPanelWindow : Window
         Progress.Visibility = Visibility.Collapsed;
         ResultSkeleton.Visibility = Visibility.Collapsed;
         StreamIndicator.Visibility = Visibility.Collapsed;
+        TranslationTextBox.Foreground = (Brush)FindResource("TextPrimaryBrush");
+        ExplanationText.Foreground = (Brush)FindResource("TextSecondaryBrush");
 
         try
         {
@@ -690,8 +732,8 @@ public partial class TranslationPanelWindow : Window
         WarningBox.Visibility = warnings.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
 
         EngineBadge.Text = partial ? "部分成功" : session.PipelineLabel ?? "翻译完成";
-        SetResultTone(failed: false, partial: partial);
-        StatusDot.Background = (Brush)FindResource("AccentBrush");
+        EngineBadge.Foreground = (Brush)FindResource(partial ? "WarningBrush" : "AccentBrush");
+        StatusDot.Background = (Brush)FindResource(partial ? "WarningBrush" : "AccentBrush");
 
         var totalMs = session.Timing.TotalElapsedMs + (ulong)Math.Max(0, _inputAcquisitionMs);
         var timingParts = new List<string> { session.PipelineLabel ?? "翻译" };
@@ -721,7 +763,8 @@ public partial class TranslationPanelWindow : Window
         UpdateStarIcon(_vocabulary?.IsStarred(source) == true);
         if (_gate.ShouldTriggerAutoCopy(settings.CopyTranslationAutomatically))
         {
-            if (await TrySetClipboardAsync(_translation))
+            var clean = MarkdownPresenter.ToPlainText(_translation);
+            if (await TrySetClipboardAsync(clean))
             {
                 StatusText.Text = partial
                     ? "部分成功 · 已自动复制译文"
@@ -754,9 +797,11 @@ public partial class TranslationPanelWindow : Window
     {
         RenderState(TranslationSessionState.Failed);
         SetTranslationContent(FriendlyError(message), isMarkdown: false);
+        TranslationTextBox.Foreground = (Brush)FindResource("DangerBrush");
         // The headline is deliberately short; the raw provider message stays
         // available underneath because it is what makes the problem fixable.
         ExplanationText.Text = message;
+        ExplanationText.Foreground = (Brush)FindResource("DangerBrush");
         ExplanationText.Visibility = Visibility.Visible;
         ExplanationBox.Visibility = Visibility.Visible;
         PhoneticText.Visibility = Visibility.Collapsed;
@@ -863,7 +908,8 @@ public partial class TranslationPanelWindow : Window
         {
             return;
         }
-        if (await TrySetClipboardAsync(_translation))
+        var clean = MarkdownPresenter.ToPlainText(_translation);
+        if (await TrySetClipboardAsync(clean))
         {
             StatusText.Text = "已复制译文到剪贴板";
             ResultCopyIcon.Data = (Geometry)FindResource("IconCheck");
@@ -880,7 +926,7 @@ public partial class TranslationPanelWindow : Window
 
     private async void SourceCopy_Click(object sender, RoutedEventArgs e)
     {
-        var text = SourceInputBox.Text;
+        var text = SourceInputBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(text))
         {
             return;
@@ -907,13 +953,6 @@ public partial class TranslationPanelWindow : Window
             if (await TrySetClipboardAsync(term))
             {
                 StatusText.Text = $"已复制术语：{term}";
-                if (sender is Button btn)
-                {
-                    var old = btn.Content;
-                    btn.Content = $"✓ {term}";
-                    await Task.Delay(1000);
-                    btn.Content = old;
-                }
             }
             else
             {
@@ -1030,8 +1069,14 @@ public partial class TranslationPanelWindow : Window
         (c >= '\uF900' && c <= '\uFAFF') ||  // CJK compatibility ideographs
         (c >= '\uFF00' && c <= '\uFFEF');    // fullwidth forms
 
-    private void SourceSpeak_Click(object sender, RoutedEventArgs e) =>
-        SpeakOrStop(SourceInputBox.Text);
+    private void SourceSpeak_Click(object sender, RoutedEventArgs e)
+    {
+        var text = SourceInputBox.Text.Trim();
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            SpeakOrStop(text);
+        }
+    }
 
     private void ResultSpeak_Click(object sender, RoutedEventArgs e)
     {
@@ -1039,7 +1084,8 @@ public partial class TranslationPanelWindow : Window
         {
             return;
         }
-        SpeakOrStop(_translation);
+        var clean = MarkdownPresenter.ToPlainText(_translation);
+        SpeakOrStop(clean);
     }
 
     private static void SpeakOrStop(string? text)
@@ -1058,22 +1104,23 @@ public partial class TranslationPanelWindow : Window
         var source = SourceInputBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(_translation)) return;
 
+        var clean = MarkdownPresenter.ToPlainText(_translation);
         var isStarred = _vocabulary.ToggleStar(
             source,
-            _translation,
+            clean,
             PhoneticText.Text.Trim('[', ']'),
             ExplanationText.Text,
             SourceLanguage,
             TargetLanguage);
 
         UpdateStarIcon(isStarred);
-        StatusText.Text = isStarred ? "★ 已加入生词本 (Anki)" : "已从生词本移除";
+        StatusText.Text = isStarred ? "已加入生词本" : "已从生词本移除";
     }
 
     private void UpdateStarIcon(bool starred)
     {
         StarToggle.IsChecked = starred;
-        StarToggle.ToolTip = starred ? "从生词本移除" : "加入生词本 / 收藏";
+        StarToggle.ToolTip = starred ? "从生词本移除" : "收藏到生词本";
     }
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e)
@@ -1189,24 +1236,8 @@ public partial class TranslationPanelWindow : Window
         }
     }
 
-    private static async Task<bool> TrySetClipboardAsync(string text)
-    {
-        // Another process can hold the clipboard open; a few awaited retries
-        // keep the message pump alive so the owner can actually release it.
-        for (var attempt = 0; attempt < 4; attempt++)
-        {
-            try
-            {
-                Clipboard.SetText(text);
-                return true;
-            }
-            catch (Exception exception) when (exception is COMException or InvalidOperationException)
-            {
-                await Task.Delay(15 * (attempt + 1));
-            }
-        }
-        return false;
-    }
+    private static Task<bool> TrySetClipboardAsync(string text)
+        => WindowsSelectionClipboardAdapter.TrySetTextAsync(text);
 
     // ================= Window behaviour =================
 
@@ -1318,6 +1349,26 @@ public partial class TranslationPanelWindow : Window
     {
         comboBox.DropDownOpened += (_, _) => _openDropDowns++;
         comboBox.DropDownClosed += (_, _) => _openDropDowns = Math.Max(0, _openDropDowns - 1);
+    }
+
+    private const int WmEnterSizeMove = 0x0231;
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        if (PresentationSource.FromVisual(this) is HwndSource source)
+        {
+            source.AddHook(HwndHook);
+        }
+    }
+
+    private nint HwndHook(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
+    {
+        if (msg == WmEnterSizeMove)
+        {
+            _userMoved = true;
+        }
+        return 0;
     }
 
     private void PinToggle_Changed(object sender, RoutedEventArgs e) =>

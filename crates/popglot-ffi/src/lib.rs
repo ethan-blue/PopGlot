@@ -803,7 +803,7 @@ impl Drop for RequestTicket {
 }
 
 fn begin_request(custom_id: Option<&str>) -> RequestTicket {
-    let id = custom_id.map_or_else(
+    let base = custom_id.map_or_else(
         || format!("req-{}", REQUEST_TICKET.fetch_add(1, Ordering::Relaxed)),
         ToOwned::to_owned,
     );
@@ -813,6 +813,14 @@ fn begin_request(custom_id: Option<&str>) -> RequestTicket {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
+    let mut id = base.clone();
+    while map.contains_key(&id) {
+        // A live registration must never be evicted by a repeated id: the
+        // old ticket's drop would then remove the new request's entry and
+        // leave an in-flight call uncancellable. Disambiguate with the
+        // monotonic ticket counter instead.
+        id = format!("{base}#{}", REQUEST_TICKET.fetch_add(1, Ordering::Relaxed));
+    }
     map.insert(id.clone(), token.clone());
     RequestTicket { id, token }
 }

@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Xml.Linq;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -160,6 +161,7 @@ internal static class Program
         Run("translation panel epoch and lifetime fencing rejects stale updates", TranslationPanelEpochAndLifetimeFencing);
         Run("translation panel reset and delta stream transitions", TranslationPanelResetAndDelta);
         Run("translation panel action gating and partial retention", TranslationPanelActionGatingAndPartialRetention);
+        Run("translation panel result card rows keep text and explanation separated", TranslationPanelResultCardRowStructure);
 
         // Both ride one STA thread: the windowed regression needs the
         // Application the screenshot pass bootstraps, and Application
@@ -1002,6 +1004,43 @@ internal static class Program
     }
 
     /// <summary>
+    /// Structural guard for the result-card regression: without dedicated grid
+    /// rows, the streaming text layer fell into row 0 on top of the engine
+    /// header buttons, and the explanation area collapsed to zero height.
+    /// XML-parse the panel XAML so future layout edits cannot silently
+    /// reintroduce either failure.
+    /// </summary>
+    private static void TranslationPanelResultCardRowStructure()
+    {
+        var doc = XDocument.Load(Path.Combine(
+            FindProjectRoot(), "apps", "PopGlot.Windows", "TranslationPanelWindow.xaml"));
+        var ns = doc.Root!.Name.Namespace;
+        var xns = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml");
+
+        // (a) The text layer Grid that hosts TranslationTextBox must own
+        // Grid.Row="1" inside the result card, never the header's row 0.
+        var translationBox = doc.Descendants(ns + "TextBox")
+            .FirstOrDefault(e => (string?)e.Attribute(xns + "Name") == "TranslationTextBox");
+        True(translationBox is not null, "TranslationTextBox must be declared");
+        var textLayerGrid = translationBox!.Ancestors(ns + "Grid").FirstOrDefault();
+        True(textLayerGrid is not null, "TranslationTextBox must sit inside a Grid");
+        // Grid.Row is an unprefixed attribute name in raw XAML (the default
+        // xmlns namespace applies to elements, not attributes).
+        Equal("1", (string?)textLayerGrid!.Attribute("Grid.Row"),
+            "the translation text layer must occupy Grid.Row=1 (the star row below the engine header)");
+
+        // (b) The explanation area's ScrollViewer ancestor must own Grid.Row=2
+        // so explanations, token chips and warnings stay visible and capped.
+        var explanationBox = doc.Descendants()
+            .FirstOrDefault(e => (string?)e.Attribute(xns + "Name") == "ExplanationBox");
+        True(explanationBox is not null, "ExplanationBox must be declared");
+        var explanationScroller = explanationBox!.Ancestors(ns + "ScrollViewer").FirstOrDefault();
+        True(explanationScroller is not null, "ExplanationBox must live inside a ScrollViewer");
+        Equal("2", (string?)explanationScroller!.Attribute("Grid.Row"),
+            "the explanation ScrollViewer must occupy Grid.Row=2 (the capped row under the text)");
+    }
+
+    /// <summary>
     /// Configured services start EMPTY; provider templates live in a separate
     /// catalog that never appears as a configured service. Pristine factory
     /// entries (a legacy-schema artifact) are recognisable for migration.
@@ -1024,6 +1063,15 @@ internal static class Program
         True(ProviderCatalog.IsPristineTemplate(deepseek), "an untouched template is pristine");
         True(ProviderCatalog.IsPristineTemplate(
             ProviderCatalog.Templates.First(t => t.Id == "openai-default")), "openai template is pristine");
+
+        // The Ollama template name moved to full-width parentheses in v5;
+        // configs from ≤0.1.2 still carry the ASCII-paren name and must stay
+        // pristine, or the v4→v5 cleanup misses their seeded placeholder.
+        var ollama = templates.First(t => t.Id == "ollama-local");
+        True(ProviderCatalog.IsPristineTemplate(ollama), "ollama template is pristine");
+        True(ProviderCatalog.IsPristineTemplate(
+            new ProviderProfile(ollama) { Name = "Ollama (本地)" }),
+            "the legacy ASCII-paren Ollama name is still pristine");
 
         // Any user edit breaks pristineness: renamed, re-modelled, or re-keyed.
         var renamed = new ProviderProfile(deepseek) { Name = "我的 DeepSeek" };
@@ -1899,8 +1947,8 @@ internal static class Program
             "credential actions must stack without squeezing the key field");
         True(xaml.Contains("Click=\"FetchModels_Click\""), "the model section needs an explicit fetch action");
         True(xaml.Contains("ModelCatalogStatusText"), "model fetch feedback must stay next to the model fields");
-        True(xaml.Contains("接口路径") && xaml.Contains("请求定制"),
-            "advanced settings must be split into understandable groups");
+        True(xaml.Contains("接口与网络") && xaml.Contains("请求定制"),
+            "advanced settings must stay split into plain-language groups");
     }
 
     private static void ModelCatalogEndpointsFollowProtocols()
@@ -3822,6 +3870,7 @@ internal static class Program
                 Settings = CoreBridge.GetSettings() with
                 {
                     ProviderType = ProviderType.OpenAiCompatible,
+                    ApiBaseUrl = "https://free-test.example.com",
                     TextModel = "",
                     VisionModel = "",
                     NetworkEnabled = true,
@@ -4306,11 +4355,11 @@ internal static class Program
         Equal(false, quickSearch.StreamBox.Focusable);
         Equal(ScrollBarVisibility.Auto, quickSearch.StreamBox.VerticalScrollBarVisibility);
         Equal(TextWrapping.Wrap, quickSearch.StreamBox.TextWrapping);
-        Equal(15.0, quickSearch.StreamBox.FontSize);
+        Equal(14.5, quickSearch.StreamBox.FontSize);
         Equal(220.0, quickSearch.StreamBox.MaxHeight);
 
         True(quickSearch.RichBox is RichTextBox, "RichBox must be a RichTextBox for markdown formatting");
-        Equal(15.0, quickSearch.RichBox.FontSize);
+        Equal(14.5, quickSearch.RichBox.FontSize);
         Equal(220.0, quickSearch.RichBox.MaxHeight);
         Equal(ScrollBarVisibility.Auto, quickSearch.RichBox.VerticalScrollBarVisibility);
 
@@ -4349,8 +4398,8 @@ internal static class Program
         // Stage update with matching epoch 1
         state = TranslateSectionReducer.ApplyStage(state, TranslationSessionStage.Streaming, 1);
         Equal(TranslateUiPhase.Streaming, state.Phase);
-        Equal("正在生成", state.StatusText);
-        Equal("正在生成", state.BadgeText);
+        Equal("正在生成…", state.StatusText);
+        Equal("正在生成…", state.BadgeText);
         True(state.IsStreamIndicatorVisible, "Indicator visible in Streaming stage");
 
         // Stage update to Finalizing
@@ -4547,7 +4596,11 @@ internal static class Program
         Equal(Visibility.Collapsed, section.StreamIndicator.Visibility);
         Equal(false, section.StreamResultBox.Focusable);
         Equal(true, section.StreamResultBox.IsReadOnly);
-        Equal(ScrollBarVisibility.Auto, section.StreamResultBox.VerticalScrollBarVisibility);
+        // Long results scroll via the shared pane ScrollViewer (result text and
+        // explanation in one flow); the inner boxes must not fight it with
+        // their own scrollbars or the explanation would reflow the layout.
+        Equal(ScrollBarVisibility.Disabled, section.StreamResultBox.VerticalScrollBarVisibility);
+        Equal(ScrollBarVisibility.Auto, section.ResultScroll.VerticalScrollBarVisibility);
         Equal(TextWrapping.Wrap, section.StreamResultBox.TextWrapping);
         Equal(14.5, section.StreamResultBox.FontSize);
         Equal(14.5, section.ResultBox.FontSize);
@@ -4743,10 +4796,10 @@ internal static class Program
         Equal(Visibility.Collapsed, panel.TranslationRichBox.Visibility);
         Equal(Visibility.Collapsed, panel.StreamIndicatorPill.Visibility);
 
-        Equal(15.0, panel.StreamTextBox.FontSize);
+        Equal(14.5, panel.StreamTextBox.FontSize);
         Equal(ScrollBarVisibility.Auto, panel.StreamTextBox.VerticalScrollBarVisibility);
         Equal(true, panel.StreamTextBox.IsReadOnly);
-        Equal(15.0, panel.FinalRichBox.FontSize);
+        Equal(14.5, panel.FinalRichBox.FontSize);
         Equal(ScrollBarVisibility.Auto, panel.FinalRichBox.VerticalScrollBarVisibility);
 
         Equal(AutomationLiveSetting.Polite, AutomationProperties.GetLiveSetting(panel.StatusTextBlock));
@@ -4754,20 +4807,24 @@ internal static class Program
         Equal(AutomationLiveSetting.Off, AutomationProperties.GetLiveSetting(panel.StreamTextBox));
 
         // MarkdownPresenter font size inheritance and FlowDocument contracts
-        var doc = new FlowDocument { FontSize = 15.0 };
+        var doc = new FlowDocument { FontSize = 14.5 };
         MarkdownPresenter.RenderToFlowDocument(doc, "这是 **加粗内容** 和 `代码` 以及普通的后续句子。", Application.Current.Resources);
         Equal(new Thickness(0), doc.PagePadding);
         True(doc.Blocks.Count > 0, "Document must have paragraphs");
         if (doc.Blocks.FirstBlock is Paragraph firstPara)
         {
-            Equal(22.0, firstPara.LineHeight);
+            // The final layer must mirror the streaming TextBox's metrics
+            // (default font line height, zero paragraph margin) so the
+            // stream→final swap cannot change the card height.
+            True(double.IsNaN(firstPara.LineHeight), "forced line height reintroduces the layout jump");
+            Equal(new Thickness(0), firstPara.Margin);
             foreach (var inline in firstPara.Inlines)
             {
                 if (inline is Run run)
                 {
                     // Run must inherit font size from FlowDocument/RichTextBox without hardcoded 14
                     Equal(DependencyProperty.UnsetValue, run.ReadLocalValue(TextElement.FontSizeProperty));
-                    Equal(15.0, run.FontSize);
+                    Equal(14.5, run.FontSize);
                 }
             }
         }

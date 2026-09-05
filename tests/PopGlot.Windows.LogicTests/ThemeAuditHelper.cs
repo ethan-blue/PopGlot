@@ -48,6 +48,9 @@ public static class ThemeAuditHelper
         AssertRatio(name, "TextSecondaryBrush", map["TextSecondaryBrush"], "SurfaceBrush", map["SurfaceBrush"], 4.5);
         AssertRatio(name, "TextTertiaryBrush (placeholder/caption)", map["TextTertiaryBrush"], "SurfaceBrush", map["SurfaceBrush"], 4.5);
         AssertRatio(name, "TextTertiaryBrush (on input)", map["TextTertiaryBrush"], "InputBrush", map["InputBrush"], 4.5);
+        AssertRatio(name, "TextPrimaryBrush (on result surface)", map["TextPrimaryBrush"], "ResultSurfaceBrush", map["ResultSurfaceBrush"], 4.5);
+        AssertRatio(name, "TextSecondaryBrush (on result surface)", map["TextSecondaryBrush"], "ResultSurfaceBrush", map["ResultSurfaceBrush"], 4.5);
+        AssertRatio(name, "TextTertiaryBrush (on result surface)", map["TextTertiaryBrush"], "ResultSurfaceBrush", map["ResultSurfaceBrush"], 4.5);
 
         // WCAG non-text contrast: >= 3.0:1 for input borders
         AssertRatio(name, "BorderStrongBrush (input edge)", map["BorderStrongBrush"], "InputBrush", map["InputBrush"], 3.0);
@@ -63,6 +66,16 @@ public static class ThemeAuditHelper
 
         // Primary button: token text colour on the neutral primary fill: >= 4.5:1
         AssertRatio(name, "PrimaryTextBrush", map["PrimaryTextBrush"], "PrimaryBrush", map["PrimaryBrush"], 4.5);
+
+        // Homepage reading plane consistency: luminance difference between InputBrush and ResultSurfaceBrush <= 2%
+        var inputLum = ThemeContrast.Luminance(map["InputBrush"]);
+        var resultLum = ThemeContrast.Luminance(map["ResultSurfaceBrush"]);
+        var lumDiff = Math.Abs(inputLum - resultLum);
+        if (lumDiff > 0.02)
+        {
+            throw new InvalidOperationException(
+                $"[{name}] InputBrush ({map["InputBrush"]}) and ResultSurfaceBrush ({map["ResultSurfaceBrush"]}) luminance difference is {lumDiff:P2}, expected <= 2%");
+        }
     }
 
     private static void AssertRatio(

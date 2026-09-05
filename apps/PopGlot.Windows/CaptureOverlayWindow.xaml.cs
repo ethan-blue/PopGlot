@@ -34,7 +34,7 @@ public partial class CaptureOverlayWindow : Window
         _forceOcrMode = ocrOnly;
         if (ocrOnly)
         {
-            HintDetail.Text = "Esc 或右键取消 · 仅提取画面文字 (OCR)";
+            HintDetail.Text = "框选文本区域 · Esc 取消";
         }
     }
 

@@ -71,7 +71,7 @@
             <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
         <Style x:Key="EditorSectionTitle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
-            <Setter Property="FontSize" Value="13.5" />
+            <Setter Property="FontSize" Value="13" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
         <Style x:Key="ModelChipButton" TargetType="Button">
@@ -80,7 +80,7 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
             <Setter Property="FontFamily" Value="{StaticResource MonoFontFamily}" />
-            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="FontSize" Value="11" />
             <Setter Property="Padding" Value="8,4" />
             <Setter Property="Margin" Value="0,0,6,6" />
             <Setter Property="Cursor" Value="Hand" />
@@ -111,12 +111,11 @@
         </Style>
         <Style x:Key="EvidenceBadge" TargetType="Border">
             <Setter Property="CornerRadius" Value="4" />
-            <Setter Property="Padding" Value="5,1.5" />
+            <Setter Property="Padding" Value="5,2" />
             <Setter Property="Margin" Value="0,0,6,0" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
-        <Style x:Key="ModelRecommendationChipStyle" BasedOn="{StaticResource ModelChipButton}" TargetType="Button" />
     </UserControl.Resources>
 
     <Grid>
@@ -129,14 +128,14 @@
         <Grid Grid.Row="0">
             <StackPanel>
                 <TextBlock Text="翻译引擎" Style="{StaticResource PageTitle}" />
-                <TextBlock Text="配置翻译使用的 AI 模型或中转服务。配置保存后对后续翻译生效。"
+                <TextBlock Text="接入模型或中转接口，保存即时生效。"
                            Style="{StaticResource PageSubtitle}" />
             </StackPanel>
             <Button Content="添加引擎" HorizontalAlignment="Right" VerticalAlignment="Top"
                     Style="{StaticResource PrimaryButton}" Padding="16,8" Click="AddProfile_Click" />
         </Grid>
 
-        <Border x:Name="RoutingPanel" Grid.Row="1" Margin="0,14,0,14" Padding="14,10" CornerRadius="10"
+        <Border x:Name="RoutingPanel" Grid.Row="1" Margin="0,14,0,14" Padding="14,10" CornerRadius="{DynamicResource CardRadius}"
                 Background="{DynamicResource InputBrush}"
                 BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
             <Grid>
@@ -147,11 +146,11 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel Width="96" VerticalAlignment="Center">
                     <TextBlock Text="默认路由" FontSize="12.5" FontWeight="SemiBold" />
-                    <TextBlock Text="修改后对后续翻译生效" Style="{StaticResource Caption}" Margin="0,2,0,0" />
+                    <TextBlock Text="即时生效" Style="{StaticResource Caption}" Margin="0,2,0,0" />
                 </StackPanel>
                 <StackPanel Grid.Column="2">
                     <TextBlock Text="文字" Style="{StaticResource Metadata}" Margin="2,0,0,5" />
-                    <ComboBox x:Name="DefaultTextCombo" MinHeight="34"
+                    <ComboBox x:Name="DefaultTextCombo"
                               AutomationProperties.Name="默认文字服务"
                               SelectionChanged="DefaultTextCombo_SelectionChanged">
                         <ComboBox.ItemContainerStyle>
@@ -163,7 +162,7 @@
                 </StackPanel>
                 <StackPanel Grid.Column="4">
                     <TextBlock Text="图片" Style="{StaticResource Metadata}" Margin="2,0,0,5" />
-                    <ComboBox x:Name="DefaultVisionCombo" MinHeight="34"
+                    <ComboBox x:Name="DefaultVisionCombo"
                               AutomationProperties.Name="默认视觉服务"
                               SelectionChanged="DefaultVisionCombo_SelectionChanged">
                         <ComboBox.ItemContainerStyle>
@@ -180,15 +179,13 @@
 
         <Grid x:Name="DetailGrid" Grid.Row="2" SizeChanged="DetailGrid_SizeChanged">
             <!-- Service overview. Editing is explicit and replaces this list. -->
-            <Border x:Name="EditorEmpty" Padding="16,14" CornerRadius="10"
-                    Background="{DynamicResource SurfaceBrush}"
-                    BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
+            <Border x:Name="EditorEmpty" Padding="0" Background="Transparent" BorderThickness="0">
                 <Grid>
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-                    <StackPanel Margin="2,0,0,13">
-                        <TextBlock Text="已配置引擎" FontSize="15" FontWeight="SemiBold" />
-                        <TextBlock Text="点击“编辑”修改连接；切换默认路由不需要重新保存服务。"
-                                   Style="{StaticResource Caption}" Margin="0,4,0,0" />
+                    <StackPanel Margin="2,0,0,12">
+                        <TextBlock Text="已配置引擎" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Text="点击编辑修改连接；切换路由自动生效。"
+                                   Style="{StaticResource Caption}" Margin="0,3,0,0" />
                     </StackPanel>
                     <Grid Grid.Row="1">
                         <StackPanel x:Name="ProfilesEmptyText" Visibility="Collapsed"
@@ -198,8 +195,8 @@
                                 <Path Data="{StaticResource IconProvider}" Width="20" Height="20" Stretch="Uniform"
                                       Fill="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Border>
-                            <TextBlock Text="还没有配置翻译引擎" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" />
-                            <TextBlock Text="添加一个翻译引擎或中转服务，保存并设为默认后即可开始翻译；连接测试只报告健康状态。" Style="{StaticResource Caption}"
+                            <TextBlock Text="未配置翻译引擎" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                            <TextBlock Text="添加接口并设为默认即可开始翻译。" Style="{StaticResource Caption}"
                                        Margin="0,6,0,14" HorizontalAlignment="Center" />
                             <Button Content="添加第一个引擎" Style="{StaticResource PrimaryButton}"
                                     Padding="16,7" Click="AddProfile_Click" />
@@ -208,14 +205,14 @@
                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <Border Padding="13,11" CornerRadius="9" Background="{DynamicResource InputBrush}"
+                                    <Border Padding="13,11" CornerRadius="{DynamicResource CardRadius}" Background="{DynamicResource InputBrush}"
                                             BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="36"/><ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="150"/><ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
-                                            <Border Width="30" Height="30" CornerRadius="9" Background="{DynamicResource AccentSoftBrush}">
+                                            <Border Width="30" Height="30" CornerRadius="10" Background="{DynamicResource AccentSoftBrush}">
                                                 <Path Data="{StaticResource IconProvider}" Width="15" Height="15" Stretch="Uniform"
                                                       Fill="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                             </Border>
@@ -225,7 +222,7 @@
                                                         <ColumnDefinition Width="*" />
                                                         <ColumnDefinition Width="Auto" />
                                                     </Grid.ColumnDefinitions>
-                                                    <TextBlock Text="{Binding Name}" FontSize="13.5" FontWeight="SemiBold"
+                                                    <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
                                                                VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
                                                                ToolTip="{Binding Name}" />
                                                     <Border Grid.Column="1" Visibility="{Binding IsDefaultBadge}" Style="{StaticResource StatusPill}"
@@ -254,9 +251,7 @@
             </Border>
 
             <!-- Full-width focused editor. -->
-            <Border x:Name="EditorForm" Visibility="Collapsed" Padding="16,14" CornerRadius="10"
-                    Background="{DynamicResource SurfaceBrush}"
-                    BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
+            <Border x:Name="EditorForm" Visibility="Collapsed" Padding="0" Background="Transparent" BorderThickness="0">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/><RowDefinition Height="*"/>
@@ -276,8 +271,8 @@
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="0,0,8,0">
                         <StackPanel>
                             <StackPanel x:Name="PresetsPanel" Visibility="Collapsed">
-                                <TextBlock Text="选择服务商" FontSize="18" FontWeight="SemiBold" />
-                                <TextBlock Text="选择常用服务商，或使用自定义兼容服务接入自建中转与私有模型。"
+                                <TextBlock Text="选择服务商" FontSize="20" FontWeight="SemiBold" />
+                                <TextBlock Text="选择服务商后，只需填写 API Key 即可开始使用。"
                                            Style="{StaticResource Caption}" Margin="0,5,0,16" />
 
                                 <!-- Prominent Custom / Relay preset card -->
@@ -286,19 +281,19 @@
                                         Background="{DynamicResource AccentSoftBrush}">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
+                                             <ColumnDefinition Width="*" />
+                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
                                         <StackPanel VerticalAlignment="Center">
                                             <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="自定义兼容 / 中转服务" FontWeight="SemiBold" FontSize="14"
+                                                <TextBlock Text="自定义兼容服务" FontWeight="SemiBold" FontSize="14"
                                                            Foreground="{DynamicResource TextPrimaryBrush}" />
                                                 <Border Style="{StaticResource StatusPill}" Background="{DynamicResource AccentBrush}"
                                                         Margin="8,0,0,0" Padding="6,1" VerticalAlignment="Center">
-                                                    <TextBlock Text="常用中转/私有端点" FontSize="10" Foreground="{DynamicResource AccentTextBrush}" FontWeight="SemiBold" />
+                                                    <TextBlock Text="自建或第三方服务" FontSize="11" Foreground="{DynamicResource AccentTextBrush}" FontWeight="SemiBold" />
                                                 </Border>
                                             </StackPanel>
-                                            <TextBlock Text="支持 OpenAI / Claude / Gemini 兼容协议的中转代理、One API、New API、自建反代或本地服务"
+                                            <TextBlock Text="适用于 OpenAI 兼容接口、自建服务和第三方平台"
                                                        Style="{StaticResource Caption}" Margin="0,4,0,0" />
                                         </StackPanel>
                                         <TextBlock Grid.Column="1" Text="接入 →" VerticalAlignment="Center" FontWeight="SemiBold"
@@ -306,20 +301,20 @@
                                     </Grid>
                                 </Button>
 
-                                <TextBlock Text="或选择标准服务商预设" FontSize="12" FontWeight="SemiBold"
+                                <TextBlock Text="标准服务商预设" FontSize="12" FontWeight="SemiBold"
                                            Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,10" />
 
                                 <Grid>
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                     <StackPanel>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="openai" Click="Preset_Click"><StackPanel><TextBlock Text="OpenAI" FontWeight="SemiBold"/><TextBlock Text="GPT · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="gemini" Click="Preset_Click"><StackPanel><TextBlock Text="Google Gemini" FontWeight="SemiBold"/><TextBlock Text="Gemini · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="zhipu" Click="Preset_Click"><StackPanel><TextBlock Text="智谱 GLM" FontWeight="SemiBold"/><TextBlock Text="国内服务 · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="openai" AutomationProperties.Name="OpenAI 预设" Click="Preset_Click"><StackPanel><TextBlock Text="OpenAI" FontWeight="SemiBold"/><TextBlock Text="GPT · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="gemini" AutomationProperties.Name="Google Gemini 预设" Click="Preset_Click"><StackPanel><TextBlock Text="Google Gemini" FontWeight="SemiBold"/><TextBlock Text="Gemini · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="zhipu" AutomationProperties.Name="智谱 GLM 预设" Click="Preset_Click"><StackPanel><TextBlock Text="智谱 GLM" FontWeight="SemiBold"/><TextBlock Text="国内服务 · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
                                     </StackPanel>
                                     <StackPanel Grid.Column="2">
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="deepseek" Click="Preset_Click"><StackPanel><TextBlock Text="DeepSeek" FontWeight="SemiBold"/><TextBlock Text="文字翻译 · 官方接口" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="claude" Click="Preset_Click"><StackPanel><TextBlock Text="Anthropic Claude" FontWeight="SemiBold"/><TextBlock Text="Messages · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="ollama" Click="Preset_Click"><StackPanel><TextBlock Text="Ollama（本地）" FontWeight="SemiBold"/><TextBlock Text="本机运行 · 无需 Key" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="deepseek" AutomationProperties.Name="DeepSeek 预设" Click="Preset_Click"><StackPanel><TextBlock Text="DeepSeek" FontWeight="SemiBold"/><TextBlock Text="文字翻译 · 官方接口" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="claude" AutomationProperties.Name="Anthropic Claude 预设" Click="Preset_Click"><StackPanel><TextBlock Text="Anthropic Claude" FontWeight="SemiBold"/><TextBlock Text="Messages · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="ollama" AutomationProperties.Name="Ollama（本地）预设" Click="Preset_Click"><StackPanel><TextBlock Text="Ollama（本地）" FontWeight="SemiBold"/><TextBlock Text="本机运行 · 无需 Key" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
                                     </StackPanel>
                                 </Grid>
                             </StackPanel>
@@ -329,11 +324,11 @@
                                     <StackPanel Orientation="Horizontal">
                                         <Border Width="44" Height="44" CornerRadius="12" Background="{DynamicResource AccentSoftBrush}"
                                                 BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1">
-                                            <TextBlock x:Name="EditorProviderBadge" Text="S" FontSize="16" FontWeight="Bold"
+                                            <TextBlock x:Name="EditorProviderBadge" Text="S" FontSize="14.5" FontWeight="Bold"
                                                        Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                         </Border>
                                         <StackPanel Margin="13,0,0,0" VerticalAlignment="Center">
-                                            <TextBlock x:Name="EditorProviderTitle" Text="连接引擎" FontSize="18" FontWeight="SemiBold" />
+                                            <TextBlock x:Name="EditorProviderTitle" Text="连接引擎" FontSize="20" FontWeight="SemiBold" />
                                             <TextBlock x:Name="EditorProviderMeta" Style="{StaticResource Caption}" Margin="0,3,0,0" />
                                         </StackPanel>
                                     </StackPanel>
@@ -397,7 +392,7 @@
 
                                         <!-- Recommendation Preference -->
                                         <Grid Margin="0,12,0,0">
-                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <WrapPanel VerticalAlignment="Center">
                                                 <TextBlock Text="推荐偏好" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="0,0,12,0" />
                                                 <RadioButton x:Name="PreferenceSpeedRadio" Content="速度优先" GroupName="ModelPreferenceGroup"
                                                              AutomationProperties.Name="速度优先偏好" Margin="0,0,12,0"
@@ -408,7 +403,7 @@
                                                 <RadioButton x:Name="PreferenceQualityRadio" Content="质量优先" GroupName="ModelPreferenceGroup"
                                                              AutomationProperties.Name="质量优先偏好"
                                                              Checked="PreferenceRadio_Checked" />
-                                            </StackPanel>
+                                            </WrapPanel>
                                         </Grid>
 
                                         <Grid x:Name="ModelFieldsGrid">
@@ -451,23 +446,24 @@
                                             </StackPanel>
                                         </Grid>
                                         <CheckBox x:Name="UseTextModelForVisionCheckBox"
-                                                  Content="同一模型同时用于文字与图片"
+                                                  Content="图文共用此模型"
                                                   Margin="2,10,0,0"
                                                   Style="{StaticResource SwitchCheckBox}"
                                                   Checked="UseTextModelForVision_Changed"
                                                   Unchecked="UseTextModelForVision_Changed" />
-                                        <TextBlock Text="配置了文字模型即启用文字路线；配置了图片模型即启用图片路线，不需要额外测试或能力开关。"
+                                        <TextBlock Text="填入模型即启用对应功能，无需手动开启。"
                                                    Style="{StaticResource Caption}" Margin="26,4,0,0" TextWrapping="Wrap" />
                                         <TextBlock x:Name="ModelCatalogStatusText" Visibility="Collapsed" Style="{StaticResource Caption}"
                                                    Margin="2,9,0,0" TextWrapping="Wrap" />
                                     </StackPanel>
                                 </Border>
 
-                                <Border x:Name="AdvancedGroup" Style="{StaticResource EditorSectionCard}">
+                                <Border x:Name="AdvancedGroup" Margin="0,0,0,14">
+
                                     <Expander x:Name="AdvancedExpander" Header="高级设置">
                                         <StackPanel Margin="0,14,0,0">
-                                            <TextBlock Text="接口路径" Style="{StaticResource EditorSectionTitle}" />
-                                            <TextBlock Text="通常无需修改；仅在中转服务使用不同接口路径时调整。"
+                                            <TextBlock Text="接口与网络" Style="{StaticResource EditorSectionTitle}" />
+                                            <TextBlock Text="官方预设无需修改；仅自建或第三方服务需要调整。"
                                                        Style="{StaticResource Caption}" Margin="0,4,0,12" />
                                             <Grid x:Name="EndpointFieldsGrid">
                                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -484,7 +480,7 @@
 
                                             <Border Height="1" Margin="0,17,0,16" Background="{DynamicResource BorderSubtleBrush}" />
                                             <TextBlock Text="请求定制" Style="{StaticResource EditorSectionTitle}" />
-                                            <TextBlock Text="请求头每行填写一项“名称: 值”；认证头由 PopGlot 安全管理。"
+                                            <TextBlock Text="仅在服务商明确要求额外请求头时填写。"
                                                        Style="{StaticResource Caption}" Margin="0,4,0,12" />
                                             <Grid x:Name="AdvancedDetailsGrid">
                                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -499,14 +495,14 @@
                                                     <TextBlock Text="Anthropic API 版本" Style="{StaticResource FieldLabel}"/>
                                                     <TextBox x:Name="AnthropicVersionTextBox" Style="{StaticResource EditorTextField}" FontFamily="{StaticResource MonoFontFamily}"/>
                                                     <TextBlock Text="服务用途" Style="{StaticResource FieldLabel}" Margin="0,15,0,8"/>
-                                                    <TextBlock Text="由上方文字模型和图片模型自动决定，不再使用人工能力开关。"
+                                                    <TextBlock Text="由上方文字与图片模型自动决定。"
                                                                Style="{StaticResource Caption}" TextWrapping="Wrap"/>
                                                     <!-- Kept hidden for schema/editor compatibility; runtime roles are derived from model fields. -->
                                                     <CheckBox x:Name="SupportsTextCheckBox" Visibility="Collapsed"/>
                                                     <CheckBox x:Name="SupportsVisionCheckBox" Visibility="Collapsed"/>
-                                                    <CheckBox x:Name="AllowInsecureTlsCheckBox" Content="信任自签名 TLS 证书" Margin="0,4,0,0"
+                                                    <CheckBox x:Name="AllowInsecureTlsCheckBox" Content="允许自签名 HTTPS 证书" Margin="0,4,0,0"
                                                   Style="{StaticResource SwitchCheckBox}"/>
-                                                    <TextBlock Text="仅用于你信任的本地或私有服务。" Style="{StaticResource Caption}" Margin="24,4,0,0"/>
+                                                    <TextBlock Text="仅连接你信任的本地或内网服务时开启。" Style="{StaticResource Caption}" Margin="24,4,0,0"/>
                                                 </StackPanel>
                                             </Grid>
                                         </StackPanel>
@@ -516,7 +512,7 @@
                         </StackPanel>
                     </ScrollViewer>
 
-                    <Border x:Name="DraftGuardBar" Grid.Row="2" Visibility="Collapsed" Margin="0,10,0,0" Padding="12,10" CornerRadius="8"
+                    <Border x:Name="DraftGuardBar" Grid.Row="2" Visibility="Collapsed" Margin="0,10,0,0" Padding="12,10" CornerRadius="{DynamicResource CardRadius}"
                             Background="{DynamicResource WarningSoftBrush}" BorderBrush="{DynamicResource WarningBrush}" BorderThickness="1.5">
                         <!-- 说明文字独占一行并可换行：旧布局把文字和三个按钮
                              挤在同一行，窄面板上按钮直接压在省略号文字上。 -->

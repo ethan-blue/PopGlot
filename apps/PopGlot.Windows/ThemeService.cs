@@ -104,6 +104,11 @@ internal static partial class ThemeService
         // DWMWA_WINDOW_CORNER_PREFERENCE (33): 2 = DWMWCP_ROUND
         var cornerPref = 2;
         _ = NativeMethods.DwmSetWindowAttribute(handle, 33, ref cornerPref, sizeof(int));
+
+        // A one-pixel glass extension keeps the native DWM elevation/shadow
+        // for opaque borderless windows without sacrificing ClearType.
+        var margins = new Margins(1, 1, 1, 1);
+        _ = NativeMethods.DwmExtendFrameIntoClientArea(handle, ref margins);
     }
 
     private static void EnsureSystemWatcher()
@@ -139,12 +144,13 @@ internal static partial class ThemeService
     }
 
     // Role semantics (see docs/UI-REFACTOR-PLAN.md §13):
-    //   Canvas       window base background
-    //   Sidebar      stable navigation rail
-    //   Surface      primary content area
-    //   SurfaceMuted secondary/read-only areas, list backgrounds
+    //   Canvas        window base background
+    //   Sidebar       stable navigation rail
+    //   Surface       primary content area
+    //   SurfaceMuted  secondary/read-only areas, list backgrounds
     //   SurfaceRaised popups, dropdown menus, floating overlays
-    //   Input        editable controls
+    //   Input         editable controls
+    //   ResultSurface translation result reading canvas
     // Accent (azure blue) is the brand only — success/warning/danger are separate
     // hues, so "online/OK/default" never borrows the brand colour.
     //
@@ -156,62 +162,64 @@ internal static partial class ThemeService
     // text, so low-emphasis copy never turns into grey mush.
     internal static readonly (string Key, string Value)[] DarkTokens =
     [
-        ("CanvasBrush", "#0A0B0F"),
-        ("SidebarBrush", "#0F1015"),
-        ("SurfaceBrush", "#14161C"),
-        ("SurfaceMutedBrush", "#111318"),
-        ("SurfaceRaisedBrush", "#1B1E26"),
-        ("SurfaceHoverBrush", "#21242E"),
-        ("SurfacePressedBrush", "#333B49"),
-        ("InputBrush", "#0E1014"),
-        ("BorderSubtleBrush", "#2A303D"),
-        ("BorderStrongBrush", "#626C82"),
-        ("AccentBrush", "#4D9FFF"),
-        ("AccentHoverBrush", "#6BABFF"),
-        ("AccentPressedBrush", "#3D82E8"),
+        ("CanvasBrush", "#101216"),
+        ("SidebarBrush", "#14171E"),
+        ("SurfaceBrush", "#181B22"),
+        ("SurfaceMutedBrush", "#14161D"),
+        ("SurfaceRaisedBrush", "#20242E"),
+        ("SurfaceHoverBrush", "#272C38"),
+        ("SurfacePressedBrush", "#353C4D"),
+        ("InputBrush", "#181B22"),
+        ("ResultSurfaceBrush", "#181B22"),
+        ("BorderSubtleBrush", "#2D3342"),
+        ("BorderStrongBrush", "#6B768D"),
+        ("AccentBrush", "#7C89D9"),
+        ("AccentHoverBrush", "#8F9BE3"),
+        ("AccentPressedBrush", "#6976C4"),
         ("AccentTextBrush", "#071224"),
-        ("AccentSoftBrush", "#152C4E"),
-        ("AccentBorderBrush", "#5E96E0"),
+        ("AccentSoftBrush", "#20243A"),
+        ("AccentBorderBrush", "#59649D"),
         // 主按钮用品牌蓝系（深一档，配白字）：既保留品牌色又保证按钮
         // 文字 AA 级对比；浅色 Accent 只用于强调/链接/选中。
-        ("PrimaryBrush", "#2563EB"),
-        ("PrimaryHoverBrush", "#1F55C7"),
-        ("PrimaryPressedBrush", "#1A47A8"),
-        ("PrimaryTextBrush", "#FFFFFF"),
+        ("PrimaryBrush", "#5562B3"),
+        ("PrimaryHoverBrush", "#5B69BE"),
+        ("PrimaryPressedBrush", "#4B579F"),
+        ("PrimaryTextBrush", "#F7F8FC"),
         ("TextPrimaryBrush", "#EEF0F4"),
-        ("TextSecondaryBrush", "#A3A9B4"),
-        ("TextTertiaryBrush", "#8A93A2"),
-        ("TextDisabledBrush", "#525A66"),
+        ("TextSecondaryBrush", "#A8B0BD"),
+        ("TextTertiaryBrush", "#939BAA"),
+        ("TextDisabledBrush", "#565F6E"),
         ("DangerBrush", "#FF6B7D"),
         ("DangerSoftBrush", "#401C25"),
         ("WarningBrush", "#F2B95C"),
         ("WarningSoftBrush", "#3D2D14"),
         ("SuccessBrush", "#3DD68C"),
         ("SuccessSoftBrush", "#143826"),
-        ("OverlayScrimBrush", "#C80A0B0F"),
+        ("OverlayScrimBrush", "#C8101216"),
     ];
 
     internal static readonly (string Key, string Value)[] LightTokens =
     [
         ("CanvasBrush", "#F6F7F9"),
-        ("SidebarBrush", "#FCFCFD"),
+        ("SidebarBrush", "#FAFAFC"),
         ("SurfaceBrush", "#FFFFFF"),
-        ("SurfaceMutedBrush", "#F4F5F7"),
+        ("SurfaceMutedBrush", "#F8F9FA"),
         ("SurfaceRaisedBrush", "#FFFFFF"),
         ("SurfaceHoverBrush", "#EDEFF3"),
         ("SurfacePressedBrush", "#D7DDE6"),
         ("InputBrush", "#FFFFFF"),
-        ("BorderSubtleBrush", "#D5DAE1"),
+        ("ResultSurfaceBrush", "#FFFFFF"),
+        ("BorderSubtleBrush", "#E2E5E9"),
         ("BorderStrongBrush", "#8590A0"),
-        ("AccentBrush", "#1A63D8"),
-        ("AccentHoverBrush", "#1554BC"),
-        ("AccentPressedBrush", "#1147A0"),
+        ("AccentBrush", "#5563B8"),
+        ("AccentHoverBrush", "#4855A4"),
+        ("AccentPressedBrush", "#3D478E"),
         ("AccentTextBrush", "#FFFFFF"),
-        ("AccentSoftBrush", "#E4EEFC"),
-        ("AccentBorderBrush", "#6D9FE5"),
-        ("PrimaryBrush", "#1A63D8"),
-        ("PrimaryHoverBrush", "#1554BC"),
-        ("PrimaryPressedBrush", "#1147A0"),
+        ("AccentSoftBrush", "#EEF0FA"),
+        ("AccentBorderBrush", "#AAB1D9"),
+        ("PrimaryBrush", "#5260B5"),
+        ("PrimaryHoverBrush", "#4652A0"),
+        ("PrimaryPressedBrush", "#3B4589"),
         ("PrimaryTextBrush", "#FFFFFF"),
         ("TextPrimaryBrush", "#15171C"),
         ("TextSecondaryBrush", "#4D545F"),
@@ -226,8 +234,22 @@ internal static partial class ThemeService
         ("OverlayScrimBrush", "#A615171C"),
     ];
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Margins(int left, int right, int top, int bottom)
+    {
+        public int Left = left;
+        public int Right = right;
+        public int Top = top;
+        public int Bottom = bottom;
+    }
+
     private static partial class NativeMethods
     {
+        [LibraryImport("dwmapi.dll")]
+        internal static partial int DwmExtendFrameIntoClientArea(
+            nint window,
+            ref Margins margins);
+
         [LibraryImport("dwmapi.dll")]
         internal static partial int DwmSetWindowAttribute(
             nint window,

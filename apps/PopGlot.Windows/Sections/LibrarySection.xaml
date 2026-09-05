@@ -3,170 +3,226 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:PopGlot.Windows">
 
-    <!-- Master–detail: the list shows one summary line per entry; the full
-         record renders in the fixed detail pane on the right and scrolls
-         there, so long source/translation text never reflows the list. -->
+    <!-- High-density Master-Detail & Property List desktop workstation -->
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- Title + mode -->
-        <StackPanel Grid.Row="0">
+        <!-- Top ToolBar: title, mode switch, quick search, export and clear -->
+        <Grid Grid.Row="0" Margin="0,0,0,8">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="资料库" Style="{StaticResource PageTitle}" FontSize="15"
+                           FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,12,0" />
+                <RadioButton x:Name="ModeHistory" Style="{StaticResource SegmentButton}"
+                             GroupName="LibraryMode" IsChecked="True" Content="历史"
+                             Checked="Mode_Checked" Tag="History" />
+                <RadioButton x:Name="ModeVocabulary" Style="{StaticResource SegmentButton}"
+                             GroupName="LibraryMode" Content="生词"
+                             Checked="Mode_Checked" Tag="Vocabulary" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <TextBox x:Name="LibrarySearchBox" Height="28" Width="200" MinWidth="130"
+                         FontSize="12.5" Padding="8,3" VerticalContentAlignment="Center"
+                         AutomationProperties.Name="搜索历史与生词"
+                         local:Ui.Placeholder="搜索原文或译文…"
+                         TextChanged="LibrarySearch_TextChanged" />
+                <Button x:Name="ExportMenuButton" Style="{StaticResource GhostButton}"
+                        Content="导出" Padding="10,4" Margin="8,0,0,0"
+                        Click="ExportMenuButton_Click" />
+                <Button x:Name="ClearCurrentButton" Style="{StaticResource GhostButton}"
+                        Margin="4,0,0,0" Content="清理" Padding="10,4"
+                        ToolTip="清空当前数据源的全部记录（点击两次确认）" />
+            </StackPanel>
+        </Grid>
+
+        <!-- ==================== Master–Detail Surface ==================== -->
+        <Border Grid.Row="1" Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
+                CornerRadius="4">
             <Grid>
-                <StackPanel>
-                    <TextBlock Text="资料库" Style="{StaticResource PageTitle}" />
-                </StackPanel>
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
-                    <RadioButton x:Name="ModeHistory" Style="{StaticResource SegmentButton}"
-                                 GroupName="LibraryMode" IsChecked="True" Content="历史"
-                                 Checked="Mode_Checked" Tag="History" />
-                    <RadioButton x:Name="ModeVocabulary" Style="{StaticResource SegmentButton}"
-                                 GroupName="LibraryMode" Content="生词"
-                                 Checked="Mode_Checked" Tag="Vocabulary" />
-                </StackPanel>
-            </Grid>
-            <TextBlock Style="{StaticResource PageSubtitle}"
-                       Text="历史与生词只保存在本机。左侧选择条目查看全文，Enter 载入工作台，Delete 删除。" />
-        </StackPanel>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="320" MinWidth="220" MaxWidth="460" />
+                    <ColumnDefinition Width="1" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
 
-        <TextBox x:Name="LibrarySearchBox" Grid.Row="1" Height="34" Margin="0,12,0,10"
-                 AutomationProperties.Name="搜索历史与生词"
-                 local:Ui.Placeholder="搜索原文或译文…"
-                 TextChanged="LibrarySearch_TextChanged" />
+                <!-- ==================== Master Column: List ==================== -->
+                <Grid Grid.Column="0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
 
-        <!-- ==================== Master–detail ==================== -->
-        <Grid Grid.Row="2">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="300" MinWidth="220" />
-                <ColumnDefinition Width="16" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
-
-            <!-- Master: one summary line per entry -->
-            <Grid Grid.Column="0">
-                <StackPanel x:Name="LibraryEmptyText" HorizontalAlignment="Center" VerticalAlignment="Center"
-                            Margin="16" Visibility="Collapsed">
-                    <TextBlock x:Name="LibraryEmptyTitle" Text="暂无历史记录" FontSize="13" FontWeight="SemiBold"
-                               Foreground="{DynamicResource TextSecondaryBrush}" TextAlignment="Center"
-                               HorizontalAlignment="Center" Margin="0,0,0,4" />
-                    <TextBlock x:Name="LibraryEmptyHint"
-                               Style="{StaticResource Caption}" MaxWidth="220"
-                               TextAlignment="Center" HorizontalAlignment="Center" />
-                </StackPanel>
-
-                <ListBox x:Name="LibraryListBox"
-                         KeyDown="LibraryList_KeyDown"
-                         SelectionChanged="LibraryList_SelectionChanged"
-                         ScrollViewer.VerticalScrollBarVisibility="Auto">
-                    <ListBox.ItemContainerStyle>
-                        <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
-                            <Setter Property="AutomationProperties.Name" Value="{Binding TitleOneLine}" />
-                        </Style>
-                    </ListBox.ItemContainerStyle>
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <Grid Margin="2,1">
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Text="{Binding TitleOneLine}" FontSize="13"
-                                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
-                                               Foreground="{DynamicResource TextPrimaryBrush}" />
-                                    <TextBlock Grid.Column="1" Text="{Binding Timestamp}" FontSize="11"
-                                               Margin="12,0,0,0" VerticalAlignment="Center"
-                                               Foreground="{DynamicResource TextTertiaryBrush}" />
-                                </Grid>
-                                <TextBlock Grid.Row="1" Text="{Binding DetailOneLine}" FontSize="12"
-                                           Margin="0,2,0,0" TextTrimming="CharacterEllipsis"
-                                           Foreground="{DynamicResource TextSecondaryBrush}" />
-                            </Grid>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
-            </Grid>
-
-            <!-- Detail: full entry, scrolls independently of the list -->
-            <Border Grid.Column="2" Background="{DynamicResource SurfaceMutedBrush}" CornerRadius="10"
-                    BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                    Padding="16,14">
-                <Grid>
-                    <!-- Nothing selected -->
-                    <StackPanel x:Name="DetailPlaceholder" HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <TextBlock Text="选择左侧条目查看全文" FontSize="13" FontWeight="SemiBold"
-                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                    <StackPanel x:Name="LibraryEmptyText" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                Margin="16" Visibility="Collapsed">
+                        <TextBlock x:Name="LibraryEmptyTitle" Text="暂无历史记录" Style="{StaticResource SectionTitle}"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" TextAlignment="Center"
                                    HorizontalAlignment="Center" Margin="0,0,0,4" />
-                        <TextBlock Style="{StaticResource Caption}" MaxWidth="240" TextAlignment="Center"
-                                   HorizontalAlignment="Center"
-                                   Text="支持方向键切换，Enter 载入翻译工作台，Delete 删除。" />
+                        <TextBlock x:Name="LibraryEmptyHint"
+                                   Style="{StaticResource Caption}" MaxWidth="220"
+                                   TextAlignment="Center" HorizontalAlignment="Center" />
                     </StackPanel>
 
-                    <!-- Selected entry: content scrolls, actions stay pinned -->
+                    <ListBox x:Name="LibraryListBox" Grid.Row="0"
+                             Background="Transparent" BorderThickness="0"
+                             KeyDown="LibraryList_KeyDown"
+                             SelectionChanged="LibraryList_SelectionChanged"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                                <Setter Property="AutomationProperties.Name" Value="{Binding TitleOneLine}" />
+                                <Setter Property="Padding" Value="10,6" />
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,1">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding TitleOneLine}" Style="{StaticResource Body}"
+                                                   FontWeight="SemiBold"
+                                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                        <TextBlock Grid.Column="1" Text="{Binding Timestamp}" Style="{StaticResource Metadata}"
+                                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                                   Margin="8,0,0,0" VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Grid.Row="1" Text="{Binding DetailOneLine}" Style="{StaticResource Caption}"
+                                               Margin="0,2,0,0" TextTrimming="CharacterEllipsis"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <!-- Master bottom summary line -->
+                    <Border Grid.Row="1" Background="{DynamicResource SurfaceMutedBrush}"
+                            BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
+                            Padding="10,5">
+                        <TextBlock x:Name="LibraryCountText" Style="{StaticResource Metadata}"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   VerticalAlignment="Center" />
+                    </Border>
+                </Grid>
+
+                <!-- ==================== Hairline Separator ==================== -->
+                <Rectangle Grid.Column="1" Fill="{DynamicResource BorderSubtleBrush}"
+                           HorizontalAlignment="Stretch" />
+
+                <!-- ==================== Detail Column: Property List Inspector ==================== -->
+                <Grid Grid.Column="2" Background="{DynamicResource CanvasBrush}">
+                    <!-- Nothing selected placeholder -->
+                    <StackPanel x:Name="DetailPlaceholder" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <TextBlock Text="未选择条目" Style="{StaticResource SectionTitle}"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   HorizontalAlignment="Center" Margin="0,0,0,4" />
+                        <TextBlock Style="{StaticResource Caption}" MaxWidth="280" TextAlignment="Center"
+                                   HorizontalAlignment="Center" Foreground="{DynamicResource TextTertiaryBrush}"
+                                   Text="方向键切换 · Enter 载入工作台 · Delete 删除" />
+                    </StackPanel>
+
+                    <!-- Selected entry: property list inspector style -->
                     <Grid x:Name="DetailScroll" Visibility="Collapsed">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
-                        <ScrollViewer x:Name="DetailContent" VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled">
-                            <StackPanel Margin="0,0,6,0">
-                                <Grid Margin="0,0,0,10">
-                                    <TextBlock x:Name="DetailLanguagePair" FontSize="11"
-                                               VerticalAlignment="Center"
-                                               Foreground="{DynamicResource TextTertiaryBrush}" />
-                                    <TextBlock x:Name="DetailKind" FontSize="11" HorizontalAlignment="Right"
-                                               VerticalAlignment="Center"
-                                               Foreground="{DynamicResource TextTertiaryBrush}" />
-                                </Grid>
 
-                                <TextBlock x:Name="DetailSource" FontSize="12.5" TextWrapping="Wrap"
-                                           Foreground="{DynamicResource TextSecondaryBrush}" />
-                                <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" Margin="0,10" />
-                                <TextBlock x:Name="DetailTranslation" FontSize="14" TextWrapping="Wrap"
-                                           LineHeight="21"
-                                           Foreground="{DynamicResource TextPrimaryBrush}" />
-                                <TextBlock x:Name="DetailExplanation" FontSize="12" TextWrapping="Wrap"
+                        <ScrollViewer x:Name="DetailContent" Grid.Row="0"
+                                      VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      Padding="16,14">
+                            <StackPanel Margin="0,0,4,0">
+                                <!-- Property list header table -->
+                                <Border Background="{DynamicResource SurfaceRaisedBrush}"
+                                        BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
+                                        CornerRadius="4" Padding="12,8" Margin="0,0,0,12">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Grid Grid.Row="0">
+                                            <TextBlock Text="语言方向" Style="{StaticResource Metadata}"
+                                                       Foreground="{DynamicResource TextTertiaryBrush}"
+                                                       VerticalAlignment="Center" />
+                                            <TextBlock x:Name="DetailLanguagePair" Style="{StaticResource BodyStrong}"
+                                                       FontSize="12.5" Foreground="{DynamicResource AccentBrush}"
+                                                       HorizontalAlignment="Right" VerticalAlignment="Center" />
+                                        </Grid>
+                                        <Border Grid.Row="1" Height="1" Background="{DynamicResource BorderSubtleBrush}"
+                                                Margin="0,6" />
+                                        <Grid Grid.Row="2">
+                                            <TextBlock Text="来源与时间" Style="{StaticResource Metadata}"
+                                                       Foreground="{DynamicResource TextTertiaryBrush}"
+                                                       VerticalAlignment="Center" />
+                                            <TextBlock x:Name="DetailKind" Style="{StaticResource Metadata}"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                                       HorizontalAlignment="Right" VerticalAlignment="Center" />
+                                        </Grid>
+                                    </Grid>
+                                </Border>
+
+                                <!-- Source Property Block -->
+                                <TextBlock Text="原文" Style="{StaticResource FieldLabel}"
+                                           Foreground="{DynamicResource TextTertiaryBrush}"
+                                           Margin="0,0,0,4" />
+                                <Border Background="{DynamicResource InputBrush}"
+                                        BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
+                                        CornerRadius="4" Padding="12,10">
+                                    <TextBlock x:Name="DetailSource" FontSize="13" LineHeight="20"
+                                               TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </Border>
+
+                                <!-- Translation Property Block -->
+                                <TextBlock Text="译文" Style="{StaticResource FieldLabel}"
+                                           Foreground="{DynamicResource TextTertiaryBrush}"
+                                           Margin="0,12,0,4" />
+                                <Border Background="{DynamicResource InputBrush}"
+                                        BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
+                                        CornerRadius="4" Padding="12,10">
+                                    <TextBlock x:Name="DetailTranslation" FontSize="14.5" LineHeight="22"
+                                               TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextPrimaryBrush}" />
+                                </Border>
+
+                                <!-- Explanation Property Block -->
+                                <TextBlock x:Name="DetailExplanation" Style="{StaticResource Caption}"
+                                           TextWrapping="Wrap" LineHeight="18"
                                            Margin="0,10,0,0"
                                            Foreground="{DynamicResource TextTertiaryBrush}" />
                             </StackPanel>
                         </ScrollViewer>
 
-                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,10,0,0"
-                                    HorizontalAlignment="Right">
-                            <Button Style="{StaticResource GhostButton}" Content="朗读"
-                                    Padding="11,5" Click="CardSpeak_Click" />
-                            <Button Style="{StaticResource GhostButton}" Margin="5,0,0,0"
-                                    Content="复制译文" Padding="11,5" Click="CardCopy_Click" />
-                            <Button Style="{StaticResource GhostButton}" Margin="5,0,0,0"
-                                    Content="载入工作台" Padding="11,5" Click="CardLoad_Click" />
-                            <Button Style="{StaticResource DangerButton}" Margin="8,0,0,0"
-                                    Content="删除" Padding="11,5" Click="CardDelete_Click" />
-                        </StackPanel>
+                        <!-- Pinned bottom action bar -->
+                        <Border Grid.Row="1" Background="{DynamicResource SurfaceMutedBrush}"
+                                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
+                                Padding="12,8">
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button Style="{StaticResource GhostButton}" Content="朗读"
+                                        Padding="12,4" Click="CardSpeak_Click" />
+                                <Button Style="{StaticResource GhostButton}" Margin="6,0,0,0"
+                                        Content="复制译文" Padding="12,4" Click="CardCopy_Click" />
+                                <Button Style="{StaticResource GhostButton}" Margin="6,0,0,0"
+                                        Content="载入工作台" Padding="12,4" Click="CardLoad_Click" />
+                                <Button Style="{StaticResource DangerButton}" Margin="8,0,0,0"
+                                        Content="删除" Padding="12,4" Click="CardDelete_Click" />
+                            </StackPanel>
+                        </Border>
                     </Grid>
                 </Grid>
-            </Border>
-        </Grid>
-
-        <!-- Footer -->
-        <Grid Grid.Row="3" Margin="0,10,0,0">
-            <TextBlock x:Name="LibraryCountText" Style="{StaticResource Caption}"
-                       VerticalAlignment="Center" />
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button x:Name="ExportMenuButton" Style="{StaticResource GhostButton}"
-                        Content="导出" Padding="10,5" Click="ExportMenuButton_Click" />
-                <Button x:Name="ClearCurrentButton" Style="{StaticResource GhostButton}"
-                        Margin="4,0,0,0" Content="清理" Padding="10,5"
-                        ToolTip="清空当前数据源的全部记录（点击两次确认）" />
-            </StackPanel>
-        </Grid>
+            </Grid>
+        </Border>
     </Grid>
 </UserControl>

@@ -19,26 +19,31 @@
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
-        <!-- ==================== Sidebar: quiet navigation, no logo chrome ==================== -->
+        <!-- ==================== Sidebar: compact workstation navigation ==================== -->
         <Border Background="{DynamicResource SidebarBrush}"
                 BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,0,1,0">
-            <Grid Margin="12,18,12,16">
+            <Grid Margin="10,0,10,12">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="38" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="14,0,0,0">
-                    <Image Width="22" Height="22" VerticalAlignment="Center"
+                <!-- Brand header aligned with window caption height -->
+                <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="6,0,0,0">
+                    <Image Width="20" Height="20" VerticalAlignment="Center"
                            RenderOptions.BitmapScalingMode="HighQuality"
                            Source="/PopGlot;component/Assets/popglot-app-avatar-v3.png"
                            AutomationProperties.Name="PopGlot 图标" />
-                    <TextBlock Text="PopGlot" FontSize="15" FontWeight="SemiBold"
-                               Margin="9,0,0,0" VerticalAlignment="Center" />
+                    <TextBlock Text="PopGlot" Style="{StaticResource PageTitle}" FontSize="15"
+                               FontWeight="SemiBold" Margin="8,0,0,0" VerticalAlignment="Center" />
                 </StackPanel>
 
-                <StackPanel Grid.Row="1" Margin="0,20,0,0">
+                <!-- Navigation section with structured group header -->
+                <StackPanel Grid.Row="1" Margin="0,10,0,0">
+                    <TextBlock Text="工作台" Style="{StaticResource Metadata}"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               FontSize="11" Margin="10,0,0,8" />
                     <RadioButton x:Name="NavTranslate" Style="{StaticResource NavButton}"
                                  GroupName="Nav" IsChecked="True" Content="翻译"
                                  local:Ui.Icon="{StaticResource IconTranslate}"
@@ -49,19 +54,18 @@
                                  Checked="Nav_Checked" Tag="Library" />
                 </StackPanel>
 
-                <!-- Sidebar bottom: the primary (and only) settings entry of
-                     this window, so "打开设置" names exactly one control. -->
+                <!-- Sidebar bottom settings entry -->
                 <Button x:Name="NavSettingsButton" Grid.Row="2"
                         Style="{StaticResource NavActionButton}"
-                        Content="设置" Margin="0,10,0,0"
+                        Content="设置" Margin="0,8,0,0"
                         local:Ui.Icon="{StaticResource IconSettings}"
                         AutomationProperties.Name="打开设置"
-                        ToolTip="打开设置窗口（翻译引擎、通用、快捷键、隐私）"
+                        ToolTip="设置（引擎、快捷键、隐私）"
                         Click="NavSettingsButton_Click" />
             </Grid>
         </Border>
 
-        <!-- ==================== Content ==================== -->
+        <!-- ==================== Content Work Surface ==================== -->
         <Grid Grid.Column="1" Background="{DynamicResource CanvasBrush}">
             <Grid.RowDefinitions>
                 <RowDefinition Height="38" />
@@ -89,53 +93,54 @@
             </Grid>
 
             <!--
-                Work surface: the two sections fill the height instead of
-                growing an outer scroll, so the translate panes and the library
-                list scroll inside their own constrained areas and the ListBox
-                keeps virtualization. Width changes drive the compact breakpoint.
+                High-density workstation surface: tight margins maximize editor
+                and reader area, avoiding floating cards or landing-page padding.
             -->
-            <Grid Grid.Row="1" Margin="28,14,28,18" SizeChanged="ContentGrid_SizeChanged">
+            <Grid Grid.Row="1" Margin="14,0,14,10" SizeChanged="ContentGrid_SizeChanged">
                 <sections:TranslateSection x:Name="TranslateSection" />
                 <sections:LibrarySection x:Name="LibrarySection" Visibility="Collapsed" />
             </Grid>
 
-            <!-- ==================== Quiet status footer ==================== -->
+            <!-- ==================== Status Footer ==================== -->
             <Border Grid.Row="2" Background="{DynamicResource SidebarBrush}"
                     BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
-                    Padding="24,5">
-                <!-- 两列布局：状态占弹性列（超长省略），引擎切换器固定右列，
-                     不再互相挤压重叠。 -->
+                    Padding="14,4">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
+
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <Border x:Name="StatusDot" Width="7" Height="7" CornerRadius="3.5"
                                 Background="{DynamicResource AccentBrush}" VerticalAlignment="Center" />
-                        <TextBlock x:Name="StatusTextBlock" Margin="8,0,0,0" FontSize="11.5"
+                        <TextBlock x:Name="StatusTextBlock" Margin="8,0,0,0"
+                                   Style="{StaticResource Metadata}"
                                    VerticalAlignment="Center"
                                    TextTrimming="CharacterEllipsis"
+                                   MaxWidth="380"
                                    ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                    AutomationProperties.LiveSetting="Polite"
                                    AutomationProperties.Name="状态"
                                    Foreground="{DynamicResource TextSecondaryBrush}" Text="就绪" />
                     </StackPanel>
+
                     <Button x:Name="EngineHealthButton" Grid.Column="1" Style="{StaticResource GhostButton}"
                             VerticalAlignment="Center"
-                            Padding="9,4" AutomationProperties.Name="翻译引擎与快速切换"
-                            ToolTip="点击快速切换文字/图片引擎；查看免费引擎状态"
+                            Padding="8,3" AutomationProperties.Name="翻译引擎快速切换"
+                            ToolTip="快速切换文字与图片引擎"
                             Click="EngineHealthButton_Click">
                         <StackPanel Orientation="Horizontal">
                             <Border x:Name="EngineDot" Width="7" Height="7" CornerRadius="3.5"
                                     Background="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center" />
-                            <TextBlock x:Name="EngineSummary" Margin="7,0,4,0" FontSize="11.5"
+                            <TextBlock x:Name="EngineSummary" Margin="6,0,4,0"
+                                       Style="{StaticResource Metadata}"
                                        VerticalAlignment="Center" MaxWidth="320"
                                        TextTrimming="CharacterEllipsis"
                                        ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                        Foreground="{DynamicResource TextSecondaryBrush}" Text="内置免费引擎" />
-                            <Path Width="9" Height="5" Stretch="Uniform" VerticalAlignment="Center"
-                                  Fill="{DynamicResource TextTertiaryBrush}" Data="M 0 0 L 5 5 L 10 0 Z" />
+                            <Path Width="8" Height="5" Stretch="Uniform" VerticalAlignment="Center"
+                                  Fill="{DynamicResource TextTertiaryBrush}" Data="{StaticResource IconChevronDown}" />
                         </StackPanel>
                     </Button>
                 </Grid>

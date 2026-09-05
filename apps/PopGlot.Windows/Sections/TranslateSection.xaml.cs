@@ -90,8 +90,8 @@ internal static class TranslateSectionReducer
                 current with
                 {
                     Phase = TranslateUiPhase.Streaming,
-                    StatusText = "正在生成",
-                    BadgeText = "正在生成",
+                    StatusText = "正在生成…",
+                    BadgeText = "正在生成…",
                     IsStreamIndicatorVisible = true,
                     AreResultActionsEnabled = false,
                 },
@@ -135,8 +135,8 @@ internal static class TranslateSectionReducer
                 IsStreamLayerVisible = true,
                 IsFinalLayerVisible = false,
                 IsStreamIndicatorVisible = true,
-                StatusText = "正在生成",
-                BadgeText = "正在生成",
+                StatusText = "正在生成…",
+                BadgeText = "正在生成…",
                 AreResultActionsEnabled = false,
             };
         }
@@ -323,6 +323,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             TranslateTargetLang.SelectedItem = LanguageCatalog.ResolveTarget("zh-CN");
         }
         _languageChangeSuspended = false;
+        UpdateAutoDetectHint();
         ApplyState(_currentState);
     }
 
@@ -353,15 +354,32 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     internal TextBox ResultBox => TranslateResult;
     internal TextBox StreamResultBox => TranslateStreamResult;
     internal Border StreamIndicator => TranslateStreamIndicator;
+    internal TextBlock AutoDetectHint => TranslateAutoDetectHint;
     internal TextBlock ExplanationText => TranslateExplanation;
-    internal ScrollViewer ExplanationBox => TranslateExplanationBox;
+    internal StackPanel ExplanationBox => TranslateExplanationBox;
+    internal ScrollViewer ResultScroll => TranslateResultScroll;
     internal TranslateUiState CurrentState => _currentState;
     internal long CurrentEpoch => _currentEpoch;
 
-    /// <summary>Compact mode drops secondary hints; panes stay side by side.</summary>
+    /// <summary>
+    /// Compact mode adjusts secondary text and responsive constraints so
+    /// hints remain readable in tight viewports instead of abruptly vanishing.
+    /// Panes stay side by side in true desktop workstation fashion.
+    /// </summary>
     internal void SetCompact(bool compact)
     {
-        TranslateShortcutHint.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        if (compact)
+        {
+            TranslateShortcutHint.Text = "↵ 翻译 · ⇧↵ 换行";
+            TranslateShortcutHint.ToolTip = "Enter 翻译 · Shift+Enter 换行";
+            TranslateStatus.MaxWidth = 160;
+        }
+        else
+        {
+            TranslateShortcutHint.Text = "Enter 翻译 · Shift+Enter 换行";
+            TranslateShortcutHint.ToolTip = null;
+            TranslateStatus.MaxWidth = 260;
+        }
     }
     internal TextBlock EngineBadge => TranslateEngineBadge;
     internal TextBlock StatusBlock => TranslateStatus;
@@ -471,18 +489,50 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         TranslateStreamIndicator.Visibility = state.IsStreamIndicatorVisible ? Visibility.Visible : Visibility.Collapsed;
 
         TranslateStreamResult.Visibility = state.IsStreamLayerVisible ? Visibility.Visible : Visibility.Collapsed;
-        TranslateResult.Visibility = state.IsFinalLayerVisible ? Visibility.Visible : Visibility.Collapsed;
+        if (!state.IsFinalLayerVisible)
+        {
+            TranslateResult.Visibility = Visibility.Collapsed;
+            TranslateRichResult.Visibility = Visibility.Collapsed;
+            TranslateRichResult.Document.Blocks.Clear();
+        }
 
         if (state.IsStreamLayerVisible)
         {
+            // Stick-to-bottom: follow the stream only while the reader sits at
+            // the bottom, so scrolling up to re-read is never overridden.
+            var stickToBottom = Ui.IsScrolledToBottom(Ui.FindScrollViewer(TranslateStreamResult));
             TranslateStreamResult.Text = state.StreamText;
-            TranslateStreamResult.CaretIndex = TranslateStreamResult.Text.Length;
-            TranslateStreamResult.ScrollToEnd();
+            if (stickToBottom)
+            {
+                TranslateStreamResult.ScrollToEnd();
+            }
         }
 
         if (state.IsFinalLayerVisible)
         {
             TranslateResult.Text = state.FinalText;
+            if (string.IsNullOrWhiteSpace(state.FinalText))
+            {
+                TranslateRichResult.Visibility = Visibility.Collapsed;
+                TranslateResult.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                try
+                {
+                    MarkdownPresenter.RenderToFlowDocument(
+                        TranslateRichResult.Document,
+                        state.FinalText,
+                        Application.Current?.Resources ?? Resources);
+                    TranslateRichResult.Visibility = Visibility.Visible;
+                    TranslateResult.Visibility = Visibility.Collapsed;
+                }
+                catch
+                {
+                    TranslateRichResult.Visibility = Visibility.Collapsed;
+                    TranslateResult.Visibility = Visibility.Visible;
+                }
+            }
         }
 
         TranslateEngineBadge.Text = state.BadgeText;
@@ -501,11 +551,20 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
     // ================= Language pair =================
 
-    private void SourceLang_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+    private void SourceLang_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateAutoDetectHint();
         PersistLanguagePair();
+    }
 
     private void TargetLang_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
         PersistLanguagePair();
+
+    private void UpdateAutoDetectHint()
+    {
+        var isAuto = Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto) == LanguageCatalog.Auto;
+        TranslateAutoDetectHint.Visibility = isAuto ? Visibility.Visible : Visibility.Collapsed;
+    }
 
     /// <summary>Remembers the pair so the floating panel opens the same way.</summary>
     private void PersistLanguagePair()
@@ -551,6 +610,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         {
             _languageChangeSuspended = false;
         }
+        UpdateAutoDetectHint();
         PersistLanguagePair();
 
         if (!string.IsNullOrWhiteSpace(TranslateResult.Text))
@@ -602,7 +662,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             string.Empty, string.Empty,
             Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto),
             Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN"));
-        TranslateStatus.Text = starred ? "已加入生词本。" : "已从生词本移除。";
+        TranslateStatus.Text = starred ? "已加入生词本" : "已从生词本移除";
     }
 
     private void TranslateMergeLines_Click(object sender, RoutedEventArgs e)
@@ -672,6 +732,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         {
             _languageChangeSuspended = false;
         }
+        UpdateAutoDetectHint();
         if (existingTranslation is not null)
         {
             var epoch = Interlocked.Increment(ref _currentEpoch);

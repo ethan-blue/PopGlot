@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:PopGlot.Windows"
-        Title="PopGlot 极速查词" Width="680" SizeToContent="Height" MaxHeight="600"
+        Title="PopGlot 极速查词" Width="640" MinWidth="480" SizeToContent="Height" MaxHeight="600"
         WindowStyle="None" ResizeMode="NoResize"
         Background="{DynamicResource SurfaceBrush}"
         Topmost="True" ShowInTaskbar="False"
@@ -12,18 +12,19 @@
     <!-- Not AllowsTransparency: text-first window keeps ClearType via an
          opaque surface; DWM provides rounding and shadow. -->
     <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="12"
-            BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1">
+            BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
 
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
+                <!-- Adaptive height: compact bar when idle, grows with the result,
+                     caps at MaxHeight; overflow scrolls inside ResultContainer. -->
+                <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <!-- Search input bar -->
-            <Border Grid.Row="0" Padding="18,14" Background="{DynamicResource SurfaceMutedBrush}"
+            <!-- Search input bar: Spotlight/Raycast style, flat & clean -->
+            <Border Grid.Row="0" Padding="16,12" Background="Transparent"
                     CornerRadius="11,11,0,0" MouseLeftButtonDown="Header_MouseLeftButtonDown">
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -32,32 +33,25 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
-                    <Border Grid.Column="0" Width="30" Height="30" CornerRadius="8"
-                            Background="{DynamicResource AccentSoftBrush}"
-                            BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1"
-                            Margin="0,0,14,0" VerticalAlignment="Center">
-                        <Path Width="14" Height="14" Stretch="Uniform"
-                              Fill="{DynamicResource AccentBrush}"
-                              Data="{StaticResource IconSearch}"
-                              HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Border>
+                    <!-- Clean minimalist search icon -->
+                    <Path Grid.Column="0" Width="15" Height="15" Stretch="Uniform"
+                          Fill="{DynamicResource TextSecondaryBrush}"
+                          Data="{StaticResource IconSearch}"
+                          Margin="2,0,12,0" VerticalAlignment="Center" />
 
                     <TextBox x:Name="SearchBox" Grid.Column="1" Style="{StaticResource FlatTextBox}"
-                             FontSize="16" FontWeight="Medium" TextWrapping="Wrap" AcceptsReturn="True"
+                             FontSize="15" FontWeight="Normal" TextWrapping="Wrap" AcceptsReturn="True"
                              MaxHeight="80" VerticalScrollBarVisibility="Auto"
                              AutomationProperties.Name="查词输入框"
-                             local:Ui.Placeholder="输入任意单词、长句、代码报错，回车立即翻译…"
+                             local:Ui.Placeholder="搜索单词、句子或报错信息…"
                              TextChanged="SearchBox_TextChanged"
                              KeyDown="SearchBox_KeyDown" />
 
                     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
-                        <Border Style="{StaticResource StatusPill}" Padding="8,3"
-                                Background="{DynamicResource AccentSoftBrush}"
-                                BorderBrush="{DynamicResource AccentBorderBrush}">
-                            <TextBlock x:Name="LangBadge" FontSize="11" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource AccentBrush}" Text="自动 → 中文" />
-                        </Border>
-                        <Button Style="{StaticResource IconButton}" Width="26" Height="26" Margin="6,0,0,0"
+                        <TextBlock x:Name="LangBadge" Style="{StaticResource Metadata}"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   VerticalAlignment="Center" Text="自动 → 中文" />
+                        <Button Style="{StaticResource IconButton}" Width="30" Height="30" Margin="6,0,0,0"
                                 AutomationProperties.Name="关闭查词栏"
                                 ToolTip="关闭 (Esc)" Click="CloseButton_Click">
                             <Path Width="10" Height="10" Stretch="Uniform"
@@ -65,109 +59,112 @@
                                   Data="{StaticResource IconClose}" />
                         </Button>
                     </StackPanel>
+
+                    <!-- Loading line overlays the search bar's bottom edge -->
+                    <ProgressBar x:Name="SearchProgress" Grid.ColumnSpan="3" Height="2" IsIndeterminate="True"
+                                 VerticalAlignment="Bottom" Visibility="Collapsed"
+                                 Foreground="{DynamicResource AccentBrush}" Background="Transparent" BorderThickness="0" />
                 </Grid>
             </Border>
 
-            <ProgressBar x:Name="SearchProgress" Grid.Row="1" Height="2" IsIndeterminate="True"
-                         Visibility="Collapsed" />
+            <!-- Hairline Divider -->
+            <Border Grid.Row="0" Height="1" Background="{DynamicResource BorderSubtleBrush}" VerticalAlignment="Bottom" />
 
-            <!-- Live Result Container: the result sits on the raised surface. -->
-            <Border x:Name="ResultContainer" Grid.Row="2" Padding="20,16" Visibility="Collapsed">
+            <!-- Live Result Container: flat and integrated stream -->
+            <Border x:Name="ResultContainer" Grid.Row="1" Padding="16,12" Visibility="Collapsed">
                 <StackPanel>
-                    <Border Background="{DynamicResource SurfaceRaisedBrush}" CornerRadius="10"
-                            BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                            Padding="14,12" MinHeight="68">
-                        <StackPanel>
-                            <Grid Margin="0,0,0,8">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <TextBlock x:Name="PhoneticLabel" FontSize="11.5"
-                                               Foreground="{DynamicResource TextTertiaryBrush}"
-                                               FontFamily="{StaticResource MonoFontFamily}"
-                                               VerticalAlignment="Center" Visibility="Collapsed"
-                                               TextTrimming="CharacterEllipsis" MaxWidth="240" />
-                                    <TextBlock x:Name="StreamIndicator" FontSize="11.5"
-                                               Foreground="{DynamicResource AccentBrush}"
-                                               FontWeight="SemiBold"
-                                               VerticalAlignment="Center" Visibility="Collapsed"
-                                               Margin="6,0,0,0" Text="生成中…" />
-                                    <TextBlock x:Name="IncompleteBadge" FontSize="11.5"
-                                               Foreground="{DynamicResource WarningBrush}"
-                                               FontWeight="SemiBold"
-                                               VerticalAlignment="Center" Visibility="Collapsed"
-                                               Margin="6,0,0,0" Text="[未完成]" />
-                                </StackPanel>
-                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                    <Button x:Name="SpeakButton" Style="{StaticResource IconButton}" Width="24" Height="22"
-                                            AutomationProperties.Name="朗读译文"
-                                            ToolTip="朗读译文 (Edge TTS)" Click="Speak_Click">
-                                        <Path x:Name="SpeakIcon" Width="11" Height="11" Stretch="Uniform"
-                                              Fill="{DynamicResource TextSecondaryBrush}"
-                                              Data="{StaticResource IconSpeaker}" />
-                                    </Button>
-                                    <Button x:Name="CopyButton" Style="{StaticResource IconButton}" Width="24" Height="22"
-                                            AutomationProperties.Name="复制译文"
-                                            ToolTip="复制译文" Click="Copy_Click">
-                                        <Path x:Name="CopyIcon" Width="11" Height="11" Stretch="Uniform"
-                                              Fill="{DynamicResource TextSecondaryBrush}"
-                                              Data="{StaticResource IconCopy}" />
-                                    </Button>
-                                    <Button x:Name="StarButton" Style="{StaticResource IconButton}" Width="24" Height="22"
-                                            Margin="2,0,0,0"
-                                            AutomationProperties.Name="加入生词本"
-                                            ToolTip="加入生词本 / 收藏" Click="Star_Click">
-                                        <Path x:Name="StarIcon" Width="11" Height="11" Stretch="Uniform"
-                                              Fill="{DynamicResource TextSecondaryBrush}"
-                                              Data="{StaticResource IconStar}" />
-                                    </Button>
-                                </StackPanel>
-                            </Grid>
-
-                            <!-- Plain text streaming layer (zero token-by-token FlowDoc rebuild) -->
-                            <TextBox x:Name="ResultStreamBox"
-                                     Style="{StaticResource FlatTextBox}"
-                                     FontSize="15"
-                                     Foreground="{DynamicResource TextPrimaryBrush}"
-                                     TextWrapping="Wrap"
-                                     AcceptsReturn="True"
-                                     IsReadOnly="True"
-                                     Focusable="False"
-                                     IsHitTestVisible="True"
-                                     MinHeight="24"
-                                     MaxHeight="220"
-                                     VerticalScrollBarVisibility="Auto"
-                                     Visibility="Collapsed"
-                                     AutomationProperties.Name="流式翻译中" />
-
-                            <!-- RichTextBox for final one-off Markdown rendering -->
-                            <RichTextBox x:Name="ResultRichBox" Style="{StaticResource FlatRichTextBox}"
-                                         FontSize="15" MaxHeight="220" VerticalScrollBarVisibility="Auto"
-                                         MinHeight="24"
-                                         Visibility="Collapsed" />
+                    <!-- Result Header & Actions -->
+                    <Grid Margin="0,0,0,6">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock x:Name="PhoneticLabel" Style="{StaticResource MonoText}" FontSize="11"
+                                       Foreground="{DynamicResource AccentBrush}"
+                                       VerticalAlignment="Center" Visibility="Collapsed"
+                                       TextTrimming="CharacterEllipsis" MaxWidth="240" />
+                            <TextBlock x:Name="StreamIndicator" Style="{StaticResource Metadata}"
+                                       Foreground="{DynamicResource AccentBrush}"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" Visibility="Collapsed"
+                                       Margin="6,0,0,0" Text="正在生成…" />
+                            <TextBlock x:Name="IncompleteBadge" Style="{StaticResource Metadata}"
+                                       Foreground="{DynamicResource WarningBrush}"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" Visibility="Collapsed"
+                                       Margin="6,0,0,0" Text="未完成" />
                         </StackPanel>
-                    </Border>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button x:Name="SpeakButton" Style="{StaticResource IconButton}" Width="30" Height="30"
+                                    AutomationProperties.Name="朗读译文"
+                                    ToolTip="朗读译文 (Ctrl+P)" Click="Speak_Click">
+                                <Path x:Name="SpeakIcon" Width="11" Height="11" Stretch="Uniform"
+                                      Fill="{DynamicResource TextSecondaryBrush}"
+                                      Data="{StaticResource IconSpeaker}" />
+                            </Button>
+                            <Button x:Name="CopyButton" Style="{StaticResource IconButton}" Width="30" Height="30"
+                                    Margin="2,0,0,0"
+                                    AutomationProperties.Name="复制译文"
+                                    ToolTip="复制译文 (Ctrl+C)" Click="Copy_Click">
+                                <Path x:Name="CopyIcon" Width="11" Height="11" Stretch="Uniform"
+                                      Fill="{DynamicResource TextSecondaryBrush}"
+                                      Data="{StaticResource IconCopy}" />
+                            </Button>
+                            <Button x:Name="StarButton" Style="{StaticResource IconButton}" Width="30" Height="30"
+                                    Margin="2,0,0,0"
+                                    AutomationProperties.Name="加入生词本"
+                                    ToolTip="收藏到生词本 (Ctrl+S)" Click="Star_Click">
+                                <Path x:Name="StarIcon" Width="11" Height="11" Stretch="Uniform"
+                                      Fill="{DynamicResource TextSecondaryBrush}"
+                                      Data="{StaticResource IconStar}" />
+                            </Button>
+                        </StackPanel>
+                    </Grid>
 
-                    <!-- Explanation: hairline + text, consistent with the floating panel. -->
-                    <StackPanel x:Name="ExplanationCard" Margin="2,10,2,0" Visibility="Collapsed">
+                    <!-- Plain text streaming layer (zero token-by-token FlowDoc rebuild) -->
+                    <TextBox x:Name="ResultStreamBox"
+                             Style="{StaticResource FlatTextBox}"
+                             FontSize="14.5"
+                             Foreground="{DynamicResource TextPrimaryBrush}"
+                             TextWrapping="Wrap"
+                             AcceptsReturn="True"
+                             IsReadOnly="True"
+                             Focusable="False"
+                             IsHitTestVisible="True"
+                             MinHeight="24"
+                             MaxHeight="220"
+                             VerticalScrollBarVisibility="Auto"
+                             Visibility="Collapsed"
+                             AutomationProperties.LiveSetting="Off"
+                             AutomationProperties.Name="流式翻译中" />
+
+                    <!-- RichTextBox for final one-off Markdown rendering -->
+                    <RichTextBox x:Name="ResultRichBox" Style="{StaticResource FlatRichTextBox}"
+                                 FontSize="14.5" MaxHeight="220" VerticalScrollBarVisibility="Auto"
+                                 MinHeight="24"
+                                 IsReadOnly="True" IsDocumentEnabled="True"
+                                 Background="Transparent" BorderThickness="0"
+                                 Visibility="Collapsed" />
+
+                    <!-- Explanation: hairline + text -->
+                    <StackPanel x:Name="ExplanationCard" Margin="0,8,0,0" Visibility="Collapsed">
                         <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" />
-                        <TextBlock x:Name="ExplanationLabel" FontSize="12.5"
-                                   Foreground="{DynamicResource TextSecondaryBrush}" LineHeight="19"
-                                   TextWrapping="Wrap" Margin="0,8,0,0" />
+                        <TextBlock x:Name="ExplanationLabel" FontSize="12"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" LineHeight="18"
+                                   TextWrapping="Wrap" Margin="0,6,0,0" />
                     </StackPanel>
                 </StackPanel>
             </Border>
 
-            <!-- Bottom Shortcuts footer -->
-            <Border Grid.Row="3" Padding="18,8" Background="{DynamicResource SidebarBrush}"
+            <!-- Bottom Shortcuts footer: Spotlight/Raycast style -->
+            <Border Grid.Row="2" Padding="16,7" Background="{DynamicResource SurfaceMutedBrush}"
                     BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
                     CornerRadius="0,0,11,11">
                 <Grid>
-                    <TextBlock x:Name="FooterStatus" FontSize="11" Foreground="{DynamicResource TextTertiaryBrush}"
-                               VerticalAlignment="Center" Text="输入文字后按 Enter 翻译"
+                    <TextBlock x:Name="FooterStatus" Style="{StaticResource Metadata}"
+                               VerticalAlignment="Center" Text="输入后按 Enter 翻译"
                                AutomationProperties.LiveSetting="Polite"
                                AutomationProperties.Name="翻译状态" />
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                        <TextBlock Text="Enter 翻译 · Ctrl+R 朗读 · Esc 退出" FontSize="11"
-                                   Foreground="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center" />
+                        <TextBlock Text="Ctrl+C 复制 · Ctrl+P 朗读 · Esc 退出" Style="{StaticResource Metadata}"
+                                   VerticalAlignment="Center" />
                     </StackPanel>
                 </Grid>
             </Border>

@@ -99,7 +99,7 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
             RenderRoute(
                 ProfileManager.ResolveRoute(draft, WindowsOcrService.IsSupported),
                 "保存后预计线路");
-            RouteDraftNote.Text = "这是未保存设置的预计线路；保存后成为实际线路。";
+            RouteDraftNote.Text = "有未保存的修改；保存后线路会按新设置重新评估。";
             RouteDraftNote.Visibility = Visibility.Visible;
         }
         catch (Exception exception)

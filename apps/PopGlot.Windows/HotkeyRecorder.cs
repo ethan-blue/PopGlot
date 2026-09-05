@@ -131,7 +131,7 @@ internal sealed class HotkeyRecorder : Button
         var candidate = new HotkeyBinding(modifiers, virtualKey);
         if (!candidate.IsValid)
         {
-            Content = "需要 Ctrl / Alt / Win";
+            Content = "需包含 Ctrl、Alt 或 Win";
             return;
         }
 

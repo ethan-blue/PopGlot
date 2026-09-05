@@ -70,7 +70,7 @@ public partial class SettingsWindow : Window
             CaptureSection.RefreshRoutePreview();
             // Running requests keep the snapshot they started with; only
             // translations started afterwards see the new service.
-            SetStatus("模型服务已更新，后续翻译生效。", StatusTone.Info);
+            SetStatus("模型服务已更新，即时生效。", StatusTone.Info);
         };
         CaptureSection.StatusChanged += SetStatus;
         CaptureSection.ProviderDirty += EvaluateDraftState;
@@ -359,20 +359,24 @@ public partial class SettingsWindow : Window
         switch (page)
         {
             case "Provider":
+                SettingsScroll.Visibility = Visibility.Collapsed;
                 ProviderSection.RefreshApiKeyState();
                 ProviderSection.RefreshProfilesList();
                 ProviderSection.Visibility = Visibility.Visible;
                 break;
             case "Shortcuts":
+                SettingsScroll.Visibility = Visibility.Visible;
                 ShortcutsSection.Visibility = Visibility.Visible;
                 break;
             case "Privacy":
+                SettingsScroll.Visibility = Visibility.Visible;
                 CaptureSection.LoadOcrState();
                 CaptureSection.RefreshRoutePreview();
                 CaptureSection.UpdateSafeModeGating();
                 PrivacyPageHost.Visibility = Visibility.Visible;
                 break;
             default:
+                SettingsScroll.Visibility = Visibility.Visible;
                 GeneralSection.Visibility = Visibility.Visible;
                 break;
         }
@@ -453,7 +457,7 @@ public partial class SettingsWindow : Window
             }
             else
             {
-                SetStatus("设置已保存，后续翻译生效。", StatusTone.Success);
+                SetStatus("设置已保存，即时生效。", StatusTone.Success);
             }
 
             _shellSettings = shellSettings;
@@ -516,11 +520,11 @@ public partial class SettingsWindow : Window
     {
         if (CaptureSection.SafeMode.IsChecked == true)
         {
-            SetStatus("安全离线模式已开启：保存后所有模型请求都会被拒绝。", StatusTone.Warning);
+            SetStatus("安全离线模式已开启：所有翻译仅在本地运行，不发起外部网络连接。", StatusTone.Info);
         }
         else if (CaptureSection.NetworkEnabled.IsChecked != true)
         {
-            SetStatus("「启用大模型网络翻译」已关闭：保存后模型请求会被拒绝。", StatusTone.Warning);
+            SetStatus("网络翻译已关闭：仅允许本机离线模型（如 Ollama）。", StatusTone.Info);
         }
     }
 

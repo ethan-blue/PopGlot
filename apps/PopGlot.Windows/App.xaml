@@ -9,49 +9,52 @@
             </ResourceDictionary.MergedDictionaries>
 
             <!--
-                Seed values only. ThemeService replaces every one of these on
-                startup and whenever the theme changes; they exist so the
-                designer and the very first layout pass have something to bind
-                to instead of falling back to transparent.
+                Design System Seed Tokens (High-Contrast Fluent/Raycast Scale).
+                ThemeService dynamically overrides every token on startup and theme change.
+                Seed brushes guarantee designer preview and initial measure-pass validity.
             -->
-            <SolidColorBrush x:Key="CanvasBrush" Color="#0A0B0F" />
-            <SolidColorBrush x:Key="SidebarBrush" Color="#0F1015" />
-            <SolidColorBrush x:Key="SurfaceBrush" Color="#14161C" />
-            <SolidColorBrush x:Key="SurfaceMutedBrush" Color="#111318" />
-            <SolidColorBrush x:Key="SurfaceRaisedBrush" Color="#1B1E26" />
-            <SolidColorBrush x:Key="SurfaceHoverBrush" Color="#21242E" />
-            <SolidColorBrush x:Key="SurfacePressedBrush" Color="#333B49" />
-            <SolidColorBrush x:Key="InputBrush" Color="#0E1014" />
-            <SolidColorBrush x:Key="BorderSubtleBrush" Color="#2A303D" />
-            <SolidColorBrush x:Key="BorderStrongBrush" Color="#626C82" />
-            <SolidColorBrush x:Key="AccentBrush" Color="#4D9FFF" />
-            <SolidColorBrush x:Key="AccentHoverBrush" Color="#6BABFF" />
-            <SolidColorBrush x:Key="AccentPressedBrush" Color="#3D82E8" />
+            <SolidColorBrush x:Key="CanvasBrush" Color="#101216" />
+            <SolidColorBrush x:Key="SidebarBrush" Color="#14171E" />
+            <SolidColorBrush x:Key="SurfaceBrush" Color="#181B22" />
+            <SolidColorBrush x:Key="SurfaceMutedBrush" Color="#14161D" />
+            <SolidColorBrush x:Key="SurfaceRaisedBrush" Color="#20242E" />
+            <SolidColorBrush x:Key="SurfaceHoverBrush" Color="#272C38" />
+            <SolidColorBrush x:Key="SurfacePressedBrush" Color="#353C4D" />
+            <SolidColorBrush x:Key="InputBrush" Color="#181B22" />
+            <SolidColorBrush x:Key="ResultSurfaceBrush" Color="#181B22" />
+            <SolidColorBrush x:Key="BorderSubtleBrush" Color="#2D3342" />
+            <SolidColorBrush x:Key="BorderStrongBrush" Color="#6B768D" />
+            <SolidColorBrush x:Key="AccentBrush" Color="#7C89D9" />
+            <SolidColorBrush x:Key="AccentHoverBrush" Color="#8F9BE3" />
+            <SolidColorBrush x:Key="AccentPressedBrush" Color="#6976C4" />
             <SolidColorBrush x:Key="AccentTextBrush" Color="#071224" />
-            <SolidColorBrush x:Key="AccentSoftBrush" Color="#152C4E" />
-            <SolidColorBrush x:Key="AccentBorderBrush" Color="#5E96E0" />
-            <SolidColorBrush x:Key="PrimaryBrush" Color="#2563EB" />
-            <SolidColorBrush x:Key="PrimaryHoverBrush" Color="#1F55C7" />
-            <SolidColorBrush x:Key="PrimaryPressedBrush" Color="#1A47A8" />
-            <SolidColorBrush x:Key="PrimaryTextBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="AccentSoftBrush" Color="#20243A" />
+            <SolidColorBrush x:Key="AccentBorderBrush" Color="#59649D" />
+            <SolidColorBrush x:Key="PrimaryBrush" Color="#5562B3" />
+            <SolidColorBrush x:Key="PrimaryHoverBrush" Color="#5B69BE" />
+            <SolidColorBrush x:Key="PrimaryPressedBrush" Color="#4B579F" />
+            <SolidColorBrush x:Key="PrimaryTextBrush" Color="#F7F8FC" />
             <SolidColorBrush x:Key="TextPrimaryBrush" Color="#EEF0F4" />
-            <SolidColorBrush x:Key="TextSecondaryBrush" Color="#A3A9B4" />
-            <SolidColorBrush x:Key="TextTertiaryBrush" Color="#8A93A2" />
-            <SolidColorBrush x:Key="TextDisabledBrush" Color="#525A66" />
+            <SolidColorBrush x:Key="TextSecondaryBrush" Color="#A8B0BD" />
+            <SolidColorBrush x:Key="TextTertiaryBrush" Color="#939BAA" />
+            <SolidColorBrush x:Key="TextDisabledBrush" Color="#565F6E" />
             <SolidColorBrush x:Key="DangerBrush" Color="#FF6B7D" />
             <SolidColorBrush x:Key="DangerSoftBrush" Color="#401C25" />
             <SolidColorBrush x:Key="WarningBrush" Color="#F2B95C" />
             <SolidColorBrush x:Key="WarningSoftBrush" Color="#3D2D14" />
             <SolidColorBrush x:Key="SuccessBrush" Color="#3DD68C" />
             <SolidColorBrush x:Key="SuccessSoftBrush" Color="#143826" />
-            <SolidColorBrush x:Key="OverlayScrimBrush" Color="#C80A0B0F" />
+            <SolidColorBrush x:Key="OverlayScrimBrush" Color="#C8101216" />
 
+            <!-- Global Window Defaults: Sub-pixel ClearType, crisp pixel snapping, layout rounding -->
             <Style TargetType="Window">
                 <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
                 <Setter Property="FontSize" Value="13" />
                 <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
                 <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
+                <Setter Property="RenderOptions.ClearTypeHint" Value="Enabled" />
                 <Setter Property="UseLayoutRounding" Value="True" />
+                <Setter Property="SnapsToDevicePixels" Value="True" />
             </Style>
         </ResourceDictionary>
     </Application.Resources>

@@ -25,7 +25,7 @@ internal sealed class QuickSearchState
     public string FinalRenderedText { get; private set; } = string.Empty;
     public string? Phonetic { get; private set; }
     public string? Explanation { get; private set; }
-    public string StatusText { get; private set; } = "输入文字后按 Enter 翻译";
+    public string StatusText { get; private set; } = "输入后按 Enter 翻译";
 
     public bool IsResultVisible { get; private set; }
     public bool IsStreamLayerVisible { get; private set; }
@@ -278,7 +278,7 @@ internal sealed class QuickSearchState
             CanCopy = false;
             CanSpeak = false;
             CanStar = false;
-            StatusText = "输入文字后按 Enter 翻译";
+            StatusText = "输入后按 Enter 翻译";
         }
         else
         {

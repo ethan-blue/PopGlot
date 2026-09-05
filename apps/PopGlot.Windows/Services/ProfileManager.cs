@@ -78,7 +78,7 @@ internal sealed class ProviderProfile
     public static ProviderProfile CreateOllama() => new()
     {
         Id = "ollama-local",
-        Name = "Ollama (本地)",
+        Name = "Ollama（本地）",
         ProviderType = ProviderType.OpenAiCompatible,
         ApiBaseUrl = "http://localhost:11434/v1",
         TextEndpoint = "/chat/completions",
@@ -253,7 +253,7 @@ internal static class ProviderCatalog
         {
             return false;
         }
-        return string.Equals(profile.Name, template.Name, StringComparison.Ordinal) &&
+        return NameMatchesTemplate(profile.Id, profile.Name, template.Name) &&
             profile.ProviderType == template.ProviderType &&
             string.Equals(profile.ApiBaseUrl, template.ApiBaseUrl, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(profile.TextEndpoint, template.TextEndpoint, StringComparison.Ordinal) &&
@@ -263,6 +263,18 @@ internal static class ProviderCatalog
             profile.SupportsText == template.SupportsText &&
             profile.SupportsVision == template.SupportsVision;
     }
+
+    /// <summary>
+    /// v5 起模板名改用全角括号「Ollama（本地）」，≤0.1.2 存量配置里仍是
+    /// ASCII 括号旧名「Ollama (本地)」。两种写法都是没动过的出厂模板，
+    /// v4→v5 的 pristine 清理迁移必须同等识别，否则旧配置里的占位条目
+    /// 会被误判为用户数据而残留。
+    /// </summary>
+    private static bool NameMatchesTemplate(string id, string name, string templateName) =>
+        string.Equals(name, templateName, StringComparison.Ordinal) ||
+        (id == "ollama-local" && string.Equals(name, LegacyOllamaTemplateName, StringComparison.Ordinal));
+
+    private const string LegacyOllamaTemplateName = "Ollama (本地)";
 
     private static bool ModelIsFactoryDefault(string id, string model, bool vision)
     {

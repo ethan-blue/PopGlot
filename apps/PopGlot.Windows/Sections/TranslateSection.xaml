@@ -3,181 +3,406 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:PopGlot.Windows">
 
-    <!-- Star row keeps the dual panes filling the window height; each pane scrolls itself. -->
+    <!-- High-density single-plane dual-column workstation -->
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
-        <!-- Header: title left, the single primary action right -->
-        <Grid Grid.Row="0">
-            <StackPanel>
-                <TextBlock Text="翻译" Style="{StaticResource PageTitle}" />
+
+        <!-- Top ToolBar: Workbench title left, primary actions right -->
+        <Grid Grid.Row="0" Margin="0,0,0,8">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="翻译工作台" Style="{StaticResource PageTitle}" FontSize="15"
+                           FontWeight="SemiBold" VerticalAlignment="Center" />
             </StackPanel>
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                 <TextBlock x:Name="TranslateShortcutHint" Text="Enter 翻译 · Shift+Enter 换行"
                            Style="{StaticResource Metadata}"
+                           Foreground="{DynamicResource TextTertiaryBrush}"
                            VerticalAlignment="Center" Margin="0,0,12,0" />
                 <Button Style="{StaticResource GhostButton}" Content="清空"
-                        Padding="10,5" Click="TranslateClear_Click" />
+                        Padding="10,4" Click="TranslateClear_Click" />
                 <Button x:Name="TranslateButton" Style="{StaticResource PrimaryButton}"
-                        Margin="8,0,0,0" Padding="20,7" Content="翻译" Click="Translate_Click" />
+                        Margin="8,0,0,0" Padding="18,5" Content="翻译" Click="Translate_Click" />
             </StackPanel>
+
+            <!-- Hairline loading progress bar -->
+            <ProgressBar x:Name="TranslateProgress" Height="2" IsIndeterminate="True"
+                         Foreground="{DynamicResource AccentBrush}"
+                         Background="Transparent" BorderThickness="0"
+                         VerticalAlignment="Bottom" Visibility="Collapsed" />
         </Grid>
 
-        <!-- Dual pane: source left (editable input), target right (read-only result) -->
-        <Grid Grid.Row="1" Margin="0,14,0,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="40" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
+        <!--
+            Single-plane dual-column work surface: unified container, hairline separator,
+            symmetrical toolbars, maximized text editing and reading area.
+        -->
+        <Border Grid.Row="1" Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
+                CornerRadius="4">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
 
-            <!-- ================= Left: Source Pane ================= -->
-            <Border Grid.Column="0" Background="{DynamicResource InputBrush}"
-                    CornerRadius="10" BorderBrush="{DynamicResource BorderSubtleBrush}"
-                    BorderThickness="1" Padding="14,12">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
+                    <ColumnDefinition Width="*" />
 
-                    <Grid Grid.Row="0" Margin="0,0,0,8">
-                        <TextBlock Text="原文" FontSize="12" FontWeight="SemiBold"
+                    <ColumnDefinition Width="40" />
+
+                    <ColumnDefinition Width="*" />
+
+                </Grid.ColumnDefinitions>
+
+
+
+                <!-- ==================== Left Column: Source ==================== -->
+
+                <!-- Source language bar: "原文" on left, auto hint & picker near center axis on right -->
+
+                <Border Grid.Row="0" Grid.Column="0" Background="{DynamicResource SurfaceMutedBrush}"
+
+                        BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,0,0,1"
+
+                        Padding="12,6,8,6">
+
+                    <Grid>
+
+                        <TextBlock Text="原文" Style="{StaticResource FieldLabel}"
+
                                    Foreground="{DynamicResource TextSecondaryBrush}"
-                                   VerticalAlignment="Center" />
-                        <ComboBox x:Name="TranslateSourceLang" HorizontalAlignment="Right"
-                                  Width="136" Style="{StaticResource CompactComboBox}"
-                                  AutomationProperties.Name="源语言"
-                                  SelectionChanged="SourceLang_SelectionChanged" />
+
+                                   FontWeight="SemiBold" VerticalAlignment="Center" Margin="0"
+
+                                   HorizontalAlignment="Left" />
+
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+
+                            <TextBlock x:Name="TranslateAutoDetectHint" Text="自动识别源语言"
+
+                                       Style="{StaticResource Metadata}"
+
+                                       Foreground="{DynamicResource TextTertiaryBrush}"
+
+                                       VerticalAlignment="Center" Margin="0,0,6,0" />
+
+                            <ComboBox x:Name="TranslateSourceLang"
+
+                                      MinWidth="100" MaxWidth="140"
+
+                                      Style="{StaticResource LanguagePickerComboBox}"
+
+                                      AutomationProperties.Name="源语言"
+
+                                      SelectionChanged="SourceLang_SelectionChanged" />
+
+                        </StackPanel>
+
                     </Grid>
 
-                    <TextBox x:Name="TranslateInput" Grid.Row="1" MinHeight="140"
+                </Border>
+
+
+
+                <!-- Source text editor (maximized area) -->
+
+                <Border Grid.Row="1" Grid.Column="0" Background="{DynamicResource InputBrush}" Padding="12,10">
+
+                    <TextBox x:Name="TranslateInput"
+
                              Style="{StaticResource FlatTextBox}"
+
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                             FontSize="14"
+
+                             FontSize="14.5"
+
+                             Foreground="{DynamicResource TextPrimaryBrush}"
+
                              AutomationProperties.Name="翻译原文输入框"
-                             local:Ui.Placeholder="输入或粘贴要翻译的内容，Enter 立即翻译，Shift+Enter 换行…"
+
+                             local:Ui.Placeholder="输入要翻译的文本…"
+
                              TextChanged="TranslateInput_TextChanged"
+
                              KeyDown="TranslateInput_KeyDown" />
 
-                    <Grid Grid.Row="2" Margin="0,10,0,0">
+                </Border>
+
+
+
+                <!-- Source action footer -->
+
+                <Border Grid.Row="2" Grid.Column="0" Background="{DynamicResource SurfaceMutedBrush}"
+
+                        BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
+
+                        Padding="12,5">
+
+                    <Grid>
+
                         <TextBlock x:Name="TranslateCounter" Style="{StaticResource Metadata}"
-                                   HorizontalAlignment="Left" VerticalAlignment="Center" Text="0 字符" />
+
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+
+                                   HorizontalAlignment="Left" VerticalAlignment="Center"
+
+                                   Text="0 字符" TextTrimming="CharacterEllipsis" />
+
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                            <Button Style="{StaticResource IconButton}" Width="28" Height="26"
+
+                            <Button Style="{StaticResource IconButton}" Width="28" Height="28"
+
                                     AutomationProperties.Name="朗读原文" ToolTip="朗读原文"
+
                                     Click="TranslateSourceSpeak_Click">
+
                                 <Path Width="12" Height="12" Stretch="Uniform"
+
                                       Fill="{DynamicResource TextSecondaryBrush}"
+
                                       Data="{StaticResource IconSpeaker}" />
+
                             </Button>
-                            <Button Style="{StaticResource IconButton}" Width="28" Height="26"
+
+                            <Button Style="{StaticResource IconButton}" Width="28" Height="28" Margin="4,0,0,0"
+
                                     AutomationProperties.Name="复制原文" ToolTip="复制原文"
+
                                     Click="TranslateSourceCopy_Click">
+
                                 <Path Width="12" Height="12" Stretch="Uniform"
+
                                       Fill="{DynamicResource TextSecondaryBrush}"
+
                                       Data="{StaticResource IconCopy}" />
+
                             </Button>
-                            <Button Style="{StaticResource IconButton}" Width="28" Height="26"
+
+                            <Button Style="{StaticResource IconButton}" Width="28" Height="28" Margin="4,0,0,0"
+
                                     AutomationProperties.Name="合并断行"
-                                    ToolTip="合并 PDF 复制产生的换行"
+
+                                    ToolTip="合并断行"
+
                                     Click="TranslateMergeLines_Click">
+
                                 <Path Width="12" Height="12" Stretch="Uniform"
+
                                       Fill="{DynamicResource TextSecondaryBrush}"
+
                                       Data="{StaticResource IconMergeLines}" />
+
                             </Button>
+
                         </StackPanel>
+
                     </Grid>
-                </Grid>
-            </Border>
 
-            <!-- ================= Center: Swap ================= -->
-            <Button x:Name="TranslateSwapButton" Grid.Column="1" Style="{StaticResource IconButton}"
-                    Width="30" Height="30" HorizontalAlignment="Center" VerticalAlignment="Center"
-                    ToolTip="交换语言方向" AutomationProperties.Name="交换语言方向"
-                    Click="TranslateSwap_Click">
-                <Path Width="13" Height="13" Stretch="Uniform"
-                      Fill="{DynamicResource TextSecondaryBrush}"
-                      Data="{StaticResource IconSwap}" />
-            </Button>
+                </Border>
 
-            <!-- ================= Right: Target Pane (the result is the focus) ================= -->
-            <!-- 与左侧原文栏同底色同边框：左右卡片此前一白一灰，完成翻译时
-                 右侧观感与输入时不一致。 -->
-            <Border Grid.Column="2" Background="{DynamicResource InputBrush}"
-                    CornerRadius="10" BorderBrush="{DynamicResource BorderSubtleBrush}"
-                    BorderThickness="1" Padding="14,12">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
 
-                    <Grid Grid.Row="0" Margin="0,0,0,8">
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Text="译文" FontSize="12" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextSecondaryBrush}"
-                                       VerticalAlignment="Center" />
-                            <Border x:Name="TranslateStreamIndicator" Visibility="Collapsed"
-                                    Margin="8,0,0,0" Padding="6,2" CornerRadius="4"
-                                    Background="{DynamicResource AccentSoftBrush}">
-                                <TextBlock Text="正在生成" FontSize="11"
-                                           Foreground="{DynamicResource AccentBrush}"
-                                           VerticalAlignment="Center" />
-                            </Border>
-                        </StackPanel>
-                        <ComboBox x:Name="TranslateTargetLang" HorizontalAlignment="Right"
-                                  Width="136" Style="{StaticResource CompactComboBox}"
+
+                <!-- ==================== Center Column: Axis & Swap ==================== -->
+
+                <!-- Center top bar cell matching Row 0 background and bottom border -->
+
+                <Border Grid.Row="0" Grid.Column="1" Background="{DynamicResource SurfaceMutedBrush}"
+
+                        BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,0,0,1" />
+
+
+
+                <!-- Language swap button: strictly placed in dedicated center column Grid.Column=1, Grid.Row=0 -->
+
+                <Button x:Name="TranslateSwapButton" Grid.Row="0" Grid.Column="1"
+
+                        Style="{StaticResource IconButton}"
+
+                        HorizontalAlignment="Center" VerticalAlignment="Center"
+
+                        Width="28" Height="28"
+
+                        ToolTip="交换语言方向" AutomationProperties.Name="交换语言方向"
+
+                        Click="TranslateSwap_Click">
+
+                    <Path Width="13" Height="13" Stretch="Uniform"
+
+                          Fill="{DynamicResource TextSecondaryBrush}"
+
+                          Data="{StaticResource IconSwap}" />
+
+                </Button>
+
+
+
+                <!-- Center footer cell matching Row 2 background and top border -->
+
+                <Border Grid.Row="2" Grid.Column="1" Background="{DynamicResource SurfaceMutedBrush}"
+
+                        BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0" />
+
+
+
+                <!-- Center vertical line: 1px hairline drawn down the center spanning body and footer -->
+
+                <Rectangle Grid.Row="1" Grid.RowSpan="2" Grid.Column="1"
+
+                           Width="1" Fill="{DynamicResource BorderSubtleBrush}"
+
+                           HorizontalAlignment="Center" SnapsToDevicePixels="True" />
+
+
+
+                <!-- ==================== Right Column: Target ==================== -->
+
+                <!-- Target language bar: picker on left near center axis, "译文/生成状态" on right -->
+
+                <Border Grid.Row="0" Grid.Column="2" Background="{DynamicResource SurfaceMutedBrush}"
+
+                        BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,0,0,1"
+
+                        Padding="8,6,12,6">
+
+                    <Grid>
+
+                        <ComboBox x:Name="TranslateTargetLang" HorizontalAlignment="Left"
+
+                                  MinWidth="100" MaxWidth="140"
+
+                                  Style="{StaticResource LanguagePickerComboBox}"
+
                                   AutomationProperties.Name="目标语言"
+
                                   SelectionChanged="TargetLang_SelectionChanged" />
+
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+
+                            <TextBlock Text="译文" Style="{StaticResource FieldLabel}"
+
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+
+                                       FontWeight="SemiBold" VerticalAlignment="Center" Margin="0" />
+
+                            <Border x:Name="TranslateStreamIndicator" Visibility="Collapsed"
+
+                                    Margin="8,0,0,0" Padding="6,2" CornerRadius="4"
+
+                                    Background="{DynamicResource AccentSoftBrush}">
+
+                                <TextBlock Text="正在生成…" Style="{StaticResource Metadata}"
+
+                                           Foreground="{DynamicResource AccentBrush}"
+
+                                           FontSize="11" VerticalAlignment="Center" />
+
+                            </Border>
+
+                        </StackPanel>
+
                     </Grid>
 
-                    <Grid Grid.Row="1" MinHeight="140">
-                        <TextBox x:Name="TranslateResult"
-                                 Style="{StaticResource FlatTextBox}"
-                                 AcceptsReturn="True" IsReadOnly="True" TextWrapping="Wrap"
-                                 VerticalScrollBarVisibility="Auto" FontSize="14.5"
-                                 Foreground="{DynamicResource TextPrimaryBrush}"
-                                 AutomationProperties.Name="翻译结果"
-                                 local:Ui.Placeholder="译文将显示在这里…" />
+                </Border>
 
-                        <TextBox x:Name="TranslateStreamResult"
-                                 Visibility="Collapsed"
-                                 Focusable="False"
-                                 IsHitTestVisible="True"
-                                 Style="{StaticResource FlatTextBox}"
-                                 AcceptsReturn="True" IsReadOnly="True" TextWrapping="Wrap"
-                                 VerticalScrollBarVisibility="Auto" FontSize="14.5"
-                                 Foreground="{DynamicResource TextPrimaryBrush}"
-                                 AutomationProperties.Name="流式翻译中" />
-                    </Grid>
+                <!-- Target text reader (maximized area, scrollable, shared with explanation) -->
 
-                    <Grid Grid.Row="2" Margin="0,10,0,0">
+                <Border Grid.Row="1" Grid.Column="2" Background="{DynamicResource ResultSurfaceBrush}" Padding="12,10">
+
+                    <ScrollViewer x:Name="TranslateResultScroll" VerticalScrollBarVisibility="Auto">
+
+                        <StackPanel>
+
+                            <Grid MinHeight="140">
+
+                                <TextBox x:Name="TranslateResult"
+
+                                         Style="{StaticResource ResultTextBox}"
+
+                                         AcceptsReturn="True" IsReadOnly="True" TextWrapping="Wrap"
+
+                                         VerticalScrollBarVisibility="Disabled" FontSize="14.5"
+
+                                         Foreground="{DynamicResource TextPrimaryBrush}"
+
+                                         AutomationProperties.Name="翻译结果"
+
+                                         local:Ui.Placeholder="译文将显示在这里…" />
+
+
+
+                                <RichTextBox x:Name="TranslateRichResult"
+                                             Visibility="Collapsed"
+                                             Style="{StaticResource FlatRichTextBox}"
+                                             FontSize="14.5"
+                                             Background="Transparent"
+                                             IsReadOnly="True"
+                                             IsDocumentEnabled="True"
+                                             VerticalScrollBarVisibility="Disabled"
+                                             AutomationProperties.Name="格式化翻译结果" />
+
+                                <TextBox x:Name="TranslateStreamResult"
+
+                                         Visibility="Collapsed"
+
+                                         Focusable="False"
+
+                                         IsHitTestVisible="True"
+
+                                         Style="{StaticResource ResultTextBox}"
+
+                                         AcceptsReturn="True" IsReadOnly="True" TextWrapping="Wrap"
+
+                                         VerticalScrollBarVisibility="Disabled" FontSize="14.5"
+
+                                         Foreground="{DynamicResource TextPrimaryBrush}"
+
+                                         AutomationProperties.Name="流式翻译中" />
+
+                            </Grid>
+
+                            <StackPanel x:Name="TranslateExplanationBox" Margin="0,12,0,0" Visibility="Collapsed">
+                                <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" Margin="0,0,0,8" />
+                                <TextBlock Text="补充说明" Style="{StaticResource FieldLabel}"
+                                           Foreground="{DynamicResource TextTertiaryBrush}" Margin="0,0,0,4" />
+                                <TextBlock x:Name="TranslateExplanation" Style="{StaticResource Caption}"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Border>
+
+                <!-- Target action footer (symmetrical to source) -->
+                <Border Grid.Row="2" Grid.Column="2" Background="{DynamicResource SurfaceMutedBrush}"
+                        BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
+                        Padding="12,5">
+                    <Grid>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <TextBlock x:Name="TranslateEngineBadge" Style="{StaticResource Metadata}"
-                                       Text="等待输入" />
+                                       Foreground="{DynamicResource TextTertiaryBrush}"
+                                       VerticalAlignment="Center" Text="等待输入" />
                             <TextBlock x:Name="TranslateStatus" Style="{StaticResource Metadata}"
-                                       Margin="10,0,0,0" VerticalAlignment="Center"
-                                       MaxWidth="300" TextTrimming="CharacterEllipsis" Text="就绪"
+                                       Margin="8,0,0,0" VerticalAlignment="Center"
+                                       MaxWidth="260" TextTrimming="CharacterEllipsis" Text="就绪"
                                        ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                        AutomationProperties.LiveSetting="Polite"
                                        AutomationProperties.Name="翻译状态" />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                            <Button x:Name="TranslateResultSpeakButton" Style="{StaticResource IconButton}" Width="28" Height="26"
+                            <Button x:Name="TranslateResultSpeakButton" Style="{StaticResource IconButton}"
+                                    Width="28" Height="28"
                                     AutomationProperties.Name="朗读译文" ToolTip="朗读译文"
                                     Click="TranslateResultSpeak_Click">
                                 <Path Width="12" Height="12" Stretch="Uniform"
                                       Fill="{DynamicResource TextSecondaryBrush}"
                                       Data="{StaticResource IconSpeaker}" />
                             </Button>
-                            <Button x:Name="TranslateResultCopyButton" Style="{StaticResource IconButton}" Width="28" Height="26"
+                            <Button x:Name="TranslateResultCopyButton" Style="{StaticResource IconButton}"
+                                    Width="28" Height="28" Margin="4,0,0,0"
                                     AutomationProperties.Name="复制译文" ToolTip="复制译文"
                                     Click="TranslateResultCopy_Click">
                                 <Path Width="12" Height="12" Stretch="Uniform"
@@ -185,7 +410,7 @@
                                       Data="{StaticResource IconCopy}" />
                             </Button>
                             <Button x:Name="TranslateStarButton" Style="{StaticResource IconButton}"
-                                    Width="28" Height="26"
+                                    Width="28" Height="28" Margin="4,0,0,0"
                                     AutomationProperties.Name="收藏到生词本"
                                     ToolTip="收藏到生词本" Click="TranslateStar_Click">
                                 <Path Width="12" Height="12" Stretch="Uniform"
@@ -194,26 +419,8 @@
                             </Button>
                         </StackPanel>
                     </Grid>
-                </Grid>
-            </Border>
-        </Grid>
-
-        <!-- Translation progress -->
-        <ProgressBar x:Name="TranslateProgress" Grid.Row="2" Height="2" IsIndeterminate="True"
-                     Foreground="{DynamicResource AccentBrush}"
-                     Background="Transparent" BorderThickness="0"
-                     Visibility="Collapsed" Margin="0,8,0,0" />
-
-        <!-- Explanation: flat section, no decorative card; capped and scrollable so it
-             can never squeeze the dual panes away. -->
-        <ScrollViewer x:Name="TranslateExplanationBox" Grid.Row="3" Visibility="Collapsed"
-                      MaxHeight="150" VerticalScrollBarVisibility="Auto" Margin="0,14,0,0">
-            <StackPanel>
-                <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" />
-                <TextBlock Text="补充说明" FontSize="12" FontWeight="SemiBold"
-                           Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,10,0,6" />
-                <TextBlock x:Name="TranslateExplanation" Style="{StaticResource Caption}" />
-            </StackPanel>
-        </ScrollViewer>
+                </Border>
+            </Grid>
+        </Border>
     </Grid>
 </UserControl>

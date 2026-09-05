@@ -31,27 +31,11 @@ internal static class Helpers
             ? value
             : fallback;
 
-    internal static async Task<bool> CopyToClipboardAsync(string? text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return false;
-        }
-        for (var attempt = 0; attempt < 4; attempt++)
-        {
-            try
-            {
-                Clipboard.SetText(text);
-                return true;
-            }
-            catch (Exception exception) when (
-                exception is System.Runtime.InteropServices.COMException or InvalidOperationException)
-            {
-                await Task.Delay(15 * (attempt + 1));
-            }
-        }
-        return false;
-    }
+    internal static Task<bool> CopyToClipboardAsync(string? text) =>
+        // Route every UI copy through the STA worker with a hard timeout: a raw
+        // Clipboard.SetText on the UI thread stalls the whole window whenever
+        // another app holds the clipboard open.
+        WindowsSelectionClipboardAdapter.TryWriteTextAsync(text);
 }
 
 /// <summary>Status tone for footer messages, shared across sections.</summary>

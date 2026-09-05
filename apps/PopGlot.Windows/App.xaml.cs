@@ -57,6 +57,21 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // Crash barriers of last resort: the credential vault and profile
+        // store can throw Win32Exception from innocent-looking async paths
+        // (engine switcher, Activated refresh). One unhandled exception must
+        // not take the whole tray app down with it.
+        DispatcherUnhandledException += (_, args) =>
+        {
+            args.Handled = true;
+            InterceptCrash(args.Exception);
+        };
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            args.SetObserved();
+            InterceptCrash(args.Exception);
+        };
+
         if (!ClaimSingleInstance())
         {
             // Another copy owns the hotkeys; hand the request over and leave
@@ -87,7 +102,7 @@ public partial class App : Application
             {
                 Notify(
                     "快捷键恢复失败",
-                    conflict ?? "快捷键已被其他程序占用。请在「设置 → 快捷键」中修改。",
+                    conflict ?? "快捷键被其他程序占用。请在「设置 → 快捷键」中更换组合。",
                     Forms.ToolTipIcon.Warning);
                 _mainWindow?.ShowShortcutConflict(conflict ?? "未知快捷键");
             };
@@ -101,7 +116,7 @@ public partial class App : Application
                 // window is hidden at this point.
                 Notify(
                     "快捷键注册失败",
-                    "有快捷键被其他程序占用。请在「设置 → 快捷键」中改成别的组合。",
+                    "快捷键被其他程序占用。请在「设置 → 快捷键」中更换组合。",
                     Forms.ToolTipIcon.Warning);
                 ShowMainWindow();
             }
@@ -119,6 +134,72 @@ public partial class App : Application
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
             Shutdown(1);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort surface for the global crash barriers: the tray icon may
+    /// not exist yet when they fire, and the handler itself must never throw.
+    /// </summary>
+    // Crash-notify throttling: an exception storm (e.g. a layout bug firing on
+    // every dispatcher frame) must not turn the tray into a balloon machine that
+    // livelocks the UI. Log everything to disk; balloon at most once per window.
+    private DateTime _crashNotifyWindowUtc = DateTime.UtcNow;
+    private int _crashNotificationsInWindow;
+    private int _crashSuppressedCount;
+
+    private void InterceptCrash(Exception exception)
+    {
+        LogCrashToFile(exception);
+        TryNotifyCrash(exception);
+    }
+
+    private static void LogCrashToFile(Exception exception)
+    {
+        try
+        {
+            var dir = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "PopGlot", "logs");
+            System.IO.Directory.CreateDirectory(dir);
+            var file = System.IO.Path.Combine(dir, $"crash-{DateTime.Now:yyyyMMdd}.log");
+            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {exception.GetType().Name}: {exception.Message}"
+
+                       + Environment.NewLine
+
+                       + exception.StackTrace + Environment.NewLine + Environment.NewLine;
+            System.IO.File.AppendAllText(file, line);
+        }
+        catch (Exception)
+        {
+            // Logging is best-effort; never throw from the crash handler.
+        }
+    }
+
+    private void TryNotifyCrash(Exception exception)
+    {
+        try
+        {
+            var nowUtc = DateTime.UtcNow;
+            if (nowUtc - _crashNotifyWindowUtc > TimeSpan.FromSeconds(15))
+            {
+                _crashNotifyWindowUtc = nowUtc;
+                _crashNotificationsInWindow = 0;
+            }
+            if (++_crashNotificationsInWindow > 1)
+            {
+                _crashSuppressedCount++;
+                return;
+            }
+            var suffix = _crashSuppressedCount > 0
+                ? $"（已拦截并记录，另静默拦截 {_crashSuppressedCount} 次）"
+                : "（已拦截并记录，程序继续运行）";
+            _crashSuppressedCount = 0;
+            Notify("PopGlot 遇到问题", $"{exception.Message}{suffix}", Forms.ToolTipIcon.Error);
+        }
+        catch (Exception)
+        {
+            // Nothing left to report through — never crash from the crash handler.
         }
     }
 
@@ -573,7 +654,7 @@ public partial class App : Application
 
         _trayMenu.Items.Add("打开 PopGlot", null, (_, _) => ShowMainWindow());
 
-        _trayMenu.Items.Add("极速查词 (Spotlight)", null, (_, _) => ShowQuickSearch());
+        _trayMenu.Items.Add("极速查词", null, (_, _) => ShowQuickSearch());
 
         _trayMenu.Items.Add(new Forms.ToolStripSeparator());
 
@@ -581,7 +662,7 @@ public partial class App : Application
 
         var captureItem = _trayMenu.Items.Add("截图翻译", null, (_, _) => BeginCapture(ocrOnly: false));
 
-        var ocrItem = _trayMenu.Items.Add("截图提取文字 (OCR)", null, (_, _) => BeginCapture(ocrOnly: true));
+        var ocrItem = _trayMenu.Items.Add("截图提取文本 (OCR)", null, (_, _) => BeginCapture(ocrOnly: true));
 
         _trayMenu.Items.Add(new Forms.ToolStripSeparator());
 
@@ -599,7 +680,7 @@ public partial class App : Application
 
             captureItem.Text = $"截图翻译\t{_shellSettings.ScreenshotHotkey.DisplayName}";
 
-            ocrItem.Text = $"截图提取文字 (OCR)\tShift + 截图";
+            ocrItem.Text = $"截图提取文本 (OCR)\tShift + 截图";
 
         };
 

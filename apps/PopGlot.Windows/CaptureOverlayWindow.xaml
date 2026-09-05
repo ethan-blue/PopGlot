@@ -11,6 +11,9 @@
              sit on top of arbitrary screen content, not on an app surface, so
              they stay fixed instead of following the theme palette. -->
         <SolidColorBrush x:Key="CaptureCrosshairBrush" Color="#66FFFFFF" />
+        <!-- Near-opaque white for the live marquee: the selection border and
+             the four corner handles share one named brush. -->
+        <SolidColorBrush x:Key="CaptureMarqueeBrush" Color="#F2FFFFFF" />
         <SolidColorBrush x:Key="CaptureHitTestBrush" Color="#01000000" />
     </Window.Resources>
 
@@ -33,38 +36,38 @@
              pointer move and a live bitmap effect makes the full-screen
              layered window visibly trail the cursor. -->
         <Border x:Name="SelectionBorder" Visibility="Collapsed" CornerRadius="2"
-                BorderBrush="#F2FFFFFF" BorderThickness="2" Background="Transparent" />
+                BorderBrush="{StaticResource CaptureMarqueeBrush}" BorderThickness="2" Background="Transparent" />
 
         <!-- Corner handles make the live selection read as a real marquee. -->
         <Rectangle x:Name="HandleTopLeft" Width="8" Height="8" Visibility="Collapsed"
-                   Fill="#F2FFFFFF" RadiusX="2" RadiusY="2" />
+                   Fill="{StaticResource CaptureMarqueeBrush}" RadiusX="2" RadiusY="2" />
         <Rectangle x:Name="HandleTopRight" Width="8" Height="8" Visibility="Collapsed"
-                   Fill="#F2FFFFFF" RadiusX="2" RadiusY="2" />
+                   Fill="{StaticResource CaptureMarqueeBrush}" RadiusX="2" RadiusY="2" />
         <Rectangle x:Name="HandleBottomLeft" Width="8" Height="8" Visibility="Collapsed"
-                   Fill="#F2FFFFFF" RadiusX="2" RadiusY="2" />
+                   Fill="{StaticResource CaptureMarqueeBrush}" RadiusX="2" RadiusY="2" />
         <Rectangle x:Name="HandleBottomRight" Width="8" Height="8" Visibility="Collapsed"
-                   Fill="#F2FFFFFF" RadiusX="2" RadiusY="2" />
+                   Fill="{StaticResource CaptureMarqueeBrush}" RadiusX="2" RadiusY="2" />
 
-        <Border x:Name="SizeBadge" Visibility="Collapsed" Padding="9,5" CornerRadius="6"
+        <Border x:Name="SizeBadge" Visibility="Collapsed" Padding="8,4" CornerRadius="6"
                 Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1">
             <TextBlock x:Name="SizeText" Foreground="{DynamicResource TextPrimaryBrush}"
                        FontFamily="{StaticResource MonoFontFamily}" FontSize="12" />
         </Border>
 
         <!-- Instruction chip, centred on the monitor under the cursor. -->
-        <Border x:Name="HintChip" Padding="16,11" CornerRadius="12"
+        <Border x:Name="HintChip" Padding="14,9" CornerRadius="10"
                 Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
             <Border.Effect>
-                <DropShadowEffect BlurRadius="26" ShadowDepth="6" Opacity="0.5" Color="#000000" />
+                <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="0.35" Color="#000000" />
             </Border.Effect>
             <StackPanel Orientation="Horizontal">
-                <Ellipse Width="8" Height="8" VerticalAlignment="Center"
-                         Fill="{DynamicResource AccentBrush}" Margin="0,0,10,0" />
-                <TextBlock Text="拖动框选要翻译的区域" Foreground="{DynamicResource TextPrimaryBrush}" FontWeight="SemiBold"
-                           VerticalAlignment="Center" />
-                <Border Width="1" Height="14" Background="{StaticResource CaptureCrosshairBrush}" Margin="12,0" />
+                <Ellipse Width="7" Height="7" VerticalAlignment="Center"
+                         Fill="{DynamicResource AccentBrush}" Margin="0,0,8,0" />
+                <TextBlock Text="框选翻译区域" Foreground="{DynamicResource TextPrimaryBrush}" FontWeight="SemiBold"
+                           FontSize="12.5" VerticalAlignment="Center" />
+                <Border Width="1" Height="12" Background="{StaticResource CaptureCrosshairBrush}" Margin="10,0" />
                 <TextBlock x:Name="HintDetail" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center"
-                           Text="Esc 或右键取消 · 按住 Shift 仅提取文字 (OCR)" />
+                           FontSize="12" Text="Esc 取消 · 按住 Shift 仅提取文本" />
             </StackPanel>
         </Border>
     </Canvas>

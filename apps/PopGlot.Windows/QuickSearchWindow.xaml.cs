@@ -81,10 +81,22 @@ public partial class QuickSearchWindow : Window
             e.Handled = true;
             await PerformTranslateAsync();
         }
-        else if (e.Key == Key.R && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        else if (e.Key == Key.P && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
         {
+            // Ctrl+P: speak. Ctrl+R stays reserved for retry semantics
+            // elsewhere (translation panel), one key one meaning.
             e.Handled = true;
             SpeakCurrent();
+        }
+        else if (e.Key == Key.C && (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == (ModifierKeys.Control | ModifierKeys.Shift))
+        {
+            e.Handled = true;
+            Copy_Click(this, new RoutedEventArgs());
+        }
+        else if (e.Key == Key.S && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && _state.CanStar)
+        {
+            e.Handled = true;
+            Star_Click(this, new RoutedEventArgs());
         }
     }
 
@@ -195,11 +207,27 @@ public partial class QuickSearchWindow : Window
 
         ResultContainer.Visibility = _state.IsResultVisible ? Visibility.Visible : Visibility.Collapsed;
         ResultStreamBox.Visibility = _state.IsStreamLayerVisible ? Visibility.Visible : Visibility.Collapsed;
-        ResultStreamBox.Text = _state.AccumulatedText;
         if (_state.IsStreamLayerVisible)
         {
-            ResultStreamBox.CaretIndex = ResultStreamBox.Text.Length;
-            ResultStreamBox.ScrollToEnd();
+            // Stick-to-bottom: follow the stream only while the reader sits at
+            // the bottom, so scrolling up to re-read is never overridden.
+            var stickToBottom = Ui.IsScrolledToBottom(Ui.FindScrollViewer(ResultStreamBox));
+            // Append-only when the accumulated text simply grew: wholesale
+            // reassignment re-layouts the whole box on every pump tick and
+            // makes the window edge flicker.
+            var accumulated = _state.AccumulatedText;
+            if (accumulated.StartsWith(ResultStreamBox.Text, StringComparison.Ordinal))
+            {
+                ResultStreamBox.AppendText(accumulated[ResultStreamBox.Text.Length..]);
+            }
+            else
+            {
+                ResultStreamBox.Text = accumulated;
+            }
+            if (stickToBottom)
+            {
+                ResultStreamBox.ScrollToEnd();
+            }
         }
 
         ResultRichBox.Visibility = _state.IsRichBoxVisible ? Visibility.Visible : Visibility.Collapsed;
@@ -213,94 +241,222 @@ public partial class QuickSearchWindow : Window
 
         FooterStatus.Text = _state.StatusText;
 
-        if (!string.IsNullOrWhiteSpace(_state.Phonetic))
+        if (_state.Stage == QuickSearchUiStage.Failed)
+
         {
-            PhoneticLabel.Text = $"[{_state.Phonetic}]";
-            PhoneticLabel.Visibility = Visibility.Visible;
+
+            FooterStatus.Foreground = (Brush)FindResource("DangerBrush");
+
         }
+
+        else if (_state.Stage is QuickSearchUiStage.Cancelled or QuickSearchUiStage.Partial)
+
+        {
+
+            FooterStatus.Foreground = (Brush)FindResource("WarningBrush");
+
+        }
+
         else
+
         {
-            PhoneticLabel.Visibility = Visibility.Collapsed;
+
+            FooterStatus.Foreground = (Brush)FindResource("TextSecondaryBrush");
+
         }
+
+
+
+        if (_state.IsIncompleteBadgeVisible)
+
+        {
+
+            IncompleteBadge.Text = _state.Stage == QuickSearchUiStage.Cancelled ? "已取消" : "未完成";
+
+            IncompleteBadge.Foreground = (Brush)FindResource("WarningBrush");
+
+        }
+
+
+
+        if (!string.IsNullOrWhiteSpace(_state.Phonetic))
+
+        {
+
+            PhoneticLabel.Text = $"[{_state.Phonetic}]";
+
+            PhoneticLabel.Visibility = Visibility.Visible;
+
+        }
+
+        else
+
+        {
+
+            PhoneticLabel.Visibility = Visibility.Collapsed;
+
+        }
+
+
 
         if (!string.IsNullOrWhiteSpace(_state.Explanation))
+
         {
+
             ExplanationLabel.Text = _state.Explanation;
+
             ExplanationCard.Visibility = Visibility.Visible;
+
         }
+
         else
+
         {
+
             ExplanationCard.Visibility = Visibility.Collapsed;
+
         }
+
+
 
         UpdateStarButton();
+
     }
+
+
 
     private void SpeakCurrent()
+
     {
+
         if (_isClosed || !_state.CanSpeak) return;
 
+
+
         var textToSpeak = !string.IsNullOrWhiteSpace(_state.FinalRenderedText)
+
             ? _state.FinalRenderedText
+
             : !string.IsNullOrWhiteSpace(_state.AccumulatedText)
+
                 ? _state.AccumulatedText
+
                 : SearchBox.Text.Trim();
 
+
+
         if (!string.IsNullOrWhiteSpace(textToSpeak))
+
         {
+
+            var clean = MarkdownPresenter.ToPlainText(textToSpeak);
+
             if (TtsService.IsSpeaking)
+
             {
+
                 TtsService.Stop();
+
             }
+
             else
+
             {
-                TtsService.Speak(textToSpeak);
+
+                TtsService.Speak(clean);
+
             }
+
         }
+
     }
+
+
 
     private void Speak_Click(object sender, RoutedEventArgs e) => SpeakCurrent();
 
-    private void Copy_Click(object sender, RoutedEventArgs e)
+
+
+    private async void Copy_Click(object sender, RoutedEventArgs e)
+
     {
+
         if (_isClosed || !_state.CanCopy) return;
 
+
+
         var textToCopy = !string.IsNullOrWhiteSpace(_state.FinalRenderedText)
+
             ? _state.FinalRenderedText
+
             : _state.AccumulatedText;
+
+
 
         if (!string.IsNullOrWhiteSpace(textToCopy))
+
         {
-            try
-            {
-                Clipboard.SetText(textToCopy);
-                FooterStatus.Text = "已复制译文到剪贴板";
-            }
-            catch { }
+
+            var clean = MarkdownPresenter.ToPlainText(textToCopy);
+
+            // Hardened write: a raw Clipboard.SetText on the UI thread freezes
+
+            // the whole window while another app holds the clipboard open.
+
+            FooterStatus.Text = await PopGlot.Windows.Sections.Helpers.CopyToClipboardAsync(clean)
+
+                ? "已复制译文到剪贴板"
+
+                : "剪贴板被其他应用占用，未复制";
+
         }
+
     }
 
+
+
     private void Star_Click(object sender, RoutedEventArgs e)
+
     {
+
         if (_isClosed || !_state.CanStar) return;
 
+
+
         var word = SearchBox.Text.Trim();
+
         if (string.IsNullOrWhiteSpace(word)) return;
 
+
+
         var targetText = !string.IsNullOrWhiteSpace(_state.FinalRenderedText)
+
             ? _state.FinalRenderedText
+
             : _state.AccumulatedText;
+
+
 
         if (string.IsNullOrWhiteSpace(targetText)) return;
 
+
+
+        var cleanTarget = MarkdownPresenter.ToPlainText(targetText);
+
         var isStarred = _vocabulary.ToggleStar(
+
             word,
-            targetText,
+
+            cleanTarget,
+
             _state.Phonetic ?? "",
+
             _state.Explanation ?? "");
 
+
+
         UpdateStarButton();
-        FooterStatus.Text = isStarred ? "★ 已添加到生词本" : "已从生词本移除";
+        FooterStatus.Text = isStarred ? "已加入生词本" : "已从生词本移除";
     }
 
     private void UpdateStarButton()
@@ -308,7 +464,7 @@ public partial class QuickSearchWindow : Window
         var word = SearchBox.Text.Trim();
         var starred = !string.IsNullOrWhiteSpace(word) && _vocabulary.IsStarred(word);
         StarIcon.Fill = (Brush)FindResource(starred ? "AccentBrush" : "TextSecondaryBrush");
-        StarButton.ToolTip = starred ? "从生词本移除" : "加入生词本 (Anki)";
+        StarButton.ToolTip = starred ? "从生词本移除" : "收藏到生词本";
     }
 
     private void CloseButton_Click(object sender, RoutedEventArgs e)
@@ -325,6 +481,38 @@ public partial class QuickSearchWindow : Window
             OnClosedCleanup();
             Close();
         }
+        else if (e.Key == Key.S && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && _state.CanStar)
+        {
+            e.Handled = true;
+            Star_Click(this, new RoutedEventArgs());
+        }
+        else if (e.Key == Key.P && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && _state.CanSpeak)
+        {
+            e.Handled = true;
+            SpeakCurrent();
+        }
+        else if (e.Key == Key.C && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && _state.CanCopy)
+
+        {
+
+            // Keep the search editor's native copy behavior. Copying the full
+
+            // translation from the keyboard uses Ctrl+Shift+C instead.
+
+            if (SearchBox.IsKeyboardFocusWithin)
+
+            {
+
+                return;
+
+            }
+
+            e.Handled = true;
+
+            Copy_Click(this, new RoutedEventArgs());
+
+        }
+
     }
 
     private void Window_Deactivated(object sender, EventArgs e)

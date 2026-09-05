@@ -412,7 +412,7 @@ internal sealed class TranslationCoordinator
                 session.Error = new TranslationError(
                     TranslationErrorKind.OcrFailed,
                     "没有可用的截图翻译线路。",
-                    "任选其一：安装 Windows OCR 语言包（设置 → 时间和语言 → 语言 → 光学字符识别）；" +
+                    "任选其一：安装 Windows OCR 语言包（设置 → 时间和语言 → 语言和区域 → 语言选项 → 光学字符识别）；" +
                     "在服务页配置并启用支持图片的视觉模型；或在「隐私与数据」中允许截图上传。");
                 onStageChanged?.Invoke(session.Stage);
                 return session;
@@ -838,6 +838,15 @@ internal sealed class TranslationCoordinator
             var finished = await Task.WhenAny(completion, delayTask);
             if (finished == completion)
             {
+                break;
+            }
+            if (delayTask.IsCanceled)
+            {
+                // A cancelled delay completes instantly, so looping on it
+                // would hot-spin a thread-pool thread until the native abort
+                // lands. Wait one plain tick for the abort, then stop pumping;
+                // post-cancel deltas are discarded by epoch fencing anyway.
+                await Task.WhenAny(completion, Task.Delay(40));
                 break;
             }
         }

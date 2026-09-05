@@ -106,6 +106,36 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
     private static readonly TimeSpan ClipboardOperationTimeout = TimeSpan.FromMilliseconds(1000);
     private static readonly SemaphoreSlim ClipboardWorkerGate = new(1, 1);
 
+    /// <summary>
+    /// Hardened clipboard write for UI copy buttons: runs on the dedicated STA
+    /// worker behind the same gate/timeout as selection capture, so a clipboard
+    /// hogged by another app can never freeze the UI thread. Returns false on
+    /// timeout or exhaustion (caller surfaces the failure), never throws.
+    /// </summary>
+    internal static async Task<bool> TryWriteTextAsync(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+        try
+        {
+            await RetryClipboardAsync(() => RunInStaAsync(() =>
+            {
+                Clipboard.SetDataObject(text, copy: true);
+                return true;
+            }, ClipboardOperationTimeout)).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception exception) when (exception is TimeoutException
+                                              or COMException
+                                              or ExternalException
+                                              or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
     internal static int InputStructureSize => Marshal.SizeOf<NativeInput>();
 
     public uint SequenceNumber => NativeMethods.GetClipboardSequenceNumber();
@@ -244,6 +274,33 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
             {
                 ClipboardWorkerGate.Release();
             }
+        }
+    }
+
+    /// <summary>
+    /// Sets plain text through the serialized STA clipboard worker with a bounded
+    /// timeout. Clipboard.SetText on the UI thread can stall for seconds while a
+    /// clipboard manager (Win+V history, Office, remote desktop) delays OLE
+    /// rendering, freezing every button on the window. Copy buttons must route
+    /// through here instead.
+    /// </summary>
+    public static async Task<bool> TrySetTextAsync(string text)
+    {
+        try
+        {
+            return await RunInStaAsync(() =>
+            {
+                Clipboard.SetDataObject(new DataObject(text), copy: true);
+                return true;
+            }, ClipboardOperationTimeout).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is TimeoutException
+                                              or COMException
+                                              or InvalidOperationException)
+        {
+            // The gate stays owned by the stuck worker; a retry would only
+            // pile onto it. Report failure and let the user retry by hand.
+            return false;
         }
     }
 

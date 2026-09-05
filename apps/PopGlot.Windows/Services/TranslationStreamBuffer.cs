@@ -71,6 +71,7 @@ public sealed class TranslationStreamBuffer : IDisposable
     private readonly object _lock = new();
     private readonly StringBuilder _pendingBuilder;
     private readonly StringBuilder _accumulatedBuilder;
+    private string? _accumulatedCache;
 
     private TranslationStreamState _state = TranslationStreamState.Active;
     private string? _abortReason;
@@ -294,6 +295,8 @@ public sealed class TranslationStreamBuffer : IDisposable
 
             _pendingBuilder.Append(chars);
             _accumulatedBuilder.Append(chars);
+            // Invalidate the lazy snapshot so GetAccumulatedText rebuilds it.
+            _accumulatedCache = null;
             _deltaCount++;
             _charCount += chars.Length;
             _byteCount += byteCount;
@@ -372,7 +375,10 @@ public sealed class TranslationStreamBuffer : IDisposable
     {
         lock (_lock)
         {
-            return _accumulatedBuilder.ToString();
+            // The 40ms pump calls this every tick even when nothing new
+            // arrived; rebuild only after an append instead of copying the
+            // full accumulated string (up to MaxChars) under the lock.
+            return _accumulatedCache ??= _accumulatedBuilder.ToString();
         }
     }
 
@@ -473,6 +479,7 @@ public sealed class TranslationStreamBuffer : IDisposable
             _abortReason = null;
             _pendingBuilder.Clear();
             _accumulatedBuilder.Clear();
+            _accumulatedCache = null;
             _deltaCount = 0;
             _charCount = 0;
             _byteCount = 0;
@@ -496,6 +503,7 @@ public sealed class TranslationStreamBuffer : IDisposable
             _state = TranslationStreamState.Disposed;
             _pendingBuilder.Clear();
             _accumulatedBuilder.Clear();
+            _accumulatedCache = null;
         }
     }
 }

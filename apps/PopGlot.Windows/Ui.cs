@@ -82,7 +82,7 @@ internal static class Ui
             "CornerRadius",
             typeof(CornerRadius),
             typeof(Ui),
-            new FrameworkPropertyMetadata(new CornerRadius(8)));
+            new FrameworkPropertyMetadata(new CornerRadius(6)));
 
     public static CornerRadius GetCornerRadius(DependencyObject element) =>
         (CornerRadius)element.GetValue(CornerRadiusProperty);
@@ -104,6 +104,20 @@ internal static class Ui
     public static void SetIcon(DependencyObject element, Geometry? value) =>
         element.SetValue(IconProperty, value);
 
+    /// <summary>Explicit width and height for template-rendered icon glyphs.</summary>
+    public static readonly DependencyProperty IconSizeProperty =
+        DependencyProperty.RegisterAttached(
+            "IconSize",
+            typeof(double),
+            typeof(Ui),
+            new FrameworkPropertyMetadata(14.0));
+
+    public static double GetIconSize(DependencyObject element) =>
+        (double)element.GetValue(IconSizeProperty);
+
+    public static void SetIconSize(DependencyObject element, double value) =>
+        element.SetValue(IconSizeProperty, value);
+
     /// <summary>Secondary line rendered under a settings row's title.</summary>
     public static readonly DependencyProperty DescriptionProperty =
         DependencyProperty.RegisterAttached(
@@ -117,4 +131,30 @@ internal static class Ui
 
     public static void SetDescription(DependencyObject element, string value) =>
         element.SetValue(DescriptionProperty, value);
+
+    // ---- Stick-to-bottom scrolling -----------------------------------------
+    // Streaming text must follow the stream only while the reader sits at the
+    // bottom. An unconditional ScrollToEnd slides the view down under someone
+    // who scrolled up to re-read earlier lines.
+
+    /// <summary>Digs the first scroll host out of a visual tree (TextBox internals).</summary>
+    internal static ScrollViewer? FindScrollViewer(DependencyObject? node)
+    {
+        if (node is null) return null;
+        var count = VisualTreeHelper.GetChildrenCount(node);
+        for (var i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(node, i);
+            if (child is ScrollViewer viewer) return viewer;
+            var nested = FindScrollViewer(child);
+            if (nested is not null) return nested;
+        }
+        return null;
+    }
+
+    /// <summary>True when the viewer is at — or has no — scrollable overflow.</summary>
+    internal static bool IsScrolledToBottom(ScrollViewer? viewer) =>
+        viewer is null ||
+        viewer.ScrollableHeight <= 0 ||
+        viewer.VerticalOffset >= viewer.ScrollableHeight - 1.0;
 }

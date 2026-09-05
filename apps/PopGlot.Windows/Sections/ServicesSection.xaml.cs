@@ -61,7 +61,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     private Action? _pendingAfterDraft;
     private ConfirmButton? _deleteConfirm;
     private ConfirmButton? _clearKeyConfirm;
-    private bool _compactEditor;
+    private bool? _compactEditor;
     private readonly System.Windows.Threading.DispatcherTimer _recommendationDebounce;
 
     /// <summary>Raised when the section needs to show a status message.</summary>
@@ -106,8 +106,12 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     /// </summary>
     private void DetailGrid_SizeChanged(object sender, SizeChangedEventArgs e)
     {
+        if (e.NewSize.Width <= 0)
+        {
+            return;
+        }
         var compact = e.NewSize.Width < 680;
-        if (compact == _compactEditor)
+        if (_compactEditor.HasValue && compact == _compactEditor.Value)
         {
             return;
         }
@@ -117,7 +121,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private void ApplyEditorLayout()
     {
-        var compact = _compactEditor;
+        var compact = _compactEditor == true;
         var hasProtocol = CustomProtocolGroup.Visibility == Visibility.Visible;
         PlacePair(IdentityFieldsGrid, ServiceNamePanel, CustomProtocolGroup, compact && hasProtocol);
         Grid.SetColumnSpan(ServiceNamePanel, hasProtocol && !compact ? 1 : 3);
@@ -129,6 +133,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         PlacePair(EndpointFieldsGrid, TextEndpointPanel, VisionEndpointPanel, compact);
         PlacePair(AdvancedDetailsGrid, HeadersPanel, CapabilitiesPanel, compact);
 
+        Grid.SetColumnSpan(ApiKeyPasswordBox, compact ? 3 : 1);
         if (compact)
         {
             Grid.SetColumn(KeyActionsPanel, 0);
@@ -152,6 +157,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     {
         Grid.SetColumn(first, 0);
         Grid.SetRow(first, 0);
+        Grid.SetColumnSpan(first, stacked ? 3 : 1);
         first.Margin = new Thickness(0);
         first.HorizontalAlignment = HorizontalAlignment.Stretch;
 
@@ -680,7 +686,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             ApplyToCore(config);
             RefreshProfilesList();
             ProfileChanged?.Invoke();
-            StatusChanged?.Invoke($"已将「{profile.Name}」设为默认文字服务，后续翻译生效。", StatusTone.Success);
+            StatusChanged?.Invoke($"已将「{profile.Name}」设为默认文字服务，即时生效。", StatusTone.Success);
         }
         catch (Exception exception)
         {
@@ -787,7 +793,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             ApplyToCore(config);
             RefreshProfilesList();
             ProfileChanged?.Invoke();
-            StatusChanged?.Invoke($"默认文字服务已切换为「{option.Label}」，后续翻译生效。", StatusTone.Success);
+            StatusChanged?.Invoke($"默认文字服务已切换为「{option.Label}」，即时生效。", StatusTone.Success);
         }
         catch (Exception exception)
         {
@@ -811,7 +817,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             ProfileChanged?.Invoke();
             StatusChanged?.Invoke(string.IsNullOrEmpty(option.Id)
                 ? "默认视觉服务将跟随默认文字服务。"
-                : $"默认视觉服务已切换为「{option.Label}」，后续翻译生效。", StatusTone.Info);
+                : $"默认视觉服务已切换为「{option.Label}」，即时生效。", StatusTone.Info);
         }
         catch (Exception exception)
         {
@@ -847,6 +853,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         SetDefaultButton.Visibility = addMode ? Visibility.Collapsed : Visibility.Visible;
         DeleteServiceButton.Visibility = addMode ? Visibility.Collapsed : Visibility.Visible;
         _isAdding = addMode;
+        if (!_compactEditor.HasValue && DetailGrid.ActualWidth > 0)
+        {
+            _compactEditor = DetailGrid.ActualWidth < 680;
+        }
+        ApplyEditorLayout();
         UpdateSaveButtonLabel();
         UpdateDeleteTooltip();
     }
@@ -965,15 +976,15 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         var (type, baseUrl, endpoint, note) = preset switch
         {
             "openai" => (ProviderType.OpenAiCompatible, "https://api.openai.com/v1",
-                "/chat/completions", "已应用 OpenAI 预设：填入 API Key 后「获取模型」选择，或手工输入模型名。"),
+                "/chat/completions", "已填入 OpenAI 推荐配置，填写 API Key 后即可验证。"),
             "deepseek" => (ProviderType.OpenAiCompatible, "https://api.deepseek.com/v1",
-                "/chat/completions", "已应用 DeepSeek 预设：填入 API Key 后「获取模型」选择，或手工输入模型名。"),
+                "/chat/completions", "已填入 DeepSeek 推荐配置，填写 API Key 后即可验证。"),
             "gemini" => (ProviderType.GeminiGenerateContent, "https://generativelanguage.googleapis.com",
-                "/v1beta/models/{model}:generateContent", "已应用 Google Gemini 预设：填入 API Key 后「获取模型」选择，或手工输入模型名。"),
+                "/v1beta/models/{model}:generateContent", "已填入 Gemini 推荐配置，填写 API Key 后即可验证。"),
             "claude" => (ProviderType.AnthropicMessages, "https://api.anthropic.com",
-                "/v1/messages", "已应用 Anthropic Claude 预设：填入 API Key 后「获取模型」选择，或手工输入模型名。"),
+                "/v1/messages", "已填入 Claude 推荐配置，填写 API Key 后即可验证。"),
             "zhipu" => (ProviderType.OpenAiCompatible, "https://open.bigmodel.cn/api/paas/v4",
-                "/chat/completions", "已应用智谱 GLM 预设：填入 API Key 后「获取模型」选择，或手工输入模型名。"),
+                "/chat/completions", "已填入 GLM 推荐配置，填写 API Key 后即可验证。"),
             "ollama" => (ProviderType.OpenAiCompatible, "http://localhost:11434/v1",
                 "/chat/completions", "已应用本地 Ollama 预设，无需 API Key：可直接输入或拉取本地模型。"),
             _ => (ProviderType.OpenAiCompatible, string.Empty,
@@ -1005,13 +1016,24 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             TextEndpointTextBox.Text = endpoint;
             VisionEndpointTextBox.Text = endpoint;
             UpdateModelSuggestions(type);
-            TextModelCombo.Text = string.Empty;
-            VisionModelCombo.Text = string.Empty;
+            var (defaultTextModel, defaultVisionModel) = preset switch
+            {
+                "openai" => ("gpt-4o-mini", "gpt-4o-mini"),
+                "deepseek" => ("deepseek-chat", string.Empty),
+                "gemini" => ("gemini-3.6-flash", "gemini-3.6-flash"),
+                "claude" => ("claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest"),
+                "zhipu" => ("glm-4-flash", "glm-4v-flash"),
+                "ollama" => ("qwen2.5:7b", string.Empty),
+                _ => (string.Empty, string.Empty),
+            };
+            TextModelCombo.Text = defaultTextModel;
+            VisionModelCombo.Text = defaultVisionModel;
             AnthropicVersionTextBox.Text = "2023-06-01";
-            SupportsTextCheckBox.IsChecked = false;
-            SupportsVisionCheckBox.IsChecked = false;
+            SupportsTextCheckBox.IsChecked = !string.IsNullOrWhiteSpace(defaultTextModel);
+            SupportsVisionCheckBox.IsChecked = !string.IsNullOrWhiteSpace(defaultVisionModel);
             _visionTracker.Reset();
-            UseTextModelForVisionCheckBox.IsChecked = false;
+            UseTextModelForVisionCheckBox.IsChecked = !string.IsNullOrWhiteSpace(defaultTextModel) &&
+                string.Equals(defaultTextModel, defaultVisionModel, StringComparison.Ordinal);
             VisionModelCombo.IsEnabled = true;
             CustomProtocolGroup.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
             BaseUrlPanel.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;

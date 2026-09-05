@@ -9,7 +9,7 @@ namespace PopGlot.Windows.Services;
 
 /// <summary>
 /// Converts raw translation markdown and technical text into pixel-perfect WPF FlowDocument/Inlines.
-/// Formats inline code, code blocks, bold text, lists, and auto-applies CJK-Latin Pangu spacing.
+/// Formats inline code, code blocks, bold text, lists, headings, and auto-applies CJK-Latin Pangu spacing.
 /// </summary>
 internal static partial class MarkdownPresenter
 {
@@ -28,7 +28,91 @@ internal static partial class MarkdownPresenter
     }
 
     /// <summary>
-    /// Renders markdown formatted blocks into a RichTextBox or StackPanel container.
+    /// Converts markdown translation text into clean, unformatted plain text
+    /// suitable for clipboard copy, speech synthesis (TTS), and vocabulary book storage.
+    /// Strips code fences, markdown headings, bullet markers, numbering, bold/italic,
+    /// inline backticks, and internal protected token placeholders.
+    /// </summary>
+    public static string ToPlainText(string? markdown)
+    {
+        if (string.IsNullOrWhiteSpace(markdown))
+        {
+            return markdown ?? string.Empty;
+        }
+
+        var lines = markdown.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
+        var sb = new StringBuilder(markdown.Length);
+        bool inCodeBlock = false;
+
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine;
+            var trimmed = line.TrimStart();
+
+            // Handle code block fences
+            if (trimmed.StartsWith("```", StringComparison.Ordinal))
+            {
+                inCodeBlock = !inCodeBlock;
+                continue;
+            }
+
+            if (inCodeBlock)
+            {
+                sb.AppendLine(line);
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                sb.AppendLine();
+                continue;
+            }
+
+            // Headings: # , ## , etc.
+            if (trimmed.StartsWith('#'))
+            {
+                int hLevel = 0;
+                while (hLevel < trimmed.Length && trimmed[hLevel] == '#') hLevel++;
+                if (hLevel >= 1 && hLevel <= 6 && hLevel < trimmed.Length && trimmed[hLevel] == ' ')
+                {
+                    line = trimmed[(hLevel + 1)..].Trim();
+                }
+            }
+            // Bullet points: - , * , +
+            else if (trimmed.StartsWith("- ", StringComparison.Ordinal) ||
+                     trimmed.StartsWith("* ", StringComparison.Ordinal) ||
+                     trimmed.StartsWith("+ ", StringComparison.Ordinal))
+            {
+                line = trimmed[2..].Trim();
+            }
+            // Ordered list: 1. , 2) , etc.
+            else
+            {
+                var match = Regex.Match(trimmed, @"^\d+[\.\)]\s+(.*)$");
+                if (match.Success)
+                {
+                    line = match.Groups[1].Value.Trim();
+                }
+            }
+
+            // Remove bold/italic markers
+            line = Regex.Replace(line, @"\*\*([^*]+)\*\*", "$1");
+            line = Regex.Replace(line, @"__([^_]+)__", "$1");
+            line = Regex.Replace(line, @"\*([^*]+)\*", "$1");
+            line = Regex.Replace(line, @"_([^_]+)_", "$1");
+            // Remove inline code backticks
+            line = Regex.Replace(line, @"`([^`]+)`", "$1");
+            // Remove protected token placeholders
+            line = Regex.Replace(line, @"⟦PG_\d{4}⟧", "");
+
+            sb.AppendLine(line.TrimEnd());
+        }
+
+        return sb.ToString().Trim();
+    }
+
+    /// <summary>
+    /// Renders markdown formatted blocks into a RichTextBox or FlowDocument container.
     /// </summary>
     public static void RenderToFlowDocument(
         FlowDocument document,
@@ -54,6 +138,7 @@ internal static partial class MarkdownPresenter
         var uiFont = (FontFamily)(resources["UiFontFamily"] ?? new FontFamily("Segoe UI Variable Text, Segoe UI, Microsoft YaHei UI"));
 
         bool inCodeBlock = false;
+        bool addParagraphSpacing = false;
         var codeBlockBuilder = new StringBuilder();
         string? codeLanguage = null;
 
@@ -90,22 +175,57 @@ internal static partial class MarkdownPresenter
             // Normal paragraph line
             if (string.IsNullOrWhiteSpace(line))
             {
+                addParagraphSpacing = document.Blocks.Count > 0;
                 continue;
+            }
+
+            var trimmedLine = line.TrimStart();
+
+            // Headings: # , ## , ###
+            if (trimmedLine.StartsWith('#'))
+            {
+                int hLevel = 0;
+                while (hLevel < trimmedLine.Length && trimmedLine[hLevel] == '#') hLevel++;
+                if (hLevel >= 1 && hLevel <= 6 && hLevel < trimmedLine.Length && trimmedLine[hLevel] == ' ')
+                {
+                    var headingText = trimmedLine[(hLevel + 1)..].Trim();
+                    var headingPara = new Paragraph
+                    {
+                        Margin = new Thickness(0, addParagraphSpacing || document.Blocks.Count > 0 ? 6 : 0, 0, 2),
+                        FontFamily = uiFont,
+                        FontWeight = FontWeights.SemiBold,
+                    };
+                    double headingSize = hLevel switch
+                    {
+                        1 => 17.0,
+                        2 => 15.5,
+                        _ => 14.5,
+                    };
+                    headingPara.FontSize = headingSize;
+                    AppendFormattedSpans(headingPara.Inlines, headingText, resources);
+                    document.Blocks.Add(headingPara);
+                    addParagraphSpacing = false;
+                    continue;
+                }
             }
 
             var paragraph = new Paragraph
             {
-                Margin = new Thickness(0, 2, 0, 4),
-                LineHeight = 22,
+                // Zero margin and default (font-metric) line height: the
+                // streaming TextBox layer this replaces has neither forced
+                // spacing nor a custom LineHeight, so the stream→final swap
+                // must not change the card's height. Forced 22px lines and
+                // per-paragraph margins were the layout jump.
+                Margin = new Thickness(0, addParagraphSpacing ? 6 : 0, 0, 0),
                 FontFamily = uiFont,
             };
 
-            // Bullet points
-            if (line.TrimStart().StartsWith("- ", StringComparison.Ordinal) || line.TrimStart().StartsWith("* ", StringComparison.Ordinal))
+            // Bullet points (- , * , + )
+            if (trimmedLine.StartsWith("- ", StringComparison.Ordinal) ||
+                trimmedLine.StartsWith("* ", StringComparison.Ordinal) ||
+                trimmedLine.StartsWith("+ ", StringComparison.Ordinal))
             {
-                var bulletIndex = line.IndexOfAny(['-', '*']);
-                var bulletContent = line[(bulletIndex + 2)..];
-
+                var bulletContent = trimmedLine[2..].Trim();
                 var bulletDot = new Run(" • ")
                 {
                     Foreground = accentBrush,
@@ -114,12 +234,26 @@ internal static partial class MarkdownPresenter
                 paragraph.Inlines.Add(bulletDot);
                 AppendFormattedSpans(paragraph.Inlines, bulletContent, resources);
             }
+            // Numbered lists (1. , 2) , etc.)
+            else if (Regex.Match(trimmedLine, @"^(\d+[\.\)])\s+(.*)$") is { Success: true } numMatch)
+            {
+                var numPrefix = numMatch.Groups[1].Value + " ";
+                var numContent = numMatch.Groups[2].Value.Trim();
+                var numRun = new Run(numPrefix)
+                {
+                    Foreground = accentBrush,
+                    FontWeight = FontWeights.SemiBold
+                };
+                paragraph.Inlines.Add(numRun);
+                AppendFormattedSpans(paragraph.Inlines, numContent, resources);
+            }
             else
             {
                 AppendFormattedSpans(paragraph.Inlines, line, resources);
             }
 
             document.Blocks.Add(paragraph);
+            addParagraphSpacing = false;
         }
 
         // Handle unclosed code block if any
@@ -142,8 +276,8 @@ internal static partial class MarkdownPresenter
         var accentSoftBrush = (Brush)(resources["AccentSoftBrush"] ?? Brushes.DarkSlateGray);
         var monoFont = (FontFamily)(resources["MonoFontFamily"] ?? new FontFamily("Cascadia Mono, Consolas"));
 
-        // Match inline tokens: `code` or **bold** or [term]
-        var pattern = @"(`[^`]+`|\*\*[^*]+\*\*|⟦PG_\d{4}⟧)";
+        // Match inline tokens: `code` or **bold** or __bold__ or [term]
+        var pattern = @"(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|⟦PG_\d{4}⟧)";
         var parts = Regex.Split(formatted, pattern);
 
         foreach (var part in parts)
@@ -171,7 +305,8 @@ internal static partial class MarkdownPresenter
                 };
                 inlines.Add(new InlineUIContainer(codeBorder));
             }
-            else if (part.StartsWith("**", StringComparison.Ordinal) && part.EndsWith("**", StringComparison.Ordinal) && part.Length >= 4)
+            else if ((part.StartsWith("**", StringComparison.Ordinal) && part.EndsWith("**", StringComparison.Ordinal) && part.Length >= 4) ||
+                     (part.StartsWith("__", StringComparison.Ordinal) && part.EndsWith("__", StringComparison.Ordinal) && part.Length >= 4))
             {
                 var boldText = part[2..^2];
                 inlines.Add(new Run(boldText)
@@ -241,19 +376,21 @@ internal static partial class MarkdownPresenter
         var copyButton = new Button
         {
             Content = "复制",
+            Width = 64,
             FontSize = 10.5,
             Padding = new Thickness(8, 2, 8, 2),
             HorizontalAlignment = HorizontalAlignment.Right,
             Cursor = System.Windows.Input.Cursors.Hand,
         };
-        copyButton.Click += (_, _) =>
+        copyButton.Click += async (_, _) =>
         {
-            try
-            {
-                Clipboard.SetText(code);
-                copyButton.Content = "已复制 ✓";
-            }
-            catch { }
+            copyButton.IsEnabled = false;
+            copyButton.Content = await PopGlot.Windows.Sections.Helpers.CopyToClipboardAsync(code)
+                ? "已复制"
+                : "复制失败";
+            await Task.Delay(1200);
+            copyButton.Content = "复制";
+            copyButton.IsEnabled = true;
         };
         header.Children.Add(copyButton);
 

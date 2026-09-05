@@ -3,73 +3,73 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:PopGlot.Windows">
 
+    <!-- Compact desktop property list -->
     <StackPanel>
         <TextBlock Text="快捷键" Style="{StaticResource PageTitle}" />
-        <TextBlock Style="{StaticResource PageSubtitle}"
-                   Text="点击输入框后直接按下想要的组合键。组合必须包含 Ctrl、Alt 或 Win；重复组合在保存时会被拒绝。" />
+        <TextBlock Text="全局唤起与操作快捷键，支持随时自定义。" Style="{StaticResource PageSubtitle}" Margin="0,5,0,16" />
 
-        <TextBlock Text="全局快捷键" Style="{StaticResource SectionTitle}" Margin="0,20,0,14" />
+        <TextBlock Text="全局快捷键" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
 
         <Grid Style="{StaticResource SettingsRow}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="190" />
+                <ColumnDefinition Width="180" />
             </Grid.ColumnDefinitions>
-            <StackPanel>
+            <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="划词翻译" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}"
-                           Text="在任意应用中选中文字后按下，读取选区并翻译" />
+                           Text="选中文字后按下呼出翻译" />
             </StackPanel>
             <local:HotkeyRecorder x:Name="SelectionHotkeyRecorder" Grid.Column="1"
-                                  Height="38" VerticalAlignment="Top" />
+                                  Height="34" VerticalAlignment="Center" />
         </Grid>
 
-        <Border Style="{StaticResource SettingsDivider}" />
+        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
 
         <Grid Style="{StaticResource SettingsRow}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="190" />
+                <ColumnDefinition Width="180" />
             </Grid.ColumnDefinitions>
-            <StackPanel>
+            <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="截图翻译" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}"
-                           Text="框选屏幕任意区域，识别其中文字并翻译" />
+                           Text="框选屏幕区域识别翻译" />
             </StackPanel>
             <local:HotkeyRecorder x:Name="ScreenshotHotkeyRecorder" Grid.Column="1"
-                                  Height="38" VerticalAlignment="Top" />
+                                  Height="34" VerticalAlignment="Center" />
         </Grid>
 
-        <Border Style="{StaticResource SettingsDivider}" />
+        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
 
         <Grid Style="{StaticResource SettingsRow}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="190" />
+                <ColumnDefinition Width="180" />
             </Grid.ColumnDefinitions>
-            <StackPanel>
+            <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="关闭浮窗" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}"
-                           Text="浮窗内始终可以直接按 Esc 关闭" />
+                           Text="或在浮窗内按 Esc" />
             </StackPanel>
             <local:HotkeyRecorder x:Name="CloseHotkeyRecorder" Grid.Column="1"
-                                  Height="38" VerticalAlignment="Top" />
+                                  Height="34" VerticalAlignment="Center" />
         </Grid>
 
-        <Border Style="{StaticResource SettingsDivider}" />
+        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
 
         <Grid Style="{StaticResource SettingsRow}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="190" />
+                <ColumnDefinition Width="180" />
             </Grid.ColumnDefinitions>
-            <StackPanel>
+            <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="打开主窗口" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}"
-                           Text="随时从任何应用呼出 PopGlot 主窗口" />
+                           Text="随时呼出 PopGlot 主窗口" />
             </StackPanel>
             <local:HotkeyRecorder x:Name="ShowWindowHotkeyRecorder" Grid.Column="1"
-                                  Height="38" VerticalAlignment="Top" />
+                                  Height="34" VerticalAlignment="Center" />
         </Grid>
     </StackPanel>
 </UserControl>

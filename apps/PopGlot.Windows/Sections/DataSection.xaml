@@ -3,55 +3,60 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:PopGlot.Windows">
 
-    <!-- Second group of the "隐私与数据" page: flat rows for data lifecycle. -->
-    <StackPanel>
-        <TextBlock Text="本地数据" Style="{StaticResource SectionTitle}" Margin="0,20,0,14" />
+    <!-- Compact desktop property list -->
+    <StackPanel Margin="0,6,0,0">
+        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,14" />
+
+        <TextBlock Text="本地存储" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
 
         <Grid Style="{StaticResource SettingsRow}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <StackPanel>
+            <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="保存本地翻译历史" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}"
-                           Text="最多 200 条，保留 90 天；疑似密钥与过大内容不记录" />
+                           Text="最多 200 条，保留 90 天；自动过滤密钥与超长文本" />
             </StackPanel>
             <ToggleButton x:Name="HistoryEnabledToggle"
                           AutomationProperties.Name="保存本地翻译历史" Grid.Column="1"
+                          VerticalAlignment="Center"
                           Style="{StaticResource ToggleSwitch}" />
         </Grid>
 
-        <Border Style="{StaticResource SettingsDivider}" />
+        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
 
         <Grid Style="{StaticResource SettingsRow}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <StackPanel>
-                <TextBlock Text="清空全部历史记录" Style="{StaticResource RowTitle}" />
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="清空翻译历史" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}"
-                           Text="删除 history.json 中的全部记录，不可恢复" />
+                           Text="删除全部本地历史记录，不可恢复" />
             </StackPanel>
             <Button x:Name="ClearHistoryButton" Grid.Column="1" Content="清空历史"
-                    Style="{StaticResource DangerButton}" />
+                    VerticalAlignment="Center"
+                    Style="{StaticResource DangerButton}" Padding="12,5" ToolTip="点击两次确认" />
         </Grid>
 
-        <Border Style="{StaticResource SettingsDivider}" />
+        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
 
         <Grid Style="{StaticResource SettingsRow}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <StackPanel>
+            <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="清空生词本" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}"
-                           Text="删除全部生词与收藏，不可恢复" />
+                           Text="删除全部生词收藏，不可恢复" />
             </StackPanel>
-            <Button x:Name="ClearVocabularyButton" Grid.Column="1" Content="清空生词本" Style="{StaticResource DangerButton}" />
+            <Button x:Name="ClearVocabularyButton" Grid.Column="1" Content="清空生词本"
+                    VerticalAlignment="Center"
+                    Style="{StaticResource DangerButton}" Padding="12,5" ToolTip="点击两次确认" />
         </Grid>
     </StackPanel>
 </UserControl>
-

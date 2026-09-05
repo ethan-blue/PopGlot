@@ -125,8 +125,11 @@ public partial class MainWindow : Window
                 _ = UpdateFreeEngineHealthAsync(force: false);
             }
         }
-        catch (InvalidOperationException)
+        catch (Exception)
         {
+            // The credential vault (Win32Exception) and profile store can
+            // both fail transiently; the footer must degrade quietly on
+            // every alt-tab instead of crashing the window.
             EngineSummary.Text = "配置不可用";
         }
     }
@@ -151,7 +154,7 @@ public partial class MainWindow : Window
             var paintsFooter = IsActiveRouteFreeEngine();
             if (force && paintsFooter)
             {
-                EngineSummary.Text = "免费引擎 · 检测中…";
+                EngineSummary.Text = "内置免费引擎 · 检测中…";
             }
             var health = await FreeTranslateService.GetHealthAsync(force);
             if (!System.Windows.Application.Current.Dispatcher.CheckAccess())
@@ -166,14 +169,14 @@ public partial class MainWindow : Window
             {
                 EngineSummary.Text = $"免费引擎可用 · {health.LatencyMs} ms";
                 EngineDot.Background = (Brush)FindResource("SuccessBrush");
-                EngineHealthButton.ToolTip = "免费翻译引擎连通正常 · 点击重新检测";
+                EngineHealthButton.ToolTip = "免费引擎可用 · 点击重新检测";
             }
             else
             {
                 EngineSummary.Text = "免费引擎不可用";
                 EngineDot.Background = (Brush)FindResource("WarningBrush");
                 EngineHealthButton.ToolTip =
-                    $"免费引擎检测失败：{health.Error} · 点击重新检测；仍不可用会直接打开设置，可配置自己的模型服务";
+                    $"免费引擎不可用：{health.Error} · 点击重新检测";
             }
         }
         catch (Exception)
@@ -329,46 +332,70 @@ public partial class MainWindow : Window
 
     private async void SwitchTextEngine(string profileId)
     {
-        SetStatus("正在切换文字引擎…", StatusTone.Info);
-        // 持久化走后台：写盘（含杀软扫描）在 UI 线程上会造成窗口卡死。
-        var (ok, error) = await Task.Run(() =>
+        try
         {
-            var success = ProfileManager.TrySwitchActiveProfile(profileId, out var message);
-            return (success, message);
-        });
-        SetStatus(ok ? "已切换文字引擎，后续翻译生效。" : error,
-            ok ? StatusTone.Success : StatusTone.Error);
-        RefreshEngineStatus();
+            SetStatus("正在切换文字引擎…", StatusTone.Info);
+            // 持久化走后台：写盘（含杀软扫描）在 UI 线程上会造成窗口卡死。
+            var (ok, error) = await Task.Run(() =>
+            {
+                var success = ProfileManager.TrySwitchActiveProfile(profileId, out var message);
+                return (success, message);
+            });
+            SetStatus(ok ? "已切换文字引擎，即时生效。" : error,
+                ok ? StatusTone.Success : StatusTone.Error);
+            RefreshEngineStatus();
+        }
+        catch (Exception exception)
+        {
+            // async void: an escapee here would kill the process via the
+            // dispatcher; the switcher must degrade to a status line.
+            SetStatus($"切换文字引擎失败：{exception.Message}", StatusTone.Error);
+        }
     }
 
     private async void SwitchVisionEngine(string? profileId)
     {
-        SetStatus("正在切换图片引擎…", StatusTone.Info);
-        var (ok, error) = await Task.Run(() =>
+        try
         {
-            var success = ProfileManager.TrySwitchVisionProfile(profileId, out var message);
-            return (success, message);
-        });
-        SetStatus(
-            ok
-                ? (profileId is null ? "图片引擎已改为跟随文字引擎。" : "已切换图片引擎，后续截图翻译生效。")
-                : error,
-            ok ? StatusTone.Success : StatusTone.Error);
-        RefreshEngineStatus();
+            SetStatus("正在切换图片引擎…", StatusTone.Info);
+            var (ok, error) = await Task.Run(() =>
+            {
+                var success = ProfileManager.TrySwitchVisionProfile(profileId, out var message);
+                return (success, message);
+            });
+            SetStatus(
+                ok
+                    ? (profileId is null ? "图片引擎已改为跟随文字引擎。" : "已切换图片引擎，即时生效。")
+                    : error,
+                ok ? StatusTone.Success : StatusTone.Error);
+            RefreshEngineStatus();
+        }
+        catch (Exception exception)
+        {
+            SetStatus($"切换图片引擎失败：{exception.Message}", StatusTone.Error);
+        }
     }
 
     private async Task SwitchToFreeEngineAsync()
     {
-        SetStatus("正在切换到内置免费引擎…", StatusTone.Info);
-        var (ok, error) = await Task.Run(() =>
+        try
         {
-            var success = ProfileManager.TrySwitchToFreeEngine(out var message);
-            return (success, message);
-        });
-        SetStatus(
-            ok ? "已切换到内置免费引擎（仅文字翻译）。" : error,
-            ok ? StatusTone.Success : StatusTone.Error);
-        RefreshEngineStatus();
+            SetStatus("正在切换到内置免费引擎…", StatusTone.Info);
+            var (ok, error) = await Task.Run(() =>
+            {
+                var success = ProfileManager.TrySwitchToFreeEngine(out var message);
+                return (success, message);
+            });
+            SetStatus(
+                ok ? "已切换到内置免费引擎（仅文字翻译）。" : error,
+                ok ? StatusTone.Success : StatusTone.Error);
+            RefreshEngineStatus();
+        }
+        catch (Exception exception)
+        {
+            // Invoked from an async-void menu lambda: must not throw upward.
+            SetStatus($"切换到免费引擎失败：{exception.Message}", StatusTone.Error);
+        }
     }
 
     private static (string Summary, StatusTone Tone) DescribeEngine(
@@ -533,7 +560,7 @@ public partial class MainWindow : Window
                 _closeHintShown = true;
                 NotifyTray?.Invoke(
                     "PopGlot 还在运行",
-                    "窗口已最小化到托盘；划词、截图翻译与快捷键仍然可用。托盘图标右键可真正退出。");
+                    "窗口已最小化到托盘；划词、截图翻译与快捷键仍然可用。托盘图标右键退出。");
                 try
                 {
                     var settings = ShellSettingsStore.Load();

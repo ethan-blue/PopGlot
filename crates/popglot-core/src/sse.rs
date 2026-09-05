@@ -7,7 +7,11 @@ use std::str::Utf8Error;
 use thiserror::Error;
 
 /// The default maximum number of bytes permitted in one SSE event.
-pub const DEFAULT_MAX_EVENT_BYTES: usize = 64 * 1024;
+///
+/// Matches the documented 256 KiB contract in ARCHITECTURE.md; legitimate
+/// single frames (long Anthropic text deltas, dense screenshot transcriptions)
+/// must not abort the whole stream.
+pub const DEFAULT_MAX_EVENT_BYTES: usize = 256 * 1024;
 /// The default maximum raw byte length of one SSE line, excluding its LF.
 pub const DEFAULT_MAX_LINE_BYTES: usize = DEFAULT_MAX_EVENT_BYTES;
 

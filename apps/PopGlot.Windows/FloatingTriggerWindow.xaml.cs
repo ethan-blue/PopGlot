@@ -65,12 +65,14 @@ public partial class FloatingTriggerWindow : Window
     {
         _isHovered = true;
         ButtonSurface.Background = (System.Windows.Media.Brush)FindResource("AccentSoftBrush");
+        ButtonSurface.BorderBrush = (System.Windows.Media.Brush)FindResource("AccentBrush");
     }
 
     private void Window_MouseLeave(object sender, MouseEventArgs e)
     {
         _isHovered = false;
-        ButtonSurface.Background = (System.Windows.Media.Brush)FindResource("SurfaceBrush");
+        ButtonSurface.Background = (System.Windows.Media.Brush)FindResource("SurfaceRaisedBrush");
+        ButtonSurface.BorderBrush = (System.Windows.Media.Brush)FindResource("AccentBorderBrush");
         _autoHideTimer.Interval = TimeSpan.FromSeconds(1.5);
         _autoHideTimer.Start();
     }
