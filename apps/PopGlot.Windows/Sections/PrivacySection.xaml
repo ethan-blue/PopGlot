@@ -81,6 +81,25 @@
                           Checked="ProviderGate_Changed" Unchecked="ProviderGate_Changed" />
         </Grid>
 
+        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
+
+        <Grid Style="{StaticResource SettingsRow}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="云端朗读（自然语音）" Style="{StaticResource RowTitle}" />
+                <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap"
+                           Text="默认关闭，朗读使用 Windows 本地语音。开启后，要朗读的文字会发送到 Microsoft 在线语音服务以生成更自然的声音。" />
+            </StackPanel>
+            <ToggleButton x:Name="CloudSpeechToggle"
+                          AutomationProperties.Name="云端朗读" Grid.Column="1"
+                          VerticalAlignment="Center"
+                          Style="{StaticResource ToggleSwitch}"
+                          Checked="CloudSpeech_ToggleChanged" Unchecked="CloudSpeech_ToggleChanged" />
+        </Grid>
+
         <!-- Route status card -->
         <Border x:Name="RouteCard" Visibility="Collapsed" Style="{StaticResource InlineCard}" Margin="0,6,0,14" Padding="12,10">
             <StackPanel>

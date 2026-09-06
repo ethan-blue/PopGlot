@@ -31,11 +31,17 @@ internal static class Helpers
             ? value
             : fallback;
 
+    /// <summary>
+    /// Test seam: replaces the system clipboard writer so UI copy actions can
+    /// be verified without touching the real clipboard. Production leaves it
+    /// null and every copy goes through the hardened STA worker.
+    /// </summary>
+    internal static Func<string?, Task<bool>>? ClipboardWriterOverride { get; set; }
+
     internal static Task<bool> CopyToClipboardAsync(string? text) =>
-        // Route every UI copy through the STA worker with a hard timeout: a raw
-        // Clipboard.SetText on the UI thread stalls the whole window whenever
-        // another app holds the clipboard open.
-        WindowsSelectionClipboardAdapter.TryWriteTextAsync(text);
+        ClipboardWriterOverride is { } writer
+            ? writer(text)
+            : WindowsSelectionClipboardAdapter.TryWriteTextAsync(text);
 }
 
 /// <summary>Status tone for footer messages, shared across sections.</summary>

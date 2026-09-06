@@ -14,6 +14,9 @@ internal static class StartupRegistration
     private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string ValueName = "PopGlot";
 
+    /// <summary>Test seam: replaces the registry write so tests never touch HKCU.</summary>
+    internal static Func<bool, bool>? TrySetOverride { get; set; }
+
     public static bool IsEnabled()
     {
         try
@@ -28,7 +31,9 @@ internal static class StartupRegistration
     }
 
     /// <summary>Applies the preference; returns false when the registry refused.</summary>
-    public static bool TrySet(bool enabled)
+    public static bool TrySet(bool enabled) => TrySetOverride?.Invoke(enabled) ?? TrySetCore(enabled);
+
+    private static bool TrySetCore(bool enabled)
     {
         try
         {

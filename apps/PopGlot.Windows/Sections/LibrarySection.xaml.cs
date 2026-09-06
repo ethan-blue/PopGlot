@@ -74,6 +74,8 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
 
     // ================= Loading =================
 
+    private bool _corruptHistoryReported;
+
     internal void ReloadHistory()
     {
         try
@@ -82,6 +84,16 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             if (_mode == LibraryMode.History)
             {
                 ApplyFilter();
+            }
+            // A quarantined history file is user data we refuse to destroy:
+            // say so once, with the backup name, instead of silently showing
+            // an empty list.
+            if (!_corruptHistoryReported && _history.LastQuarantinePath is { } backup)
+            {
+                _corruptHistoryReported = true;
+                StatusChanged?.Invoke(
+                    $"历史记录文件损坏，已备份为 {System.IO.Path.GetFileName(backup)}，原文件未被删除。",
+                    StatusTone.Warning);
             }
         }
         catch (Exception exception)
@@ -256,13 +268,20 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
     {
         if (SelectedRow() is { } row)
         {
-            TtsService.Speak(_mode == LibraryMode.Vocabulary ? row.Source : row.Translation);
+            TtsService.Speak(
+                _mode == LibraryMode.Vocabulary ? row.Source : row.Translation,
+                _mode == LibraryMode.Vocabulary
+                    ? row.Word?.SourceLanguage ?? "auto"
+                    : row.History?.TargetLanguage ?? "zh-CN");
         }
     }
 
     private async void CardCopy_Click(object sender, RoutedEventArgs e)
     {
-        if (SelectedRow() is { } row && await Helpers.CopyToClipboardAsync(row.Translation))
+        // Same shared formatter as the translate surfaces: the stored raw
+        // text leaves as the agreed plain text, not damaged or raw markup.
+        if (SelectedRow() is { } row &&
+            await Helpers.CopyToClipboardAsync(MarkdownPresenter.ToPlainText(row.Translation)))
         {
             StatusChanged?.Invoke("已复制译文。", StatusTone.Info);
         }
@@ -288,15 +307,19 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
     {
         if (_mode == LibraryMode.History)
         {
-            _history.Remove(row.Id);
+            var removed = _history.Remove(row.Id);
             ReloadHistory();
-            StatusChanged?.Invoke("已删除该条记录。", StatusTone.Info);
+            StatusChanged?.Invoke(
+                removed ? "已删除该条记录。" : "未保存到本机，请重试。",
+                removed ? StatusTone.Info : StatusTone.Error);
         }
         else if (_vocabulary is not null)
         {
-            _vocabulary.Remove(row.Id);
+            var removed = _vocabulary.Remove(row.Id);
             ReloadVocabulary();
-            StatusChanged?.Invoke("已从生词本移除该词条。", StatusTone.Info);
+            StatusChanged?.Invoke(
+                removed ? "已从生词本移除该词条。" : "未保存到本机，请重试。",
+                removed ? StatusTone.Info : StatusTone.Error);
         }
     }
 
@@ -386,8 +409,10 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         }
         else if (_vocabulary is not null)
         {
-            _vocabulary.Clear();
-            StatusChanged?.Invoke("生词本已清空。", StatusTone.Info);
+            var cleared = _vocabulary.Clear();
+            StatusChanged?.Invoke(
+                cleared ? "生词本已清空。" : "清空生词本失败：文件正被占用。",
+                cleared ? StatusTone.Info : StatusTone.Error);
             ReloadVocabulary();
         }
     }

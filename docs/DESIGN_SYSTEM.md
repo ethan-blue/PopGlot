@@ -1,6 +1,8 @@
-# PopGlot Design System & UI/UX Guidelines (v0.1.1+)
+# PopGlot Design System & UI/UX Guidelines (v0.1.3+)
 
 本文档定义 PopGlot Windows 客户端的完整设计规范、色彩系统（Design Tokens）、字体层级、网格排版自适应补偿机制及地道中文（去 AI 味 / 去翻译腔）交互文案规范。
+
+> **事实来源**：色彩 token 的唯一权威定义在 `apps/PopGlot.Windows/ThemeService.cs`（`DarkTokens` / `LightTokens`），由测试 `ThemeAuditHelper.RunAudits` 强制对比度预算。本文档是节选说明；两者不一致时以代码为准并修文档。
 
 ---
 
@@ -15,44 +17,45 @@
 
 ## 一、色彩体系
 
-PopGlot 采用高对比度、低视觉噪音的暗色与亮色调色盘，严格遵循 **60-30-10** 配色法则，全部关键文本均满足 WCAG AA 4.5:1 对比度要求。
+PopGlot 采用高对比度、低视觉噪音的暗色与亮色调色盘：中性底色（60%）、次级容器与卡片（30%）、克制的低饱和蓝紫强调（10%）。文本 token 对相邻表面的对比度由测试强制 ≥4.5:1，关键控件边界 ≥3:1（AI-RULES §7.1）。
 
-### 1.1 配色比例分布
-* **主底色背景 (60%)**：承载全局应用画布与基础底色。
-* **次级容器与卡片 (30%)**：输入框、工作台卡片、侧边栏、浮窗面板。
-* **核心交互与高亮 (10%)**：主操作按钮（Brand Azure）、焦点光圈、选中高亮。
+### 1.1 Dark Mode 设计令牌（与 ThemeService.cs 逐值一致）
 
-### 1.2 Dark Mode 设计令牌 (Design Tokens)
+| Token Name | Hex Code | 作用与语义 |
+| :--- | :--- | :--- |
+| `CanvasBrush` | `#101216` | 主窗口底色 |
+| `SidebarBrush` | `#14171E` | 侧边栏与底栏背景 |
+| `SurfaceBrush` | `#181B22` | 卡片容器背景 |
+| `SurfaceMutedBrush` | `#14161D` | 列表背景、只读卡片 |
+| `SurfaceRaisedBrush` | `#20242E` | 下拉浮层、二级悬浮卡片 |
+| `SurfaceHoverBrush` | `#272C38` | 控件悬停态 |
+| `SurfacePressedBrush` | `#353C4D` | 控件按下态 |
+| `InputBrush` | `#181B22` | 文本输入区域底色 |
+| `BorderSubtleBrush` | `#2D3342` | 次级分割线与边框 |
+| `BorderStrongBrush` | `#6B768D` | 输入框与控件外轮廓（≥3:1） |
+| `PrimaryBrush` | `#5562B3` | 主操作按钮底色（深一档品牌蓝，配白字 AA） |
+| `PrimaryHoverBrush` | `#5B69BE` | 主操作按钮悬停 |
+| `PrimaryPressedBrush` | `#4B579F` | 主操作按钮按下 |
+| `PrimaryTextBrush` | `#F7F8FC` | 主操作按钮文字（≥4.5:1，含 hover/pressed） |
+| `AccentBrush` | `#7C89D9` | 品牌高亮/链接/选中（不做按钮底色） |
+| `AccentSoftBrush` | `#20243A` | 徽章/高亮衬底 |
+| `AccentBorderBrush` | `#59649D` | 选中软边框 |
+| `FocusBrush` | `#7C89D9` | 焦点环（对画布/表面 ≥3:1，区别于选中软边框） |
+| `TextPrimaryBrush` | `#EEF0F4` | 一级正文/标题文字 |
+| `TextSecondaryBrush` | `#A8B0BD` | 次级说明/副标题 |
+| `TextTertiaryBrush` | `#939BAA` | 占位符/元数据/时间戳（≥4.5:1） |
+| `TextDisabledBrush` | `#565F6E` | 禁用态文本 |
+| `DangerBrush` | `#FF6B7D` | 危险/删除/报错文字 |
+| `DangerSoftBrush` | `#401C25` | 危险状态衬底 |
+| `DangerHoverBrush` | `#52222E` | 危险按钮悬停底（配 DangerHoverText 红字，暗色不用白字压亮红） |
+| `SuccessBrush` | `#3DD68C` | 成功/健康状态 |
+| `SuccessSoftBrush` | `#143826` | 成功状态衬底 |
+| `WarningBrush` | `#F2B95C` | 警告/未保存修改 |
+| `WarningSoftBrush` | `#3D2D14` | 警告状态衬底 |
 
-| Token Name | Hex Code | 作用与语义 | 对比度与 WCAG 标准 |
-| :--- | :--- | :--- | :--- |
-| `CanvasBrush` | `#0A0B0F` | 主窗口底色 (60%) | 基准背景 |
-| `SidebarBrush` | `#0F1015` | 侧边栏与底栏背景 | 与主底色形成微明度差 |
-| `SurfaceBrush` | `#14161C` | 卡片容器背景 (30%) | 与主底色 1.3:1 柔和明度阶梯 |
-| `SurfaceMutedBrush` | `#111318` | 列表背景、只读卡片 | 抑制低优先级视觉权重 |
-| `SurfaceRaisedBrush` | `#1B1E26` | 下拉浮层、二级悬浮卡片 | 空间层级提升 |
-| `SurfaceHoverBrush` | `#21242E` | 控件悬停态 | 交互反馈 |
-| `SurfacePressedBrush`| `#333B49` | 控件按下态 | 物理反馈 |
-| `InputBrush` | `#0E1014` | 文本输入区域底色 | 高沉浸专注 |
-| `BorderSubtleBrush` | `#2A303D` | 次级分割线与边框 | 柔和结构线 |
-| `BorderStrongBrush` | `#626C82` | 输入框与控件外轮廓 (3.0:1) | 满足非文本对比度 |
-| `PrimaryBrush` | `#2563EB` | 主操作按钮底色 (10%) | 配白字对比度 4.6:1 (AA) |
-| `PrimaryHoverBrush` | `#1F55C7` | 主操作按钮悬停 | 交互状态 |
-| `PrimaryPressedBrush`| `#1A47A8` | 主操作按钮按下 | 交互状态 |
-| `PrimaryTextBrush` | `#FFFFFF` | 主操作按钮文字 | 在 Primary 上对比度 4.6:1 |
-| `AccentBrush` | `#4D9FFF` | 品牌高亮/链接/状态点 (10%) | 在 Canvas 上对比度 9.8:1 (AAA) |
-| `AccentSoftBrush` | `#152C4E` | 徽章/高亮底色 | 低饱和衬底 |
-| `AccentBorderBrush` | `#5E96E0` | 高亮边框/焦点环 | 强化选中 |
-| `TextPrimaryBrush` | `#EEF0F4` | 一级正文/标题文字 | 在 Surface 上对比度 13.8:1 (AAA) |
-| `TextSecondaryBrush`| `#A3A9B4` | 次级说明/副标题 | 在 Surface 上对比度 7.2:1 (AAA) |
-| `TextTertiaryBrush` | `#8A93A2` | 占位符/元数据/时间戳 | 在 Surface 上对比度 5.4:1 (AA) |
-| `TextDisabledBrush` | `#525A66` | 禁用态文本 | 弱化呈现 |
-| `SuccessBrush` | `#3DD68C` | 成功/健康状态 | 在 SuccessSoft 上 4.8:1 (AA) |
-| `SuccessSoftBrush` | `#143826` | 成功状态衬底 | - |
-| `WarningBrush` | `#F2B95C` | 警告/未保存修改 | 在 WarningSoft 上 5.1:1 (AA) |
-| `WarningSoftBrush` | `#3D2D14` | 警告状态衬底 | - |
-| `DangerBrush` | `#FF6B7D` | 危险/删除/报错 | 在 DangerSoft 上 4.9:1 (AA) |
-| `DangerSoftBrush` | `#401C25` | 危险状态衬底 | - |
+亮色主题对应值（Canvas `#F6F7F9`、Primary `#5260B5`、Accent `#5563B8` 等）见 `ThemeService.LightTokens`，同样由测试强制对比度。
+
+> 历史：v0.1.1 文档曾记录另一套 `#0A0B0F / #2563EB / #4D9FFF`（亮蓝大强调）配色，与当时实现即不一致；当前方向在 v0.1.3 整改中锁定为上表并纳入自动化审计。
 
 ---
 
@@ -73,7 +76,7 @@ PopGlot 采用高对比度、低视觉噪音的暗色与亮色调色盘，严格
 | **Content Large** | 14.5px | 22px (1.51) | Regular (400) | `#EEF0F4` | 翻译结果展示区域 |
 | **Caption (说明)** | 12px | 17px (1.42) | Regular (400) | `#A3A9B4` | 控件下方解释提示、空状态说明 |
 | **Metadata (元数据)** | 11px | 16px (1.45) | Regular (400) | `#8A93A2` | 时间戳、字符计数、路由徽章 |
-| **Kbd / Token** | 12.5px | 18px (1.44) | Medium (500) | `#4D9FFF` | 快捷键录制框、保护代码词条 |
+| **Kbd / Token** | 12.5px | 18px (1.44) | Medium (500) | `AccentBrush`（代码词条用 `TextSecondaryBrush`） | 快捷键录制框、保护代码词条 |
 
 ---
 

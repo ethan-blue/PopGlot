@@ -78,6 +78,11 @@ public partial class QuickSearchWindow : Window
             {
                 return; // Shift+Enter inserts newline
             }
+            // IME composition confirm: the composition owns this Enter.
+            if (System.Windows.Input.InputMethod.GetIsInputMethodEnabled(SearchBox))
+            {
+                return;
+            }
             e.Handled = true;
             await PerformTranslateAsync();
         }
@@ -172,7 +177,8 @@ public partial class QuickSearchWindow : Window
                         MarkdownPresenter.RenderToFlowDocument(
                             ResultRichBox.Document,
                             _state.FinalRenderedText,
-                            Application.Current?.Resources ?? Resources);
+                            Application.Current?.Resources ?? Resources,
+                            resultActionsEnabled: _state.CanCopy);
                     }
                     catch
                     {
@@ -363,7 +369,7 @@ public partial class QuickSearchWindow : Window
 
             {
 
-                TtsService.Speak(clean);
+                TtsService.Speak(clean, CoreBridge.GetSettings().TargetLanguage);
 
             }
 
@@ -443,7 +449,9 @@ public partial class QuickSearchWindow : Window
 
         var cleanTarget = MarkdownPresenter.ToPlainText(targetText);
 
-        var isStarred = _vocabulary.ToggleStar(
+        var languageSettings = CoreBridge.GetSettings();
+
+        var result = _vocabulary.ToggleStar(
 
             word,
 
@@ -451,18 +459,29 @@ public partial class QuickSearchWindow : Window
 
             _state.Phonetic ?? "",
 
-            _state.Explanation ?? "");
+            _state.Explanation ?? "",
+
+            languageSettings.SourceLanguage ?? LanguageCatalog.Auto,
+
+            languageSettings.TargetLanguage ?? "zh-CN");
 
 
 
         UpdateStarButton();
-        FooterStatus.Text = isStarred ? "已加入生词本" : "已从生词本移除";
+        FooterStatus.Text = result.Persisted
+            ? (result.Starred ? "已加入生词本" : "已从生词本移除")
+            : result.DescribeFailureZh();
     }
 
     private void UpdateStarButton()
     {
         var word = SearchBox.Text.Trim();
-        var starred = !string.IsNullOrWhiteSpace(word) && _vocabulary.IsStarred(word);
+        var settings = CoreBridge.GetSettings();
+        var starred = !string.IsNullOrWhiteSpace(word) &&
+            _vocabulary.IsStarred(
+                word,
+                settings.SourceLanguage ?? LanguageCatalog.Auto,
+                settings.TargetLanguage ?? "zh-CN");
         StarIcon.Fill = (Brush)FindResource(starred ? "AccentBrush" : "TextSecondaryBrush");
         StarButton.ToolTip = starred ? "从生词本移除" : "收藏到生词本";
     }

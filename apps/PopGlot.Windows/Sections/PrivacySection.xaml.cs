@@ -30,6 +30,7 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
     internal ToggleButton SafeMode => SafeModeToggle;
     internal ToggleButton NetworkEnabled => NetworkEnabledToggle;
     internal ToggleButton AllowImageUpload => AllowImageUploadToggle;
+    internal ToggleButton CloudSpeech => CloudSpeechToggle;
     internal ComboBox ModeCombo => ModeComboBox;
 
     internal bool IsLoading { get => _loading; set => _loading = value; }
@@ -127,6 +128,66 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         RouteBadgeText.Foreground = (Brush)FindResource(warning ? "WarningBrush" : "AccentBrush");
     }
 
+    // ================= Cloud speech consent =================
+
+    /// <summary>
+    /// Loads the cloud-speech toggle from the persisted consent. The consent
+    /// is independent from every translation permission: it only ever says
+    /// "send read-aloud text to the Microsoft voice service".
+    /// </summary>
+    internal void RefreshCloudSpeechState()
+    {
+        if (CloudSpeechToggle is null)
+        {
+            return;
+        }
+        _loading = true;
+        try
+        {
+            CloudSpeechToggle.IsChecked = _shellSettings.CloudSpeechEnabled;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void CloudSpeech_ToggleChanged(object sender, RoutedEventArgs e)
+    {
+        UpdateSafeModeGating();
+        if (_loading)
+        {
+            return;
+        }
+
+        var enabled = CloudSpeechToggle.IsChecked == true;
+        try
+        {
+            var updated = _shellSettings with { CloudSpeechEnabled = enabled };
+            ShellSettingsStore.Save(updated);
+            _shellSettings = updated;
+            StatusChanged?.Invoke(
+                enabled
+                    ? "已允许云端朗读：朗读文字将发送到 Microsoft 在线语音服务。"
+                    : "已关闭云端朗读：仅使用 Windows 本地语音。",
+                StatusTone.Info);
+        }
+        catch (Exception exception)
+        {
+            // Never leave the toggle claiming a state that was not persisted.
+            _loading = true;
+            try
+            {
+                CloudSpeechToggle.IsChecked = !enabled;
+            }
+            finally
+            {
+                _loading = false;
+            }
+            StatusChanged?.Invoke($"保存云端朗读选择失败：{exception.Message}", StatusTone.Error);
+        }
+    }
+
     // ================= Free engine consent =================
 
     internal void RefreshFreeEngineState()
@@ -183,6 +244,10 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         NetworkEnabledToggle.IsEnabled = !safe;
         ModeComboBox.IsEnabled = !safe;
         AllowImageUploadToggle.IsEnabled = !safe;
+        if (CloudSpeechToggle is not null)
+        {
+            CloudSpeechToggle.IsEnabled = !safe;
+        }
         SafeModeGateNote.Visibility = safe ? Visibility.Visible : Visibility.Collapsed;
     }
 

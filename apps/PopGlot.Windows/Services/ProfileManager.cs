@@ -28,6 +28,7 @@ internal sealed class ProviderProfile
         AllowInsecureTls = source.AllowInsecureTls;
         CredentialTarget = source.CredentialTarget;
         IsLocal = source.IsLocal;
+        AllowLanEndpoints = source.AllowLanEndpoints;
     }
 
     public ProviderProfile Clone() => new(this);
@@ -47,6 +48,13 @@ internal sealed class ProviderProfile
     public bool AllowInsecureTls { get; set; }
     public string CredentialTarget { get; set; } = "PopGlot/provider/openai-default";
     public bool IsLocal { get; set; }
+
+    /// <summary>
+    /// Explicit permission for a service on another LAN device. Never derived
+    /// from the URL: a private-range address alone grants nothing, and older
+    /// configs deserialize as false so no existing permission widens.
+    /// </summary>
+    public bool AllowLanEndpoints { get; set; }
 
     public static ProviderProfile CreateOpenAi() => new()
     {
@@ -188,7 +196,7 @@ internal sealed class CoreProductConfig
 
     public CoreProductConfig Clone() => new(this);
 
-    public int SchemaVersion { get; set; } = 6;
+    public int SchemaVersion { get; set; } = 7;
     public string ActiveProfileId { get; set; } = string.Empty;
     public string? VisionProfileId { get; set; }
 
@@ -302,10 +310,7 @@ internal static class ProfileManager
 {
     private static readonly object Gate = new();
 
-    private static readonly string ConfigPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "PopGlot",
-        "product-config.json");
+    private static readonly string ConfigPath = StoragePaths.ProductConfig;
 
     /// <summary>Test seam: redirects the config file (also disables seeding).</summary>
     internal static string? ConfigPathOverride;
@@ -353,7 +358,15 @@ internal static class ProfileManager
                         {
                             config = MigrateToV6InMemory(config);
                         }
-                        if (originalVersion < 6)
+                        if (config.SchemaVersion < 7)
+                        {
+                            // v7 introduces the independent LAN permission.
+                            // Every existing profile migrates with it absent
+                            // (false): a private-range URL alone never earns
+                            // the right to receive content.
+                            config.SchemaVersion = 7;
+                        }
+                        if (originalVersion < 7)
                         {
                             try
                             {
@@ -598,13 +611,17 @@ internal static class ProfileManager
             return;
         }
 
-        var settings = textProfile.ToProviderSettings(current);
+        var settings = textProfile.ToProviderSettings(current) with
+        {
+            AllowLanEndpoints = textProfile.AllowLanEndpoints,
+        };
         var visionProfile = config.TryGetVisionProfile();
         if (visionProfile is not null && visionProfile.SupportsVision &&
             !string.IsNullOrWhiteSpace(visionProfile.VisionModel))
         {
             // Never fold by host/protocol. The selected vision profile is an
-            // independent route even when it happens to share the same URL.
+            // independent route even when it happens to share the same URL,
+            // and it carries its own LAN permission.
             settings = settings with
             {
                 SupportsVision = true,
@@ -615,7 +632,8 @@ internal static class ProfileManager
                     visionProfile.VisionModel,
                     visionProfile.ExtraHeaders,
                     visionProfile.AnthropicVersion,
-                    visionProfile.AllowInsecureTls),
+                    visionProfile.AllowInsecureTls,
+                    visionProfile.AllowLanEndpoints),
             };
         }
         else
@@ -719,7 +737,7 @@ internal static class ProfileManager
             notReady = "缺少 Base URL";
             return false;
         }
-        if (!ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl) &&
+        if (ProviderSettings.ClassifyEndpoint(profile.ApiBaseUrl) == EndpointClass.Internet &&
             !CredentialStore.HasApiKey(profile.CredentialTarget))
         {
             notReady = "尚未配置密钥";
@@ -818,105 +836,87 @@ internal static class ProfileManager
     /// Resolves the actual screenshot state machine once. Callers render or
     /// execute this result instead of reimplementing privacy/availability
     /// rules independently.
+    ///
+    /// The shell OBSERVES (endpoints, permissions, OCR packs, configured
+    /// routes); the Rust domain DECIDES via the shared decision table
+    /// (<see cref="CoreBridge.SelectRoute"/>) — the same table the Rust side
+    /// exercises, so the two languages cannot drift.
     /// </summary>
     public static ResolvedRoute ResolveRoute(ProviderSettings settings, bool localOcrAvailable)
     {
         var providers = ResolveRoutes();
-        var visionLeavesDevice = providers.Vision is not null &&
-            !ProviderSettings.IsLocalBaseUrl(providers.Vision.Profile.ApiBaseUrl);
-        var visionUsable = providers.Vision is not null &&
-            (!visionLeavesDevice ||
-                (settings.NetworkEnabled &&
-                 !settings.SafeDevMode &&
-                 settings.AllowImageUploadInAuto));
+        // Any non-loopback vision service — LAN or internet — receives the
+        // screenshot bytes, so the image leaves the device. "Local" means the
+        // machine itself, never "somewhere on our network".
+        var visionClass = providers.Vision is null
+            ? EndpointClass.Internet
+            : ProviderSettings.ClassifyEndpoint(providers.Vision.Profile.ApiBaseUrl);
+        var visionLeavesDevice = providers.Vision is not null && visionClass != EndpointClass.Loopback;
 
-        if (settings.Mode == TranslationMode.LocalOcr)
-        {
-            return localOcrAvailable
-                ? new(providers.Text, providers.Vision, ScreenshotPipeline.LocalOcr, false,
-                    "本地 OCR 识别截图，识别出的文字进入统一文字翻译线路。")
-                : new(providers.Text, providers.Vision, ScreenshotPipeline.Unavailable, false,
-                    "已指定本地 OCR，但系统没有可用的 OCR 语言包。");
-        }
+        // Vision reachability mirrors the Rust from_settings contract: network
+        // on, safe mode off, and a key wherever the profile needs one.
+        var visionReachable = settings.NetworkEnabled && !settings.SafeDevMode;
+        var visionCredentialPresent = providers.Vision is not null &&
+            (providers.Vision.Profile.IsLocal ||
+             !string.IsNullOrWhiteSpace(_credentialProbe(providers.Vision.CredentialTarget)));
+        var visionConfigured = providers.Vision is not null && visionReachable && visionCredentialPresent;
 
-        // VisionDirect is an explicit user choice. It must never silently
-        // become OCR: either the selected vision profile is executable or the
-        // operation is blocked with a precise reason.
-        if (settings.Mode == TranslationMode.VisionDirect)
-        {
-            return visionUsable && providers.Vision is not null
-                ? new(providers.Text, providers.Vision, ScreenshotPipeline.VisionDirect,
-                    visionLeavesDevice, "已按设置使用所选视觉模型直接识别并翻译截图。")
-                : new(providers.Text, providers.Vision, ScreenshotPipeline.Unavailable, false,
-                    providers.Vision is null
-                        ? "未配置可用的图片服务，请先选择图片模型。"
-                        : visionLeavesDevice && !settings.AllowImageUploadInAuto
-                            ? "所选图片服务为远程服务，但当前未允许截图离开设备。"
-                            : "所选图片服务当前被网络或安全模式阻止。");
-        }
-
-        // 视觉识别 + 文本翻译：需要视觉服务可用，且有一条可执行的文字
-        // 线路来承接译文。缺任何一段都明确阻断，不静默降级。
-        if (settings.Mode == TranslationMode.VisionOcr)
-        {
-            if (visionUsable && providers.Vision is not null && providers.Text is not null)
+        var facts = new ScreenshotRouteFacts(
+            RequestedMode: settings.Mode.ToString(),
+            VisionConfigured: visionConfigured,
+            VisionEndpointClass: visionClass switch
             {
-                return new(providers.Text, providers.Vision, ScreenshotPipeline.VisionOcr,
-                    visionLeavesDevice,
-                    visionLeavesDevice
-                        ? "已授权视觉模型识别截图文字（截图将上传），译文由文本模型流式生成。"
-                        : "本地视觉服务识别截图文字，译文由文本模型流式生成，图片不离开本机。");
-            }
-            return new(providers.Text, providers.Vision, ScreenshotPipeline.Unavailable, false,
-                providers.Vision is null
-                    ? "未配置可用的图片服务：视觉识别需要先选择图片模型。"
-                    : !visionUsable && visionLeavesDevice && !settings.AllowImageUploadInAuto
-                        ? "所选图片服务为远程服务，但当前未允许截图离开设备。"
-                        : providers.Text is null
-                            ? "视觉识别 + 文本翻译需要同时配置图片模型与文字模型。"
-                            : "所选图片服务当前被网络或安全模式阻止。");
-        }
+                EndpointClass.Loopback => "loopback",
+                EndpointClass.PrivateNetwork => "private",
+                _ => "internet",
+            },
+            ImageUploadAllowed: settings.AllowImageUploadInAuto,
+            AllowLanEndpoints: providers.Vision?.Profile.AllowLanEndpoints ?? settings.AllowLanEndpoints,
+            LocalOcrAvailable: localOcrAvailable,
+            TextRouteAvailable: providers.Text is not null);
 
-        if (settings.Mode == TranslationMode.Auto && localOcrAvailable)
+        var decision = CoreBridge.SelectRoute(facts);
+        var pipeline = decision.SelectedMode switch
         {
-            return new(providers.Text, providers.Vision, ScreenshotPipeline.LocalOcr, false,
-                "自动模式优先使用本地 OCR；截图不会上传，识别出的文字进入统一文字翻译线路。");
-        }
-
-        if (visionUsable)
+            TranslationMode.VisionDirect => ScreenshotPipeline.VisionDirect,
+            TranslationMode.VisionOcr => ScreenshotPipeline.VisionOcr,
+            TranslationMode.LocalOcr => ScreenshotPipeline.LocalOcr,
+            _ => ScreenshotPipeline.Unavailable,
+        };
+        // "auto_unavailable" means NO pipeline can run (no OCR engine and no
+        // admitted vision route): the pipeline is Unavailable even though the
+        // decision names LocalOcr as the non-existent fallback.
+        if (decision.ReasonCode == "auto_unavailable" ||
+            decision.ReasonCode == "forced_local_ocr_without_engine")
         {
-            // 自动模式下本地 OCR 不可用：云端视觉服务优先「识别 + 文本
-            // 翻译」两段式（译文由文本模型流式输出，通常更快更稳）；本
-            // 地视觉服务保持直译，一次调用即可，图片也不离开本机。
-            if (visionLeavesDevice && providers.Text is not null && providers.Vision is not null)
-            {
-                return new(providers.Text, providers.Vision, ScreenshotPipeline.VisionOcr, true,
-                    "本地 OCR 不可用；已授权视觉模型识别截图（截图将上传），译文由文本模型生成。");
-            }
-            return new(providers.Text, providers.Vision, ScreenshotPipeline.VisionDirect, visionLeavesDevice,
-                visionLeavesDevice
-                    ? "本地 OCR 不可用；已授权回退到独立视觉服务并上传截图。"
-                    : "本地 OCR 不可用；将回退到本地视觉服务，图片不离开本机。");
+            pipeline = ScreenshotPipeline.Unavailable;
         }
-
-        if (localOcrAvailable)
+        // A decision whose selected mode still needs the vision route can only
+        // render when that route actually exists (Auto might pick LocalOcr).
+        var unusable =
+            pipeline is ScreenshotPipeline.VisionDirect or ScreenshotPipeline.VisionOcr &&
+            (providers.Vision is null || !visionConfigured);
+        if (unusable)
         {
-            return new(providers.Text, providers.Vision, ScreenshotPipeline.LocalOcr, false,
-                settings.Mode == TranslationMode.VisionDirect
-                    ? "视觉服务未就绪或截图上传未授权，已回退到本地 OCR。"
-                    : "使用本地 OCR；截图不会上传。");
+            pipeline = ScreenshotPipeline.Unavailable;
         }
-
-        return new(providers.Text, providers.Vision, ScreenshotPipeline.Unavailable, false,
-            providers.Vision is null
-                ? "本地 OCR 不可用，且没有带模型与凭据的视觉服务。"
-                : "本地 OCR 不可用，且截图上传未授权或网络被禁用。");
+        return new ResolvedRoute(
+            providers.Text, providers.Vision, pipeline, decision.MayUploadImage, decision.ExplanationZh);
     }
 
     /// <summary>
-    /// Full vision readiness: a model must be named, and a cloud service must
-    /// hold a key. Capability state is layered on by the UI (verified or
-    /// declared-unknown) because no catalog guarantees input modality.
+    /// Credential probe for vision reachability. Resolved once per call; the
+    /// seam exists so the isolated test host can redirect it to the in-memory
+    /// vault.
+    /// </summary>
+    private static Func<string, string?> _credentialProbe = target => CredentialStore.LoadApiKey(target);
+
+    /// <summary>
+    /// Full vision readiness: a model must be named, and an internet service
+    /// must hold a key. Loopback and LAN services may be keyless; LAN still
+    /// needs its own permission at execution time. Capability state is layered
+    /// on by the UI (verified or declared-unknown) because no catalog
+    /// guarantees input modality.
     /// </summary>
     public static bool IsVisionReady(ProviderProfile profile)
     {
@@ -924,7 +924,7 @@ internal static class ProfileManager
         {
             return false;
         }
-        if (ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl))
+        if (ProviderSettings.ClassifyEndpoint(profile.ApiBaseUrl) != EndpointClass.Internet)
         {
             return true;
         }

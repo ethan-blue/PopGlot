@@ -42,12 +42,16 @@ internal sealed partial class HistoryStore : IHistoryRepository
     private readonly string _path;
     private readonly Lock _gate = new();
 
+    /// <summary>
+    /// Path of the most recent corrupt/oversized backup created by a load, if
+    /// any. Surfaced so the library can tell the user their data was
+    /// quarantined instead of silently replaced.
+    /// </summary>
+    internal string? LastQuarantinePath { get; private set; }
+
     public HistoryStore(string? path = null)
     {
-        _path = path ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PopGlot",
-            "history.json");
+        _path = path ?? StoragePaths.History;
     }
 
     public IReadOnlyList<TranslationHistoryEntry> Load()
@@ -62,14 +66,22 @@ internal sealed partial class HistoryStore : IHistoryRepository
     {
         try
         {
-            if (!File.Exists(_path) || new FileInfo(_path).Length > MaxFileBytes)
+            if (!File.Exists(_path))
             {
+                return [];
+            }
+            if (new FileInfo(_path).Length > MaxFileBytes)
+            {
+                // Oversized is treated as unreadable, but the bytes are the
+                // user's history: quarantine before a later save replaces them.
+                QuarantineUnlocked();
                 return [];
             }
             var entries = JsonSerializer.Deserialize<List<TranslationHistoryEntry>>(
                 File.ReadAllText(_path), JsonOptions) ?? [];
             var cutoff = DateTimeOffset.UtcNow - MaxAge;
             return entries
+                .Where(entry => entry is not null)
                 .Where(entry => entry.CreatedAt >= cutoff)
                 .OrderByDescending(entry => entry.CreatedAt)
                 .Take(MaxEntries)
@@ -78,7 +90,29 @@ internal sealed partial class HistoryStore : IHistoryRepository
         catch (Exception exception) when (
             exception is IOException or JsonException or UnauthorizedAccessException)
         {
+            // Corrupt file preservation: back it up so the next save cannot
+            // destroy the only copy of the user's history.
+            QuarantineUnlocked();
             return [];
+        }
+    }
+
+    private void QuarantineUnlocked()
+    {
+        try
+        {
+            if (File.Exists(_path))
+            {
+                var quarantinePath = $"{_path}.corrupt-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}";
+                File.Copy(_path, quarantinePath, overwrite: true);
+                LastQuarantinePath = quarantinePath;
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
         }
     }
 
@@ -187,8 +221,25 @@ internal sealed partial class HistoryStore : IHistoryRepository
 
     private static string CsvEscape(string? value)
     {
-        if (string.IsNullOrEmpty(value)) return "\"\"";
-        return $"\"{value.Replace("\"", "\"\"")}\"";
+        var text = value ?? string.Empty;
+        // Same spreadsheet-formula contract as the vocabulary export: a field
+        // starting with =,+,-,@ (after leading controls/spaces) gains an
+        // in-quote apostrophe so Excel never executes it as a formula.
+        var safe = IsFormulaPrefixed(text) ? "'" + text : text;
+        return $"\"{safe.Replace("\"", "\"\"")}\"";
+    }
+
+    private static bool IsFormulaPrefixed(string text)
+    {
+        foreach (var ch in text)
+        {
+            if (char.IsControl(ch) || ch == ' ')
+            {
+                continue;
+            }
+            return ch is '=' or '+' or '-' or '@';
+        }
+        return false;
     }
 
     internal static bool CanPersist(TranslationHistoryEntry entry)

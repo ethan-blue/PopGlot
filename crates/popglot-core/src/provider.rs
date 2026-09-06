@@ -558,6 +558,7 @@ impl ProviderClient {
     pub fn new(limits: TransportLimits) -> Result<Self, ProviderError> {
         let mut builder = reqwest::Client::builder()
             .connect_timeout(limits.connect_timeout)
+            .redirect(same_origin_redirect_policy())
             .user_agent(concat!("PopGlot/", env!("CARGO_PKG_VERSION")));
         if limits.accept_invalid_certs {
             // Opt-in for private relays reached by bare IP or self-signed TLS;
@@ -1749,27 +1750,54 @@ fn extra_headers(settings: &ProviderSettings) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Same-origin redirects only, at most three hops: a model endpoint has no
+/// business forwarding content (and its query string) to a different host.
+fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() > 3 {
+            return attempt.error("重定向次数过多，已中止。");
+        }
+        let Some(first) = attempt.previous().first() else {
+            return attempt.follow();
+        };
+        if attempt.url().origin() == first.origin() {
+            attempt.follow()
+        } else {
+            attempt.error("服务把请求重定向到了另一台主机，已中止（不允许跨目标跳转）。")
+        }
+    })
+}
+
 fn validate_execution(
     settings: &ProviderSettings,
     api_key: &str,
     request_id: &str,
 ) -> Result<(), ProviderError> {
-    // Offline controls block remote traffic, not a provider explicitly
-    // hosted on loopback/private local infrastructure.
-    let local_runtime = is_local_base_url(&settings.api_base_url);
-    if !local_runtime && settings.safe_dev_mode {
+    // The three endpoint classes carry different permissions: loopback stays
+    // on the machine, a private-range address is another LAN device (needs an
+    // explicit, separate permission because content leaves the machine), and
+    // anything else is the internet.
+    use popglot_domain::EndpointClass;
+    let class = popglot_domain::classify_endpoint(&settings.api_base_url);
+    if class != EndpointClass::Loopback && settings.safe_dev_mode {
         return Err(ProviderError::new(
             ProviderErrorKind::NetworkDisabled,
-            "安全离线模式已开启；未发送任何远程模型请求。可使用本地模型，或关闭安全离线模式。",
+            "安全离线模式已开启；未发送任何远程模型请求。可使用本机 (localhost) 模型，或关闭安全离线模式。",
         ));
     }
-    if !local_runtime && !settings.network_enabled {
+    if class != EndpointClass::Loopback && !settings.network_enabled {
         return Err(ProviderError::new(
             ProviderErrorKind::NetworkDisabled,
             "网络访问未启用；未发送任何远程 Provider 请求。请在设置中勾选「启用大模型网络翻译」。",
         ));
     }
-    if api_key.trim().is_empty() && !is_local_base_url(&settings.api_base_url) {
+    if class == EndpointClass::PrivateNetwork && !settings.allow_lan_endpoints {
+        return Err(ProviderError::new(
+            ProviderErrorKind::NetworkDisabled,
+            "该服务位于局域网的另一台设备；需在设置中单独允许局域网模型后才会发送内容。",
+        ));
+    }
+    if api_key.trim().is_empty() && class == EndpointClass::Internet {
         return Err(ProviderError::new(
             ProviderErrorKind::MissingCredential,
             "未配置 API Key；请先在设置中填入对应服务的 API Key 或使用本地模型。",
@@ -2728,6 +2756,132 @@ mod tests {
             .expect("prepare");
         let error = build_headers(&config, &prepared).expect_err("must reject secret header");
         assert_eq!(error.kind, ProviderErrorKind::Configuration);
+    }
+
+    #[test]
+    fn lan_endpoints_need_the_separate_permission() {
+        let mut config = settings(ProviderType::OpenAiCompatible);
+        config.api_base_url = "http://192.168.1.20:11434/v1".to_owned();
+        config.network_enabled = true;
+        config.safe_dev_mode = false;
+
+        // A private-range host is NOT "local": safe mode blocks it, and even
+        // with the network on it needs the explicit LAN permission.
+        config.safe_dev_mode = true;
+        assert_eq!(
+            validate_execution(&config, "", "request")
+                .expect_err("safe mode")
+                .kind,
+            ProviderErrorKind::NetworkDisabled
+        );
+        config.safe_dev_mode = false;
+        assert_eq!(
+            validate_execution(&config, "", "request")
+                .expect_err("no lan permission")
+                .kind,
+            ProviderErrorKind::NetworkDisabled
+        );
+
+        // With the explicit permission, a keyless LAN model executes.
+        config.allow_lan_endpoints = true;
+        assert!(validate_execution(&config, "", "request").is_ok());
+
+        // And a loopback model keeps working untouched.
+        config.api_base_url = "http://127.0.0.1:11434/v1".to_owned();
+        config.allow_lan_endpoints = false;
+        assert!(validate_execution(&config, "", "request").is_ok());
+    }
+
+    #[tokio::test]
+    async fn cross_origin_redirects_are_refused() {
+        // Origin A answers 302 → origin B (a different port on loopback, so a
+        // different origin). The policy must refuse instead of forwarding the
+        // query string to the second host.
+        let listener_b = std::net::TcpListener::bind("127.0.0.1:0").expect("bind b");
+        let port_b = listener_b.local_addr().expect("port b").port();
+        let listener_a = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a");
+        let port_a = listener_a.local_addr().expect("port a").port();
+
+        std::thread::spawn(move || {
+            let (stream, _) = listener_a.accept().expect("accept a");
+            respond_302(&stream, &format!("http://127.0.0.1:{port_b}/next?q=leak"));
+        });
+        std::thread::spawn(move || {
+            let (stream, _) = listener_b.accept().expect("accept b");
+            respond_200_empty(&stream);
+        });
+
+        let client = reqwest::Client::builder()
+            .redirect(same_origin_redirect_policy())
+            .build()
+            .expect("client");
+        let response = client
+            .get(format!("http://127.0.0.1:{port_a}/start?q=secret"))
+            .send()
+            .await
+            .expect_err("a cross-origin redirect must fail");
+        assert!(
+            response.is_redirect(),
+            "the failure must be the redirect policy, got: {response}"
+        );
+    }
+
+    #[tokio::test]
+    async fn same_origin_redirect_is_followed() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("port").port();
+        let handle = std::thread::spawn(move || {
+            let (first, _) = listener.accept().expect("accept 1");
+            respond_302(&first, &format!("http://127.0.0.1:{port}/final"));
+            let (second, _) = listener.accept().expect("accept 2");
+            respond_200_empty(&second);
+        });
+
+        let client = reqwest::Client::builder()
+            .redirect(same_origin_redirect_policy())
+            .build()
+            .expect("client");
+        let response = client
+            .get(format!("http://127.0.0.1:{port}/start"))
+            .send()
+            .await
+            .expect("same-origin redirect must be followed");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        handle.join().expect("server thread");
+    }
+
+    fn drain_request(stream: &std::net::TcpStream) {
+        let mut buffer = [0u8; 4096];
+        let mut received = 0usize;
+        // Read until the end of the request head; a mock that answers before
+        // the client finished sending can trip hyper's connection state.
+        while let Ok(read) =
+            std::io::Read::read(&mut &stream.try_clone().expect("clone"), &mut buffer)
+        {
+            received += read;
+            let head = &buffer[..received.min(buffer.len())];
+            if read == 0 || head.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+    }
+
+    fn respond_302(mut stream: &std::net::TcpStream, location: &str) {
+        use std::io::Write;
+        drain_request(stream);
+        let response = format!(
+            "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.flush();
+    }
+
+    fn respond_200_empty(mut stream: &std::net::TcpStream) {
+        use std::io::Write;
+        drain_request(stream);
+        let _ = stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+        let _ = stream.flush();
     }
 
     #[test]

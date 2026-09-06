@@ -204,6 +204,24 @@ pub extern "C" fn popglot_plan_screenshot_route(
     })
 }
 
+/// Pure helper: the screenshot routing DECISION TABLE. The shell collects
+/// every observable fact, the domain owns the decision — one strategy for
+/// the settings preview and the actual capture, in either language.
+///
+/// # Safety
+///
+/// `facts_json` must be a valid NUL-terminated UTF-8 pointer, or null (which
+/// fails with an error envelope instead of dereferencing).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_select_route(facts_json: *const c_char) -> *mut c_char {
+    ffi_guard(|| {
+        let facts = unsafe { read_utf8(facts_json) }?;
+        let context: popglot_domain::RoutingContext =
+            serde_json::from_str(facts).map_err(|error| error.to_string())?;
+        Ok(success(popglot_domain::select_route(&context)))
+    })
+}
+
 /// Sends a user-initiated, text-only Provider connection test using saved settings.
 ///
 /// # Safety
@@ -831,6 +849,101 @@ fn ffi_guard(operation: impl FnOnce() -> Result<*mut c_char, String>) -> *mut c_
         Ok(Err(error)) => failure(error),
         Err(_) => failure("PopGlot Core encountered an unexpected panic"),
     }
+}
+
+/// Pure helper: masks technical tokens in `text`. Shared by every text route
+/// (the configured providers run it inside the core; the built-in free engine
+/// calls it from the shell through this export) so both languages execute one
+/// regex set, never a divergent copy.
+///
+/// # Safety
+///
+/// `text` must be a valid NUL-terminated UTF-8 pointer, or null (which fails
+/// with an error envelope instead of dereferencing).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_protect_tokens(text: *const c_char) -> *mut c_char {
+    ffi_guard(|| {
+        let source = unsafe { read_utf8(text) }?;
+        let protected = popglot_domain::protect_tokens(source);
+        Ok(success(protected))
+    })
+}
+
+/// Pure helper: restores placeholders with exactly-once semantics. `tokens`
+/// is the JSON array the shell received from `popglot_protect_tokens`.
+///
+/// # Safety
+///
+/// `translated` and `tokens_json` must be valid NUL-terminated UTF-8
+/// pointers, or null (which fails with an error envelope).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_restore_tokens(
+    translated: *const c_char,
+    tokens_json: *const c_char,
+) -> *mut c_char {
+    ffi_guard(|| {
+        let translated = unsafe { read_utf8(translated) }?;
+        let tokens_json = unsafe { read_utf8(tokens_json) }?;
+        let tokens: Vec<popglot_domain::ProtectedToken> =
+            serde_json::from_str(tokens_json).map_err(|error| error.to_string())?;
+        Ok(success(popglot_domain::restore_tokens(translated, &tokens)))
+    })
+}
+
+/// Pure helper: classifies an endpoint host so the shell and the core reach
+/// the same conclusion from the same fixture list.
+///
+/// # Safety
+///
+/// `text` must be a valid NUL-terminated UTF-8 pointer, or null (which fails
+/// with an error envelope instead of dereferencing).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_classify_endpoint(text: *const c_char) -> *mut c_char {
+    ffi_guard(|| {
+        let candidate = unsafe { read_utf8(text) }?;
+        let class = match popglot_domain::classify_endpoint(candidate) {
+            popglot_domain::EndpointClass::Loopback => "loopback",
+            popglot_domain::EndpointClass::PrivateNetwork => "private",
+            popglot_domain::EndpointClass::Internet => "internet",
+        };
+        Ok(success(serde_json::json!({ "class": class })))
+    })
+}
+
+/// Pure helper: plans how a long source is translated within one session's
+/// request budget — ordered segments whose concatenation reproduces the
+/// source, or an explicit rejection reason sent before anything goes out.
+///
+/// # Safety
+///
+/// `text` must be a valid NUL-terminated UTF-8 pointer, or null (which fails
+/// with an error envelope instead of dereferencing).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_plan_segments(
+    text: *const c_char,
+    max_segment_chars: u32,
+    max_segments: u32,
+) -> *mut c_char {
+    ffi_guard(|| {
+        let source = unsafe { read_utf8(text) }?;
+        let plan = popglot_domain::plan_translation_segments(
+            source,
+            max_segment_chars as usize,
+            max_segments as usize,
+        );
+        let payload = match plan {
+            popglot_domain::SegmentPlan::Single => serde_json::json!({ "mode": "single" }),
+            popglot_domain::SegmentPlan::Segments(segments) => serde_json::json!({
+                "mode": "segments",
+                "segments": segments,
+            }),
+            popglot_domain::SegmentPlan::Rejected(reason) => serde_json::json!({
+                "mode": "rejected",
+                "rejected_reason": reason,
+            }),
+        };
+        Ok(success(payload))
+    })
 }
 
 #[cfg(test)]

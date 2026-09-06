@@ -26,13 +26,11 @@ internal static partial class CoreBridge
     private static readonly SemaphoreSlim SaveQueue = new(1, 1);
     private static ProviderSettings? _cachedSettings;
 
-    public static void Initialize()
+    public static void Initialize(string? configDirectory = null)
     {
-        var configDirectory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PopGlot");
-        Directory.CreateDirectory(configDirectory);
-        EnsureSuccess<string>(Invoke(() => NativeMethods.Initialize(configDirectory)));
+        var resolvedDirectory = configDirectory ?? StoragePaths.CoreConfigDirectory;
+        Directory.CreateDirectory(resolvedDirectory);
+        EnsureSuccess<string>(Invoke(() => NativeMethods.Initialize(resolvedDirectory)));
     }
 
     /// <summary>
@@ -97,6 +95,23 @@ internal static partial class CoreBridge
         EnsureSuccess<RoutingDecision>(Invoke(() => NativeMethods.PlanScreenshotRoute(
             localOcrAvailable ? 1 : 0,
             credentialPresent ? 1 : 0)));
+
+    /// <summary>
+    /// The screenshot routing DECISION TABLE, evaluated by the Rust domain
+    /// from the shell-collected facts. This is the single strategy source:
+    /// the settings preview and the actual capture must both come through
+    /// here, so the two languages can never diverge again.
+    /// </summary>
+    public static RoutingDecision SelectRoute(ScreenshotRouteFacts facts)
+    {
+        ArgumentNullException.ThrowIfNull(facts);
+        return EnsureSuccess<RoutingDecision>(Invoke(() =>
+            NativeMethods.SelectRoute(JsonSerializer.Serialize(facts, JsonOptions))));
+    }
+
+    /// <summary>Raw JSON in, raw JSON out — the cross-language parity probe.</summary>
+    internal static string SelectRouteRaw(string factsJson) =>
+        Invoke(() => NativeMethods.SelectRoute(factsJson));
 
     /// <summary>
     /// Translates one screenshot through a draft settings snapshot with a
@@ -411,93 +426,15 @@ internal static partial class CoreBridge
             return await TranslateTextAsync(apiKey, source, sourceLang, targetLang, requestId, cancellationToken);
         }
 
-        if (!Services.OutboundPolicy.AllowsFreeEngine(settings, out var denial))
+        if (!Services.OutboundPolicy.AllowsFreeEngine(settings, out var denial, out var authorization))
         {
             throw new InvalidOperationException(
                 denial is null ? "未允许出网翻译。" : $"{denial.Message} {denial.ActionableSuggestion}".Trim());
         }
 
-        return await FreeTranslateService.TranslateAsync(source, sourceLang, targetLang, cancellationToken);
+        return await FreeTranslateService.TranslateAsync(source, sourceLang, targetLang, authorization, cancellationToken);
     }
 
-    public static Task<ScreenshotTranslation> TranslateScreenshotAsync(
-        string? apiKey,
-        byte[] image,
-        string sourceLang,
-        string targetLang,
-        CancellationToken cancellationToken) =>
-        TranslateScreenshotAsync(apiKey, image, sourceLang, targetLang, null, cancellationToken);
-
-    public static async Task<ScreenshotTranslation> TranslateScreenshotAsync(
-        string? apiKey,
-        byte[] image,
-        string sourceLang,
-        string targetLang,
-        string? requestId = null,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(image);
-        if (image.Length == 0 || image.Length > 8 * 1024 * 1024)
-        {
-            throw new ArgumentOutOfRangeException(nameof(image), "截图必须大于 0 且不超过 8 MiB。");
-        }
-
-        var ocrAvailable = WindowsOcrService.IsSupported;
-        var route = PlanScreenshotRoute(ocrAvailable, !string.IsNullOrWhiteSpace(apiKey));
-
-        if (route.MayUploadImage)
-        {
-            var imageBase64 = Convert.ToBase64String(image);
-            var effectiveKey = string.IsNullOrWhiteSpace(apiKey) ? "local" : apiKey;
-            var reqId = requestId ?? Guid.NewGuid().ToString("N");
-            try
-            {
-                var response = await RunCancellableAsync(
-                    () => EnsureSuccess<TranslationResponse>(Invoke(
-                        () => NativeMethods.TranslateVisionV2(
-                            effectiveKey, "image/png", imageBase64, sourceLang, targetLang, reqId))),
-                    reqId,
-                    cancellationToken);
-                return new ScreenshotTranslation(response, "视觉模型", route.ExplanationZh);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception visionError) when (ocrAvailable)
-            {
-                try
-                {
-                    var fallback = await TranslateViaLocalOcrAsync(
-                        apiKey, image, sourceLang, targetLang, reqId, cancellationToken);
-                    return fallback with
-                    {
-                        PipelineReason = $"视觉模型失败（{visionError.Message}），已回退到本地 OCR。",
-                    };
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception fallbackError)
-                {
-                    throw new InvalidOperationException(
-                        $"视觉模型翻译失败（{visionError.Message}）；本地 OCR 回退也失败（{fallbackError.Message}）。");
-                }
-            }
-        }
-
-        if (!ocrAvailable)
-        {
-            throw new InvalidOperationException(route.ExplanationZh);
-        }
-
-        var local = await TranslateViaLocalOcrAsync(
-            apiKey, image, sourceLang, targetLang, requestId, cancellationToken);
-        return local with { PipelineReason = route.ExplanationZh };
-    }
-
-    /// <summary>
     /// The OCR fallback path: recognise locally, then translate the text via
     /// the unified entry — configured provider when present, the authorised
     /// free engine otherwise. Never bypasses the free-engine decision.
@@ -551,36 +488,59 @@ internal static partial class CoreBridge
             (ulong)networkStopwatch.ElapsedMilliseconds);
     }
 
-    private static async Task<ScreenshotTranslation> TranslateViaLocalOcrAsync(
-        string? apiKey,
-        byte[] image,
-        string sourceLang,
-        string targetLang,
-        string? requestId,
-        CancellationToken cancellationToken)
-    {
-        var recognized = await WindowsOcrService.RecognizeTextAsync(image, sourceLang);
-        if (string.IsNullOrWhiteSpace(recognized))
-        {
-            throw new InvalidOperationException(
-                "本地 OCR 未能在所选区域识别到文字。请重新框选更清晰的区域，或在设置中开启截图上传以使用视觉模型。");
-        }
-        cancellationToken.ThrowIfCancellationRequested();
-        var response = await TranslateTextAsync(
-            apiKey, recognized, sourceLang, targetLang, requestId, cancellationToken);
-        var withTranscription = response with
-        {
-            Result = response.Result with { Transcription = recognized },
-        };
-        return new ScreenshotTranslation(withTranscription, "本地 OCR", string.Empty);
-    }
-
     public static void CancelRequest(string requestId)
     {
         if (!string.IsNullOrWhiteSpace(requestId))
         {
             NativeMethods.CancelRequest(requestId);
         }
+    }
+
+    /// <summary>
+    /// Masks technical tokens with the SAME Rust regex set the configured
+    /// providers use, so the built-in free engine can never run a divergent
+    /// C# copy of the protection rules.
+    /// </summary>
+    public static ProtectedTextDto ProtectTokens(string text)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(text);
+        return EnsureSuccess<ProtectedTextDto>(Invoke(() => NativeMethods.ProtectTokens(text)));
+    }
+
+    /// <summary>
+    /// Raw Rust-side endpoint classification, used by tests to prove the C#
+    /// classifier and the core agree on the same fixtures.
+    /// </summary>
+    internal static string ClassifyEndpointViaFfi(string url) =>
+        Invoke(() => NativeMethods.ClassifyEndpoint(url));
+
+    /// <summary>
+    /// Restores placeholders exactly once and reports dropped, duplicated and
+    /// unknown ones — the same contract the core enforces for the configured
+    /// providers.
+    /// </summary>
+    public static RestoredTextDto RestoreTokens(string translated, IReadOnlyList<ProtectedTokenDto> tokens)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(translated);
+        ArgumentNullException.ThrowIfNull(tokens);
+        var tokensJson = JsonSerializer.Serialize(tokens, JsonOptions);
+        return EnsureSuccess<RestoredTextDto>(Invoke(() => NativeMethods.RestoreTokens(translated, tokensJson)));
+    }
+
+    /// <summary>Session output-budget constants shared with the Rust planner.</summary>
+    internal const int MaxSegmentChars = 800;
+    internal const int MaxSegments = 8;
+
+    /// <summary>
+    /// Plans how a long source is translated within one session: a single
+    /// request, ordered segments (concatenation reproduces the source), or an
+    /// explicit rejection that must surface BEFORE anything is sent.
+    /// </summary>
+    public static SegmentPlanDto PlanSegments(string source)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(source);
+        return EnsureSuccess<SegmentPlanDto>(Invoke(() =>
+            NativeMethods.PlanSegments(source, MaxSegmentChars, MaxSegments)));
     }
 
     public static void CancelActiveRequest()
@@ -762,6 +722,9 @@ internal static partial class CoreBridge
         [LibraryImport(LibraryName, EntryPoint = "popglot_plan_screenshot_route")]
         internal static partial nint PlanScreenshotRoute(int localOcrAvailable, int credentialPresent);
 
+        [LibraryImport(LibraryName, EntryPoint = "popglot_select_route", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint SelectRoute(string factsJson);
+
         [LibraryImport(LibraryName, EntryPoint = "popglot_test_connection_draft", StringMarshalling = StringMarshalling.Utf8)]
         internal static partial nint TestConnectionDraft(string draftJson, string apiKey, string? requestId);
 
@@ -827,17 +790,21 @@ internal static partial class CoreBridge
             delegate* unmanaged[Cdecl]<nint, int, nint, nuint, int> callback,
             nint userData);
 
-        [LibraryImport(LibraryName, EntryPoint = "popglot_translate_vision_v2", StringMarshalling = StringMarshalling.Utf8)]
-        internal static partial nint TranslateVisionV2(
-            string apiKey,
-            string mediaType,
-            string imageBase64,
-            string sourceLang,
-            string targetLang,
-            string? requestId);
 
         [LibraryImport(LibraryName, EntryPoint = "popglot_cancel_request", StringMarshalling = StringMarshalling.Utf8)]
         internal static partial int CancelRequest(string requestId);
+
+        [LibraryImport(LibraryName, EntryPoint = "popglot_protect_tokens", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint ProtectTokens(string text);
+
+        [LibraryImport(LibraryName, EntryPoint = "popglot_restore_tokens", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint RestoreTokens(string translated, string tokensJson);
+
+        [LibraryImport(LibraryName, EntryPoint = "popglot_classify_endpoint", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint ClassifyEndpoint(string url);
+
+        [LibraryImport(LibraryName, EntryPoint = "popglot_plan_segments", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint PlanSegments(string text, int maxSegmentChars, int maxSegments);
 
         [LibraryImport(LibraryName, EntryPoint = "popglot_cancel_active_request")]
         internal static partial int CancelActiveRequest();
@@ -874,7 +841,8 @@ internal sealed record VisionProviderOverride(
     string VisionModel,
     IReadOnlyDictionary<string, string> ExtraHeaders,
     string AnthropicVersion,
-    bool AllowInsecureTls = false);
+    bool AllowInsecureTls = false,
+    bool AllowLanEndpoints = false);
 
 internal sealed record ProviderSettings(
     uint SchemaVersion,
@@ -892,6 +860,7 @@ internal sealed record ProviderSettings(
     TranslationMode Mode,
     bool AllowImageUploadInAuto,
     bool SafeDevMode,
+    bool AllowLanEndpoints,
     bool AllowInsecureTls,
     bool ApiKeyConfigured,
     string SourceLanguage,
@@ -903,13 +872,25 @@ internal sealed record ProviderSettings(
     public bool VisionIsConfigured => SupportsVision && !string.IsNullOrWhiteSpace(VisionModel);
     public bool TextIsConfigured => SupportsText && !string.IsNullOrWhiteSpace(TextModel);
 
-    public bool TargetsLocalRuntime => IsLocalBaseUrl(ApiBaseUrl);
+    /// <summary>Loopback only: content genuinely stays on this machine.</summary>
+    public bool TargetsLocalRuntime => ClassifyEndpoint(ApiBaseUrl) == EndpointClass.Loopback;
 
-    internal static bool IsLocalBaseUrl(string? baseUrl)
+    /// <summary>Another device on the LAN: content has left the machine.</summary>
+    public bool TargetsPrivateNetwork => ClassifyEndpoint(ApiBaseUrl) == EndpointClass.PrivateNetwork;
+
+    internal static bool IsLocalBaseUrl(string? baseUrl) =>
+        ClassifyEndpoint(baseUrl) != EndpointClass.Internet;
+
+    /// <summary>
+    /// The three-way host classification shared with the Rust core
+    /// (AI-RULES §4.1). Unknown or malformed input classifies conservatively
+    /// as Internet.
+    /// </summary>
+    internal static EndpointClass ClassifyEndpoint(string? baseUrl)
     {
         if (string.IsNullOrWhiteSpace(baseUrl))
         {
-            return false;
+            return EndpointClass.Internet;
         }
         var text = baseUrl.Trim();
         if (!text.Contains("://", StringComparison.Ordinal))
@@ -918,37 +899,52 @@ internal sealed record ProviderSettings(
         }
         if (!Uri.TryCreate(text, UriKind.Absolute, out var uri))
         {
-            return false;
+            return EndpointClass.Internet;
         }
 
-        var host = uri.Host;
-        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
-            host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase) ||
-            host is "::1" or "[::1]")
+        var host = uri.Host.ToLowerInvariant();
+        if (host.Length == 0)
         {
-            return true;
+            return EndpointClass.Internet;
         }
-        if (!System.Net.IPAddress.TryParse(host, out var address))
+        if (host is "localhost" or "::1" || host.EndsWith(".localhost", StringComparison.Ordinal))
         {
-            return false;
+            return EndpointClass.Loopback;
         }
-        if (System.Net.IPAddress.IsLoopback(address))
+        if (System.Net.IPAddress.TryParse(host, out var address))
         {
-            return true;
+            if (System.Net.IPAddress.IsLoopback(address))
+            {
+                return EndpointClass.Loopback;
+            }
+            var octets = address.GetAddressBytes();
+            switch (octets.Length)
+            {
+                case 4:
+                    return (octets[0], octets[1]) switch
+                    {
+                        (10, _) or (192, 168) => EndpointClass.PrivateNetwork,
+                        (172, var second) when second is >= 16 and <= 31 => EndpointClass.PrivateNetwork,
+                        _ => EndpointClass.Internet,
+                    };
+                case 16:
+                    // IPv6 unique local addresses: fc00::/7.
+                    if ((octets[0] & 0xFE) == 0xFC)
+                    {
+                        return EndpointClass.PrivateNetwork;
+                    }
+                    break;
+            }
         }
-        var octets = address.GetAddressBytes();
-        if (octets.Length != 4)
-        {
-            return false;
-        }
-        return octets[0] switch
-        {
-            10 => true,
-            192 => octets[1] == 168,
-            172 => octets[1] is >= 16 and <= 31,
-            _ => false,
-        };
+        return EndpointClass.Internet;
     }
+}
+
+internal enum EndpointClass
+{
+    Loopback,
+    PrivateNetwork,
+    Internet,
 }
 
 internal sealed record RoutingDecision(
@@ -957,13 +953,51 @@ internal sealed record RoutingDecision(
     string ExplanationZh,
     bool MayUploadImage);
 
+/// <summary>
+/// The shell-collected facts one screenshot routing decision needs. Field
+/// names bind to the Rust `RoutingContext` (snake_case). The shell owns
+/// observation; the domain owns the decision.
+/// </summary>
+internal sealed record ScreenshotRouteFacts(
+    string RequestedMode,
+    bool VisionConfigured,
+    string VisionEndpointClass,
+    bool ImageUploadAllowed,
+    bool AllowLanEndpoints,
+    bool LocalOcrAvailable,
+    bool TextRouteAvailable);
+
+/// One protected placeholder, mirrored from the Rust domain's ProtectedToken.
+internal sealed record ProtectedTokenDto(string Placeholder, string Original);
+
+/// The masked text plus its token table, from `popglot_protect_tokens`.
+internal sealed record ProtectedTextDto(string SanitizedText, IReadOnlyList<ProtectedTokenDto> Tokens);
+
+/// Exactly-once restoration result, from `popglot_restore_tokens`.
+internal sealed record RestoredTextDto(
+    string Text,
+    IReadOnlyList<string> DroppedTerms,
+    IReadOnlyList<string> DuplicatedTerms,
+    IReadOnlyList<string> UnknownPlaceholders);
+
+/// <summary>
+/// The shell-side view of the Rust session plan. <see cref="RejectedReason"/>
+/// is null unless the source cannot be translated within the session budget
+/// ("code_block_too_large" / "too_many_segments").
+/// </summary>
+internal sealed record SegmentPlanDto(
+    string Mode,
+    IReadOnlyList<string>? Segments = null,
+    string? RejectedReason = null);
+
 internal sealed record TranslationResult(
     string TranslatedText,
     string Transcription,
     string Explanation,
     IReadOnlyList<string> ProtectedTerms,
     IReadOnlyList<string> Warnings,
-    string Phonetic = "");
+    string Phonetic = "",
+    bool IsPartial = false);
 
 internal sealed record ProviderDiagnostics(
     string RequestId,
@@ -983,7 +1017,3 @@ internal sealed record TranslationResponse(
     public string EngineLabel => IsFreeEngine ? "免费引擎" : Diagnostics.ProviderType.ToString();
 }
 
-internal sealed record ScreenshotTranslation(
-    TranslationResponse Response,
-    string Pipeline,
-    string PipelineReason);

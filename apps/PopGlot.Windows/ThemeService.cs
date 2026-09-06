@@ -179,6 +179,9 @@ internal static partial class ThemeService
         ("AccentTextBrush", "#071224"),
         ("AccentSoftBrush", "#20243A"),
         ("AccentBorderBrush", "#59649D"),
+        // Focus ring: strong enough to clear 3:1 against every resting
+        // surface, unlike the soft AccentBorder it replaces.
+        ("FocusBrush", "#7C89D9"),
         // 主按钮用品牌蓝系（深一档，配白字）：既保留品牌色又保证按钮
         // 文字 AA 级对比；浅色 Accent 只用于强调/链接/选中。
         ("PrimaryBrush", "#5562B3"),
@@ -191,6 +194,13 @@ internal static partial class ThemeService
         ("TextDisabledBrush", "#565F6E"),
         ("DangerBrush", "#FF6B7D"),
         ("DangerSoftBrush", "#401C25"),
+        // Danger hover/pressed keep AA text contrast in the dark theme: the
+        // bright red fill would drop white text to ~2.6:1, so the dark theme
+        // deepens the soft fill and keeps the red text instead.
+        ("DangerHoverBrush", "#52222E"),
+        ("DangerHoverTextBrush", "#FF6B7D"),
+        ("DangerPressedBrush", "#4E1E28"),
+        ("DangerPressedTextBrush", "#FF6B7D"),
         ("WarningBrush", "#F2B95C"),
         ("WarningSoftBrush", "#3D2D14"),
         ("SuccessBrush", "#3DD68C"),
@@ -217,6 +227,7 @@ internal static partial class ThemeService
         ("AccentTextBrush", "#FFFFFF"),
         ("AccentSoftBrush", "#EEF0FA"),
         ("AccentBorderBrush", "#AAB1D9"),
+        ("FocusBrush", "#5260B5"),
         ("PrimaryBrush", "#5260B5"),
         ("PrimaryHoverBrush", "#4652A0"),
         ("PrimaryPressedBrush", "#3B4589"),
@@ -227,6 +238,10 @@ internal static partial class ThemeService
         ("TextDisabledBrush", "#A6ACB7"),
         ("DangerBrush", "#C93148"),
         ("DangerSoftBrush", "#FCEBEE"),
+        ("DangerHoverBrush", "#C93148"),
+        ("DangerHoverTextBrush", "#FFFFFF"),
+        ("DangerPressedBrush", "#B02A3E"),
+        ("DangerPressedTextBrush", "#FFFFFF"),
         ("WarningBrush", "#9C5B00"),
         ("WarningSoftBrush", "#FFF3DB"),
         ("SuccessBrush", "#0B7350"),

@@ -20,6 +20,20 @@ internal static partial class MarkdownPresenter
     [GeneratedRegex(@"([a-zA-Z0-9_\$#@`%])([\u4e00-\u9fa5\u3040-\u30ff])")]
     private static partial Regex LatinToCjkRegex();
 
+    // Inline code spans. Splitting on this FIRST is what keeps technical text
+    // intact: everything inside a span is copied, spoken and spaced verbatim.
+    [GeneratedRegex(@"`[^`]+`")]
+    private static partial Regex InlineCodeRegex();
+
+    /// <summary>
+    /// Emphasis runs whose content looks like natural language (whitespace or
+    /// CJK/full-width characters). Identifier-like content — `foo_bar_baz`,
+    /// `__init__`, `a*b*c`, `**GDP**` — never matches, so technical delimiters
+    /// are preserved instead of being guessed away.
+    /// </summary>
+    [GeneratedRegex(@"(\*\*|\*|__|_)([^\s*_]+(?:[ \t]+[^\s*_]+)*)\1")]
+    private static partial Regex EmphasisRegex();
+
     public static string FormatPangu(string text)
     {
         if (string.IsNullOrEmpty(text)) return text;
@@ -27,11 +41,34 @@ internal static partial class MarkdownPresenter
         return LatinToCjkRegex().Replace(s1, "$1 $2");
     }
 
+    private static bool LooksLikeNaturalLanguage(string content)
+    {
+        foreach (var ch in content)
+        {
+            if (char.IsWhiteSpace(ch) || ch >= 0x2E80)
+            {
+                // CJK, kana, Hangul, full-width forms and CJK punctuation all
+                // read as natural language; ASCII-only runs do not.
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Removes natural-language emphasis markers from one non-code segment.
+    /// </summary>
+    private static string StripNaturalEmphasis(string segment) =>
+        EmphasisRegex().Replace(segment, match =>
+            LooksLikeNaturalLanguage(match.Groups[2].Value) ? match.Groups[2].Value : match.Value);
+
     /// <summary>
     /// Converts markdown translation text into clean, unformatted plain text
     /// suitable for clipboard copy, speech synthesis (TTS), and vocabulary book storage.
-    /// Strips code fences, markdown headings, bullet markers, numbering, bold/italic,
-    /// inline backticks, and internal protected token placeholders.
+    ///
+    /// Structure is parsed FIRST: fenced blocks and inline code spans are
+    /// preserved byte-for-byte, and only natural-language segments get
+    /// headings/bullets/emphasis unwrapped. Unparseable input is kept as-is.
     /// </summary>
     public static string ToPlainText(string? markdown)
     {
@@ -95,29 +132,42 @@ internal static partial class MarkdownPresenter
                 }
             }
 
-            // Remove bold/italic markers
-            line = Regex.Replace(line, @"\*\*([^*]+)\*\*", "$1");
-            line = Regex.Replace(line, @"__([^_]+)__", "$1");
-            line = Regex.Replace(line, @"\*([^*]+)\*", "$1");
-            line = Regex.Replace(line, @"_([^_]+)_", "$1");
-            // Remove inline code backticks
-            line = Regex.Replace(line, @"`([^`]+)`", "$1");
-            // Remove protected token placeholders
-            line = Regex.Replace(line, @"⟦PG_\d{4}⟧", "");
-
-            sb.AppendLine(line.TrimEnd());
+            sb.AppendLine(TransformNaturalSegments(line, static segment => StripNaturalEmphasis(segment)).TrimEnd());
         }
 
         return sb.ToString().Trim();
     }
 
     /// <summary>
+    /// Splits one line into inline-code spans and natural segments, applies
+    /// <paramref name="transform"/> to natural segments only, and reassembles
+    /// the line with code content untouched.
+    /// </summary>
+    public static string TransformNaturalSegments(string line, Func<string, string> transform)
+    {
+        var builder = new StringBuilder(line.Length);
+        var position = 0;
+        foreach (Match match in InlineCodeRegex().Matches(line))
+        {
+            builder.Append(transform(line[position..match.Index]));
+            builder.Append(match.Value[1..^1]); // strip the backticks, keep content verbatim
+            position = match.Index + match.Length;
+        }
+        builder.Append(transform(line[position..]));
+        return builder.ToString();
+    }
+
+    /// <summary>
     /// Renders markdown formatted blocks into a RichTextBox or FlowDocument container.
+    /// When <paramref name="resultActionsEnabled"/> is false — partial, cancelled
+    /// or failed content — the per-code-block copy buttons render disabled, so
+    /// dynamically generated controls obey the same eligibility as the toolbar.
     /// </summary>
     public static void RenderToFlowDocument(
         FlowDocument document,
         string markdownText,
-        ResourceDictionary resources)
+        ResourceDictionary resources,
+        bool resultActionsEnabled = true)
     {
         ArgumentNullException.ThrowIfNull(document);
         document.Blocks.Clear();
@@ -160,7 +210,7 @@ internal static partial class MarkdownPresenter
                 {
                     inCodeBlock = false;
                     var codeContent = codeBlockBuilder.ToString().TrimEnd();
-                    var codeBlock = CreateCodeBlockElement(codeContent, codeLanguage, monoFont, textPrimaryBrush, inputBrush, borderSubtleBrush, accentBrush);
+                    var codeBlock = CreateCodeBlockElement(codeContent, codeLanguage, monoFont, textPrimaryBrush, inputBrush, borderSubtleBrush, accentBrush, resultActionsEnabled);
                     document.Blocks.Add(new BlockUIContainer(codeBlock));
                     continue;
                 }
@@ -260,7 +310,7 @@ internal static partial class MarkdownPresenter
         if (inCodeBlock && codeBlockBuilder.Length > 0)
         {
             var codeContent = codeBlockBuilder.ToString().TrimEnd();
-            var codeBlock = CreateCodeBlockElement(codeContent, codeLanguage, monoFont, textPrimaryBrush, inputBrush, borderSubtleBrush, accentBrush);
+            var codeBlock = CreateCodeBlockElement(codeContent, codeLanguage, monoFont, textPrimaryBrush, inputBrush, borderSubtleBrush, accentBrush, resultActionsEnabled);
             document.Blocks.Add(new BlockUIContainer(codeBlock));
         }
     }
@@ -270,23 +320,80 @@ internal static partial class MarkdownPresenter
         string text,
         ResourceDictionary resources)
     {
-        var formatted = FormatPangu(text);
         var textPrimaryBrush = (Brush)(resources["TextPrimaryBrush"] ?? Brushes.White);
         var accentBrush = (Brush)(resources["AccentBrush"] ?? Brushes.Teal);
         var accentSoftBrush = (Brush)(resources["AccentSoftBrush"] ?? Brushes.DarkSlateGray);
         var monoFont = (FontFamily)(resources["MonoFontFamily"] ?? new FontFamily("Cascadia Mono, Consolas"));
 
-        // Match inline tokens: `code` or **bold** or __bold__ or [term]
+        // Structure first: split on code spans / bold / protected tokens, then
+        // apply Pangu spacing per natural-language segment only. Spacing the
+        // whole line up front used to push spaces INSIDE code spans and paths.
         var pattern = @"(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|⟦PG_\d{4}⟧)";
-        var parts = Regex.Split(formatted, pattern);
+        var parts = Regex.Split(text, pattern);
 
+        // Plan the pieces as plain text first so Pangu spacing can cross the
+        // seam between a natural segment and an adjacent token (使用`ls`命令
+        // renders as 使用 ls 命令) without ever touching token contents.
+        var pieces = new List<(PieceKind Kind, string Text)>();
         foreach (var part in parts)
         {
             if (string.IsNullOrEmpty(part)) continue;
-
             if (part.StartsWith('`') && part.EndsWith('`') && part.Length >= 2)
             {
-                var codeText = part[1..^1];
+                pieces.Add((PieceKind.Code, part[1..^1]));
+            }
+            else if ((part.StartsWith("**", StringComparison.Ordinal) && part.EndsWith("**", StringComparison.Ordinal) && part.Length >= 4) ||
+                     (part.StartsWith("__", StringComparison.Ordinal) && part.EndsWith("__", StringComparison.Ordinal) && part.Length >= 4))
+            {
+                pieces.Add((PieceKind.Bold, part[2..^2]));
+            }
+            else if (part.StartsWith("⟦PG_", StringComparison.Ordinal) && part.EndsWith('⟧'))
+            {
+                pieces.Add((PieceKind.Token, part));
+            }
+            else
+            {
+                pieces.Add((PieceKind.Natural, part));
+            }
+        }
+
+        for (var index = 0; index < pieces.Count; index++)
+        {
+            var (kind, pieceText) = pieces[index];
+            if (kind is PieceKind.Natural or PieceKind.Bold)
+            {
+                var spaced = FormatPangu(pieceText);
+                if (index > 0 && spaced.Length > 0)
+                {
+                    var previousChar = LastContentChar(pieces[index - 1]);
+                    if (NeedsSeamSpace(previousChar, spaced[0]))
+                    {
+                        spaced = " " + spaced;
+                    }
+                }
+                if (index + 1 < pieces.Count && spaced.Length > 0)
+                {
+                    var nextChar = FirstContentChar(pieces[index + 1]);
+                    if (NeedsSeamSpace(spaced[^1], nextChar))
+                    {
+                        spaced += " ";
+                    }
+                }
+                if (kind == PieceKind.Bold)
+                {
+                    inlines.Add(new Run(spaced)
+                    {
+                        FontWeight = FontWeights.SemiBold,
+                        Foreground = textPrimaryBrush,
+                    });
+                }
+                else
+                {
+                    inlines.Add(new Run(spaced) { Foreground = textPrimaryBrush });
+                }
+            }
+            else if (kind == PieceKind.Code)
+            {
                 var codeBorder = new Border
                 {
                     Background = accentSoftBrush,
@@ -296,7 +403,7 @@ internal static partial class MarkdownPresenter
                     VerticalAlignment = VerticalAlignment.Center,
                     Child = new TextBlock
                     {
-                        Text = codeText,
+                        Text = pieceText,
                         FontFamily = monoFont,
                         FontSize = 12.5,
                         Foreground = accentBrush,
@@ -305,35 +412,50 @@ internal static partial class MarkdownPresenter
                 };
                 inlines.Add(new InlineUIContainer(codeBorder));
             }
-            else if ((part.StartsWith("**", StringComparison.Ordinal) && part.EndsWith("**", StringComparison.Ordinal) && part.Length >= 4) ||
-                     (part.StartsWith("__", StringComparison.Ordinal) && part.EndsWith("__", StringComparison.Ordinal) && part.Length >= 4))
-            {
-                var boldText = part[2..^2];
-                inlines.Add(new Run(boldText)
-                {
-                    FontWeight = FontWeights.SemiBold,
-                    Foreground = textPrimaryBrush,
-                });
-            }
-            else if (part.StartsWith("⟦PG_", StringComparison.Ordinal) && part.EndsWith('⟧'))
+            else
             {
                 // Protected token placeholder
-                inlines.Add(new Run(part)
+                inlines.Add(new Run(pieceText)
                 {
                     FontFamily = monoFont,
                     Foreground = accentBrush,
                     FontWeight = FontWeights.Bold,
                 });
             }
-            else
-            {
-                inlines.Add(new Run(part)
-                {
-                    Foreground = textPrimaryBrush,
-                });
-            }
         }
     }
+
+    private enum PieceKind
+    {
+        Natural,
+        Code,
+        Bold,
+        Token,
+    }
+
+    // The character classes mirror FormatPangu's CJK↔Latin regexes so seams
+    // behave exactly like intra-segment spacing.
+    private static bool IsLatinish(char c) =>
+        char.IsAsciiLetterOrDigit(c) || c is '_' or '$' or '#' or '@' or '`' or '%';
+
+    private static bool IsCjkish(char c) => c is >= '\u3040' and <= '\u30FF' or >= '\u4E00' and <= '\u9FA5';
+
+    private static bool NeedsSeamSpace(char left, char right) =>
+        !char.IsWhiteSpace(left) && !char.IsWhiteSpace(right) &&
+        ((IsCjkish(left) && IsLatinish(right)) || (IsLatinish(left) && IsCjkish(right)));
+
+    private static char LastContentChar((PieceKind Kind, string Text) piece) => piece.Kind switch
+    {
+        PieceKind.Code => piece.Text.Length > 0 ? piece.Text[^1] : '`',
+        PieceKind.Token => piece.Text.Length > 0 ? piece.Text[^1] : ' ',
+        _ => piece.Text.Length > 0 ? piece.Text[^1] : ' ',
+    };
+
+    private static char FirstContentChar((PieceKind Kind, string Text) piece) => piece.Kind switch
+    {
+        PieceKind.Code => piece.Text.Length > 0 ? piece.Text[0] : '`',
+        _ => piece.Text.Length > 0 ? piece.Text[0] : ' ',
+    };
 
     private static UIElement CreateCodeBlockElement(
         string code,
@@ -342,7 +464,8 @@ internal static partial class MarkdownPresenter
         Brush textPrimary,
         Brush background,
         Brush borderBrush,
-        Brush accentBrush)
+        Brush accentBrush,
+        bool resultActionsEnabled = true)
     {
         var outerBorder = new Border
         {
@@ -382,6 +505,13 @@ internal static partial class MarkdownPresenter
             HorizontalAlignment = HorizontalAlignment.Right,
             Cursor = System.Windows.Input.Cursors.Hand,
         };
+        if (!resultActionsEnabled)
+        {
+            // The session is partial/incomplete: the dynamically created code
+            // block obeys the same eligibility as the outer result actions.
+            copyButton.IsEnabled = false;
+            copyButton.ToolTip = "内容不完整，复制已禁用";
+        }
         copyButton.Click += async (_, _) =>
         {
             copyButton.IsEnabled = false;
@@ -390,7 +520,7 @@ internal static partial class MarkdownPresenter
                 : "复制失败";
             await Task.Delay(1200);
             copyButton.Content = "复制";
-            copyButton.IsEnabled = true;
+            copyButton.IsEnabled = resultActionsEnabled;
         };
         header.Children.Add(copyButton);
 

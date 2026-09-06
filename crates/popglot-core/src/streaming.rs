@@ -157,7 +157,8 @@ pub struct StreamingTokenRestorer {
     variants: Vec<Vec<String>>,
     pending: String,
     restored: String,
-    matched: Vec<bool>,
+    /// Exactly-once bookkeeping: how many times each placeholder echoed.
+    match_counts: Vec<usize>,
     finished: bool,
 }
 
@@ -169,12 +170,11 @@ impl StreamingTokenRestorer {
             tokens: tokens.to_vec(),
             variants: tokens
                 .iter()
-                .enumerate()
-                .map(|(index, token)| protected_token_variants(&token.placeholder, index))
+                .map(|token| protected_token_variants(&token.placeholder))
                 .collect(),
             pending: String::new(),
             restored: String::new(),
-            matched: vec![false; tokens.len()],
+            match_counts: vec![0; tokens.len()],
             finished: false,
         }
     }
@@ -194,19 +194,32 @@ impl StreamingTokenRestorer {
         self.emit(false)
     }
 
-    /// Finishes and returns the complete restored text plus dropped-token info.
+    /// Finishes and returns the complete restored text plus exactly-once
+    /// integrity findings (dropped / duplicated / unknown placeholders).
     #[must_use]
     pub fn finish(&mut self) -> popglot_domain::RestoredText {
         let _ = self.finish_delta();
+        // Every known placeholder has been consumed by emit(); whatever
+        // placeholder-shaped text remains in the restored output was never
+        // issued for this request.
+        let unknown = popglot_domain::unknown_placeholders_in(&self.restored, self.tokens.len());
         popglot_domain::RestoredText {
             text: self.restored.clone(),
             dropped_terms: self
                 .tokens
                 .iter()
                 .enumerate()
-                .filter(|(index, _)| !self.matched[*index])
+                .filter(|(index, _)| self.match_counts[*index] == 0)
                 .map(|(_, token)| token.original.clone())
                 .collect(),
+            duplicated_terms: self
+                .tokens
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| self.match_counts[*index] > 1)
+                .map(|(_, token)| token.original.clone())
+                .collect(),
+            unknown_placeholders: unknown,
         }
     }
 
@@ -237,7 +250,7 @@ impl StreamingTokenRestorer {
             output.push_str(&self.pending[..start]);
             self.pending.drain(..start + variant.len());
             output.push_str(&self.tokens[token_index].original);
-            self.matched[token_index] = true;
+            self.match_counts[token_index] += 1;
         }
         self.restored.push_str(&output);
         output
@@ -432,6 +445,35 @@ mod tests {
     }
 
     #[test]
+    fn duplicated_streamed_placeholder_is_reported() {
+        let protected = protect_tokens("const answer = getAnswer();");
+        assert_eq!(protected.tokens.len(), 1);
+        let mut restorer = StreamingTokenRestorer::new(&protected.tokens);
+        let first = restorer.push("答案是 ");
+        let second = restorer.push(protected.tokens[0].placeholder.as_str());
+        assert_eq!(first, "答案是 ");
+        assert_eq!(second, "getAnswer");
+        let third = restorer.push("，又是 ");
+        let fourth = restorer.push(protected.tokens[0].placeholder.as_str());
+        assert_eq!(third, "，又是 ");
+        assert_eq!(fourth, "getAnswer");
+        let result = restorer.finish();
+        assert_eq!(result.duplicated_terms, vec!["getAnswer"]);
+        assert!(result.dropped_terms.is_empty());
+    }
+
+    #[test]
+    fn unknown_streamed_placeholder_is_reported() {
+        let protected = protect_tokens("const answer = getAnswer();");
+        let mut restorer = StreamingTokenRestorer::new(&protected.tokens);
+        assert_eq!(restorer.push("看到 [[PG_0009]] 了"), "看到 [[PG_0009]] 了");
+        let result = restorer.finish();
+        assert_eq!(result.unknown_placeholders, vec!["[[PG_0009]]"]);
+        // The real placeholder never arrived, so it is dropped as well.
+        assert_eq!(result.dropped_terms, vec!["getAnswer"]);
+    }
+
+    #[test]
     fn delimiter_splits_at_every_unicode_boundary() {
         for delimiter in ["<<<PG_META_x>>>", "⟦尾部元数据⟧", "::元数据::"] {
             let wire = format!("中文{delimiter}{{\"warnings\":[]}}");
@@ -455,7 +497,7 @@ mod tests {
             .tokens
             .iter()
             .enumerate()
-            .map(|(index, token)| (index, protected_token_variants(&token.placeholder, index)))
+            .map(|(index, token)| (index, protected_token_variants(&token.placeholder)))
         {
             for variant in variants {
                 let wire = format!("前{variant}后");

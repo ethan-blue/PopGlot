@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace PopGlot.Windows.Services;
 
@@ -45,6 +46,7 @@ internal interface ITranslationExecutor
         string source,
         string sourceLang,
         string targetLang,
+        FreeEngineAuthorization authorization,
         CancellationToken cancellationToken);
 }
 
@@ -106,8 +108,9 @@ internal sealed class DefaultTranslationExecutor : ITranslationExecutor
         string source,
         string sourceLang,
         string targetLang,
+        FreeEngineAuthorization authorization,
         CancellationToken cancellationToken) =>
-        FreeTranslateService.TranslateAsync(source, sourceLang, targetLang, cancellationToken);
+        FreeTranslateService.TranslateAsync(source, sourceLang, targetLang, authorization, cancellationToken);
 }
 
 /// <summary>
@@ -135,6 +138,61 @@ internal sealed class TranslationCoordinator
     }
 
     public static TranslationCoordinator Instance { get; } = new(new HistoryStore(), new VocabularyStore());
+
+    /// <summary>
+    /// The free engine runs the SAME protect → translate → restore contract as
+    /// the configured providers: masking goes through the Rust FFI helper (one
+    /// regex set, never a C# copy), and dropped, duplicated or unknown
+    /// placeholders turn the result Partial with an explicit warning instead
+    /// of a silent green success.
+    /// </summary>
+    private async Task<TranslationResponse> TranslateFreeWithTokenProtectionAsync(
+        ProviderSettings settings,
+        string source,
+        string sourceLang,
+        string targetLang,
+        FreeEngineAuthorization authorization,
+        CancellationToken cancellationToken)
+    {
+        if (!settings.ProtectCodeTokens)
+        {
+            return await _executor.TranslateFreeAsync(source, sourceLang, targetLang, authorization, cancellationToken);
+        }
+
+        var protectedText = CoreBridge.ProtectTokens(source);
+        var response = await _executor.TranslateFreeAsync(
+            protectedText.SanitizedText, sourceLang, targetLang, authorization, cancellationToken);
+        if (protectedText.Tokens.Count == 0)
+        {
+            return response;
+        }
+
+        var restored = CoreBridge.RestoreTokens(response.Result.TranslatedText, protectedText.Tokens);
+        var warnings = response.Result.Warnings.ToList();
+        if (restored.DroppedTerms.Count > 0)
+        {
+            warnings.Add($"模型未在译文中保留这些代码元素：{string.Join("、", restored.DroppedTerms)}");
+        }
+        if (restored.DuplicatedTerms.Count > 0)
+        {
+            warnings.Add($"这些占位符在译文中重复出现，结果不完整：{string.Join("、", restored.DuplicatedTerms)}");
+        }
+        if (restored.UnknownPlaceholders.Count > 0)
+        {
+            warnings.Add($"译文中出现了本请求未发出的占位符：{string.Join("、", restored.UnknownPlaceholders)}");
+        }
+
+        return response with
+        {
+            Result = response.Result with
+            {
+                TranslatedText = restored.Text,
+                ProtectedTerms = protectedText.Tokens.Select(token => token.Original).ToList(),
+                Warnings = warnings,
+                IsPartial = response.Result.IsPartial || warnings.Count > 0,
+            },
+        };
+    }
 
     public async Task<TranslationSession> TranslateTextAsync(
         string source,
@@ -217,34 +275,12 @@ internal sealed class TranslationCoordinator
                 session.OutboundOccurred = !isLocal;
                 session.PipelineLabel = isLocal ? "本地模型" : DescribeProvider(textRuntimeSettings?.ProviderType ?? settings.ProviderType);
 
-                TranslationStreamSession streamSession;
-                if (textRuntimeSettings is not null &&
-                    (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))
-                {
-                    streamSession = _executor.StreamTextDraft(
-                        textRuntimeSettings,
-                        textApiKey ?? string.Empty,
-                        trimmed,
-                        sourceLang,
-                        targetLang,
-                        session.SessionId,
-                        epoch,
-                        cancellationToken);
-                }
-                else
-                {
-                    streamSession = _executor.StreamText(
-                        textApiKey,
-                        trimmed,
-                        sourceLang,
-                        targetLang,
-                        session.SessionId,
-                        epoch,
-                        cancellationToken);
-                }
-
-                response = await PumpStreamAsync(
-                    streamSession,
+                response = await TranslateProviderTextAsync(
+                    trimmed,
+                    sourceLang,
+                    targetLang,
+                    textRuntimeSettings,
+                    textApiKey,
                     session,
                     epoch,
                     startTimestampTicks,
@@ -255,8 +291,9 @@ internal sealed class TranslationCoordinator
             else
             {
                 // The free web engine is an explicit, consented provider —
-                // never a silent fallback. OutboundPolicy owns that decision.
-                if (!OutboundPolicy.AllowsFreeEngine(settings, out var freeDenial))
+                // never a silent fallback. OutboundPolicy owns that decision
+                // and issues the authorization the send boundary requires.
+                if (!OutboundPolicy.AllowsFreeEngine(settings, out var freeDenial, out var freeAuth))
                 {
                     session.Stage = TranslationSessionStage.Failed;
                     session.Error = freeDenial ?? new TranslationError(
@@ -269,8 +306,8 @@ internal sealed class TranslationCoordinator
 
                 session.OutboundOccurred = true;
                 session.PipelineLabel = "内置免费引擎";
-                response = await _executor.TranslateFreeAsync(
-                    trimmed, sourceLang, targetLang, cancellationToken);
+                response = await TranslateFreeWithTokenProtectionAsync(
+                    settings, trimmed, sourceLang, targetLang, freeAuth!, cancellationToken);
 
                 progress?.Report(new TranslationStreamUpdate(
                     SessionId: session.SessionId,
@@ -301,8 +338,27 @@ internal sealed class TranslationCoordinator
                 progress: progress,
                 onStageChanged: onStageChanged,
                 networkElapsedMs: (ulong)netStopwatch.ElapsedMilliseconds,
-                totalStopwatch: totalStopwatch);
+                totalStopwatch: totalStopwatch,
+                cancellationToken: cancellationToken);
 
+            return session;
+        }
+        catch (SegmentSessionException segmentFailure)
+        {
+            // Some segments translated, a later one failed or came back
+            // incomplete: the fragments surface as Partial — visible, gated
+            // away from history and every automatic side effect (T03).
+            totalStopwatch.Stop();
+            ApplyFinalResponse(
+                session: session,
+                response: segmentFailure.PartialResponse,
+                sourceKind: sourceKind,
+                epoch: epoch,
+                progress: progress,
+                onStageChanged: onStageChanged,
+                networkElapsedMs: segmentFailure.PartialResponse.Diagnostics.ElapsedMs,
+                totalStopwatch: totalStopwatch,
+                cancellationToken: cancellationToken);
             return session;
         }
         catch (OperationCanceledException)
@@ -359,6 +415,10 @@ internal sealed class TranslationCoordinator
         };
 
         var totalStopwatch = Stopwatch.StartNew();
+        // Hoisted for the segment-session catch, which routes fragments into
+        // ApplyFinalResponse with the real routing/OCR timings.
+        var routingStopwatch = Stopwatch.StartNew();
+        ulong ocrElapsedMs = 0;
 
         try
         {
@@ -377,7 +437,6 @@ internal sealed class TranslationCoordinator
             session.Stage = TranslationSessionStage.Routing;
             onStageChanged?.Invoke(session.Stage);
 
-            var routingStopwatch = Stopwatch.StartNew();
             var settings = _executor.GetSettings();
             var ocrAvailable = _executor.IsOcrSupported;
             var route = _executor.ResolveScreenshotRoute(settings, ocrAvailable);
@@ -418,7 +477,6 @@ internal sealed class TranslationCoordinator
                 return session;
             }
 
-            ulong ocrElapsedMs = 0;
             ulong networkElapsedMs = 0;
             var imageSentToProvider = false;
             var imageLeftDevice = false;
@@ -462,6 +520,7 @@ internal sealed class TranslationCoordinator
                         startTicks,
                         progress,
                         onStageChanged,
+                        textPrefix: string.Empty,
                         cancellationToken);
 
                     netStopwatch.Stop();
@@ -518,9 +577,13 @@ internal sealed class TranslationCoordinator
                 {
                     throw;
                 }
-                catch (Exception visionError) when (visionStreamSession.Buffer.DeltaCount == 0 && ocrAvailable && settings.Mode == TranslationMode.Auto)
+                catch (Exception visionError) when (
+                    visionError is not SegmentSessionException &&
+                    visionStreamSession.Buffer.DeltaCount == 0 && ocrAvailable && settings.Mode == TranslationMode.Auto)
                 {
-                    // Vision failed with zero visible delta, fall back to local OCR
+                    // Vision failed with zero visible delta, fall back to local
+                    // OCR. A TEXT-phase segment failure never re-runs OCR: its
+                    // fragments must stay visible as Partial instead.
                     progress?.Report(new TranslationStreamUpdate(
                         SessionId: session.SessionId,
                         Epoch: epoch,
@@ -554,39 +617,16 @@ internal sealed class TranslationCoordinator
                     var fallbackNetStopwatch = Stopwatch.StartNew();
                     var fallbackStartTicks = Stopwatch.GetTimestamp();
 
-                    if (textRuntimeSettings is not null &&
-                        (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))
+                    if ((textRuntimeSettings is not null &&
+                            (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))
+                        || !string.IsNullOrWhiteSpace(textApiKey))
                     {
-                        var textStream = _executor.StreamTextDraft(
+                        response = await TranslateProviderTextAsync(
+                            recognized,
+                            sourceLang,
+                            targetLang,
                             textRuntimeSettings,
-                            textApiKey ?? string.Empty,
-                            recognized,
-                            sourceLang,
-                            targetLang,
-                            session.SessionId,
-                            epoch,
-                            cancellationToken);
-                        response = await PumpStreamAsync(
-                            textStream,
-                            session,
-                            epoch,
-                            fallbackStartTicks,
-                            progress,
-                            onStageChanged,
-                            cancellationToken);
-                    }
-                    else if (!string.IsNullOrWhiteSpace(textApiKey) || (textRuntimeSettings?.TargetsLocalRuntime ?? false))
-                    {
-                        var textStream = _executor.StreamText(
                             textApiKey,
-                            recognized,
-                            sourceLang,
-                            targetLang,
-                            session.SessionId,
-                            epoch,
-                            cancellationToken);
-                        response = await PumpStreamAsync(
-                            textStream,
                             session,
                             epoch,
                             fallbackStartTicks,
@@ -596,13 +636,14 @@ internal sealed class TranslationCoordinator
                     }
                     else
                     {
-                        if (!OutboundPolicy.AllowsFreeEngine(settings, out var freeDenial))
+                        if (!OutboundPolicy.AllowsFreeEngine(settings, out var freeDenial, out var freeAuth))
                         {
                             throw new InvalidOperationException(
                                 freeDenial is null ? "未允许出网翻译。" : $"{freeDenial.Message} {freeDenial.ActionableSuggestion}".Trim());
                         }
 
-                        response = await _executor.TranslateFreeAsync(recognized, sourceLang, targetLang, cancellationToken);
+                        response = await TranslateFreeWithTokenProtectionAsync(
+                            settings, recognized, sourceLang, targetLang, freeAuth!, cancellationToken);
                         progress?.Report(new TranslationStreamUpdate(
                             SessionId: session.SessionId,
                             Epoch: epoch,
@@ -685,8 +726,26 @@ internal sealed class TranslationCoordinator
                 networkElapsedMs: networkElapsedMs,
                 totalStopwatch: totalStopwatch,
                 ocrElapsedMs: ocrElapsedMs,
-                routingElapsedMs: (ulong)routingStopwatch.ElapsedMilliseconds);
+                routingElapsedMs: (ulong)routingStopwatch.ElapsedMilliseconds,
+                cancellationToken: cancellationToken);
 
+            return session;
+        }
+        catch (SegmentSessionException segmentFailure)
+        {
+            totalStopwatch.Stop();
+            ApplyFinalResponse(
+                session: session,
+                response: segmentFailure.PartialResponse,
+                sourceKind: TranslationInputSource.Screenshot,
+                epoch: epoch,
+                progress: progress,
+                onStageChanged: onStageChanged,
+                networkElapsedMs: segmentFailure.PartialResponse.Diagnostics.ElapsedMs,
+                totalStopwatch: totalStopwatch,
+                ocrElapsedMs: ocrElapsedMs,
+                routingElapsedMs: (ulong)routingStopwatch.ElapsedMilliseconds,
+                cancellationToken: cancellationToken);
             return session;
         }
         catch (OperationCanceledException)
@@ -745,43 +804,32 @@ internal sealed class TranslationCoordinator
     {
         var startTicks = Stopwatch.GetTimestamp();
 
-        if (textRuntimeSettings is not null &&
-            (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))
+        if ((textRuntimeSettings is not null &&
+                (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))
+            || !string.IsNullOrWhiteSpace(textApiKey) || (textRuntimeSettings?.TargetsLocalRuntime ?? false))
         {
-            var textStream = _executor.StreamTextDraft(
+            return await TranslateProviderTextAsync(
+                recognized,
+                sourceLang,
+                targetLang,
                 textRuntimeSettings,
-                textApiKey ?? string.Empty,
-                recognized,
-                sourceLang,
-                targetLang,
-                session.SessionId,
+                textApiKey,
+                session,
                 epoch,
+                startTicks,
+                progress,
+                onStageChanged,
                 cancellationToken);
-            return await PumpStreamAsync(
-                textStream, session, epoch, startTicks, progress, onStageChanged, cancellationToken);
         }
 
-        if (!string.IsNullOrWhiteSpace(textApiKey) || (textRuntimeSettings?.TargetsLocalRuntime ?? false))
-        {
-            var textStream = _executor.StreamText(
-                textApiKey!,
-                recognized,
-                sourceLang,
-                targetLang,
-                session.SessionId,
-                epoch,
-                cancellationToken);
-            return await PumpStreamAsync(
-                textStream, session, epoch, startTicks, progress, onStageChanged, cancellationToken);
-        }
-
-        if (!OutboundPolicy.AllowsFreeEngine(settings, out var freeDenial))
+        if (!OutboundPolicy.AllowsFreeEngine(settings, out var freeDenial, out var freeAuth))
         {
             throw new InvalidOperationException(
                 freeDenial is null ? "未允许出网翻译。" : $"{freeDenial.Message} {freeDenial.ActionableSuggestion}".Trim());
         }
 
-        var response = await _executor.TranslateFreeAsync(recognized, sourceLang, targetLang, cancellationToken);
+        var response = await TranslateFreeWithTokenProtectionAsync(
+            settings, recognized, sourceLang, targetLang, freeAuth!, cancellationToken);
         progress?.Report(new TranslationStreamUpdate(
             SessionId: session.SessionId,
             Epoch: epoch,
@@ -801,6 +849,200 @@ internal sealed class TranslationCoordinator
         return response;
     }
 
+    /// <summary>
+    /// Total wall-clock budget for ONE translation session across all of its
+    /// segments. Each request keeps its own internal timeout; this deadline
+    /// only prevents 8 sequential requests from extending the session
+    /// indefinitely. Expiry is surfaced like a user cancellation.
+    /// </summary>
+    internal static readonly TimeSpan SessionDeadline = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Translates provider text with an output budget that matches the input:
+    /// short sources stay one request; long sources are planned into ordered
+    /// ≤800-char segments by the Rust planner and translated sequentially,
+    /// with fragments visible if any segment fails. A rejected plan fails the
+    /// session BEFORE anything is sent.
+    /// </summary>
+    private async Task<TranslationResponse> TranslateProviderTextAsync(
+        string source,
+        string sourceLang,
+        string targetLang,
+        ProviderSettings? textRuntimeSettings,
+        string? textApiKey,
+        TranslationSession session,
+        long epoch,
+        long startTimestampTicks,
+        IProgress<TranslationStreamUpdate>? progress,
+        Action<TranslationSessionStage>? onStageChanged,
+        CancellationToken cancellationToken)
+    {
+        var plan = CoreBridge.PlanSegments(source);
+        if (plan.RejectedReason is not null)
+        {
+            throw new InvalidOperationException(
+                plan.RejectedReason == "oversized_code_block"
+                    ? "内容里有一个超过单段预算的代码块，无法安全切分。请缩短该代码块后重试。"
+                    : $"内容超出一次会话的翻译预算（最多 {CoreBridge.MaxSegments} 段、每段 {CoreBridge.MaxSegmentChars} 字符）。请缩短或分批提交。");
+        }
+
+        var segments = plan.Mode == "segments"
+            ? plan.Segments ?? [source]
+            : new[] { source };
+
+        // One request behaves exactly as before.
+        if (segments.Count == 1)
+        {
+            var single = CreateTextStream(
+                segments[0], sourceLang, targetLang, textRuntimeSettings, textApiKey,
+                session.SessionId, epoch, cancellationToken);
+            return await PumpStreamAsync(
+                single, session, epoch, startTimestampTicks, progress, onStageChanged,
+                textPrefix: string.Empty, cancellationToken);
+        }
+
+        // Sequential segments under ONE deadline and cancellation token.
+        using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        sessionCts.CancelAfter(SessionDeadline);
+
+        var merged = new StringBuilder();
+        var explanations = new List<string>();
+        var warnings = new List<string>();
+        ulong networkMs = 0;
+
+        for (var index = 0; index < segments.Count; index++)
+        {
+            sessionCts.Token.ThrowIfCancellationRequested();
+            var segmentTicks = Stopwatch.GetTimestamp();
+            var streamSession = CreateTextStream(
+                segments[index], sourceLang, targetLang, textRuntimeSettings, textApiKey,
+                session.SessionId, epoch, sessionCts.Token);
+
+            TranslationResponse segmentResponse;
+            try
+            {
+                segmentResponse = await PumpStreamAsync(
+                    streamSession, session, epoch, segmentTicks, progress, onStageChanged,
+                    textPrefix: merged.ToString(), sessionCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                // Fragments already translated stay visible; the outer cancel
+                // handler reports them.
+                session.TranslatedText = merged.ToString();
+                throw;
+            }
+            catch (Exception)
+            {
+                // Completed fragments must remain visible as a Partial, never
+                // vanish into a Failed-with-no-body state.
+                session.TranslatedText = merged.ToString();
+                if (merged.Length > 0)
+                {
+                    warnings.Add($"第 {index + 1} 段翻译失败，仅保留已完成片段。");
+                    throw new SegmentSessionException(
+                        BuildSegmentResponse(merged, explanations, warnings, networkMs));
+                }
+                throw;
+            }
+
+            var result = segmentResponse.Result;
+            networkMs += segmentResponse.Diagnostics.ElapsedMs;
+            var segmentIncomplete =
+                result.Warnings.Count > 0 || result.IsPartial || string.IsNullOrWhiteSpace(result.TranslatedText);
+            if (segmentIncomplete)
+            {
+                warnings.Add($"第 {index + 1} 段未完整返回。");
+            }
+            if (!string.IsNullOrWhiteSpace(result.Explanation))
+            {
+                explanations.Add(result.Explanation.Trim());
+            }
+            warnings.AddRange(result.Warnings);
+
+            var segmentText = !string.IsNullOrWhiteSpace(result.TranslatedText)
+                ? result.TranslatedText
+                : streamSession.Buffer.GetAccumulatedText();
+            merged.Append(segmentText);
+            session.TranslatedText = merged.ToString();
+
+            // A visibly incomplete segment ends the session as Partial: the
+            // following segments would glue onto an unreliable fragment.
+            if (segmentIncomplete)
+            {
+                throw new SegmentSessionException(
+                    BuildSegmentResponse(merged, explanations, warnings, networkMs));
+            }
+        }
+
+        return BuildSegmentResponse(merged, explanations, warnings, networkMs);
+    }
+
+    private TranslationStreamSession CreateTextStream(
+        string segment,
+        string sourceLang,
+        string targetLang,
+        ProviderSettings? textRuntimeSettings,
+        string? textApiKey,
+        string sessionId,
+        long epoch,
+        CancellationToken cancellationToken)
+    {
+        if (textRuntimeSettings is not null &&
+            (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))
+        {
+            return _executor.StreamTextDraft(
+                textRuntimeSettings,
+                textApiKey ?? string.Empty,
+                segment,
+                sourceLang,
+                targetLang,
+                sessionId,
+                epoch,
+                cancellationToken);
+        }
+        return _executor.StreamText(
+            textApiKey,
+            segment,
+            sourceLang,
+            targetLang,
+            sessionId,
+            epoch,
+            cancellationToken);
+    }
+
+    private static TranslationResponse BuildSegmentResponse(
+        StringBuilder merged,
+        IReadOnlyList<string> explanations,
+        IReadOnlyList<string> warnings,
+        ulong networkMs) =>
+        new(
+            new TranslationResult(
+                TranslatedText: merged.ToString(),
+                Transcription: string.Empty,
+                Explanation: string.Join("\n\n", explanations),
+                ProtectedTerms: [],
+                Warnings: warnings),
+            new ProviderDiagnostics(
+                RequestId: "segmented",
+                ProviderType: ProviderType.OpenAiCompatible,
+                Endpoint: string.Empty,
+                Attempts: 1,
+                StatusCode: 200,
+                ElapsedMs: networkMs));
+
+    /// <summary>
+    /// Some segments completed and one failed or returned incomplete: the
+    /// fragments travel back to <see cref="ApplyFinalResponse"/> inside this
+    /// response so they surface as Partial (visible, never persisted) instead
+    /// of a body-less Failed.
+    /// </summary>
+    private sealed class SegmentSessionException(TranslationResponse partialResponse)
+        : Exception("会话分段翻译未全部完成。")
+    {
+        public TranslationResponse PartialResponse { get; } = partialResponse;
+    }
+
     private static async Task<TranslationResponse> PumpStreamAsync(
         TranslationStreamSession streamSession,
         TranslationSession session,
@@ -808,6 +1050,7 @@ internal sealed class TranslationCoordinator
         long startTimestampTicks,
         IProgress<TranslationStreamUpdate>? progress,
         Action<TranslationSessionStage>? onStageChanged,
+        string textPrefix,
         CancellationToken cancellationToken)
     {
         var buffer = streamSession.Buffer;
@@ -822,14 +1065,14 @@ internal sealed class TranslationCoordinator
                     session.Stage = TranslationSessionStage.Streaming;
                     onStageChanged?.Invoke(session.Stage);
                 }
-                session.TranslatedText = buffer.GetAccumulatedText();
+                session.TranslatedText = textPrefix + buffer.GetAccumulatedText();
                 progress?.Report(new TranslationStreamUpdate(
                     SessionId: session.SessionId,
                     Epoch: epoch,
                     Kind: TranslationStreamUpdateKind.Delta,
                     Delta: delta,
                     AccumulatedText: session.TranslatedText,
-                    AccumulatedCharCount: buffer.CharCount,
+                    AccumulatedCharCount: session.TranslatedText.Length,
                     Ttft: buffer.GetTtft(startTimestampTicks),
                     IsPartial: true));
             }
@@ -858,14 +1101,14 @@ internal sealed class TranslationCoordinator
                 session.Stage = TranslationSessionStage.Streaming;
                 onStageChanged?.Invoke(session.Stage);
             }
-            session.TranslatedText = buffer.GetAccumulatedText();
+            session.TranslatedText = textPrefix + buffer.GetAccumulatedText();
             progress?.Report(new TranslationStreamUpdate(
                 SessionId: session.SessionId,
                 Epoch: epoch,
                 Kind: TranslationStreamUpdateKind.Delta,
                 Delta: finalDelta,
                 AccumulatedText: session.TranslatedText,
-                AccumulatedCharCount: buffer.CharCount,
+                AccumulatedCharCount: session.TranslatedText.Length,
                 Ttft: buffer.GetTtft(startTimestampTicks),
                 IsPartial: true));
         }
@@ -883,10 +1126,28 @@ internal sealed class TranslationCoordinator
         ulong networkElapsedMs,
         Stopwatch totalStopwatch,
         ulong ocrElapsedMs = 0,
-        ulong routingElapsedMs = 0)
+        ulong routingElapsedMs = 0,
+        CancellationToken cancellationToken = default)
     {
         session.Stage = TranslationSessionStage.Finalizing;
         onStageChanged?.Invoke(session.Stage);
+
+        // A final that arrives after the user cancelled (an executor may
+        // return a complete response instead of throwing) is NOT a completion:
+        // the text stays visible but the session lands on Cancelled and
+        // nothing persists (T19/F03).
+        if (cancellationToken.IsCancellationRequested)
+        {
+            // Populate text so partially-streamed content is replaced with the
+            // complete response — the user can still read and copy it.
+            session.TranslatedText = response.Result.TranslatedText;
+            session.Stage = TranslationSessionStage.Cancelled;
+            session.Error = new TranslationError(
+                TranslationErrorKind.Cancelled,
+                "翻译请求已取消。");
+            onStageChanged?.Invoke(session.Stage);
+            return; // WriteHistoryOnce is never reached → nothing persists.
+        }
 
         session.TranslatedText = response.Result.TranslatedText;
         if (!string.IsNullOrEmpty(response.Result.Transcription))
@@ -903,7 +1164,14 @@ internal sealed class TranslationCoordinator
         session.ProtectedTerms = response.Result.ProtectedTerms;
         session.Warnings = response.Result.Warnings;
 
-        session.Stage = response.Result.Warnings.Count > 0
+        // Integrity comes from the provider contract, not just warnings: an
+        // is_partial final, integrity warnings, or an empty translation are
+        // all incomplete states. They stay visible but never qualify.
+        var incomplete =
+            response.Result.Warnings.Count > 0 ||
+            response.Result.IsPartial ||
+            string.IsNullOrWhiteSpace(response.Result.TranslatedText);
+        session.Stage = incomplete
             ? TranslationSessionStage.Partial
             : TranslationSessionStage.Completed;
 
@@ -922,32 +1190,48 @@ internal sealed class TranslationCoordinator
 
     private void WriteHistoryOnce(TranslationSession session, TranslationInputSource sourceKind)
     {
-        if (session.IsSuccess && _history is not null && !string.IsNullOrWhiteSpace(session.TranslatedText))
+        // Eligibility, not "a result arrived": integrity warnings, an
+        // is_partial final, an empty translation, cancellations and failures
+        // never enter history. At most one write per session, so a duplicated
+        // final delivery cannot persist twice.
+        if (!session.IsCleanCompletion || _history is null || session.HistoryCommitted)
         {
-            if (sourceKind == TranslationInputSource.Screenshot && string.IsNullOrWhiteSpace(session.SourceText))
-            {
-                return;
-            }
+            return;
+        }
 
-            var shellSettings = _settingsService?.GetShellSettings() ?? ShellSettingsStore.Load();
-            var kindLabel = sourceKind switch
-            {
-                TranslationInputSource.Selection => "划词",
-                TranslationInputSource.Screenshot => "截图",
-                TranslationInputSource.QuickSearch => "查词",
-                _ => "输入",
-            };
-            var entry = new TranslationHistoryEntry(
-                Guid.NewGuid(),
-                DateTimeOffset.UtcNow,
-                kindLabel,
-                session.SourceText,
-                session.TranslatedText,
-                session.Explanation,
-                session.ProtectedTerms,
-                session.SourceLanguage,
-                session.TargetLanguage);
-            _history.TryAdd(entry, shellSettings.HistoryEnabled);
+        if (sourceKind == TranslationInputSource.Screenshot && string.IsNullOrWhiteSpace(session.SourceText))
+        {
+            return;
+        }
+
+        var shellSettings = _settingsService?.GetShellSettings() ?? ShellSettingsStore.Load();
+        var kindLabel = sourceKind switch
+        {
+            TranslationInputSource.Selection => "划词",
+            TranslationInputSource.Screenshot => "截图",
+            TranslationInputSource.QuickSearch => "查词",
+            _ => "输入",
+        };
+        var entry = new TranslationHistoryEntry(
+            Guid.NewGuid(),
+            DateTimeOffset.UtcNow,
+            kindLabel,
+            session.SourceText,
+            session.TranslatedText,
+            session.Explanation,
+            session.ProtectedTerms,
+            session.SourceLanguage,
+            session.TargetLanguage);
+        var addResult = _history.TryAdd(entry, shellSettings.HistoryEnabled);
+        // "Committed" means the store actually accepted the entry — a failed
+        // write must not let the session claim a save that never happened.
+        if (addResult == HistoryAddResult.Stored)
+        {
+            session.HistoryCommitted = true;
+        }
+        else if (addResult == HistoryAddResult.Failed)
+        {
+            session.Warnings = [.. session.Warnings, "译文未保存到本机历史：写入失败。"];
         }
     }
 

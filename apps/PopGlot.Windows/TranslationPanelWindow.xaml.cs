@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using PopGlot.Windows.Sections;
 using PopGlot.Windows.Services;
 
 namespace PopGlot.Windows;
@@ -214,18 +215,20 @@ public partial class TranslationPanelWindow : Window
             throw new InvalidOperationException("未能在所选区域识别出有效文字。");
         }
 
-        var formatted = MarkdownPresenter.FormatPangu(recognized.Trim());
-        SourceInputBox.Text = formatted;
-        _gate.OnCompleted(formatted);
-        SetTranslationContent(formatted, isMarkdown: false);
+        // The recognized text is the original text: it is shown, stored and
+        // auto-copied verbatim. Visual Pangu spacing must never be written
+        // back into the original (it used to insert spaces inside paths).
+        SourceInputBox.Text = recognized;
+        _gate.OnCompleted(recognized);
+        SetTranslationContent(recognized, isMarkdown: false);
         SetResultActionsEnabled(true);
-        await TrySetClipboardAsync(formatted);
+        await TrySetClipboardAsync(recognized);
 
         RenderState(TranslationSessionState.Completed);
         EngineBadge.Text = "离线 OCR 取字";
         SetBadgeTone(failed: false);
         StatusText.Text = "已提取画面文字并自动复制到剪贴板";
-        RouteText.Text = $"{formatted.Length} 字符";
+        RouteText.Text = $"{recognized.Length} 字符";
     }
 
     internal async Task StartTextAsync(string text)
@@ -498,10 +501,16 @@ public partial class TranslationPanelWindow : Window
             return;
         }
 
-        if (!session.IsSuccess || session.Stage == TranslationSessionStage.Failed)
+        if (!session.IsCleanCompletion || session.Stage == TranslationSessionStage.Failed)
         {
             Progress.Visibility = Visibility.Collapsed;
-            var message = session.Error?.Message ?? "翻译未完成";
+            // A Partial keeps its visible text but lands here on purpose: the
+            // gate records FailedWithPartial so result actions, auto-copy and
+            // starring stay blocked while the retained text stays readable.
+            var message = session.Error?.Message
+                ?? (session.Stage == TranslationSessionStage.Partial
+                    ? "译文不完整，未执行自动复制等动作"
+                    : "翻译未完成");
             var suggestion = session.Error?.ActionableSuggestion;
             var fullMessage = string.IsNullOrWhiteSpace(suggestion) ? message : $"{message} {suggestion}".Trim();
             _gate.OnFailed(fullMessage, session.TranslatedText);
@@ -694,7 +703,8 @@ public partial class TranslationPanelWindow : Window
 
     private async Task RenderFinalSuccessAsync(string source, TranslationSession session, string pipelineNote)
     {
-        var partial = session.Warnings.Count > 0;
+        // Only clean completions reach this method (HandleSessionResultAsync
+        // routes everything else to the partial/failure renderers).
         _translation = session.TranslatedText;
         Progress.Visibility = Visibility.Collapsed;
         ResultSkeleton.Visibility = Visibility.Collapsed;
@@ -704,7 +714,8 @@ public partial class TranslationPanelWindow : Window
 
         try
         {
-            MarkdownPresenter.RenderToFlowDocument(TranslationRichBox.Document, session.TranslatedText, Application.Current?.Resources ?? Resources);
+            MarkdownPresenter.RenderToFlowDocument(TranslationRichBox.Document, session.TranslatedText, Application.Current?.Resources ?? Resources,
+                resultActionsEnabled: session.IsCleanCompletion);
             TranslationRichBox.Visibility = Visibility.Visible;
             TranslationTextBox.Visibility = Visibility.Collapsed;
         }
@@ -731,9 +742,9 @@ public partial class TranslationPanelWindow : Window
         WarningText.Text = warnings.Count == 0 ? string.Empty : string.Join("\n", warnings);
         WarningBox.Visibility = warnings.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
 
-        EngineBadge.Text = partial ? "部分成功" : session.PipelineLabel ?? "翻译完成";
-        EngineBadge.Foreground = (Brush)FindResource(partial ? "WarningBrush" : "AccentBrush");
-        StatusDot.Background = (Brush)FindResource(partial ? "WarningBrush" : "AccentBrush");
+        EngineBadge.Text = session.PipelineLabel ?? "翻译完成";
+        EngineBadge.Foreground = (Brush)FindResource("AccentBrush");
+        StatusDot.Background = (Brush)FindResource("AccentBrush");
 
         var totalMs = session.Timing.TotalElapsedMs + (ulong)Math.Max(0, _inputAcquisitionMs);
         var timingParts = new List<string> { session.PipelineLabel ?? "翻译" };
@@ -753,22 +764,18 @@ public partial class TranslationPanelWindow : Window
         timingParts.Add($"网络/模型 {session.Timing.NetworkElapsedMs} ms");
         timingParts.Add($"总计 {totalMs} ms");
         RouteText.Text = string.Join(" · ", timingParts);
-        StatusText.Text = partial
-            ? "部分成功 · 见下方提醒"
-            : (string.IsNullOrWhiteSpace(pipelineNote)
-                ? TranslationSessionStateText.Describe(TranslationSessionState.Completed)
-                : pipelineNote);
+        StatusText.Text = string.IsNullOrWhiteSpace(pipelineNote)
+            ? TranslationSessionStateText.Describe(TranslationSessionState.Completed)
+            : pipelineNote;
 
         var settings = _shellSettings();
-        UpdateStarIcon(_vocabulary?.IsStarred(source) == true);
+        UpdateStarIcon(_vocabulary?.IsStarred(source, SourceLanguage, TargetLanguage) == true);
         if (_gate.ShouldTriggerAutoCopy(settings.CopyTranslationAutomatically))
         {
             var clean = MarkdownPresenter.ToPlainText(_translation);
             if (await TrySetClipboardAsync(clean))
             {
-                StatusText.Text = partial
-                    ? "部分成功 · 已自动复制译文"
-                    : "翻译完成 · 已自动复制译文";
+                StatusText.Text = "翻译完成 · 已自动复制译文";
             }
         }
     }
@@ -1074,7 +1081,7 @@ public partial class TranslationPanelWindow : Window
         var text = SourceInputBox.Text.Trim();
         if (!string.IsNullOrWhiteSpace(text))
         {
-            SpeakOrStop(text);
+            SpeakOrStop(text, SourceLanguage);
         }
     }
 
@@ -1085,17 +1092,17 @@ public partial class TranslationPanelWindow : Window
             return;
         }
         var clean = MarkdownPresenter.ToPlainText(_translation);
-        SpeakOrStop(clean);
+        SpeakOrStop(clean, TargetLanguage);
     }
 
-    private static void SpeakOrStop(string? text)
+    private void SpeakOrStop(string? text, string languageTag)
     {
         if (TtsService.IsSpeaking)
         {
             TtsService.Stop();
             return;
         }
-        TtsService.Speak(text);
+        TtsService.Speak(text, languageTag);
     }
 
     private void StarToggle_Click(object sender, RoutedEventArgs e)
@@ -1105,7 +1112,7 @@ public partial class TranslationPanelWindow : Window
         if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(_translation)) return;
 
         var clean = MarkdownPresenter.ToPlainText(_translation);
-        var isStarred = _vocabulary.ToggleStar(
+        var result = _vocabulary.ToggleStar(
             source,
             clean,
             PhoneticText.Text.Trim('[', ']'),
@@ -1113,8 +1120,14 @@ public partial class TranslationPanelWindow : Window
             SourceLanguage,
             TargetLanguage);
 
-        UpdateStarIcon(isStarred);
-        StatusText.Text = isStarred ? "已加入生词本" : "已从生词本移除";
+        // A failed write must not light the star: reflect the store's actual
+        // state and say what went wrong.
+        UpdateStarIcon(result.Persisted
+            ? result.Starred
+            : _vocabulary.IsStarred(source, SourceLanguage, TargetLanguage));
+        StatusText.Text = result.Persisted
+            ? (result.Starred ? "已加入生词本" : "已从生词本移除")
+            : result.DescribeFailureZh();
     }
 
     private void UpdateStarIcon(bool starred)
@@ -1136,6 +1149,11 @@ public partial class TranslationPanelWindow : Window
         }
         // Shift+Enter inserts a newline; Enter translates.
         if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+        {
+            return;
+        }
+        // IME composition confirm: the composition owns this Enter.
+        if (System.Windows.Input.InputMethod.GetIsInputMethodEnabled(SourceInputBox))
         {
             return;
         }
@@ -1236,8 +1254,10 @@ public partial class TranslationPanelWindow : Window
         }
     }
 
+    // Shared clipboard entry with the other surfaces (quick search, workbench,
+    // library): one hardened writer, one place to audit or substitute.
     private static Task<bool> TrySetClipboardAsync(string text)
-        => WindowsSelectionClipboardAdapter.TrySetTextAsync(text);
+        => Helpers.CopyToClipboardAsync(text);
 
     // ================= Window behaviour =================
 

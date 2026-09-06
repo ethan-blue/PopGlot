@@ -15,8 +15,21 @@ internal sealed partial class CredentialStore : ICredentialVault
 
     public static CredentialStore Instance { get; } = new();
 
+    /// <summary>
+    /// Test seam: when installed, every credential operation routes to this
+    /// vault instead of Windows Credential Manager. Production leaves it null;
+    /// the isolated test host installs an in-memory vault so tests can never
+    /// read or write the user's real credentials.
+    /// </summary>
+    internal static ICredentialVault? OverrideVault { get; set; }
+
     public static void SaveApiKey(string apiKey, string targetName = DefaultTargetName)
     {
+        if (OverrideVault is { } vault)
+        {
+            vault.SaveCredential(apiKey, targetName);
+            return;
+        }
         if (string.IsNullOrWhiteSpace(apiKey))
         {
             DeleteApiKey(targetName);
@@ -59,6 +72,10 @@ internal sealed partial class CredentialStore : ICredentialVault
 
     public static bool HasApiKey(string targetName = DefaultTargetName)
     {
+        if (OverrideVault is { } vault)
+        {
+            return vault.HasCredential(targetName);
+        }
         if (!CredRead(targetName, CredTypeGeneric, 0, out var credentialPointer))
         {
             const int ErrorNotFound = 1168;
@@ -75,6 +92,10 @@ internal sealed partial class CredentialStore : ICredentialVault
 
     public static string? LoadApiKey(string targetName = DefaultTargetName)
     {
+        if (OverrideVault is { } vault)
+        {
+            return vault.LoadCredential(targetName);
+        }
         if (!CredRead(targetName, CredTypeGeneric, 0, out var credentialPointer))
         {
             const int ErrorNotFound = 1168;
@@ -117,6 +138,11 @@ internal sealed partial class CredentialStore : ICredentialVault
 
     public static void DeleteApiKey(string targetName = DefaultTargetName)
     {
+        if (OverrideVault is { } vault)
+        {
+            vault.DeleteCredential(targetName);
+            return;
+        }
         if (!CredDelete(targetName, CredTypeGeneric, 0))
         {
             const int ErrorNotFound = 1168;

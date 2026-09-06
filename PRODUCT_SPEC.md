@@ -57,7 +57,7 @@ Idle → Connecting → Streaming → Finalizing → Completed
 - 文本模型与模型推荐偏好（极速/均衡/高质）
 - 视觉模型
 - 非敏感自定义请求头、文本/图片能力开关、网络许可
-- `Auto / LocalOcr / VisionDirect`
+- `Auto / LocalOcr / VisionDirect / VisionOcr`
 - 自动模式是否允许上传截图
 - 安全离线模式（总开关，覆盖内置免费引擎）
 - 划词（`Ctrl+Alt+W`）、截图（`Ctrl+Alt+Space`）、关闭浮窗（`Ctrl+Alt+X`）、主窗口（`Ctrl+Alt+O`）四组独立全局快捷键

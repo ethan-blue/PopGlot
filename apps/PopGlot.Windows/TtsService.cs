@@ -15,15 +15,22 @@ internal static class TtsService
     private static MediaPlayer? _player;
     private static string? _currentFile;
     private static int _generation;
+    private static CancellationTokenSource? _synthesisCts;
 
     /// <summary>Test seam: overrides settings lookup for online TTS gating.</summary>
     internal static Func<ProviderSettings>? SettingsResolver { get; set; }
 
-    /// <summary>Test seam: overrides Edge neural TTS synthesis.</summary>
-    internal static Func<string, Task<string>>? EdgeSynthesizer { get; set; }
+    /// <summary>Test seam: overrides shell settings lookup (cloud speech consent).</summary>
+    internal static Func<ShellSettings>? ShellSettingsResolver { get; set; }
 
-    /// <summary>Test seam: overrides local offline synthesis.</summary>
-    internal static Func<string, Task<string>>? LocalSynthesizer { get; set; }
+    /// <summary>
+    /// Test seam: overrides Edge neural TTS synthesis. Arguments are the text,
+    /// the resolved voice and the cancellation token owned by TtsService.
+    /// </summary>
+    internal static Func<string, string?, CancellationToken, Task<string?>>? EdgeSynthesizer { get; set; }
+
+    /// <summary>Test seam: overrides local offline synthesis. May return null to skip playback.</summary>
+    internal static Func<string, Task<string?>>? LocalSynthesizer { get; set; }
 
     /// <summary>Raised when speech synthesis begins or ends.</summary>
     public static event EventHandler<bool>? SpeakingStateChanged;
@@ -40,8 +47,13 @@ internal static class TtsService
         }
     }
 
-    /// <summary>Speaks <paramref name="text"/>, replacing any current utterance.</summary>
-    public static void Speak(string? text)
+    /// <summary>
+    /// Speaks <paramref name="text"/> in <paramref name="languageTag"/>,
+    /// replacing any current utterance. The cloud voice service needs its own
+    /// explicit consent — the translation network permission alone never
+    /// authorises sending text to Microsoft speech.
+    /// </summary>
+    public static void Speak(string? text, string? languageTag = null, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
@@ -50,9 +62,12 @@ internal static class TtsService
 
         Stop();
         int generation;
+        CancellationTokenSource synthesisCts;
         lock (Gate)
         {
             generation = ++_generation;
+            synthesisCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _synthesisCts = synthesisCts;
         }
 
         _ = Task.Run(async () =>
@@ -61,20 +76,24 @@ internal static class TtsService
             try
             {
                 var settings = SettingsResolver?.Invoke() ?? CoreBridge.GetSettings();
+                var shellSettings = ShellSettingsResolver?.Invoke() ?? ShellSettingsStore.Load();
                 var networkAllowed = settings.NetworkEnabled && !settings.SafeDevMode;
+                // The Microsoft voice service is a separate destination with a
+                // separate consent; upgrading never grants it implicitly.
+                var cloudSpeechAllowed = networkAllowed && shellSettings.CloudSpeechEnabled;
 
-                if (networkAllowed)
+                if (cloudSpeechAllowed)
                 {
-                    // First try ultra-natural Edge Neural TTS
                     try
                     {
+                        var voice = EdgeTtsService.ResolveVoice(languageTag, text);
                         path = EdgeSynthesizer is not null
-                            ? await EdgeSynthesizer(text)
-                            : await EdgeTtsService.SynthesizeToMp3FileAsync(text);
+                            ? await EdgeSynthesizer(text, voice, synthesisCts.Token)
+                            : await EdgeTtsService.SynthesizeToMp3FileAsync(text, voice, synthesisCts.Token);
                     }
-                    catch
+                    catch (Exception exception) when (exception is not OperationCanceledException)
                     {
-                        // Fall back to offline Windows Speech Synthesis
+                        // Fall back to offline Windows Speech Synthesis.
                         path = LocalSynthesizer is not null
                             ? await LocalSynthesizer(text)
                             : await SynthesizeLocalToFileAsync(text);
@@ -82,16 +101,23 @@ internal static class TtsService
                 }
                 else
                 {
-                    // Offline / SafeDevMode: strictly local synthesis, never touch Edge TTS
+                    // Offline, safe mode, or cloud speech not consented:
+                    // strictly local synthesis, never touch the network.
                     path = LocalSynthesizer is not null
                         ? await LocalSynthesizer(text)
-                        : await SynthesizeLocalToFileAsync(text);
+                        : await SynthesizeLocalToFileAsync(text, languageTag);
                 }
 
                 if (path is not null)
                 {
                     await Application.Current.Dispatcher.InvokeAsync(() => StartPlayback(path, generation));
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                // Stop() or a new Speak() cancelled this synthesis; the file is
+                // cleaned by Stop and nothing may play.
+                TryDelete(path);
             }
             catch (Exception)
             {
@@ -104,6 +130,7 @@ internal static class TtsService
     {
         MediaPlayer? player;
         string? file;
+        CancellationTokenSource? synthesis;
         lock (Gate)
         {
             _generation++;
@@ -111,6 +138,19 @@ internal static class TtsService
             file = _currentFile;
             _player = null;
             _currentFile = null;
+            synthesis = _synthesisCts;
+            _synthesisCts = null;
+        }
+
+        // Cancel an in-flight cloud synthesis too — stopping must not leave a
+        // request running that nobody will use.
+        try
+        {
+            synthesis?.Cancel();
+            synthesis?.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
         }
 
         if (player is null)
@@ -136,10 +176,10 @@ internal static class TtsService
         }
     }
 
-    private static async Task<string> SynthesizeLocalToFileAsync(string text)
+    private static async Task<string> SynthesizeLocalToFileAsync(string text, string? languageTag = null)
     {
         using var synthesizer = new SpeechSynthesizer();
-        var voice = SelectLocalVoice(text);
+        var voice = SelectLocalVoice(text, languageTag);
         if (voice is not null)
         {
             synthesizer.Voice = voice;
@@ -182,14 +222,17 @@ internal static class TtsService
         SpeakingStateChanged?.Invoke(null, true);
     }
 
-    private static VoiceInformation? SelectLocalVoice(string text)
+    private static VoiceInformation? SelectLocalVoice(string text, string? languageTag)
     {
         var voices = SpeechSynthesizer.AllVoices;
         if (voices.Count == 0)
         {
             return null;
         }
-        var prefix = DetectLanguagePrefix(text);
+        var prefix = !string.IsNullOrWhiteSpace(languageTag) &&
+            !languageTag.Equals("auto", StringComparison.OrdinalIgnoreCase)
+                ? languageTag.Split('-')[0]
+                : DetectLanguagePrefix(text);
         return voices.FirstOrDefault(voice =>
                 voice.Language.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             ?? SpeechSynthesizer.DefaultVoice;
@@ -209,7 +252,9 @@ internal static class TtsService
     }
 
     /// <summary>
-    /// Cleans up any stale temporary TTS audio files from prior sessions.
+    /// Cleans up any stale temporary TTS audio files from prior sessions —
+    /// both the local (<c>popglot-tts-*</c>) and cloud (<c>popglot-edgetts-*</c>)
+    /// file families.
     /// </summary>
     public static void CleanupStaleTempFiles(TimeSpan? olderThan = null)
     {
@@ -217,18 +262,21 @@ internal static class TtsService
         {
             var tempDir = Path.GetTempPath();
             var threshold = DateTime.UtcNow - (olderThan ?? TimeSpan.FromMinutes(10));
-            foreach (var file in Directory.EnumerateFiles(tempDir, "popglot-tts-*.*"))
+            foreach (var pattern in (string[])["popglot-tts-*.*", "popglot-edgetts-*.*"])
             {
-                try
+                foreach (var file in Directory.EnumerateFiles(tempDir, pattern))
                 {
-                    var lastWrite = File.GetLastWriteTimeUtc(file);
-                    if (lastWrite < threshold)
+                    try
                     {
-                        File.Delete(file);
+                        var lastWrite = File.GetLastWriteTimeUtc(file);
+                        if (lastWrite < threshold)
+                        {
+                            File.Delete(file);
+                        }
                     }
-                }
-                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-                {
+                    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                    {
+                    }
                 }
             }
         }

@@ -99,7 +99,20 @@ internal sealed class TranslationSession
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? CompletedAt { get; set; }
 
-    public bool IsSuccess => Stage is TranslationSessionStage.Completed or TranslationSessionStage.Partial;
+    /// <summary>Set once the coordinator has persisted this session, so a duplicated final delivery can never write history twice.</summary>
+    public bool HistoryCommitted { get; set; }
+
+    /// <summary>
+    /// The one completion contract every consumer shares: only a non-empty
+    /// Completed stage with no integrity warnings is eligible for history,
+    /// auto-copy, speech, starring or code-block copy. "The request returned
+    /// a result" is not "the result is complete"; a Partial stays visible but
+    /// never triggers side effects.
+    /// </summary>
+    public bool IsCleanCompletion =>
+        Stage == TranslationSessionStage.Completed &&
+        Warnings.Count == 0 &&
+        !string.IsNullOrWhiteSpace(TranslatedText);
 }
 
 /// <summary>
@@ -148,8 +161,8 @@ internal interface IHistoryRepository
 internal interface IVocabularyRepository
 {
     IReadOnlyList<VocabularyWord> GetAll();
-    bool IsStarred(string word);
-    bool ToggleStar(
+    bool IsStarred(string word, string sourceLang = "auto", string targetLang = "zh-CN");
+    VocabularySaveResult ToggleStar(
         string word,
         string translation,
         string phonetic = "",
@@ -158,7 +171,7 @@ internal interface IVocabularyRepository
         string targetLang = "zh-CN",
         List<string>? tags = null);
     bool Remove(Guid id);
-    void Clear();
+    bool Clear();
     string ExportToCsv();
     string ExportToAnkiTsv();
     string ExportToMarkdown();

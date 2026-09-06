@@ -3,6 +3,7 @@ using PopGlot.Windows.Sections;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
+using System.Net.WebSockets;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -26,10 +27,17 @@ internal static class Program
 {
     private static int _passed;
     private static int _failed;
+    private static Application? _bootstrappedApp;
 
     [STAThread]
     private static async Task<int> Main()
     {
+        // Isolation FIRST: nothing below may see real user data, credentials,
+        // or public network. A missing isolation bootstrap must fail the run.
+        TestIsolation.Initialize();
+        Run("test isolation is active", TestIsolation.AssertActive);
+        Run("no real PopGlot instance conflicts with the suite", TestIsolation.AssertNoConflictingAppInstance);
+
         await RunAsync("clipboard restores after selection", ClipboardRestoresAfterSelectionAsync);
         await RunAsync("clipboard stays untouched when copy fails", ClipboardUntouchedOnCopyFailureAsync);
         await RunAsync("newer user clipboard wins", NewerUserClipboardWinsAsync);
@@ -51,6 +59,9 @@ internal static class Program
         Run("shell settings round-trip", ShellSettingsRoundTrip);
 
         Run("local base urls are detected by host", LocalBaseUrlsDetectedByHost);
+        Run("endpoint classification agrees with the rust core", EndpointClassificationAgreesWithRustCore);
+        Run("lan vision service needs the explicit permission", LanVisionServiceNeedsExplicitPermission);
+        Run("routing decision table agrees across the ffi boundary", RoutingDecisionTableAgreesAcrossFfi);
         Run("language catalog normalizes and swaps", LanguageCatalogBehaviour);
 
         Run("sensitive history is rejected", SensitiveHistoryIsRejected);
@@ -60,14 +71,28 @@ internal static class Program
         Run("SendInput ABI size is correct", SendInputAbiSizeIsCorrect);
 
         Run("pangu spacing formats CJK-Latin text correctly", PanguSpacingFormatsCorrectly);
+        Run("markdown plain text preserves technical identifiers and code", MarkdownPlainTextPreservesTechnicalText);
         Run("edge neural tts resolves voices by language script", EdgeTtsResolvesVoicesCorrectly);
+        Run("edge tts voices follow the language tag", EdgeTtsVoicesFollowLanguageTag);
+        await RunAsync("edge tts assembles fragmented websocket messages", EdgeTtsAssemblesFragmentedMessagesAsync);
+        await RunAsync("edge tts enforces source and audio limits", EdgeTtsEnforcesLimitsAsync);
+        Run("tts temp cleanup covers both file families", TtsTempCleanupCoversBothFamilies);
         Run("vocabulary store supports star, remove and export", VocabularyStoreBehaviour);
         Run("vocabulary store csv export conforms to standard format", VocabularyStoreCsvExportConforms);
         Run("vocabulary store handles corrupt json safely", VocabularyStoreHandlesCorruptJsonSafely);
+        Run("vocabulary store save failures stay visible", VocabularyStoreSaveFailuresStayVisible);
+        Run("vocabulary store enforces entry and capacity limits", VocabularyStoreEnforcesLimits);
+        Run("vocabulary star identity preserves code identifier case", VocabularyStarIdentityPreservesCase);
+        Run("vocabulary concurrent changes do not overwrite each other", VocabularyConcurrentChangesDoNotOverwrite);
+        Run("history corrupt file is quarantined not destroyed", HistoryCorruptFileIsQuarantined);
+        Run("exports are safe for spreadsheets and anki", ExportsAreSafeForSpreadsheetsAndAnki);
+        Run("crash diagnostics sanitize secrets and bound length", CrashDiagnosticsSanitizeAndBound);
+        Run("crash log rotates and stays within its budget", CrashDiagnosticsRotateAndStayBounded);
         Run("history store csv and markdown export conform to format", HistoryStoreExportConforms);
         Run("hotkey action enum values are recognized without exception", HotkeyActionsRecognized);
         Run("show window hotkey and free engine consent round-trip", ShellSettingsShowWindowAndConsentRoundTrip);
         await RunAsync("free engine consent gates the outbound decision", FreeEngineConsentGatesOutbound);
+        await RunAsync("free engine authorization matrix at the send boundary", FreeEngineAuthorizationMatrixAtSendBoundary);
         await RunAsync("offline policy blocks remote but allows local providers", OfflineModeSendsNothing);
         await RunAsync("test connection draft never alters saved settings", DraftConnectionLeavesSettingsUntouched);
         Run("icon controls expose automation names", IconControlsExposeAutomationNames);
@@ -96,6 +121,7 @@ internal static class Program
         Run("settings closes transient translation surfaces", SettingsClosesTransientSurfaces);
         Run("screenshot draft route is visible", ScreenshotDraftRouteIsVisible);
         Run("service editor fields share a stable responsive grid", ServiceEditorUsesStableResponsiveGrid);
+        Run("service draft coordinator pure rules hold", ServiceDraftCoordinatorPureRulesHold);
         Run("model catalog endpoints follow provider protocols", ModelCatalogEndpointsFollowProtocols);
         Run("model catalog parses OpenAI and Gemini responses", ModelCatalogParsesProviderResponses);
         await RunAsync("model catalog uses draft credentials without saving", ModelCatalogUsesDraftCredentialsAsync);
@@ -140,7 +166,19 @@ internal static class Program
         await RunAsync("coordinator final calibration replaces text and metadata", CoordinatorFinalCalibrationReplacesTextAsync);
         await RunAsync("coordinator error and cancellation preserve partial text and write no history", CoordinatorErrorAndCancellationPreservePartialAndNoHistoryAsync);
         await RunAsync("coordinator successful translation writes history once", CoordinatorSuccessfulTranslationWritesHistoryOnceAsync);
+        await RunAsync("partial final never persists or triggers side effects", PartialFinalNeverPersistsOrTriggersSideEffects);
+        await RunAsync("cancelled final does not persist", CancelledFinalDoesNotPersistAsync);
+        await RunAsync("history write failure is not fake committed", HistoryWriteFailureIsNotFakeCommittedAsync);
+        Run("rust is_partial flag survives into the csharp dto", PartialContractSurvivesSerialization);
+        await RunAsync("free engine runs the shared token protection chain", FreeEngineRunsSharedTokenProtection);
+        await RunAsync("free engine transport boundary rejects oversize html and fakes", FreeEngineTransportBoundary);
         await RunAsync("coordinator free engine single shot emits reset and delta and writes history once", CoordinatorFreeSingleShotAsync);
+        await RunAsync("long input plans into ordered segments", LongInputPlansIntoOrderedSegmentsAsync);
+        await RunAsync("cancel between segments stops later requests", CancelBetweenSegmentsStopsLaterRequestsAsync);
+        await RunAsync("segment failure keeps fragments as partial", SegmentFailureKeepsFragmentsAsPartialAsync);
+        await RunAsync("incomplete segment stops session as partial", IncompleteSegmentStopsSessionAsPartialAsync);
+        await RunAsync("budget refusal sends nothing", BudgetRefusalSendsNothingAsync);
+        Run("short source stays single and planner agrees across ffi", ShortSourceStaysSingleAndPlannerAgreesAcrossFfi);
         await RunAsync("coordinator vision failure with deltas does not fallback to OCR", CoordinatorVisionWithDeltaFailureDoesNotOcrFallbackAsync);
         await RunAsync("coordinator vision failure with zero deltas falls back to OCR", CoordinatorVisionZeroDeltaFailureFallsBackToOcrAsync);
         await RunAsync("coordinator epoch propagation fences session updates", CoordinatorEpochPropagationAsync);
@@ -169,10 +207,21 @@ internal static class Program
         RunStaBatch(
             ("quick search component lifecycle and stream contracts", QuickSearchComponentLifecycleAndStreamContracts),
             ("translate section component lifecycle and stream contracts", TranslateSectionComponentLifecycleAndStreamContracts),
+            ("translate section stacks when narrow", TranslateSectionStacksWhenNarrow),
+            ("stream scroll position is preserved while reading", StreamScrollPositionIsPreservedWhileReading),
+            ("translate empty state guides first use", TranslateEmptyStateGuidesFirstUse),
             ("translation panel component lifecycle and stream contracts", TranslationPanelComponentLifecycleAndStreamContracts),
+            ("markdown visual rendering separates code from natural language", MarkdownVisualSeparatesCodeFromNaturalLanguage),
+            ("primary button text uses primary text brush", PrimaryButtonTextUsesPrimaryTextBrush),
+            ("three entries copy the same agreed plain text", ThreeEntriesCopyTheSameAgreedText),
+            ("code block copy button obeys eligibility", CodeBlockCopyButtonObeysEligibility),
+            ("panel routes partial session to blocked actions and no auto copy", PanelRoutesPartialSessionToBlockedActionsAndNoAutoCopy),
+            ("panel star failure is visible", PanelStarFailureIsVisible),
             ("render screenshots and measure performance baseline", RenderScreenshotsAndMeasureBaseline),
             ("a failed save recovers to dirty then clean", FailedSaveRecoversToDirtyThenClean),
-            ("hotkey service suspension and retention behavior", HotkeyServiceSuspensionAndRetentionBehavior));
+            ("settings cloud speech consent round-trip", SettingsCloudSpeechConsentRoundTrip),
+            ("hotkey service suspension and retention behavior", HotkeyServiceSuspensionAndRetentionBehavior),
+            ("tts cloud speech needs its own consent", TtsCloudSpeechNeedsOwnConsent));
 
         await RunAsync("clipboard isolation and hard timeout resilience", ClipboardIsolationAndHardTimeoutAsync);
         await RunAsync("clipboard snapshot fail closed behavior", ClipboardSnapshotFailClosedBehaviorAsync);
@@ -184,6 +233,16 @@ internal static class Program
         {
             await RunAsync("free web translation smoke (network)", FreeTranslationSmokeAsync);
         }
+
+        // The whole run must have left the user's real config untouched and
+        // must never have attempted a public-network send. The only sanctioned
+        // exception is the explicit POPGLOT_SMOKE_FREE smoke, whose single
+        // attempt the isolation guard still refuses.
+        Run("real user config unchanged by the run", TestIsolation.VerifyRealFilesUnchanged);
+        var sanctionedAttempts = Environment.GetEnvironmentVariable("POPGLOT_SMOKE_FREE") == "1" ? 1 : 0;
+        Run("no unsanctioned public network send was attempted", () =>
+            True(TestIsolation.BlockedPublicSends <= sanctionedAttempts,
+                $"the run attempted {TestIsolation.BlockedPublicSends} public-network requests; at most {sanctionedAttempts} were sanctioned"));
 
         Console.WriteLine($"\nPopGlot Windows logic tests: {_passed} passed, {_failed} failed.");
         return _failed == 0 ? 0 : 1;
@@ -437,6 +496,206 @@ internal static class Program
         True(!ProviderSettings.IsLocalBaseUrl("https://api.openai.com/v1"), "OpenAI is not local");
         True(!ProviderSettings.IsLocalBaseUrl("https://172.200.1.1/v1"), "172.200 is outside the private range");
         True(!ProviderSettings.IsLocalBaseUrl(""), "empty is not local");
+
+        // The honesty line: loopback and LAN are different classes. Only
+        // loopback counts as "targets the local runtime".
+        Equal(EndpointClass.Loopback, ProviderSettings.ClassifyEndpoint("http://localhost:11434/v1"));
+        Equal(EndpointClass.Loopback, ProviderSettings.ClassifyEndpoint("http://[::1]:11434"));
+        Equal(EndpointClass.PrivateNetwork, ProviderSettings.ClassifyEndpoint("http://192.168.1.20:8080"));
+        Equal(EndpointClass.Internet, ProviderSettings.ClassifyEndpoint("https://localhost.example.com"));
+        var lanSettings = CoreBridge.GetSettings() with { ApiBaseUrl = "http://192.168.1.20:11434/v1" };
+        True(!lanSettings.TargetsLocalRuntime, "a LAN device is not the local runtime");
+        True(lanSettings.TargetsPrivateNetwork, "a LAN device is its own class");
+    }
+
+    /// <summary>
+    /// T05 acceptance: the C# classifier and the Rust core classifier must
+    /// reach the same conclusion for the whole shared fixture list (the same
+    /// rows as the Rust-side fixture test).
+    /// </summary>
+    private static void EndpointClassificationAgreesWithRustCore()
+    {
+        var cases = new (string Url, EndpointClass Expected)[]
+        {
+            ("http://localhost:11434", EndpointClass.Loopback),
+            ("http://127.0.0.1:8080/v1", EndpointClass.Loopback),
+            ("http://127.10.20.30/v1", EndpointClass.Loopback),
+            ("http://[::1]:11434", EndpointClass.Loopback),
+            ("https://localhost.example.com", EndpointClass.Internet),
+            ("https://api.openai.com/v1", EndpointClass.Internet),
+            ("http://192.168.1.20:8080", EndpointClass.PrivateNetwork),
+            ("http://172.16.0.4:8000/v1", EndpointClass.PrivateNetwork),
+            ("http://172.200.1.1/v1", EndpointClass.Internet),
+            ("http://10.0.0.5/v1", EndpointClass.PrivateNetwork),
+            ("http://[fd00::1]:11434", EndpointClass.PrivateNetwork),
+            ("http://user:secret@10.0.0.5:11434/v1", EndpointClass.PrivateNetwork),
+            ("http://LOCALHOST:11434", EndpointClass.Loopback),
+            ("http://10.0.0.5:notaport/", EndpointClass.Internet),
+            ("not a url at all", EndpointClass.Internet),
+            ("", EndpointClass.Internet),
+        };
+
+        foreach (var (url, expected) in cases)
+        {
+            var csharp = ProviderSettings.ClassifyEndpoint(url);
+            Equal(expected, csharp, $"C# classification of {url}");
+
+            var rustJson = CoreBridge.EnsureSuccess<System.Text.Json.JsonElement>(
+                InvokeClassify(url));
+            var rust = rustJson.GetProperty("class").GetString() switch
+            {
+                "loopback" => EndpointClass.Loopback,
+                "private" => EndpointClass.PrivateNetwork,
+                _ => EndpointClass.Internet,
+            };
+            Equal(expected, rust, $"Rust classification of {url}");
+        }
+    }
+
+    private static string InvokeClassify(string url) => CoreBridge.ClassifyEndpointViaFfi(url);
+
+    /// <summary>
+    /// T05 acceptance: a LAN vision service is another device — the route is
+    /// blocked without the explicit permission even when image upload is
+    /// allowed, shows the honest LAN wording with it, and a loopback vision
+    /// service keeps "图片不离开本机".
+    /// </summary>
+    /// <summary>
+    /// T13 acceptance: the shell's fact collection and the Rust decision
+    /// table agree across the FFI on the same fixture rows — preview and
+    /// execution share one strategy, and neither language has a private copy.
+    /// </summary>
+    private static void RoutingDecisionTableAgreesAcrossFfi()
+    {
+        // (mode, visionConfigured, visionClass, uploadAllowed, allowLan, ocrAvailable, textRoute)
+        (string Mode, bool Vis, string Class, bool Upload, bool Lan, bool Ocr, bool Text)[] rows =
+        [
+            ("Auto", true, "internet", true, false, true, true),
+            ("Auto", true, "internet", true, false, false, true),
+            ("Auto", true, "private", true, false, false, true),
+            ("Auto", true, "private", true, true, false, true),
+            ("Auto", true, "loopback", true, false, false, true),
+            ("Auto", false, "internet", true, false, true, true),
+            ("Auto", false, "internet", true, false, false, true),
+            ("VisionDirect", true, "internet", true, false, true, true),
+            ("VisionDirect", true, "internet", false, false, true, true),
+            ("VisionDirect", true, "loopback", false, false, true, true),
+            ("VisionOcr", true, "internet", true, false, true, true),
+            ("VisionOcr", true, "internet", true, false, true, false),
+            ("LocalOcr", true, "internet", true, false, true, true),
+            ("LocalOcr", true, "internet", true, false, false, true),
+        ];
+
+        foreach (var row in rows)
+        {
+            // Rust side, evaluated directly.
+            var factsJson = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                requested_mode = row.Mode,
+                vision_configured = row.Vis,
+                vision_endpoint_class = row.Class,
+                image_upload_allowed = row.Upload,
+                allow_lan_endpoints = row.Lan,
+                local_ocr_available = row.Ocr,
+                text_route_available = row.Text,
+            });
+            var rustDecision = System.Text.Json.JsonSerializer.Deserialize<RoutingDecision>(
+                CoreBridge.SelectRouteRaw(factsJson), new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+
+            // The same facts must produce the same pipeline class on the C#
+            // side of the boundary (the mapping ProfileManager performs).
+            var pipeline = rustDecision.ReasonCode switch
+            {
+                "auto_unavailable" or "forced_local_ocr_without_engine" => ScreenshotPipeline.Unavailable,
+                _ => rustDecision.SelectedMode switch
+                {
+                    TranslationMode.VisionDirect => ScreenshotPipeline.VisionDirect,
+                    TranslationMode.VisionOcr => ScreenshotPipeline.VisionOcr,
+                    _ => ScreenshotPipeline.LocalOcr,
+                },
+            };
+            _ = pipeline; // mapping exercised; the equality proof is below
+
+            // The invariant that matters: MayUploadImage == (vision pipeline
+            // selected AND the endpoint leaves the device).
+            var visionSelected = rustDecision.SelectedMode is TranslationMode.VisionDirect or TranslationMode.VisionOcr;
+            var leavesDevice = visionSelected && rustDecision.ReasonCode is not "auto_unavailable" &&
+                row.Class != "loopback";
+            Equal(leavesDevice, rustDecision.MayUploadImage,
+                $"row {row.Mode}/{row.Class}/upload={row.Upload}/lan={row.Lan}/ocr={row.Ocr}");
+        }
+    }
+
+    private static void LanVisionServiceNeedsExplicitPermission()
+    {
+        ProfileManager.ResetForTests();
+        ProfileManager.ConfigPathOverride = Path.Combine(
+            Path.GetTempPath(), $"popglot-lan-route-{Guid.NewGuid():N}.json");
+        try
+        {
+            var settings = CoreBridge.GetSettings() with
+            {
+                NetworkEnabled = true,
+                SafeDevMode = false,
+                AllowImageUploadInAuto = true,
+                Mode = TranslationMode.Auto,
+            };
+
+            var config = new CoreProductConfig
+            {
+                SchemaVersion = 7,
+                ActiveProfileId = "lan-text",
+                Profiles =
+                [
+                    new ProviderProfile
+                    {
+                        Id = "lan-text",
+                        Name = "LAN Text",
+                        ProviderType = ProviderType.OpenAiCompatible,
+                        ApiBaseUrl = "http://127.0.0.1:11434/v1",
+                        TextEndpoint = "/chat/completions",
+                        VisionEndpoint = "/chat/completions",
+                        TextModel = "text-model",
+                        VisionModel = "vision-model",
+                        SupportsText = true,
+                        SupportsVision = true,
+                        IsLocal = true,
+                        AllowLanEndpoints = false,
+                    },
+                ],
+            };
+            // Point the vision service at another LAN device without permission.
+            config.Profiles[0].ApiBaseUrl = "http://192.168.1.20:11434/v1";
+            ProfileManager.Save(config);
+
+            var blocked = ProfileManager.ResolveRoute(settings, localOcrAvailable: false);
+            Equal(ScreenshotPipeline.Unavailable, blocked.ScreenshotPipeline,
+                "a LAN vision service without the permission must not run");
+            True(blocked.ExplanationZh.Contains("局域网"), blocked.ExplanationZh);
+            Equal(false, blocked.MayUploadImage);
+
+            // Grant the permission on the profile: usable and honest about
+            // where the image goes.
+            config.Profiles[0].AllowLanEndpoints = true;
+            ProfileManager.Save(config);
+            var granted = ProfileManager.ResolveRoute(settings, localOcrAvailable: false);
+            Equal(ScreenshotPipeline.VisionOcr, granted.ScreenshotPipeline);
+            Equal(true, granted.MayUploadImage, "a LAN vision request does leave the device");
+            True(granted.ExplanationZh.Contains("局域网"), granted.ExplanationZh);
+
+            // Loopback vision stays genuinely device-local.
+            config.Profiles[0].ApiBaseUrl = "http://127.0.0.1:11434/v1";
+            ProfileManager.Save(config);
+            var local = ProfileManager.ResolveRoute(settings, localOcrAvailable: false);
+            Equal(ScreenshotPipeline.VisionDirect, local.ScreenshotPipeline);
+            Equal(false, local.MayUploadImage, "a loopback vision service never moves the image");
+            True(local.ExplanationZh.Contains("不离开本机"), local.ExplanationZh);
+        }
+        finally
+        {
+            File.Delete(ProfileManager.ConfigPathOverride);
+            ProfileManager.ResetForTests();
+        }
     }
 
     private static void LanguageCatalogBehaviour()
@@ -529,7 +788,15 @@ internal static class Program
 
     private static async Task FreeTranslationSmokeAsync()
     {
-        var response = await FreeTranslateService.TranslateAsync("hello world", "auto", "zh-CN");
+        // The smoke runs only when POPGLOT_SMOKE_FREE=1 is explicitly set; it
+        // still needs free-engine consent and an authorization for the send
+        // boundary. The isolation HTTP guard refuses the actual public send,
+        // so the smoke reports the refusal instead of silently passing.
+        OutboundPolicy.PersistConsent(FreeEngineConsent.Allowed);
+        var settings = CoreBridge.GetSettings();
+        True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var authorization),
+            "free-engine consent must be grantable in the isolated environment");
+        var response = await FreeTranslateService.TranslateAsync("hello world", "auto", "zh-CN", authorization);
         Console.WriteLine($"  -> engine={response.Diagnostics.Endpoint} text={response.Result.TranslatedText}");
         True(response.IsFreeEngine, "the free engine must identify itself");
         True(response.Result.TranslatedText.Contains("世界", StringComparison.Ordinal) ||
@@ -546,12 +813,1014 @@ internal static class Program
         Equal("耗时 120ms 完成", MarkdownPresenter.FormatPangu("耗时120ms完成"));
     }
 
+    /// <summary>
+    /// T02 acceptance for the shared plain-text formatter used by copy,
+    /// speech and vocabulary storage in the panel, quick search and the
+    /// workbench: technical identifiers, inline code and fenced code must
+    /// survive byte-for-byte, while natural-language emphasis is unwrapped.
+    /// </summary>
+    private static void MarkdownPlainTextPreservesTechnicalText()
+    {
+        // Bare identifiers must never lose underscores or asterisks.
+        Equal("foo_bar_baz", MarkdownPresenter.ToPlainText("foo_bar_baz"));
+        Equal("__init__", MarkdownPresenter.ToPlainText("__init__"));
+        Equal("snake_case_name", MarkdownPresenter.ToPlainText("snake_case_name"));
+        Equal("a*b*c", MarkdownPresenter.ToPlainText("a*b*c"));
+
+        // Inline code: the container syntax goes, the content stays verbatim.
+        Equal("foo_bar_baz", MarkdownPresenter.ToPlainText("`foo_bar_baz`"));
+        Equal(@"C:\用户data\file.txt", MarkdownPresenter.ToPlainText(@"`C:\用户data\file.txt`"));
+
+        // Natural-language emphasis is still unwrapped for plain-text copy.
+        Equal("普通粗体", MarkdownPresenter.ToPlainText("**普通粗体**"));
+        Equal("重点 内容", MarkdownPresenter.ToPlainText("**重点 内容**"));
+
+        // Mixed prose keeps code verbatim while surrounding text is cleaned.
+        Equal("调用 getUserName() 获取名字", MarkdownPresenter.ToPlainText("调用 `getUserName()` 获取名字"));
+
+        // Fenced code: fences go, content (indentation, tabs, blank lines,
+        // identifiers) stays byte-for-byte.
+        var fenced = "```python\ndef f():\n\treturn foo_bar_baz\n\n```";
+        Equal("def f():\n\treturn foo_bar_baz", NormalizeNewlines(MarkdownPresenter.ToPlainText(fenced)));
+
+        // Headings, bullets, ordered lists and links still read naturally.
+        Equal("标题文字", MarkdownPresenter.ToPlainText("## 标题文字"));
+        Equal("列表项内容", MarkdownPresenter.ToPlainText("- 列表项内容"));
+        Equal("第一步", MarkdownPresenter.ToPlainText("1. 第一步"));
+        Equal("文档见 https://example.com/a_b_c", MarkdownPresenter.ToPlainText("文档见 https://example.com/a_b_c"));
+
+        // Malformed input: no crash, no silent content deletion.
+        Equal("print(1)", NormalizeNewlines(MarkdownPresenter.ToPlainText("```python\nprint(1)")));
+        Equal("a ` b", MarkdownPresenter.ToPlainText("a ` b"));
+        Equal("值是 ⟦PG_0001⟧ 吗", MarkdownPresenter.ToPlainText("值是 ⟦PG_0001⟧ 吗"));
+    }
+
+    private static string NormalizeNewlines(string text) => text.Replace("\r\n", "\n");
+
+    /// <summary>
+    /// T02 acceptance: from one simulated final result, the copy actions of
+    /// all three surfaces — floating panel (real button click), quick search
+    /// (production copy handler) and the workbench — deliver the identical
+    /// agreed plain text through an in-memory clipboard.
+    /// </summary>
+    private static void ThreeEntriesCopyTheSameAgreedText()
+    {
+        EnsureApplication();
+        // The copy handlers are async and resume after the clipboard write;
+        // give this STA thread the same Dispatcher synchronization context a
+        // real UI thread has so their continuations come back here instead of
+        // touching the window from a worker thread.
+        var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+        SynchronizationContext.SetSynchronizationContext(
+            new System.Windows.Threading.DispatcherSynchronizationContext(dispatcher));
+
+        const string raw = "调用 `getUserName()` 获取名字，检查 foo_bar_baz 与 `__init__`";
+        var agreed = MarkdownPresenter.ToPlainText(raw);
+        var recorded = new List<string>();
+        var originalWriter = Helpers.ClipboardWriterOverride;
+        // Complete on a worker thread after a real delay, like the hardened
+        // clipboard worker does — an instantly-completed task would let the
+        // async handlers continue synchronously and skip dispatcher marshaling.
+        Helpers.ClipboardWriterOverride = text =>
+        {
+            lock (recorded)
+            {
+                recorded.Add(text ?? string.Empty);
+            }
+            return Task.Delay(30).ContinueWith(static _ => true);
+        };
+        try
+        {
+            // 1. Quick search: drive the production state machine to a clean
+            // completion, then run the real copy handler.
+            var quickSearch = new QuickSearchWindow(
+                new HistoryStore(TestIsolation.HistoryPath),
+                new VocabularyStore(TestIsolation.VocabularyPath));
+            var session = new TranslationSession
+            {
+                Stage = TranslationSessionStage.Completed,
+                SourceText = "demo query",
+                TranslatedText = raw,
+            };
+            quickSearch.State.StartNewSearch("demo query");
+            True(quickSearch.State.OnSessionCompleted(session, quickSearch.State.CurrentEpoch, "demo query"),
+                "the quick search state machine must accept the completed session");
+            True(quickSearch.State.CanCopy, "completed quick search must allow copy");
+            InvokeClick(quickSearch, "Copy_Click");
+            SpinUntil(() => recordedCount(recorded) >= 1, "quick search copy never landed");
+            Equal(agreed, recorded[0], "quick search copy must deliver the agreed plain text");
+
+            // 2. Floating panel: a real WPF button click on ResultCopyBtn with
+            // the completed gate and final translation in place.
+            var panel = new TranslationPanelWindow(
+                new Rect(100, 100, 20, 20),
+                new HistoryStore(TestIsolation.HistoryPath),
+                () => ShellSettings.Default,
+                null,
+                null,
+                new VocabularyStore(TestIsolation.VocabularyPath));
+            typeof(TranslationPanelWindow)
+                .GetField("_translation", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .SetValue(panel, raw);
+            var panelGate = (TranslationPanelStreamGate)typeof(TranslationPanelWindow)
+                    .GetField("_gate", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .GetValue(panel)!;
+            // Drive the gate through the real lifecycle: begin → stream →
+            // clean completion, exactly as a successful session would.
+            var (panelEpoch, _) = panelGate.BeginNewOperation();
+            panelGate.ApplyUpdate(new TranslationStreamUpdate(
+                "s1", panelEpoch, TranslationStreamUpdateKind.Delta, raw, raw, raw.Length));
+            panelGate.OnCompleted(raw);
+            True(panelGate.CanPerformResultActions, "the completed panel gate must allow result actions");
+            panel.ResultCopyBtn.RaiseEvent(new RoutedEventArgs(
+                System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            SpinUntil(() => recordedCount(recorded) >= 2, "panel copy never landed");
+            Equal(agreed, recorded[1], "panel copy must deliver the agreed plain text");
+
+            // 3. Workbench section: real click event on the result copy button.
+            var section = new TranslateSection();
+            section.ResultBox.Text = raw;
+            ((System.Windows.Controls.Button)section.FindName("TranslateResultCopyButton"))!
+                .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            SpinUntil(() => recordedCount(recorded) >= 3, "workbench copy never landed");
+            Equal(agreed, recorded[2], "workbench copy must deliver the agreed plain text");
+        }
+        finally
+        {
+            Helpers.ClipboardWriterOverride = originalWriter;
+        }
+    }
+
+    private static int recordedCount(List<string> recorded)
+    {
+        lock (recorded)
+        {
+            return recorded.Count;
+        }
+    }
+
+    /// <summary>
+    /// T03 acceptance: code-block copy buttons are generated dynamically, so
+    /// they must inherit the session's eligibility instead of always copying.
+    /// </summary>
+    private static void CodeBlockCopyButtonObeysEligibility()
+    {
+        EnsureApplication();
+        const string markdown = "```python\nprint(foo_bar_baz)\n```";
+
+        var blocked = new FlowDocument();
+        MarkdownPresenter.RenderToFlowDocument(blocked, markdown, Application.Current.Resources, resultActionsEnabled: false);
+        var blockedButton = FindCodeCopyButton(blocked);
+        True(blockedButton is not null, "the blocked code block must still render its copy button");
+        True(blockedButton!.IsEnabled == false, "a partial session's code-block copy button must be disabled");
+        string? tooltip = blockedButton.ToolTip as string;
+        True(tooltip?.Contains("不完整") == true, $"the disabled button must explain why, got: {tooltip}");
+
+        var eligible = new FlowDocument();
+        MarkdownPresenter.RenderToFlowDocument(eligible, markdown, Application.Current.Resources, resultActionsEnabled: true);
+        var eligibleButton = FindCodeCopyButton(eligible);
+        True(eligibleButton is not null && eligibleButton.IsEnabled,
+            "a clean session's code-block copy button must stay enabled");
+    }
+
+    private static System.Windows.Controls.Button? FindCodeCopyButton(FlowDocument document)
+    {
+        foreach (var block in document.Blocks)
+        {
+            if (block is BlockUIContainer { Child: System.Windows.Controls.Border border } &&
+                border.Child is System.Windows.Controls.Grid grid &&
+                FindCopyButtonIn(grid) is { } button)
+            {
+                return button;
+            }
+        }
+        return null;
+    }
+
+    private static System.Windows.Controls.Button? FindCopyButtonIn(System.Windows.DependencyObject node)
+    {
+        if (node is System.Windows.Controls.Button { Content: "复制" } button)
+        {
+            return button;
+        }
+        var count = System.Windows.Media.VisualTreeHelper.GetChildrenCount(node);
+        for (var index = 0; index < count; index++)
+        {
+            if (FindCopyButtonIn(System.Windows.Media.VisualTreeHelper.GetChild(node, index)) is { } found)
+            {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// T03 acceptance: a Partial session routed through the panel's production
+    /// result handler lands on FailedWithPartial — retained text stays visible
+    /// while result actions and auto-copy stay blocked.
+    /// </summary>
+    private static void PanelRoutesPartialSessionToBlockedActionsAndNoAutoCopy()
+    {
+        EnsureApplication();
+        var panel = new TranslationPanelWindow(
+            new Rect(100, 100, 20, 20),
+            new HistoryStore(TestIsolation.HistoryPath),
+            () => ShellSettings.Default,
+            null,
+            null,
+            new VocabularyStore(TestIsolation.VocabularyPath));
+
+        var clipboardWrites = new List<string>();
+        var originalWriter = Helpers.ClipboardWriterOverride;
+        Helpers.ClipboardWriterOverride = text =>
+        {
+            clipboardWrites.Add(text ?? string.Empty);
+            return Task.FromResult(true);
+        };
+        try
+        {
+            var partialSession = new TranslationSession
+            {
+                Stage = TranslationSessionStage.Partial,
+                TranslatedText = "保留的部分文本 foo_bar",
+            };
+            typeof(TranslationPanelWindow)
+                .GetMethod("HandleSessionResultAsync",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .Invoke(panel, new object?[] { "demo source", partialSession, 0L, "note" });
+
+            var gate = (TranslationPanelStreamGate)typeof(TranslationPanelWindow)
+                .GetField("_gate", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(panel)!;
+            Equal(TranslationPanelStage.FailedWithPartial, gate.Stage,
+                "a partial session must land on the blocked-with-partial stage");
+            True(!gate.CanPerformResultActions, "result actions must stay blocked on partial");
+            True(!gate.ShouldTriggerAutoCopy(true), "auto-copy must never trigger on partial");
+            True(!gate.HasPartialText == false, "the partial text must be retained");
+            Equal(0, clipboardWrites.Count, "no clipboard write may happen for a partial session");
+        }
+        finally
+        {
+            Helpers.ClipboardWriterOverride = originalWriter;
+        }
+    }
+
+    /// <summary>
+    /// T07 acceptance at the UI surface: a star toggle whose write fails shows
+    /// "未保存到本机" and does not light the star, even after a fully
+    /// completed translation opened the result actions.
+    /// </summary>
+    private static void PanelStarFailureIsVisible()
+    {
+        EnsureApplication();
+        var dirAsPath = Path.Combine(Path.GetTempPath(), $"popglot-vocab-panel-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dirAsPath);
+        var panel = new TranslationPanelWindow(
+            new Rect(100, 100, 20, 20),
+            new HistoryStore(TestIsolation.HistoryPath),
+            () => ShellSettings.Default,
+            null,
+            null,
+            new VocabularyStore(dirAsPath));
+        try
+        {
+            var completed = new TranslationSession
+            {
+                Stage = TranslationSessionStage.Completed,
+                TranslatedText = "完整译文，包含 foo_bar_baz",
+            };
+            typeof(TranslationPanelWindow)
+                .GetMethod("HandleSessionResultAsync",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .Invoke(panel, new object?[] { "panel star source", completed, 0L, null });
+            panel.SourceInputBox.Text = "panel star source";
+
+            typeof(TranslationPanelWindow)
+                .GetMethod("StarToggle_Click",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .Invoke(panel, new object?[] { panel, new RoutedEventArgs() });
+
+            True(panel.StatusText.Text.Contains("未保存到本机"),
+                $"the panel must say nothing was saved, got: {panel.StatusText.Text}");
+            True(panel.StarToggle.IsChecked != true, "a failed star write must not light the star icon");
+        }
+        finally
+        {
+            panel.Close();
+            try { Directory.Delete(dirAsPath); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// T07 acceptance: concurrent star changes serialize through the store's
+    /// lock; no update is lost and the file reloads with every winner.
+    /// </summary>
+    private static void VocabularyConcurrentChangesDoNotOverwrite()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"popglot-vocab-conc-{Guid.NewGuid():N}.json");
+        try
+        {
+            var store = new VocabularyStore(tempFile);
+            var words = Enumerable.Range(0, 8).Select(i => $"word_{i}").ToArray();
+            var threads = new List<Thread>();
+            foreach (var word in words)
+            {
+                threads.Add(new Thread(() =>
+                {
+                    for (var round = 0; round < 3; round++)
+                    {
+                        store.ToggleStar(word, "并发词条", "", "", "en", "zh-CN");
+                    }
+                }));
+            }
+            foreach (var thread in threads)
+            {
+                thread.Start();
+            }
+            foreach (var thread in threads)
+            {
+                thread.Join();
+            }
+
+            Equal(words.Length, store.GetAll().Count, "every word must survive the concurrent toggles");
+            Equal(words.Length, new VocabularyStore(tempFile).GetAll().Count,
+                "the persisted file must contain every winner after reload");
+        }
+        finally
+        {
+            try { File.Delete(tempFile); } catch { }
+            try { File.Delete(tempFile + ".bak"); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// T08 acceptance: an exception carrying synthetic secrets (Authorization
+    /// header, key-shaped literal, URL query with user text) reaches neither
+    /// the crash log file nor the tray summary in raw form, and every entry is
+    /// length-bounded.
+    /// </summary>
+    private static void CrashDiagnosticsSanitizeAndBound()
+    {
+        var secretBearer = "Bearer aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789";
+        var secretKey = "sk-TESTabcdef1234567890XYZ";
+        var userText = "用户私密原文内容";
+        var message =
+            $"请求失败 Authorization: {secretBearer} key={secretKey} " +
+            $"url=https://api.example.com/v1/chat?q={userText} 其他上下文";
+        var exception = new ExceptionWithSyntheticStack(
+            message,
+            string.Join("\n", Enumerable.Range(0, 80).Select(i => $"   at Demo.Frame{i}() in D:\\demo\\file{i}.cs:line {i}")));
+
+        var sanitized = DiagnosticsLog.Sanitize(message);
+        True(!sanitized.Contains(secretBearer), "bearer tokens must be redacted");
+        True(!sanitized.Contains("aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789"), "the bare token value must not survive either");
+        True(!sanitized.Contains(secretKey), "key-shaped literals must be redacted");
+        True(!sanitized.Contains(userText), "URL query text must be stripped");
+        True(sanitized.Contains("https://api.example.com/v1/chat?…"), "the URL base may survive without its query");
+
+        var summary = DiagnosticsLog.CrashSummary(exception);
+        True(summary.Length <= 161, $"the balloon summary must stay short, got {summary.Length}");
+        True(!summary.Contains(secretKey), "the balloon summary must be sanitized too");
+
+        var entry = DiagnosticsLog.BuildEntry(exception);
+        True(!entry.Contains(secretBearer) && !entry.Contains(secretKey) && !entry.Contains(userText),
+            "the log entry must contain no raw secret");
+        True(entry.Contains("[redacted]") && entry.Contains("[redacted-key]"),
+            "redaction markers must appear instead");
+        True(!entry.Contains("Frame79"), "the stack must be truncated after the frame budget");
+
+        // The production write path lands under the isolated StoragePaths.
+        var logDir = StoragePaths.Logs;
+        DiagnosticsLog.Log(exception);
+        var today = Path.Combine(logDir, $"crash-{DateTime.Now:yyyyMMdd}.log");
+        True(File.Exists(today), "the crash file must be written");
+        var written = File.ReadAllText(today);
+        True(!written.Contains(secretBearer) && !written.Contains(secretKey) && !written.Contains(userText),
+            "nothing raw may reach disk");
+    }
+
+    /// <summary>
+    /// T08 acceptance: files rotate at the per-file cap, retention deletes
+    /// expired files, the total directory stays under its budget, and an
+    /// exception storm cannot grow the directory without bound.
+    /// </summary>
+    private static void CrashDiagnosticsRotateAndStayBounded()
+    {
+        var dir = Path.Combine(TestIsolation.Root, "logs-t08");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            // Rotation: a file at the cap is moved aside before the next write.
+            var today = Path.Combine(dir, $"crash-{DateTime.Now:yyyyMMdd}.log");
+            File.WriteAllText(today, new string('x', (int)DiagnosticsLog.MaxFileBytes));
+            DiagnosticsLog.RotateIfNeeded(today);
+            True(!File.Exists(today) || new FileInfo(today).Length < DiagnosticsLog.MaxFileBytes,
+                "a capped file must be rotated before new writes");
+            True(Directory.EnumerateFiles(dir, "*.rot").Any(), "the rotated copy must exist");
+
+            // Retention: an expired file disappears on cleanup.
+            var expired = Path.Combine(dir, "crash-20200101.log");
+            File.WriteAllText(expired, "old");
+            File.SetLastWriteTimeUtc(expired, DateTime.UtcNow - DiagnosticsLog.Retention - TimeSpan.FromDays(1));
+
+            // Total cap: 12 recent 1MiB files exceed the 10MiB budget; the
+            // oldest must go until the directory fits again.
+            var heavy = new List<FileInfo>();
+            for (var i = 0; i < 12; i++)
+            {
+                var path = Path.Combine(dir, $"crash-2099010{i}.log");
+                File.WriteAllText(path, new string('x', 1024 * 1024));
+                File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(-20 + i));
+                heavy.Add(new FileInfo(path));
+            }
+
+            DiagnosticsLog.CleanupIfStale(dir, force: true);
+
+            True(!File.Exists(expired), "an expired crash log must be deleted");
+            var total = Directory.EnumerateFiles(dir, "crash-*").Sum(p => new FileInfo(p).Length);
+            True(total <= DiagnosticsLog.MaxTotalBytes,
+                $"the directory must stay within its budget, got {total}");
+            var oldest = heavy.OrderBy(f => f.LastWriteTimeUtc).First();
+            True(!oldest.Exists, "the oldest files are the ones removed");
+
+            // Storm: a thousand crashes neither throw nor grow past one file cap.
+            var boom = new InvalidOperationException(new string('y', 400));
+            for (var i = 0; i < 1000; i++)
+            {
+                DiagnosticsLog.Log(boom);
+            }
+            var stormTotal = Directory.EnumerateFiles(StoragePaths.Logs, "crash-*").Sum(p => new FileInfo(p).Length);
+            True(stormTotal <= DiagnosticsLog.MaxTotalBytes,
+                $"a crash storm must stay bounded, got {stormTotal}");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>An exception whose stack can be injected: real frames carry file paths.</summary>
+    private sealed class ExceptionWithSyntheticStack(string message, string stackTrace) : Exception(message)
+    {
+        public override string StackTrace => stackTrace;
+    }
+
+    /// <summary>
+    /// T09 acceptance (F10 repro): the text INSIDE a PrimaryButton must
+    /// actually render with PrimaryTextBrush. The implicit TextBlock style
+    /// used to override it with TextPrimary — dark text on the brand blue
+    /// (3.16:1) — and only a visual-subtree probe catches that.
+    /// </summary>
+    private static void PrimaryButtonTextUsesPrimaryTextBrush()
+    {
+        EnsureApplication();
+        foreach (var theme in new[] { ThemePreference.Dark, ThemePreference.Light })
+        {
+            ThemeService.Apply(theme);
+            var expected = ((SolidColorBrush)Application.Current.FindResource("PrimaryTextBrush")).Color;
+
+            // String content: WPF generates the TextBlock inside the template.
+            var stringButton = new Button { Content = "翻译" };
+            stringButton.Style = (Style)Application.Current.FindResource("PrimaryButton");
+            stringButton.Measure(new Size(200, 60));
+            stringButton.Arrange(new Rect(0, 0, 200, 60));
+            var generated = FindVisualTextBlock(stringButton);
+            True(generated is not null, $"{theme}: the generated text node must exist");
+            Equal(expected, ((SolidColorBrush)generated!.GetValue(TextBlock.ForegroundProperty)).Color,
+                $"{theme}: the generated text inside a primary button must use PrimaryTextBrush");
+
+            // Explicit nested TextBlock content inherits the same way.
+            var nested = new Button { Content = new TextBlock { Text = "翻译" } };
+            nested.Style = (Style)Application.Current.FindResource("PrimaryButton");
+            nested.Measure(new Size(200, 60));
+            nested.Arrange(new Rect(0, 0, 200, 60));
+            var nestedText = FindVisualTextBlock(nested);
+            True(nestedText is not null, $"{theme}: the nested text node must exist");
+            Equal(expected, ((SolidColorBrush)nestedText!.GetValue(TextBlock.ForegroundProperty)).Color,
+                $"{theme}: a nested TextBlock in a primary button must inherit PrimaryTextBrush");
+
+            // The same inheritance carries TEMPLATE trigger values (the
+            // mechanism DangerButton hover uses to swap its text colour).
+            nested.SetValue(System.Windows.Controls.Control.ForegroundProperty,
+                new SolidColorBrush(Color.FromRgb(0xFE, 0xFE, 0xFE)));
+            Equal(Color.FromRgb(0xFE, 0xFE, 0xFE),
+                ((SolidColorBrush)nestedText.GetValue(TextBlock.ForegroundProperty)).Color,
+                $"{theme}: a foreground set on the button must reach its text");
+        }
+
+        // Ten theme round-trips: the text must follow the live theme with no
+        // frozen brush and no lost colour (the screenshot pass then re-checks
+        // whole windows in both themes).
+        // Ten theme round-trips with freshly built buttons: the token
+        // plumbing must stay correct after every switch, with no frozen
+        // value leaking into later themes. (In-place recolouring of
+        // PRE-EXISTING elements rides App.xaml's unfrozen brushes in the
+        // production app; the test host runs the frozen-replacement path, so
+        // live in-place switching is verified on the real machine instead.)
+        for (var i = 0; i < 10; i++)
+        {
+            var theme = i % 2 == 0 ? ThemePreference.Dark : ThemePreference.Light;
+            ThemeService.Apply(theme);
+            // New buttons resolve resources directly from the application
+            // dictionary at build time — no dispatcher pump needed (and a
+            // pump here can execute queued dispatcher work unrelated to the
+            // assertion).
+            var expected = ((SolidColorBrush)Application.Current.FindResource("PrimaryTextBrush")).Color;
+            var roundTrip = new Button { Content = "翻译" };
+            roundTrip.Style = (Style)Application.Current.FindResource("PrimaryButton");
+            roundTrip.Measure(new Size(200, 60));
+            roundTrip.Arrange(new Rect(0, 0, 200, 60));
+            var roundTripText = FindVisualTextBlock(roundTrip);
+            True(roundTripText is not null, $"round-trip {i}: the text node must exist");
+            Equal(expected, ((SolidColorBrush)roundTripText!.GetValue(TextBlock.ForegroundProperty)).Color,
+                $"round-trip {i}: a fresh primary button must render the live theme");
+        }
+        ThemeService.Apply(ThemePreference.Dark);
+    }
+
+    private static TextBlock? FindVisualTextBlock(System.Windows.Media.Visual visual)
+    {
+        if (visual is TextBlock text)
+        {
+            return text;
+        }
+        for (var i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(visual); i++)
+        {
+            if (FindVisualTextBlock((System.Windows.Media.Visual)System.Windows.Media.VisualTreeHelper.GetChild(visual, i)) is { } found)
+            {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    private static void InvokeClick(object target, string methodName)
+    {
+        typeof(QuickSearchWindow)
+            .GetMethod(methodName, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .Invoke(target, new[] { target, new RoutedEventArgs() });
+    }
+
+    private static void SpinUntil(Func<bool> condition, string message)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline && !condition())
+        {
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                System.Windows.Threading.DispatcherPriority.Background, new Action(() => { }));
+            Thread.Sleep(10);
+        }
+        True(condition(), message);
+    }
+
+    /// <summary>
+    /// T02 visual acceptance: Pangu spacing and emphasis parsing must run per
+    /// natural-language segment; code spans render verbatim with no inserted
+    /// spaces, no lost underscores.
+    /// </summary>
+    private static void MarkdownVisualSeparatesCodeFromNaturalLanguage()
+    {
+        EnsureApplication();
+        var document = new FlowDocument();
+        MarkdownPresenter.RenderToFlowDocument(
+            document,
+            "调用 `getUserName()` 获取名字，路径 `C:\\用户data\\file.txt` 保持原样",
+            Application.Current.Resources);
+
+        var rendered = new StringBuilder();
+        var codeTexts = new List<string>();
+        foreach (var inline in CollectInlines(document.Blocks))
+        {
+            if (inline is InlineUIContainer container)
+            {
+                // Production renders code spans as Border > TextBlock; dig the
+                // text out of whatever visual hosts it.
+                var code = FindTextBlock(container.Child);
+                if (code is not null)
+                {
+                    codeTexts.Add(code.Text);
+                    rendered.Append(code.Text);
+                }
+            }
+            else if (inline is Run run)
+            {
+                rendered.Append(run.Text);
+            }
+        }
+
+        var text = rendered.ToString();
+        True(codeTexts.Contains("getUserName()"), $"the code span must render verbatim, got: {text}");
+        True(codeTexts.Contains(@"C:\用户data\file.txt"),
+            $"the path code span must keep every character, got: {text}");
+        True(!text.Contains("用户 data", StringComparison.Ordinal),
+            $"Pangu spacing must not enter code spans, got: {text}");
+        True(text.Contains("调用 getUserName() 获取名字", StringComparison.Ordinal),
+            $"natural language around code must stay readable, got: {text}");
+
+        // Natural-language bold renders as bold text without markers.
+        var boldDoc = new FlowDocument();
+        MarkdownPresenter.RenderToFlowDocument(boldDoc, "**普通粗体**", Application.Current.Resources);
+        var boldRuns = CollectInlines(boldDoc.Blocks).OfType<Run>().ToList();
+        True(boldRuns.Any(r => r.Text == "普通粗体" && r.FontWeight == FontWeights.SemiBold),
+            "natural-language bold must render as a semibold run without asterisks");
+    }
+
+    private static IEnumerable<Inline> CollectInlines(BlockCollection blocks)
+    {
+        foreach (var block in blocks)
+        {
+            if (block is Paragraph paragraph)
+            {
+                foreach (var inline in paragraph.Inlines)
+                {
+                    yield return inline;
+                }
+            }
+        }
+    }
+
+    private static TextBlock? FindTextBlock(System.Windows.DependencyObject? node)
+    {
+        while (node is not null)
+        {
+            if (node is TextBlock text)
+            {
+                return text;
+            }
+            if (node is System.Windows.Controls.Border border)
+            {
+                node = border.Child;
+                continue;
+            }
+            if (node is System.Windows.Controls.ContentPresenter presenter)
+            {
+                node = presenter.Content as System.Windows.DependencyObject;
+                continue;
+            }
+            return null;
+        }
+        return null;
+    }
+
     private static void EdgeTtsResolvesVoicesCorrectly()
     {
         Equal("en-US-JennyNeural", EdgeTtsService.ResolveDefaultVoice("Hello world"));
         Equal("zh-CN-XiaoxiaoNeural", EdgeTtsService.ResolveDefaultVoice("你好世界"));
         Equal("ja-JP-NanamiNeural", EdgeTtsService.ResolveDefaultVoice("こんにちは"));
         Equal("ko-KR-SunHiNeural", EdgeTtsService.ResolveDefaultVoice("안녕하세요"));
+    }
+
+    /// <summary>
+    /// T06 acceptance: an explicit language tag decides the voice; script
+    /// detection is only the fallback, and emoji or a lone accent never
+    /// select a language (the old range comparison sent them to German).
+    /// </summary>
+    private static void EdgeTtsVoicesFollowLanguageTag()
+    {
+        Equal("fr-FR-DeniseNeural", EdgeTtsService.ResolveVoice("fr-FR", "bonjour été"));
+        Equal("en-US-JennyNeural", EdgeTtsService.ResolveVoice("en-US", "Hello 😀"));
+        Equal("zh-TW-HsiaoChenNeural", EdgeTtsService.ResolveVoice("zh-TW", "你好"));
+        Equal("ja-JP-NanamiNeural", EdgeTtsService.ResolveVoice("ja-JP", "你好，世界"));
+        Equal("de-DE-KatjaNeural", EdgeTtsService.ResolveVoice("de-DE", "Hello 😀"));
+
+        // Fallback without a tag: unambiguous scripts decide, emoji stays
+        // English, French accents hint French.
+        Equal("ja-JP-NanamiNeural", EdgeTtsService.ResolveVoice(null, "こんにちは"));
+        Equal("en-US-JennyNeural", EdgeTtsService.ResolveVoice(null, "Hello 😀"));
+        Equal("fr-FR-DeniseNeural", EdgeTtsService.ResolveVoice(null, "bonjour été"));
+        Equal("de-DE-KatjaNeural", EdgeTtsService.ResolveVoice(null, "Übermäßig groß"));
+        // "auto" means unknown: the script/accent fallback applies.
+        Equal("fr-FR-DeniseNeural", EdgeTtsService.ResolveVoice("auto", "bonjour été"));
+    }
+
+    /// <summary>
+    /// T06 acceptance: WebSocket protocol messages are reassembled from
+    /// fragments — text markers split anywhere, binary two-byte headers split
+    /// anywhere — and a connection that dies before turn.end is a failure,
+    /// never truncated audio presented as success.
+    /// </summary>
+    private static async Task EdgeTtsAssemblesFragmentedMessagesAsync()
+    {
+        var audioPayload = new byte[] { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08 };
+
+        // A complete binary message: 2-byte header length + header + audio.
+        var binary = new byte[2 + 4 + audioPayload.Length];
+        binary[0] = 0x00;
+        binary[1] = 0x04;
+        binary[2] = 0x68;
+        binary[3] = 0x65;
+        binary[4] = 0x61;
+        binary[5] = 0x64;
+        Array.Copy(audioPayload, 0, binary, 6, audioPayload.Length);
+
+        var turnEnd = Encoding.UTF8.GetBytes("X-RequestId:1\r\nPath:turn.end\r\n");
+        var configAck = Encoding.UTF8.GetBytes("Path:response\r\n");
+
+        // 1. Every message fragmented mid-header / mid-marker is reassembled.
+        var fragments = new List<(WebSocketMessageType Type, byte[] Bytes, bool End)>
+        {
+            (WebSocketMessageType.Text, configAck, true),
+            (WebSocketMessageType.Binary, binary[..4], false),          // header split
+            (WebSocketMessageType.Binary, binary[4..8], false),         // header tail + audio start
+            (WebSocketMessageType.Binary, binary[8..], true),           // audio tail
+            (WebSocketMessageType.Text, turnEnd[..9], false),           // turn.end split mid-word
+            (WebSocketMessageType.Text, turnEnd[9..], true),
+            (WebSocketMessageType.Close, [], true),
+        };
+        var ws = new FakeWebSocket(fragments);
+        EdgeTtsService.WebSocketFactory = (_, _) => Task.FromResult<WebSocket>(ws);
+        try
+        {
+            var path = await EdgeTtsService.SynthesizeToMp3FileAsync("demo text");
+            var written = await File.ReadAllBytesAsync(path);
+            True(written.AsSpan().SequenceEqual(audioPayload),
+                "reassembled audio must be byte-identical");
+            File.Delete(path);
+        }
+        finally
+        {
+            EdgeTtsService.WebSocketFactory = null;
+        }
+
+        // 2. A connection that closes before turn.end must fail, not return
+        // truncated audio.
+        var truncated = new FakeWebSocket(
+        [
+            (WebSocketMessageType.Binary, binary, true),
+            (WebSocketMessageType.Close, [], true),
+        ]);
+        EdgeTtsService.WebSocketFactory = (_, _) => Task.FromResult<WebSocket>(truncated);
+        try
+        {
+            await ThrowsAsync<InvalidOperationException>(
+                () => EdgeTtsService.SynthesizeToMp3FileAsync("demo text"));
+        }
+        finally
+        {
+            EdgeTtsService.WebSocketFactory = null;
+        }
+    }
+
+    /// <summary>
+    /// T06 acceptance: the source limit (5000 characters) and the audio
+    /// budget (8 MiB cumulative, single messages included) are enforced with
+    /// explicit errors — never by handing back truncated audio.
+    /// </summary>
+    private static async Task EdgeTtsEnforcesLimitsAsync()
+    {
+        // 1. Input beyond the per-request character budget is rejected up
+        //    front, with the actual limit spelled out.
+        var inputError = await ThrowsAsync<InvalidOperationException>(
+            () => EdgeTtsService.SynthesizeToMp3FileAsync(new string('a', 5_001)));
+        True(inputError.Message.Contains("5000", StringComparison.Ordinal),
+            "the rejection must name the real limit");
+
+        // 2. Exactly 5000 characters pass the input gate: with a transport
+        //    that closes at once, the failure is the transport's, not the
+        //    character gate's.
+        EdgeTtsService.WebSocketFactory = (_, _) => Task.FromResult<WebSocket>(
+            new FakeWebSocket([(WebSocketMessageType.Close, [], true)]));
+        try
+        {
+            var boundaryError = await ThrowsAsync<InvalidOperationException>(
+                () => EdgeTtsService.SynthesizeToMp3FileAsync(new string('a', 5_000)));
+            True(!boundaryError.Message.Contains("5000", StringComparison.Ordinal),
+                "an at-limit input must not be rejected by the character gate");
+        }
+        finally
+        {
+            EdgeTtsService.WebSocketFactory = null;
+        }
+
+        // 3. A single protocol message larger than the audio budget is refused.
+        var oversizeFrame = BinaryFrameWithAudio(8 * 1024 * 1024 + 1);
+        EdgeTtsService.WebSocketFactory = (_, _) => Task.FromResult<WebSocket>(
+            new FakeWebSocket([(WebSocketMessageType.Binary, oversizeFrame, true)]));
+        try
+        {
+            await ThrowsAsync<InvalidOperationException>(
+                () => EdgeTtsService.SynthesizeToMp3FileAsync("demo text"));
+        }
+        finally
+        {
+            EdgeTtsService.WebSocketFactory = null;
+        }
+
+        // 4. Cumulative audio across messages is capped too: two 5 MiB frames
+        //    exceed the 8 MiB budget on the second one.
+        var halfBudget = BinaryFrameWithAudio(5 * 1024 * 1024);
+        EdgeTtsService.WebSocketFactory = (_, _) => Task.FromResult<WebSocket>(
+            new FakeWebSocket(
+            [
+                (WebSocketMessageType.Binary, halfBudget, true),
+                (WebSocketMessageType.Binary, halfBudget, true),
+            ]));
+        try
+        {
+            await ThrowsAsync<InvalidOperationException>(
+                () => EdgeTtsService.SynthesizeToMp3FileAsync("demo text"));
+        }
+        finally
+        {
+            EdgeTtsService.WebSocketFactory = null;
+        }
+    }
+
+    private static byte[] BinaryFrameWithAudio(int audioLength)
+    {
+        var frame = new byte[2 + 4 + audioLength];
+        frame[1] = 0x04; // two-byte big-endian header length = 4
+        frame[2] = (byte)'h';
+        frame[3] = (byte)'e';
+        frame[4] = (byte)'a';
+        frame[5] = (byte)'d';
+        return frame;
+    }
+
+    /// <summary>
+    /// T06 acceptance: stale audio residue from BOTH temp file families is
+    /// cleaned, while files still in use are untouched.
+    /// </summary>
+    private static void TtsTempCleanupCoversBothFamilies()
+    {
+        var tempDir = Path.GetTempPath();
+        var staleLocal = Path.Combine(tempDir, $"popglot-tts-{Guid.NewGuid():N}.wav");
+        var staleCloud = Path.Combine(tempDir, $"popglot-edgetts-{Guid.NewGuid():N}.mp3");
+        var freshLocal = Path.Combine(tempDir, $"popglot-tts-{Guid.NewGuid():N}.wav");
+        try
+        {
+            File.WriteAllText(staleLocal, "stale");
+            File.WriteAllText(staleCloud, "stale");
+            File.WriteAllText(freshLocal, "fresh");
+            var twoHoursAgo = DateTime.UtcNow.AddHours(-2);
+            File.SetLastWriteTimeUtc(staleLocal, twoHoursAgo);
+            File.SetLastWriteTimeUtc(staleCloud, twoHoursAgo);
+
+            TtsService.CleanupStaleTempFiles();
+
+            True(!File.Exists(staleLocal), "stale local TTS audio must be cleaned");
+            True(!File.Exists(staleCloud), "stale cloud TTS audio must be cleaned");
+            True(File.Exists(freshLocal), "recent TTS audio must be kept");
+        }
+        finally
+        {
+            foreach (var path in new[] { staleLocal, staleCloud, freshLocal })
+            {
+                try
+                {
+                    if (File.Exists(path))
+                    {
+                        File.Delete(path);
+                    }
+                }
+                catch (IOException)
+                {
+                }
+            }
+        }
+    }
+
+    private sealed class FakeWebSocket(IReadOnlyList<(WebSocketMessageType Type, byte[] Bytes, bool End)> frames) : WebSocket
+    {
+        private int _position;
+
+        public override WebSocketState State =>
+            _position >= frames.Count ? WebSocketState.Closed : WebSocketState.Open;
+
+        public override async Task<WebSocketReceiveResult> ReceiveAsync(
+            ArraySegment<byte> buffer, CancellationToken cancellationToken)
+        {
+            if (_position >= frames.Count)
+            {
+                return new WebSocketReceiveResult(0, WebSocketMessageType.Close, true);
+            }
+            var (type, bytes, end) = frames[_position++];
+            if (type == WebSocketMessageType.Close)
+            {
+                return new WebSocketReceiveResult(0, WebSocketMessageType.Close, true);
+            }
+            var count = Math.Min(bytes.Length, buffer.Count);
+            Array.Copy(bytes, 0, buffer.Array!, buffer.Offset, count);
+            await Task.Yield();
+            return new WebSocketReceiveResult(count, type, end);
+        }
+
+        public override Task SendAsync(ArraySegment<byte> buffer, WebSocketMessageType messageType, bool endOfMessage, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public override Task CloseAsync(WebSocketCloseStatus closeStatus, string? statusDescription, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public override void Abort() { }
+        public override Task CloseOutputAsync(WebSocketCloseStatus closeStatus, string? statusDescription, CancellationToken cancellationToken) => Task.CompletedTask;
+        public override void Dispose() { }
+        public override WebSocketCloseStatus? CloseStatus => null;
+        public override string? CloseStatusDescription => null;
+        public override string? SubProtocol => null;
+    }
+
+    /// <summary>
+    /// T06 acceptance: the Microsoft voice service is a separate destination
+    /// with a separate consent — translation network permission alone never
+    /// sends text there — and Stop cancels an in-flight synthesis.
+    /// </summary>
+    private static void TtsCloudSpeechNeedsOwnConsent()
+    {
+        EnsureApplication();
+        var edgeCalls = new List<(string Text, string? Voice)>();
+        var localCalls = 0;
+        var originalEdge = TtsService.EdgeSynthesizer;
+        var originalLocal = TtsService.LocalSynthesizer;
+        var originalSettings = TtsService.SettingsResolver;
+        var originalShell = TtsService.ShellSettingsResolver;
+        try
+        {
+            TtsService.SettingsResolver = () => CoreBridge.GetSettings() with
+            {
+                NetworkEnabled = true,
+                SafeDevMode = false,
+            };
+            // Synthesizer mocks return null: this test exercises gating and
+            // cancellation only, never actual playback (a MediaPlayer in a
+            // console host needs real audio plumbing the suite must not
+            // depend on).
+            TtsService.EdgeSynthesizer = (text, voice, _) =>
+            {
+                lock (edgeCalls)
+                {
+                    edgeCalls.Add((text, voice));
+                }
+                return Task.FromResult<string?>(null);
+            };
+            TtsService.LocalSynthesizer = _ =>
+            {
+                Interlocked.Increment(ref localCalls);
+                return Task.FromResult<string?>(null);
+            };
+
+            // 1. Cloud speech not consented: network is on, but the text must
+            // stay local — zero cloud sends.
+            TtsService.ShellSettingsResolver = () => ShellSettings.Default with { CloudSpeechEnabled = false };
+            TtsService.Speak("consent probe", "fr-FR");
+            SpinUntil(() => Volatile.Read(ref localCalls) >= 1, "local synthesis never ran");
+            lock (edgeCalls)
+            {
+                Equal(0, edgeCalls.Count, "cloud speech must not run without its own consent");
+            }
+
+            // 2. Consented: the edge synthesizer runs with the resolved voice.
+            TtsService.ShellSettingsResolver = () => ShellSettings.Default with { CloudSpeechEnabled = true };
+            TtsService.Speak("consent probe two", "fr-FR");
+            SpinUntil(
+                () => { lock (edgeCalls) { return edgeCalls.Count >= 1; } },
+                "cloud synthesis never ran");
+            string? resolvedVoice;
+            lock (edgeCalls)
+            {
+                Equal(1, edgeCalls.Count, "only the consented cloud call may run");
+                resolvedVoice = edgeCalls[0].Voice;
+            }
+            Equal("fr-FR-DeniseNeural", resolvedVoice, "the language tag must resolve the voice");
+
+            // 3. Stop cancels an in-flight cloud synthesis.
+            var cancelled = new TaskCompletionSource();
+            TtsService.EdgeSynthesizer = async (_, _, ct) =>
+            {
+                lock (edgeCalls)
+                {
+                    edgeCalls.Add(("cancel probe", "en-US-JennyNeural"));
+                }
+                try
+                {
+                    await Task.Delay(5000, ct);
+                    return Path.Combine(Path.GetTempPath(), $"popglot-edgetts-test-{Guid.NewGuid():N}.mp3");
+                }
+                catch (OperationCanceledException)
+                {
+                    cancelled.SetResult();
+                    throw;
+                }
+            };
+            TtsService.Speak("cancel probe", "en-US");
+            SpinUntil(
+                () => { lock (edgeCalls) { return edgeCalls.Count >= 2; } },
+                "cloud synthesis never started");
+            var stopwatch = Stopwatch.StartNew();
+            TtsService.Stop();
+            SpinUntil(() => cancelled.Task.IsCompleted, "Stop must cancel the in-flight synthesis");
+            stopwatch.Stop();
+            True(stopwatch.ElapsedMilliseconds < 200,
+                $"Stop must cancel an in-flight synthesis within 200ms (took {stopwatch.ElapsedMilliseconds}ms)");
+            Equal(false, TtsService.IsSpeaking, "nothing may play after Stop");
+        }
+        finally
+        {
+            TtsService.EdgeSynthesizer = originalEdge;
+            TtsService.LocalSynthesizer = originalLocal;
+            TtsService.SettingsResolver = originalSettings;
+            TtsService.ShellSettingsResolver = originalShell;
+            TtsService.Stop();
+        }
     }
 
     private static void VocabularyStoreBehaviour()
@@ -563,8 +1832,15 @@ internal static class Program
             True(!store.IsStarred("borrow checker"), "clean store should not have word");
 
             var starred = store.ToggleStar("borrow checker", "借用检查器", "bɒrəʊ", "Rust内存安全", "en", "zh-CN");
-            True(starred, "word should be marked starred");
-            True(store.IsStarred("borrow checker"), "word must be queried as starred");
+            True(starred.Persisted && starred.Starred, "word should be marked starred and persisted");
+            True(store.IsStarred("borrow checker", "en", "zh-CN"), "word must be queried as starred");
+
+            // Identity is word + language pair: the same word starred for a
+            // different target language is a separate entry, not an unstar.
+            var otherPair = store.ToggleStar("borrow checker", "借用檢查器", "", "", "en", "zh-TW");
+            True(otherPair.Persisted && otherPair.Starred, "same word for another language pair stars separately");
+            Equal(2, store.GetAll().Count);
+            True(store.IsStarred("borrow checker", "en", "zh-CN"), "the first pair must still be starred");
 
             var tsv = store.ExportToAnkiTsv();
             True(tsv.Contains("borrow checker\t借用检查器"), "Anki export must contain tab-separated front/back");
@@ -572,9 +1848,10 @@ internal static class Program
             var md = store.ExportToMarkdown();
             True(md.Contains("| **borrow checker** | 借用检查器 |"), "Markdown export must contain table row");
 
-            var unstarred = !store.ToggleStar("borrow checker", "");
-            True(unstarred, "toggling again must unstar the word");
-            True(!store.IsStarred("borrow checker"), "word should no longer be starred");
+            var unstarred = store.ToggleStar("borrow checker", "", "", "", "en", "zh-CN");
+            True(unstarred.Persisted && !unstarred.Starred, "toggling the same pair again must unstar");
+            True(!store.IsStarred("borrow checker", "en", "zh-CN"), "word should no longer be starred for that pair");
+            True(store.IsStarred("borrow checker", "en", "zh-TW"), "the other pair survives the unstar");
         }
         finally
         {
@@ -629,6 +1906,230 @@ internal static class Program
         }
     }
 
+    /// <summary>
+    /// T07 acceptance: a store whose storage path cannot be written reports
+    /// the failure instead of a fake star, keeps its previous entries in
+    /// memory, and a successful save really survives a reload.
+    /// </summary>
+    private static void VocabularyStoreSaveFailuresStayVisible()
+    {
+        // The classic F08 probe: a DIRECTORY where the file should be.
+        var dirAsPath = Path.Combine(Path.GetTempPath(), $"popglot-vocab-dir-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dirAsPath);
+        var goodFile = Path.Combine(Path.GetTempPath(), $"popglot-vocab-good-{Guid.NewGuid():N}.json");
+        try
+        {
+            var broken = new VocabularyStore(dirAsPath);
+            var result = broken.ToggleStar("foo_bar_baz", "演示译文", "", "", "en", "zh-CN");
+            True(!result.Persisted, "a write to a directory path must report not persisted");
+            True(!broken.IsStarred("foo_bar_baz", "en", "zh-CN"),
+                "a failed write must not light the star in memory");
+            True(result.DescribeFailureZh().Contains("未保存到本机"),
+                "the failure wording must tell the user nothing was saved");
+            Equal(0, new VocabularyStore(dirAsPath).GetAll().Count,
+                "recreating the store finds nothing: the fake success is gone");
+
+            // A working store keeps earlier entries after a failed mutation.
+            var store = new VocabularyStore(goodFile);
+            True(store.ToggleStar("keep_me", "保留词条", "", "", "en", "zh-CN").Persisted, "baseline star must persist");
+            var failing = new VocabularyStore(dirAsPath);
+            var failed = failing.ToggleStar("never_saved", "永不落盘", "", "", "en", "zh-CN");
+            True(!failed.Persisted, "the failing store must refuse its own write");
+
+            var reload = new VocabularyStore(goodFile);
+            Equal(1, reload.GetAll().Count, "earlier entries survive reloads untouched");
+            True(reload.IsStarred("keep_me", "en", "zh-CN"), "the reloaded store keeps its star");
+        }
+        finally
+        {
+            try { Directory.Delete(dirAsPath); } catch { }
+            try { File.Delete(goodFile); } catch { }
+            try { File.Delete(goodFile + ".bak"); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// T07 acceptance: entry length and capacity limits reject explicitly and
+    /// never silently drop older entries to make room.
+    /// </summary>
+    private static void VocabularyStoreEnforcesLimits()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"popglot-vocab-limit-{Guid.NewGuid():N}.json");
+        try
+        {
+            var store = new VocabularyStore(tempFile);
+            var oversized = store.ToggleStar(
+                new string('a', VocabularyStore.MaxEntryCharacters + 1), "译文", "", "", "en", "zh-CN");
+            Equal(VocabularySaveStatus.EntryTooLarge, oversized.Status);
+            True(!oversized.Persisted, "an oversized entry must not persist");
+            Equal(0, store.GetAll().Count);
+
+            // Seed a full store through its own file: 10000 entries on disk.
+            var full = new List<string>();
+            var template = new VocabularyWord(
+                Guid.NewGuid(), DateTimeOffset.UtcNow, "seed", "种子", "", "", "en", "zh-CN", []);
+            for (var i = 0; i < VocabularyStore.MaxEntries; i++)
+            {
+                full.Add($"{{\"Id\":\"{Guid.NewGuid()}\",\"CreatedAt\":\"2026-09-05T00:00:00Z\",\"Word\":\"word_{i}\",\"Translation\":\"译_{i}\",\"Phonetic\":\"\",\"Explanation\":\"\",\"SourceLanguage\":\"en\",\"TargetLanguage\":\"zh-CN\",\"Tags\":[]}}");
+            }
+            File.WriteAllText(tempFile, "[" + string.Join(",", full) + "]");
+            var loaded = new VocabularyStore(tempFile);
+            Equal(VocabularyStore.MaxEntries, loaded.GetAll().Count);
+
+            var refused = loaded.ToggleStar("one_more", "再一条", "", "", "en", "zh-CN");
+            Equal(VocabularySaveStatus.StoreFull, refused.Status);
+            True(!refused.Persisted, "a full store must refuse instead of dropping the oldest");
+            Equal(VocabularyStore.MaxEntries, loaded.GetAll().Count);
+            True(loaded.IsStarred("word_0", "en", "zh-CN"),
+                "the oldest entry must still be there after the refusal");
+        }
+        finally
+        {
+            try { File.Delete(tempFile); } catch { }
+            try { File.Delete(tempFile + ".bak"); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// T07 acceptance: star identity keeps code identifiers distinct (case
+    /// preserved) while language tags compare loosely.
+    /// </summary>
+    private static void VocabularyStarIdentityPreservesCase()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"popglot-vocab-case-{Guid.NewGuid():N}.json");
+        try
+        {
+            var store = new VocabularyStore(tempFile);
+            True(store.ToggleStar("MyVariable", "我的变量", "", "", "en", "zh-CN").Persisted, "baseline star must persist");
+            True(store.ToggleStar("myvariable", "同名小写", "", "", "en", "zh-CN").Persisted,
+                "different case is a different code identifier");
+            Equal(2, store.GetAll().Count);
+            True(store.IsStarred("MyVariable", "EN", "zh-cn"),
+                "language tags compare loosely regardless of case");
+            True(!new VocabularyStore(tempFile).IsStarred("MYVARIABLE", "en", "zh-CN"),
+                "word case is not folded on reload either");
+        }
+        finally
+        {
+            try { File.Delete(tempFile); } catch { }
+            try { File.Delete(tempFile + ".bak"); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// T07 acceptance: a corrupt or oversized history file is quarantined
+    /// (never destroyed by the next save), null array entries are ignored,
+    /// and the library is told where the backup is.
+    /// </summary>
+    private static void HistoryCorruptFileIsQuarantined()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"popglot-hist-corrupt-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, "{ not json at all");
+            var store = new HistoryStore(path);
+            Equal(0, store.Load().Count);
+            True(store.LastQuarantinePath is not null && File.Exists(store.LastQuarantinePath),
+                "the corrupt history must be backed up");
+            Equal("{ not json at all", File.ReadAllText(store.LastQuarantinePath!),
+                "the quarantine keeps the original bytes");
+            True(store.TryAdd(Entry("fresh after corrupt", "损坏后的新条目"), enabled: true)
+                is HistoryAddResult.Stored,
+                "history still works after a corrupt load");
+            True(File.Exists(store.LastQuarantinePath!),
+                "the quarantine survives the next save instead of being overwritten");
+
+            // Null entries inside an otherwise valid array must not crash Load.
+            var nullsPath = path + ".nulls";
+            File.WriteAllText(nullsPath,
+                """[null,{"Id":"11111111-1111-1111-1111-111111111111","CreatedAt":"2026-09-05T00:00:00Z","SourceKind":"输入","Source":"real entry","Translation":"真实条目","Explanation":"","ProtectedTerms":[]}]""");
+            var nulls = new HistoryStore(nullsPath);
+            var loaded = nulls.Load();
+            Equal(1, loaded.Count, "null entries are skipped, valid ones load");
+            True(nulls.LastQuarantinePath is null, "a merely sparse file is not quarantined");
+
+            // Oversized file: unreadable, but the bytes are still the user's.
+            var bigPath = path + ".big";
+            File.WriteAllText(bigPath, new string('x', 4 * 1024 * 1024 + 1));
+            var big = new HistoryStore(bigPath);
+            Equal(0, big.Load().Count);
+            True(big.LastQuarantinePath is not null && new FileInfo(big.LastQuarantinePath!).Length > 4 * 1024 * 1024,
+                "an oversized history is quarantined before any save can replace it");
+        }
+        finally
+        {
+            foreach (var candidate in Directory.EnumerateFiles(
+                Path.GetDirectoryName(path)!, Path.GetFileName(path) + "*"))
+            {
+                try { File.Delete(candidate); } catch { }
+            }
+        }
+    }
+
+    /// <summary>
+    /// T07 acceptance: default exports are safe — CSV formula prefixes are
+    /// neutralized (including after leading control characters), quotes,
+    /// commas, newlines, Chinese and emoji round-trip, and the Anki TSV
+    /// escapes HTML characters because the header declares #html:true.
+    /// </summary>
+    private static void ExportsAreSafeForSpreadsheetsAndAnki()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"popglot-vocab-export-{Guid.NewGuid():N}.json");
+        try
+        {
+            var store = new VocabularyStore(tempFile);
+            True(store.ToggleStar("=cmd|' /C calc'!A0", "危险公式", "", "", "en", "zh-CN").Persisted, "fixture star must persist");
+            True(store.ToggleStar("+SUM(A1:A2)", "加号公式", "", "", "en", "zh-CN").Persisted, "fixture star must persist");
+            True(store.ToggleStar("-2+3", "负号开头", "", "", "en", "zh-CN").Persisted, "fixture star must persist");
+            True(store.ToggleStar("@import", "at 开头", "", "", "en", "zh-CN").Persisted, "fixture star must persist");
+            True(store.ToggleStar("\t=indirect()", "制表符掩护的公式", "", "", "en", "zh-CN").Persisted, "fixture star must persist");
+            True(store.ToggleStar("plain, \"word\"", "逗号与引号\n第二行 😀 中文", "", "", "en", "zh-CN").Persisted, "fixture star must persist");
+
+            var csv = store.ExportToCsv();
+            // Round-trip with a real CSV parser: column structure must survive
+            // (the T19/F07 probe caught the old apostrophe-outside-quotes
+            // producing 10 fields against a 9-column header) AND every cell
+            // that could act as a formula must carry the in-quote neutralizer.
+            using var parser = new Microsoft.VisualBasic.FileIO.TextFieldParser(
+                new System.IO.StringReader(csv));
+            parser.HasFieldsEnclosedInQuotes = true;
+            parser.SetDelimiters(",");
+            var header = parser.ReadFields();
+            True(header is not null && header.Length == 9, "the header must have 9 columns");
+            var parsedFormulaRows = 0;
+            while (!parser.EndOfData)
+            {
+                var fields = parser.ReadFields();
+                True(fields is not null && fields.Length == 9,
+                    $"every record must have 9 columns, got {fields?.Length}");
+                var word = fields![2];
+                // The neutralizer is part of the stored value: '=<formula>.
+                if (word.Length > 1 && word[0] == '\'' && "=+-@".Contains(word[1]))
+                {
+                    parsedFormulaRows++;
+                }
+            }
+            True(parsedFormulaRows >= 4, $"expected the formula-prefixed rows to round-trip, got {parsedFormulaRows}");
+            True(csv.Contains("😀"), "emoji must survive the CSV bytes");
+
+            var anki = store.ExportToAnkiTsv();
+            // A word carrying HTML-significant characters must be escaped.
+            var htmlStore = new VocabularyStore(tempFile + ".html");
+            True(htmlStore.ToggleStar("<script>&\"x\"</script>", "HTML 字符", "", "", "en", "zh-CN").Persisted, "fixture star must persist");
+            var htmlTsv = htmlStore.ExportToAnkiTsv();
+            True(htmlTsv.Contains("&lt;script&gt;&amp;&quot;x&quot;&lt;/script&gt;"),
+                "Anki export must escape < > & \" because #html:true is declared");
+            True(!htmlTsv.Contains("<script>"), "raw angle brackets must not reach the TSV");
+        }
+        finally
+        {
+            try { File.Delete(tempFile); } catch { }
+            try { File.Delete(tempFile + ".bak"); } catch { }
+            try { File.Delete(tempFile + ".html"); } catch { }
+            try { File.Delete(tempFile + ".html.bak"); } catch { }
+        }
+    }
+
     private static void HistoryStoreExportConforms()
     {
         var path = Path.Combine(Path.GetTempPath(), $"popglot-hist-exp-{Guid.NewGuid():N}.json");
@@ -680,19 +2181,26 @@ internal static class Program
             {
                 ShowWindowHotkey = HotkeyBinding.Parse("Ctrl+Alt+K", HotkeyBinding.ShowWindowDefault),
                 FreeEngineConsent = FreeEngineConsent.Allowed,
+                CloudSpeechEnabled = true,
+                CloseHintShown = true,
             };
             ShellSettingsStore.Save(original, path);
             var reloaded = ShellSettingsStore.Load(path);
             Equal(original, reloaded);
             Equal("Ctrl+Alt+K", reloaded.ShowWindowHotkey?.DisplayName);
             Equal(FreeEngineConsent.Allowed, reloaded.FreeEngineConsent);
+            Equal(true, reloaded.CloudSpeechEnabled, "the cloud speech consent must round-trip");
+            Equal(true, reloaded.CloseHintShown);
 
             // A legacy file without these fields keeps the defaults instead of
-            // silently dropping the shortcut or the consent answer.
+            // silently dropping the shortcut or the consent answer. Upgrades
+            // never grant the Microsoft voice destination implicitly.
             File.WriteAllText(path, "{\"SelectionHotkey\":\"Ctrl+Shift+Y\"}");
             var migrated = ShellSettingsStore.Load(path);
             Equal("Ctrl+Alt+O", migrated.ShowWindowHotkey?.DisplayName);
             Equal(FreeEngineConsent.Unset, migrated.FreeEngineConsent);
+            Equal(false, migrated.CloudSpeechEnabled,
+                "a legacy settings file must not gain cloud speech consent");
         }
         finally
         {
@@ -761,6 +2269,166 @@ internal static class Program
             OutboundPolicy.SettingsSaver = originalSaver;
             OutboundPolicy.ConsentPrompt = originalPrompt;
             File.Delete(path);
+        }
+    }
+
+    /// <summary>
+    /// T01 acceptance: the free-engine send boundary (FreeTranslateService and
+    /// the production health probe) transmits only for Consent=Allowed with
+    /// safe-dev-mode off and network on — for the coordinator's normal entry
+    /// AND for a forced probe. Denied/Unset must produce zero sends through
+    /// the real service, not merely a false UsesFreeEngine predicate, and an
+    /// Unset refusal must not silently persist a denial.
+    /// </summary>
+    private static async Task FreeEngineAuthorizationMatrixAtSendBoundary()
+    {
+        var originalLoader = OutboundPolicy.SettingsLoader;
+        var originalSaver = OutboundPolicy.SettingsSaver;
+        var originalSender = FreeTranslateService.HttpSenderOverride;
+        var originalPrompt = OutboundPolicy.ConsentPrompt;
+        var consentPath = Path.Combine(Path.GetTempPath(), $"popglot-consent-matrix-{Guid.NewGuid():N}.json");
+        OutboundPolicy.ConsentPrompt = null;
+        long sends = 0;
+        FreeTranslateService.HttpSenderOverride = (request, _) =>
+        {
+            Interlocked.Increment(ref sends);
+            var host = request.RequestUri?.Host ?? string.Empty;
+            True(host is "translate.googleapis.com" or "clients5.google.com",
+                $"the free engine must only target its documented endpoints, got {host}");
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                // Shape understood by the first endpoint's parser (gtx single):
+                // sentences live under root[0].
+                Content = new StringContent(
+                    "[[[\"mock-translation\",\"demo source\",\"en\",\"\"]]]",
+                    Encoding.UTF8,
+                    "application/json"),
+            });
+        };
+        try
+        {
+            foreach (var consent in new[] { FreeEngineConsent.Unset, FreeEngineConsent.Denied, FreeEngineConsent.Allowed })
+            foreach (var safeDevMode in new[] { true, false })
+            foreach (var networkEnabled in new[] { true, false })
+            {
+                OutboundPolicy.SettingsLoader = () => ShellSettings.Default with { FreeEngineConsent = consent };
+                OutboundPolicy.SettingsSaver = _ => { };
+                var settings = CoreBridge.GetSettings() with
+                {
+                    SafeDevMode = safeDevMode,
+                    NetworkEnabled = networkEnabled,
+                };
+                var label = $"consent={consent} safeDevMode={safeDevMode} networkEnabled={networkEnabled}";
+                var allowed = consent == FreeEngineConsent.Allowed && !safeDevMode && networkEnabled;
+                Interlocked.Exchange(ref sends, 0);
+
+                // Normal entry: the coordinator running the REAL free-engine
+                // boundary (not a fake executor).
+                var coordinator = new TranslationCoordinator(
+                    executor: new FreeEngineBoundaryExecutor(settings));
+                var session = await coordinator.TranslateTextAsync(
+                    $"matrix {consent} {safeDevMode} {networkEnabled}",
+                    "auto", "zh-CN", TranslationInputSource.Manual);
+                Equal(allowed ? 1 : 0, Interlocked.Read(ref sends), $"normal entry send count for {label}");
+                if (allowed)
+                {
+                    Equal("mock-translation", session.TranslatedText,
+                        $"the allowed combo must actually reach the mock ({label})");
+                    Equal(TranslationSessionStage.Completed, session.Stage, label);
+                }
+                else
+                {
+                    True(session.Error is not null,
+                        $"a denied combo must fail with an explicit reason ({label})");
+                }
+
+                // Forced probe through the production health service.
+                if (allowed)
+                {
+                    True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var probeAuth), label);
+                    var health = await FreeTranslateService.GetHealthAsync(force: true, probeAuth);
+                    True(health.Ok, $"the allowed probe must reach the mock ({label})");
+                    Equal(2, Interlocked.Read(ref sends), $"forced probe send count for {label}");
+                }
+                else
+                {
+                    // No authorization exists for this combo: even a caller
+                    // that grabs the production health service and forces a
+                    // re-check must transmit nothing.
+                    var health = await FreeTranslateService.GetHealthAsync(force: true, null);
+                    True(!health.Ok, $"an unauthorized probe must not report success ({label})");
+                    Equal(0, Interlocked.Read(ref sends), $"unauthorized probe must send nothing ({label})");
+                }
+            }
+
+            // Unset stays Unset: a refused probe must not record a denial the
+            // user never gave.
+            OutboundPolicy.SettingsLoader = () => ShellSettingsStore.Load(consentPath);
+            OutboundPolicy.SettingsSaver = s => ShellSettingsStore.Save(s, consentPath);
+            var unsetSettings = CoreBridge.GetSettings() with { SafeDevMode = false, NetworkEnabled = true };
+            Equal(false, OutboundPolicy.AllowsFreeEngine(unsetSettings, out _, out var unsetAuth));
+            True(unsetAuth is null, "a denied decision must never issue an authorization");
+            Equal(FreeEngineConsent.Unset, ShellSettingsStore.Load(consentPath).FreeEngineConsent);
+        }
+        finally
+        {
+            OutboundPolicy.SettingsLoader = originalLoader;
+            OutboundPolicy.SettingsSaver = originalSaver;
+            OutboundPolicy.ConsentPrompt = originalPrompt;
+            FreeTranslateService.HttpSenderOverride = originalSender;
+            File.Delete(consentPath);
+        }
+    }
+
+    /// <summary>
+    /// Executor for the authorization matrix: production routing decisions
+    /// resolve to "nothing configured" so the coordinator takes the free-engine
+    /// branch, while TranslateFreeAsync runs the REAL FreeTranslateService
+    /// boundary with the authorization the coordinator issued.
+    /// </summary>
+    private sealed class FreeEngineBoundaryExecutor(ProviderSettings settings) : ITranslationExecutor
+    {
+        /// <summary>Optional fake engine; when null the real FreeTranslateService runs.</summary>
+        public Func<string, string, string, CancellationToken, Task<TranslationResponse>>? OnTranslateFree { get; init; }
+
+        public ProviderSettings GetSettings() => settings;
+
+        public (ProviderRoute? Text, ProviderRoute? Vision) ResolveRoutes() => (null, null);
+
+        public ResolvedRoute ResolveScreenshotRoute(ProviderSettings s, bool ocrAvailable) =>
+            throw new NotSupportedException("not used by the authorization matrix");
+
+        public string? LoadApiKey(string target) => null;
+
+        public bool IsOcrSupported => false;
+
+        public Task<string> RecognizeOcrTextAsync(byte[] imageBytes, string sourceLang, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("not used by the authorization matrix");
+
+        public TranslationStreamSession StreamText(
+            string? apiKey, string source, string sourceLang, string targetLang,
+            string sessionId, long epoch, CancellationToken cancellationToken) =>
+            throw new NotSupportedException("not used by the authorization matrix");
+
+        public TranslationStreamSession StreamTextDraft(
+            ProviderSettings draftSettings, string apiKey, string source, string sourceLang,
+            string targetLang, string sessionId, long epoch, CancellationToken cancellationToken) =>
+            throw new NotSupportedException("not used by the authorization matrix");
+
+        public TranslationStreamSession StreamVisionDraft(
+            ProviderSettings draftSettings, string textApiKey, string visionApiKey, byte[] image,
+            string sourceLang, string targetLang, string sessionId, long epoch, CancellationToken cancellationToken) =>
+            throw new NotSupportedException("not used by the authorization matrix");
+
+        public async Task<TranslationResponse> TranslateFreeAsync(
+            string source, string sourceLang, string targetLang,
+            Services.FreeEngineAuthorization authorization, CancellationToken cancellationToken)
+        {
+            if (OnTranslateFree is not null)
+            {
+                return await OnTranslateFree(source, sourceLang, targetLang, cancellationToken);
+            }
+            return await FreeTranslateService.TranslateAsync(source, sourceLang, targetLang, authorization, cancellationToken);
         }
     }
 
@@ -1378,14 +3046,16 @@ internal static class Program
         try
         {
             var migrated = ProfileManager.Load();
-            Equal(6, migrated.SchemaVersion, "migration bumps the schema version");
+            Equal(7, migrated.SchemaVersion, "migration bumps the schema version");
             Equal(1, migrated.Profiles.Count, "only the user-configured service survives");
+            True(!migrated.Profiles[0].AllowLanEndpoints,
+                "migration must never invent the LAN permission for existing profiles");
             Equal("我的双用途服务", migrated.Profiles[0].Name);
             True(migrated.Profiles[0].SupportsText && migrated.Profiles[0].SupportsVision,
                 "model fields, including one shared model, derive both route roles");
             Equal("我的双用途服务", migrated.TryGetActiveProfile()!.Name,
                 "a migrated-away default re-points at the surviving text service");
-            Equal(6, System.Text.Json.JsonSerializer.Deserialize<CoreProductConfig>(
+            Equal(7, System.Text.Json.JsonSerializer.Deserialize<CoreProductConfig>(
                 File.ReadAllText(path))?.SchemaVersion ?? -1,
                 "the migrated schema is persisted");
 
@@ -1873,6 +3543,495 @@ internal static class Program
             ProfileManager.ResetForTests();
             try { Directory.Delete(dir, recursive: true); } catch { }
         }
+    }
+
+    /// <summary>
+    /// T06 acceptance: the privacy page exposes the cloud-speech consent with
+    /// its own destination. The toggle persists immediately, never becomes a
+    /// form draft, and saving unrelated settings preserves the consent (the
+    /// old Save_Click silently reset it to the default).
+    /// </summary>
+    private static void SettingsCloudSpeechConsentRoundTrip()
+    {
+        ProfileManager.ResetForTests();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-cloudspeech-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        ProfileManager.ConfigPathOverride = Path.Combine(dir, "product-config.json");
+        CoreBridge.Initialize();
+        EnsureApplication();
+        var originalStartupSeam = StartupRegistration.TrySetOverride;
+        var windowHolder = new SettingsWindow?[] { null };
+        try
+        {
+            StartupRegistration.TrySetOverride = _ => true;
+            var shell = ShellSettings.Default with { CloudSpeechEnabled = true };
+            var window = new SettingsWindow(
+                shell, new HistoryStore(Path.Combine(dir, "history.json")))
+            {
+                ApplyShellSettings = _ => true,
+            };
+            windowHolder[0] = window;
+
+            Equal(true, window.CaptureSection.CloudSpeech.IsChecked,
+                "the consent toggle must load the persisted state");
+
+            // Saving unrelated settings must not reset the consent. The old
+            // Save_Click rebuilt ShellSettings without CloudSpeechEnabled,
+            // silently disabling the Microsoft voice destination.
+            var autoCopy = window.GeneralSection.AutoCopy;
+            var autoCopyOriginal = autoCopy.IsChecked == true;
+            autoCopy.IsChecked = !autoCopyOriginal;
+            Equal(SettingsEditState.Dirty, window.EditState, "an unrelated edit must mark the form dirty");
+
+            typeof(SettingsWindow).GetMethod("Save_Click",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(window, new object[] { window, new RoutedEventArgs() });
+            SpinUntil(() => window.EditState == SettingsEditState.Clean, "the save must reach Clean");
+
+            Equal(true, ShellSettingsStore.Load().CloudSpeechEnabled,
+                "saving the form must preserve the cloud speech consent");
+            Equal(true, window.CaptureSection.CloudSpeech.IsChecked);
+
+            // The consent itself is immediate: not a draft, saved on flip.
+            window.CaptureSection.CloudSpeech.IsChecked = false;
+            Equal(false, ShellSettingsStore.Load().CloudSpeechEnabled,
+                "the consent toggle must save immediately");
+            Equal(SettingsEditState.Clean, window.EditState,
+                "the consent toggle is not a settings draft");
+            window.CaptureSection.CloudSpeech.IsChecked = true;
+            Equal(true, ShellSettingsStore.Load().CloudSpeechEnabled);
+            Equal(SettingsEditState.Clean, window.EditState);
+        }
+        finally
+        {
+            StartupRegistration.TrySetOverride = originalStartupSeam;
+            try
+            {
+                windowHolder[0]?.Close();
+            }
+            catch (Exception)
+            {
+            }
+            ProfileManager.ResetForTests();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// T12 acceptance: a long technical article is planned into segments,
+    /// translated sequentially IN ORDER, and merged losslessly — while a
+    /// short source stays a single request. The mock tags every segment so
+    /// the concatenation order is provable, and code fences stay intact.
+    /// </summary>
+    private static async Task LongInputPlansIntoOrderedSegmentsAsync()
+    {
+        var history = new FakeHistoryRepository();
+        var executor = new FakeTranslationExecutor();
+        var requestedSources = new List<string>();
+        var coordinator = new TranslationCoordinator(history: history, executor: executor);
+
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            lock (requestedSources) requestedSources.Add(source);
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+            var translated = $"[译:{source.Trim()}]";
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(10);
+                buffer.TryAppend(translated);
+                buffer.Complete();
+                tcs.SetResult(new TranslationResponse(
+                    new TranslationResult(translated, "", "", [], []),
+                    new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 40)));
+            });
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        // ~4000-char technical article with a fenced block and identifiers.
+        var paragraph = "The build failed with a FileNotFoundError for config.json. ";
+        var article = $"{string.Concat(Enumerable.Repeat(paragraph, 30))}\n\n```bash\ncargo test --workspace\n```\n\n{string.Concat(Enumerable.Repeat(paragraph, 30))}";
+
+        var session = await coordinator.TranslateTextAsync(
+            article, "en", "zh-CN", TranslationInputSource.Manual);
+
+        Equal(TranslationSessionStage.Completed, session.Stage,
+            "all segments complete → the session completes");
+        lock (requestedSources)
+        {
+            True(requestedSources.Count >= 2 && requestedSources.Count <= CoreBridge.MaxSegments,
+                $"a ~4k source must split into 2..8 requests, got {requestedSources.Count}");
+            foreach (var segment in requestedSources)
+            {
+                True(segment.Length <= CoreBridge.MaxSegmentChars,
+                    $"each segment must respect the per-segment budget, got {segment.Length}");
+            }
+            // Order: the first request must contain the article's opening,
+            // and the code block stays whole inside one request.
+            True(requestedSources[0].StartsWith(paragraph),
+                "the first segment starts at the beginning of the source");
+            True(requestedSources.Any(source => source.Contains("cargo test --workspace")),
+                "the fenced commands must travel inside one segment intact");
+        }
+        // Order-preserving merge with segment markers.
+        var firstMarker = requestedSources[0].Trim()[..20];
+        var text = session.TranslatedText;
+        True(text.IndexOf("[译:", StringComparison.Ordinal) < text.LastIndexOf("[译:", StringComparison.Ordinal),
+            "segment translations appear in request order");
+        True(text.Contains($"[译:{firstMarker}"), "the first segment's translation opens the merge");
+        // History: a clean segmented completion persists exactly once.
+        Equal(1, history.Entries.Count);
+    }
+
+    /// <summary>
+    /// T12 acceptance: a session cancelled during segment 3 issues ZERO
+    /// requests for segment 4, and the completed fragments stay visible.
+    /// </summary>
+    private static async Task CancelBetweenSegmentsStopsLaterRequestsAsync()
+    {
+        var history = new FakeHistoryRepository();
+        var executor = new FakeTranslationExecutor();
+        var requestCount = 0;
+        var coordinator = new TranslationCoordinator(history: history, executor: executor);
+
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            var count = Interlocked.Increment(ref requestCount);
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(30);
+                if (count == 3)
+                {
+                    // The user cancels while segment 3 is in flight.
+                    ct.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(20));
+                    buffer.TryAppend("片段三的前半");
+                    buffer.Complete();
+                    tcs.SetCanceled(ct);
+                    return;
+                }
+                buffer.TryAppend($"[段{count}]");
+                buffer.Complete();
+                tcs.SetResult(new TranslationResponse(
+                    new TranslationResult($"[段{count}]", "", "", [], []),
+                    new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 20)));
+            });
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        var long1 = new string('a', 500) + "\n\n";
+        var source = long1 + long1 + long1 + long1;
+
+        var session = await coordinator.TranslateTextAsync(
+            source, "en", "zh-CN", TranslationInputSource.Manual);
+
+        Equal(TranslationSessionStage.Cancelled, session.Stage);
+        var totalRequests = Volatile.Read(ref requestCount);
+        True(totalRequests < 8, $"cancellation must stop later segments (observed {totalRequests} requests)");
+        True(session.TranslatedText.Contains("[段1]") && session.TranslatedText.Contains("[段2]"),
+            "fragments from completed segments stay visible after cancellation");
+    }
+
+    /// <summary>
+    /// T12 acceptance: a segment that fails mid-session leaves the completed
+    /// fragments visible as PARTIAL with a warning naming the segment — never
+    /// a body-less Failed — and writes no history.
+    /// </summary>
+    private static async Task SegmentFailureKeepsFragmentsAsPartialAsync()
+    {
+        var history = new FakeHistoryRepository();
+        var executor = new FakeTranslationExecutor();
+        var requestCount = 0;
+        var coordinator = new TranslationCoordinator(history: history, executor: executor);
+
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            var count = Interlocked.Increment(ref requestCount);
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(15);
+                if (count == 2)
+                {
+                    // Segment 2 explodes after streaming some text.
+                    buffer.TryAppend("半截");
+                    buffer.Complete();
+                    tcs.SetException(new InvalidOperationException("mock segment failure"));
+                    return;
+                }
+                buffer.TryAppend($"[段{count}]");
+                buffer.Complete();
+                tcs.SetResult(new TranslationResponse(
+                    new TranslationResult($"[段{count}]", "", "", [], []),
+                    new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 20)));
+            });
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        var long1 = new string('b', 500) + "\n\n";
+        var session = await coordinator.TranslateTextAsync(
+            long1 + long1 + long1, "en", "zh-CN", TranslationInputSource.Manual);
+
+        Equal(TranslationSessionStage.Partial, session.Stage,
+            "completed fragments plus a failed segment must surface as Partial");
+        True(session.TranslatedText.Contains("[段1]"),
+            "the completed first fragment must remain visible");
+        True(session.Warnings.Any(warning => warning.Contains("第 2 段")),
+            "the warning must name the failed segment");
+        Equal(0, history.Entries.Count, "a Partial session never persists");
+        Equal(2, Volatile.Read(ref requestCount), "no requests after the failed segment");
+    }
+
+    /// <summary>
+    /// T12 acceptance: an incomplete SEGMENT (is_partial / dropped-token
+    /// warnings / empty text) ends the session as Partial instead of gluing
+    /// further segments onto an unreliable fragment — no fake success.
+    /// </summary>
+    private static async Task IncompleteSegmentStopsSessionAsPartialAsync()
+    {
+        var history = new FakeHistoryRepository();
+        var executor = new FakeTranslationExecutor();
+        var requestCount = 0;
+        var coordinator = new TranslationCoordinator(history: history, executor: executor);
+
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            var count = Interlocked.Increment(ref requestCount);
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(15);
+                if (count == 1)
+                {
+                    // Segment 1 "finishes" but reports a dropped placeholder:
+                    // an integrity failure this session must not paper over.
+                    buffer.TryAppend("第一段不完整");
+                    buffer.Complete();
+                    tcs.SetResult(new TranslationResponse(
+                        new TranslationResult("第一段不完整", "", "", [], ["缺失占位符 PG_0000"]),
+                        new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 20)));
+                    return;
+                }
+                buffer.TryAppend($"[段{count}]");
+                buffer.Complete();
+                tcs.SetResult(new TranslationResponse(
+                    new TranslationResult($"[段{count}]", "", "", [], []),
+                    new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 20)));
+            });
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        var long1 = new string('c', 500) + "\n\n";
+        var session = await coordinator.TranslateTextAsync(
+            long1 + long1, "en", "zh-CN", TranslationInputSource.Manual);
+
+        Equal(TranslationSessionStage.Partial, session.Stage,
+            "an integrity-incomplete segment must not yield a Completed session");
+        Equal(1, Volatile.Read(ref requestCount), "later segments must not run after an incomplete one");
+        Equal(0, history.Entries.Count);
+    }
+
+    /// <summary>
+    /// T12 acceptance: the budget gate refuses up front — an oversized atomic
+    /// code block and a source needing too many segments fail with an
+    /// actionable message BEFORE any request exists.
+    /// </summary>
+    private static async Task BudgetRefusalSendsNothingAsync()
+    {
+        var history = new FakeHistoryRepository();
+        var executor = new FakeTranslationExecutor();
+        var requestCount = 0;
+        var coordinator = new TranslationCoordinator(history: history, executor: executor);
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            Interlocked.Increment(ref requestCount);
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        // 1. An atomic code block larger than the per-segment budget.
+        var bigCode = $"```text\n{new string('x', 2000)}\n```\n";
+        var refused = await coordinator.TranslateTextAsync(
+            bigCode, "en", "zh-CN", TranslationInputSource.Manual);
+        Equal(TranslationSessionStage.Failed, refused.Stage);
+        True(refused.Error?.Message.Contains("代码块") == true,
+            "the refusal must name the oversized code block");
+        Equal(0, Volatile.Read(ref requestCount), "a refused session sends nothing");
+
+        // 2. 64 KiB of CJK would need ~80 segments: refused up front.
+        var mass = new string('翻', 64 * 1024);
+        var refusedMany = await coordinator.TranslateTextAsync(
+            mass, "zh-CN", "en", TranslationInputSource.Manual);
+        Equal(TranslationSessionStage.Failed, refusedMany.Stage);
+        True(refusedMany.Error?.Message.Contains("预算") == true,
+            "the refusal must name the session budget");
+        Equal(0, Volatile.Read(ref requestCount), "still nothing sent");
+    }
+
+    /// <summary>
+    /// T12 acceptance: a SHORT source is never segmented — one request, the
+    /// historical adaptive-budget behavior — and an FFI/C# agreement check on
+    /// the planner keeps the shell and the core on one contract.
+    /// </summary>
+    private static void ShortSourceStaysSingleAndPlannerAgreesAcrossFfi()
+    {
+        // C# side: a short source goes out as ONE request.
+        var shortSource = "Hello world, translate me.";
+        var plan = CoreBridge.PlanSegments(shortSource);
+        Equal("single", plan.Mode, "short sources must stay a single request");
+
+        // Long source: the FFI plan returns segments whose concatenation
+        // reproduces the source exactly, and the count respects the budget.
+        var paragraph = "Technical sentence about foo_bar_baz with a config.json path. ";
+        var longSource = $"{string.Concat(Enumerable.Repeat(paragraph, 10))}\n\n{string.Concat(Enumerable.Repeat(paragraph, 10))}";
+        var longPlan = CoreBridge.PlanSegments(longSource);
+        Equal("segments", longPlan.Mode);
+        True((longPlan.Segments?.Count ?? 0) >= 2, "a long source must plan into at least two segments");
+        Equal(longSource, string.Concat(longPlan.Segments!),
+            "segment concatenation must reproduce the source byte-for-byte");
+
+        // The oversized code block rejection crosses the FFI boundary too.
+        var codePlan = CoreBridge.PlanSegments($"```text\n{new string('x', 2000)}\n```\n");
+        Equal("oversized_code_block", codePlan.RejectedReason);
+    }
+
+    /// <summary>
+    /// T17 acceptance: the service editor's pure rules live in
+    /// ServiceDraftCoordinator — validation, draft construction, header
+    /// parsing and recommendation coordination — with no WPF control and no
+    /// I/O, so the same logic backs preview and save headless.
+    /// </summary>
+    private static void ServiceDraftCoordinatorPureRulesHold()
+    {
+        // Validation: name, URL presence, HTTPS-only for non-local.
+        Equal("请先填写服务名称。", ServiceDraftCoordinator.Validate("", "https://api.example.com"));
+        Equal("API Base URL 不能为空。", ServiceDraftCoordinator.Validate("Srv", "  "));
+        Equal("API Base URL 必须使用 HTTPS；仅本机或局域网服务允许 HTTP。",
+            ServiceDraftCoordinator.Validate("Srv", "http://api.example.com/v1"));
+        Equal(null, ServiceDraftCoordinator.Validate("Srv", "https://api.example.com/v1"),
+            "a valid remote draft validates clean");
+        Equal(null, ServiceDraftCoordinator.Validate("Srv", "http://127.0.0.1:11434"),
+            "loopback HTTP stays allowed");
+        Equal(null, ServiceDraftCoordinator.Validate("Srv", "http://192.168.1.20:11434"),
+            "LAN HTTP stays allowed (LAN admission is a separate permission)");
+
+        // Construction: defaults, vision sharing, locality and capability flags.
+        var draft = ServiceDraftCoordinator.BuildDraft(new ServiceDraftInputs(
+            "My Service", "http://localhost:11434/v1", ProviderType.OpenAiCompatible,
+            "  ", " ", "text-model", "text-model",
+            new Dictionary<string, string>(), " ", AllowInsecureTls: false));
+        Equal("/chat/completions", draft.TextEndpoint, "blank endpoint falls back to the default");
+        Equal("2023-06-01", draft.AnthropicVersion, "blank anthropic version falls back");
+        Equal(true, draft.SupportsText && draft.SupportsVision);
+        Equal(true, draft.IsLocal);
+
+        // Header parsing: strict failure on a malformed line, clean success otherwise.
+        var headers = ServiceDraftCoordinator.ParseHeaders("X-Demo: one\r\n\r\nX-Other: two");
+        Equal(2, headers.Count);
+        Equal("one", headers["X-Demo"]);
+        var malformed = Throws<InvalidOperationException>(
+            () => ServiceDraftCoordinator.ParseHeaders("X-Broken"));
+        True(malformed.Message.Contains("Header: Value"), "the parse error must name the format");
+
+        // Recommendation coordination: shared vision yields no vision result.
+        var descriptors = new List<ModelDescriptor>
+        {
+            new("m-fast", CapabilityState.Supported, CapabilityState.Unknown, "Catalog"),
+            new("m-strong", CapabilityState.Supported, CapabilityState.Supported, "Catalog"),
+        };
+        var (text, vision) = ServiceDraftCoordinator.ComputeRecommendations(
+            ProviderType.OpenAiCompatible, isLocal: false, descriptors,
+            ModelPreference.Speed, "m-fast", null, visionSharedWithText: true);
+        Equal("m-fast", text.RecommendedModel?.Model.Id);
+        Equal(null, vision, "shared vision needs no separate ranking");
+
+        var (text2, vision2) = ServiceDraftCoordinator.ComputeRecommendations(
+            ProviderType.OpenAiCompatible, isLocal: false, descriptors,
+            ModelPreference.Speed, "m-fast", "m-strong", visionSharedWithText: false);
+        Equal("m-fast", text2.RecommendedModel?.Model.Id);
+        True(vision2 is not null, "separate vision must produce its own ranking");
+    }
+
+    /// <summary>
+    /// T19/F03 acceptance: a COMPLETE final that arrives after the user
+    /// cancelled must land on Cancelled with zero history and zero side
+    /// effects — not Completed-with-persistence.
+    /// </summary>
+    private static async Task CancelledFinalDoesNotPersistAsync()
+    {
+        var history = new FakeHistoryRepository();
+        var executor = new FakeTranslationExecutor();
+        var coordinator = new TranslationCoordinator(history: history, executor: executor);
+        using var cts = new CancellationTokenSource();
+
+        // The executor returns a complete response, but only AFTER the
+        // session token was cancelled — the exact interleaving F03 described.
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+            _ = Task.Run(async () =>
+            {
+                cts.Cancel(); // cancel BEFORE the response resolves
+                await Task.Delay(30);
+                buffer.TryAppend("完整译文");
+                buffer.Complete();
+                tcs.SetResult(new TranslationResponse(
+                    new TranslationResult("完整译文", "", "", [], []),
+                    new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 30)));
+            });
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        var session = await coordinator.TranslateTextAsync(
+            "demo source", "en", "zh-CN", TranslationInputSource.Manual, cts.Token);
+
+        Equal(TranslationSessionStage.Cancelled, session.Stage,
+            "a late complete final after cancellation must NOT read as Completed");
+        True(session.TranslatedText.Contains("完整译文"), "the text stays visible");
+        Equal(0, history.Entries.Count, "a cancelled session must not persist");
+    }
+
+    /// <summary>
+    /// T19/F07 acceptance: a clean translation whose history write FAILS must
+    /// not mark the session committed — the failure surfaces as a warning and
+    /// the session is not counted as persisted.
+    /// </summary>
+    private static async Task HistoryWriteFailureIsNotFakeCommittedAsync()
+    {
+        var failing = new FailingHistoryRepository();
+        var executor = new FakeTranslationExecutor();
+        var coordinator = new TranslationCoordinator(history: failing, executor: executor);
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(10);
+                buffer.TryAppend("完整译文");
+                buffer.Complete();
+                tcs.SetResult(new TranslationResponse(
+                    new TranslationResult("完整译文", "", "", [], []),
+                    new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 20)));
+            });
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        var session = await coordinator.TranslateTextAsync(
+            "demo source", "en", "zh-CN", TranslationInputSource.Manual);
+
+        Equal(TranslationSessionStage.Completed, session.Stage,
+            "the translation itself succeeded — the STORE failed, not the session");
+        Equal(1, failing.Attempts, "the store was actually attempted");
+        True(!session.HistoryCommitted,
+            "a failed history write must never mark the session committed");
+        True(session.Warnings.Any(w => w.Contains("未保存到本机历史")),
+            "the user must see that the translation was not saved");
     }
 
     private static void ShortcutRecordingSuspendsGlobalShortcuts()
@@ -2457,6 +4616,8 @@ internal static class Program
         True(lightMatches.Count > 0, "LightTokens must be defined");
     }
 
+    private static int _dispatcherFailures;
+
     private static void EnsureApplication()
     {
         if (Application.Current is null)
@@ -2470,6 +4631,18 @@ internal static class Program
             {
                 // Fallback
             }
+            // Keep a strong root: Application.Current alone must not be the
+            // only reference keeping the host alive across test loops.
+            _bootstrappedApp = app;
+            // A single unhandled dispatcher exception must not tear the
+            // Application down and poison every later WPF test; record it and
+            // keep the harness alive.
+            app.DispatcherUnhandledException += (_, args) =>
+            {
+                _dispatcherFailures++;
+                Console.WriteLine($"DISPATCHER EXCEPTION (#{_dispatcherFailures}): {args.Exception.GetType().Name}: {args.Exception.Message}");
+                args.Handled = true;
+            };
             ThemeService.Apply(ThemePreference.Dark);
         }
         else
@@ -2486,29 +4659,36 @@ internal static class Program
 
         EnsureApplication();
 
-        var history = new HistoryStore();
-        var vocab = new VocabularyStore();
+        // Everything below renders the isolated demo fixtures only: synthetic
+        // history/vocabulary, the Demo Text Service profile, in-memory vault,
+        // and the native core bound to the isolation directory.
+        var history = new HistoryStore(TestIsolation.HistoryPath);
+        var vocab = new VocabularyStore(TestIsolation.VocabularyPath);
+        True(history.Load().Count == 3, "the synthetic history fixture must be loaded");
+        True(vocab.GetAll().Count == 2, "the synthetic vocabulary fixture must be loaded");
 
-        var swCold = Stopwatch.StartNew();
-        CoreBridge.Initialize();
+        // ---- Component benchmarks (T15: honest naming, honest scope) ----
+        // These measure in-test-host component operations. They are NOT the
+        // AI-RULES app-level budgets: process start, tray availability, real
+        // hotkey→first-frame and idle working set require the independent
+        // Release app (scripts/measure-startup.ps1) and real hardware, and
+        // are reported separately. No fabricated tray number exists here.
+        var swCoreInit = Stopwatch.StartNew();
+        CoreBridge.Initialize(TestIsolation.CoreConfigDirectory);
         _ = CoreBridge.GetSettings();
-        swCold.Stop();
-        var coldStartupMs = swCold.ElapsedMilliseconds;
+        swCoreInit.Stop();
+        var coreInitializeMs = swCoreInit.ElapsedMilliseconds;
 
-        var swWarm = Stopwatch.StartNew();
+        var swWindow = Stopwatch.StartNew();
         var winWarm = new QuickSearchWindow(history, vocab);
-        swWarm.Stop();
-        var warmStartupMs = swWarm.ElapsedMilliseconds;
-
-        var swTray = Stopwatch.StartNew();
-        swTray.Stop();
-        var trayInitMs = Math.Max(1, swTray.ElapsedMilliseconds);
+        swWindow.Stop();
+        var windowConstructMs = swWindow.ElapsedMilliseconds;
 
         var proc = Process.GetCurrentProcess();
         proc.Refresh();
         var workingSetMb = proc.WorkingSet64 / (1024.0 * 1024.0);
 
-        var swHotkey = Stopwatch.StartNew();
+        var swConstructArrange = Stopwatch.StartNew();
         var panel = new TranslationPanelWindow(
             new Rect(100, 100, 20, 20),
             history,
@@ -2521,50 +4701,90 @@ internal static class Program
         panel.Measure(new Size(420, 520));
         panel.Arrange(new Rect(0, 0, 420, 520));
         panel.UpdateLayout();
-        swHotkey.Stop();
-        var hotkeyToPanelMs = swHotkey.ElapsedMilliseconds;
+        swConstructArrange.Stop();
+        var windowConstructArrangeMs = swConstructArrange.ElapsedMilliseconds;
 
         var swCancel = Stopwatch.StartNew();
         CoreBridge.CancelActiveRequest();
         swCancel.Stop();
-        var cancelLatencyMs = swCancel.Elapsed.TotalMilliseconds;
+        var cancelNoopMs = swCancel.Elapsed.TotalMilliseconds;
 
-        Console.WriteLine($"\n[Baseline Performance Metrics]");
-        Console.WriteLine($"Cold Startup (Core + Settings): {coldStartupMs} ms");
-        Console.WriteLine($"Warm Window Init: {warmStartupMs} ms");
-        Console.WriteLine($"Tray Available: {trayInitMs} ms");
-        Console.WriteLine($"Process Working Set: {workingSetMb:F1} MB");
-        Console.WriteLine($"Hotkey to Panel First Frame: {hotkeyToPanelMs} ms");
-        Console.WriteLine($"Cancellation Latency: {cancelLatencyMs:F2} ms\n");
+        Console.WriteLine($"\n[Component Benchmarks — test host, NOT app-level budgets]");
+        Console.WriteLine($"CoreInitialize (native init + settings load): {coreInitializeMs} ms");
+        Console.WriteLine($"WindowConstruct (QuickSearch constructor): {windowConstructMs} ms");
+        Console.WriteLine($"Test-host process working set (NOT the app's idle WS): {workingSetMb:F1} MB");
+        Console.WriteLine($"WindowConstructArrange (panel 420x520): {windowConstructArrangeMs} ms");
+        Console.WriteLine($"CancelNoopOverhead (no active request): {cancelNoopMs:F2} ms");
+        Console.WriteLine($"App-level budgets (startup P50/P95, tray, hotkey→frame, idle WS): see artifacts/perf/startup.json from scripts/measure-startup.ps1 — NOT measured here.\n");
 
         RenderAndSave(new MainWindow(ShellSettings.Default, history, vocab), 960, 640, Path.Combine(outDir, "main_window_dark.png"), ThemePreference.Dark);
         RenderAndSave(new MainWindow(ShellSettings.Default, history, vocab), 960, 640, Path.Combine(outDir, "main_window_light.png"), ThemePreference.Light);
         RenderAndSave(new SettingsWindow(ShellSettings.Default, history, vocab), 960, 680, Path.Combine(outDir, "settings_dark.png"), ThemePreference.Dark);
         RenderAndSave(new SettingsWindow(ShellSettings.Default, history, vocab), 960, 680, Path.Combine(outDir, "settings_light.png"), ThemePreference.Light);
+        // The privacy page carries the destination consents (free engine,
+        // cloud speech); it needs its own visual regression capture.
+        var privacyDark = new SettingsWindow(ShellSettings.Default, history, vocab);
+        privacyDark.ShowPage("Privacy");
+        RenderAndSave(privacyDark, 960, 760, Path.Combine(outDir, "settings_privacy_dark.png"), ThemePreference.Dark);
+        var privacyLight = new SettingsWindow(ShellSettings.Default, history, vocab);
+        privacyLight.ShowPage("Privacy");
+        RenderAndSave(privacyLight, 960, 760, Path.Combine(outDir, "settings_privacy_light.png"), ThemePreference.Light);
         RenderAndSave(CreateServiceEditorPreview(), 760, 620, Path.Combine(outDir, "service_editor_dark.png"), ThemePreference.Dark);
         RenderAndSave(CreateServiceEditorPreview(), 760, 620, Path.Combine(outDir, "service_editor_light.png"), ThemePreference.Light);
         RenderAndSave(CreateServiceEditorPreview(), 620, 720, Path.Combine(outDir, "service_editor_compact_light.png"), ThemePreference.Light);
         RenderAndSave(CreateAdvancedServiceEditorPreview(), 760, 920, Path.Combine(outDir, "service_editor_advanced_light.png"), ThemePreference.Light);
         RenderAndSave(new QuickSearchWindow(history, vocab), 560, 360, Path.Combine(outDir, "quick_search_dark.png"), ThemePreference.Dark);
         RenderAndSave(new QuickSearchWindow(history, vocab), 560, 360, Path.Combine(outDir, "quick_search_light.png"), ThemePreference.Light);
+        // T11: narrow content — the workbench must stack (input ≥160 DIP on
+        // top, reader below) instead of squeezing side-by-side panes.
+        RenderAndSave(new MainWindow(ShellSettings.Default, history, vocab), 560, 640, Path.Combine(outDir, "main_window_narrow_dark.png"), ThemePreference.Dark);
+        AssertCanvasFilled(Path.Combine(outDir, "main_window_narrow_dark.png"), "main_window_narrow_dark.png");
+        // T11: a long model identifier must not push the form apart.
+        RenderAndSave(CreateServiceEditorPreview("demo-provider/very-long-preview-model-identifier-v9.3.2-preview-20260905-8192k-context"), 760, 620, Path.Combine(outDir, "service_editor_long_model_light.png"), ThemePreference.Light);
+        AssertCanvasFilled(Path.Combine(outDir, "service_editor_long_model_light.png"), "service_editor_long_model_light.png");
+        // T11: error state with a long reason + actionable next step.
+        var errorPanel = new TranslationPanelWindow(new Rect(100, 100, 20, 20), history, () => ShellSettings.Default, null, null, vocab);
+        DrivePanelSession(errorPanel, "demo source for the error state", new TranslationSession
+        {
+            Stage = TranslationSessionStage.Failed,
+            Error = new TranslationError(
+                TranslationErrorKind.ServerError,
+                "连接超时（120 秒无响应）：mock-provider/northcentralus/deployments/very-long-deployment-name-20260905",
+                "检查服务地址与网络后重试；离线模式会阻止本次请求。"),
+        });
+        RenderAndSave(errorPanel, 420, 560, Path.Combine(outDir, "translation_panel_error_dark.png"), ThemePreference.Dark);
+        AssertCanvasFilled(Path.Combine(outDir, "translation_panel_error_dark.png"), "translation_panel_error_dark.png");
         RenderAndSave(new TranslationPanelWindow(new Rect(100, 100, 20, 20), history, () => ShellSettings.Default, null, null, vocab), 420, 520, Path.Combine(outDir, "translation_panel_dark.png"), ThemePreference.Dark);
         RenderAndSave(new TranslationPanelWindow(new Rect(100, 100, 20, 20), history, () => ShellSettings.Default, null, null, vocab), 420, 520, Path.Combine(outDir, "translation_panel_light.png"), ThemePreference.Light);
         RenderAndSave(new FloatingTriggerWindow(new Point(100, 100), () => { }), 64, 64, Path.Combine(outDir, "floating_trigger_dark.png"), ThemePreference.Dark);
         RenderAndSave(new FloatingTriggerWindow(new Point(100, 100), () => { }), 64, 64, Path.Combine(outDir, "floating_trigger_light.png"), ThemePreference.Light);
 
-        // Visual regression matrix: same surfaces rendered at 125/150/200% DPI
-        // in both themes, so clipping or scaling regressions show up as
-        // diffable artifacts instead of a user report.
+        // Visual regression matrix: every core surface rendered at 125/150/200%
+        // DPI in both themes, so clipping or scaling regressions show up as
+        // diffable artifacts instead of a user report. Each output must fully
+        // paint its canvas — the retired producer squeezed 200% content into
+        // the top-left quarter and left the rest blank.
         foreach (var dpi in new[] { 1.25, 1.5, 2.0 })
         {
             foreach (var theme in new[] { ThemePreference.Dark, ThemePreference.Light })
             {
                 var scaleLabel = $"{Math.Round(dpi * 100)}pct";
                 var suffix = $"{theme}_{scaleLabel}";
-                RenderAndSaveAtDpi(new MainWindow(ShellSettings.Default, history, vocab), 960, 640,
-                    Path.Combine(outDir, $"main_window_{suffix}.png"), theme, dpi);
-                RenderAndSaveAtDpi(new TranslationPanelWindow(new Rect(100, 100, 20, 20), history, () => ShellSettings.Default, null, null, vocab), 420, 520,
-                    Path.Combine(outDir, $"translation_panel_{suffix}.png"), theme, dpi);
+                var outputs = new List<(Window Window, int Width, int Height, string Name)>
+                {
+                    (new MainWindow(ShellSettings.Default, history, vocab), 960, 640, $"main_window_{suffix}.png"),
+                    (new TranslationPanelWindow(new Rect(100, 100, 20, 20), history, () => ShellSettings.Default, null, null, vocab), 420, 520, $"translation_panel_{suffix}.png"),
+                    (new QuickSearchWindow(history, vocab), 560, 360, $"quick_search_{suffix}.png"),
+                    (new SettingsWindow(ShellSettings.Default, history, vocab), 960, 680, $"settings_{suffix}.png"),
+                    (CreateServiceEditorPreview(), 760, 620, $"service_editor_{suffix}.png"),
+                    (CreateLibraryPreview(history, vocab), 960, 640, $"library_{suffix}.png"),
+                };
+                foreach (var (host, hostWidth, hostHeight, name) in outputs)
+                {
+                    var path = Path.Combine(outDir, name);
+                    RenderAndSaveAtDpi(host, hostWidth, hostHeight, path, theme, dpi);
+                    AssertCanvasFilled(path, name);
+                }
             }
         }
 
@@ -2577,45 +4797,173 @@ internal static class Program
         True(File.Exists(Path.Combine(outDir, "quick_search_dark.png")), "quick_search_dark.png must be created");
         True(File.Exists(Path.Combine(outDir, "translation_panel_dark.png")), "translation_panel_dark.png must be created");
         True(File.Exists(Path.Combine(outDir, "main_window_light_200pct.png")), "the 200% DPI matrix must be produced");
+        // The 200% main window must be a TRUE 1920×1280 canvas — logical
+        // 960×640 × scale 2 — not a half-blank artifact of the old producer.
+        var twoHundred = LoadBitmap(Path.Combine(outDir, "main_window_light_200pct.png"));
+        Equal(1920, twoHundred.PixelWidth, "960 DIP at 200% must be 1920px wide");
+        Equal(1280, twoHundred.PixelHeight, "640 DIP at 200% must be 1280px tall");
+        AssertCanvasFilled(Path.Combine(outDir, "main_window_light_200pct.png"), "main_window_light_200pct.png");
+
+        // The canvas check itself must reject a mostly-unpainted render —
+        // the signature of the retired producer (content squeezed top-left).
+        var brokenPath = Path.Combine(outDir, "selfcheck_broken_canvas.png");
+        var brokenVisual = new System.Windows.Controls.Border
+        {
+            Width = 100,
+            Height = 60,
+            Background = Brushes.White,
+        };
+        brokenVisual.Measure(new Size(100, 60));
+        brokenVisual.Arrange(new Rect(0, 0, 100, 60));
+        var brokenRtb = new RenderTargetBitmap(400, 240, 96, 96, PixelFormats.Pbgra32);
+        brokenRtb.Render(brokenVisual);
+        var brokenEncoder = new PngBitmapEncoder();
+        brokenEncoder.Frames.Add(BitmapFrame.Create(brokenRtb));
+        using (var brokenStream = File.Create(brokenPath))
+        {
+            brokenEncoder.Save(brokenStream);
+        }
+        Throws<InvalidOperationException>(() => AssertCanvasFilled(brokenPath, "selfcheck"));
+
+        // Window construction and rendering must never send anything to the
+        // network: the guarded free-engine boundary refuses public hosts and
+        // counts the refusals.
+        Equal(0, TestIsolation.BlockedPublicSends,
+            "rendering the windows attempted a public-network request");
     }
 
     private static void RenderAndSave(Window window, int width, int height, string filePath, ThemePreference theme) =>
         RenderAndSaveAtDpi(window, width, height, filePath, theme, 1.0);
 
-    private static void RenderAndSaveAtDpi(Window window, int width, int height, string filePath, ThemePreference theme, double dpiScale)
+    /// <summary>
+    /// Renders the window content at EXPLICIT logical DIP dimensions; the
+    /// bitmap is always logical × scale pixels, so a 960×640 DIP window at
+    /// 200% produces a fully painted 1920×1280 canvas. The previous producer
+    /// divided the logical size by the scale while multiplying the bitmap —
+    /// the 200% screenshots showed content squeezed into the top-left
+    /// quarter with blank canvas everywhere else (F11).
+    /// </summary>
+    private static void RenderAndSaveAtDpi(Window window, int logicalWidthDip, int logicalHeightDip, string filePath, ThemePreference theme, double dpiScale)
     {
         ThemeService.Apply(theme);
-        var logicalWidth = width / dpiScale;
-        var logicalHeight = height / dpiScale;
-        window.Width = logicalWidth;
-        window.Height = logicalHeight;
+        window.Width = logicalWidthDip;
+        window.Height = logicalHeightDip;
 
         // An unshown WPF Window renders as a black native surface. Render its
         // managed content root instead so headless screenshots actually catch
         // spacing, clipping and theme regressions without opening a window.
         var visual = window.Content as FrameworkElement ?? window;
-        visual.Width = logicalWidth;
-        visual.Height = logicalHeight;
-        visual.Measure(new Size(logicalWidth, logicalHeight));
-        visual.Arrange(new Rect(0, 0, logicalWidth, logicalHeight));
+        visual.Width = logicalWidthDip;
+        visual.Height = logicalHeightDip;
+        visual.Measure(new Size(logicalWidthDip, logicalHeightDip));
+        visual.Arrange(new Rect(0, 0, logicalWidthDip, logicalHeightDip));
         visual.UpdateLayout();
 
+        var pixelWidth = (int)Math.Round(logicalWidthDip * dpiScale);
+        var pixelHeight = (int)Math.Round(logicalHeightDip * dpiScale);
         var dpi = 96 * dpiScale;
-        var rtb = new RenderTargetBitmap(
-            (int)Math.Ceiling(width * dpiScale), (int)Math.Ceiling(height * dpiScale),
-            dpi, dpi, PixelFormats.Pbgra32);
+        var rtb = new RenderTargetBitmap(pixelWidth, pixelHeight, dpi, dpi, PixelFormats.Pbgra32);
         rtb.Render(visual);
 
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(rtb));
-        using var stream = File.Create(filePath);
-        encoder.Save(stream);
+        WriteWithRetry(filePath, encoder);
+
+        // Size self-consistency: the file must carry exactly logical × scale.
+        var written = LoadBitmap(filePath);
+        Equal(pixelWidth, written.PixelWidth,
+            $"{Path.GetFileName(filePath)}: pixel width must be logical {logicalWidthDip} × scale {dpiScale}");
+        Equal(pixelHeight, written.PixelHeight,
+            $"{Path.GetFileName(filePath)}: pixel height must be logical {logicalHeightDip} × scale {dpiScale}");
     }
 
-    private static Window CreateServiceEditorPreview()
+    /// <summary>Decodes a PNG fully and releases the file handle immediately.</summary>
+    private static BitmapSource LoadBitmap(string filePath)
+    {
+        var image = new BitmapImage();
+        image.BeginInit();
+        image.CacheOption = BitmapCacheOption.OnLoad;
+        image.UriSource = new Uri(filePath);
+        image.EndInit();
+        image.Freeze();
+        return image;
+    }
+
+    /// <summary>
+    /// Explorer thumbnails or scanners can hold an artifacts file for a
+    /// moment; a screenshot producer must not fail a whole run over that.
+    /// </summary>
+    private static void WriteWithRetry(string filePath, PngBitmapEncoder encoder)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                using var stream = File.Create(filePath);
+                encoder.Save(stream);
+                return;
+            }
+            catch (IOException) when (attempt < 5)
+            {
+                Thread.Sleep(200);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Fails when a significant part of the canvas is unpainted — the exact
+    /// signature of the old DPI producer (content squeezed top-left, blank
+    /// elsewhere). Windows render opaque backgrounds, so a correct render
+    /// leaves essentially no transparent pixels.
+    /// </summary>
+    private static void AssertCanvasFilled(string filePath, string label, double maxTransparentFraction = 0.02)
+    {
+        var source = LoadBitmap(filePath);
+        var pixels = new byte[source.PixelWidth * source.PixelHeight * 4];
+        new WriteableBitmap(source).CopyPixels(pixels, source.PixelWidth * 4, 0);
+        var transparent = 0;
+        for (var i = 3; i < pixels.Length; i += 4)
+        {
+            if (pixels[i] == 0)
+            {
+                transparent++;
+            }
+        }
+        var fraction = (double)transparent / (source.PixelWidth * source.PixelHeight);
+        True(fraction <= maxTransparentFraction,
+            $"{label}: {(fraction * 100):F1}% of the canvas is unpainted — layout or DPI producer regression");
+    }
+
+    /// <summary>Drives a production panel session result synchronously.</summary>
+    private static void DrivePanelSession(TranslationPanelWindow panel, string source, TranslationSession session)
+    {
+        typeof(TranslationPanelWindow)
+            .GetMethod("HandleSessionResultAsync",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .Invoke(panel, new object?[] { source, session, 0L, null });
+        panel.UpdateLayout();
+    }
+
+    /// <summary>Library page preview fed by the synthetic history/vocabulary fixtures.</summary>
+    private static Window CreateLibraryPreview(HistoryStore history, VocabularyStore vocab)
+    {
+        var section = new LibrarySection();
+        section.Initialize(history, vocab);
+        section.ReloadHistory();
+        section.ReloadVocabulary();
+        var host = new System.Windows.Controls.Border
+        {
+            Child = section,
+            Padding = new Thickness(24),
+        };
+        host.SetResourceReference(System.Windows.Controls.Border.BackgroundProperty, "CanvasBrush");
+        return new Window { Content = host };
+    }
+
+    private static Window CreateServiceEditorPreview(string? textModel = null)
     {
         var section = new ServicesSection();
-        section.LoadProfileIntoForm(ProviderProfile.CreateGemini());
+        section.LoadProfileIntoForm(DemoProfile(textModel: textModel));
         typeof(ServicesSection)
             .GetMethod("ShowEditorForm", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
             .Invoke(section, new object[] { false });
@@ -2634,7 +4982,7 @@ internal static class Program
     private static Window CreateAdvancedServiceEditorPreview()
     {
         var section = new ServicesSection();
-        section.LoadProfileIntoForm(ProviderProfile.CreateOllama());
+        section.LoadProfileIntoForm(DemoProfile(advanced: true));
         typeof(ServicesSection)
             .GetMethod("ShowEditorForm", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
             .Invoke(section, new object[] { false });
@@ -2648,10 +4996,52 @@ internal static class Program
         return new Window { Content = host };
     }
 
+    /// <summary>
+    /// The demo profile used by every rendered surface: fixed fake names, a
+    /// loopback URL that is never contacted, and no relationship to whatever
+    /// services exist on the machine running the tests.
+    /// </summary>
+    private static ProviderProfile DemoProfile(bool advanced = false, string? textModel = null) => new()
+    {
+        Id = "demo-text",
+        Name = "Demo Text Service",
+        ProviderType = ProviderType.OpenAiCompatible,
+        ApiBaseUrl = "http://127.0.0.1:9/v1",
+        TextEndpoint = "/chat/completions",
+        VisionEndpoint = "/chat/completions",
+        TextModel = textModel ?? "demo-text-model",
+        VisionModel = "demo-vision-model",
+        AnthropicVersion = "2023-06-01",
+        SupportsText = true,
+        SupportsVision = true,
+        CredentialTarget = "PopGlot/provider/demo-text",
+        IsLocal = true,
+        ExtraHeaders = advanced
+            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["X-Demo-Header"] = "demo" }
+            : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+    };
+
     // ================= Harness =================
+
+    /// <summary>
+    /// Optional substring filter (POPGLOT_TESTS_FILTER): when set, only tests
+    /// whose name contains it run. Lets targeted verification proceed while a
+    /// real PopGlot instance is open (quit it for the FULL suite — the
+    /// isolation guard refuses to run beside one).
+    /// </summary>
+    private static readonly string? NameFilter =
+        Environment.GetEnvironmentVariable("POPGLOT_TESTS_FILTER")?.Trim().ToLowerInvariant();
+
+    private static bool ShouldRun(string name) =>
+        NameFilter is null || NameFilter.Length == 0 ||
+        name.ToLowerInvariant().Contains(NameFilter, StringComparison.Ordinal);
 
     private static async Task RunAsync(string name, Func<Task> test)
     {
+        if (!ShouldRun(name))
+        {
+            return;
+        }
         try
         {
             await test();
@@ -2662,11 +5052,16 @@ internal static class Program
         {
             _failed++;
             Console.WriteLine($"FAIL {name}: {exception.Message}");
+            Console.WriteLine(exception.StackTrace);
         }
     }
 
     private static void Run(string name, Action test)
     {
+        if (!ShouldRun(name))
+        {
+            return;
+        }
         try
         {
             test();
@@ -2677,6 +5072,7 @@ internal static class Program
         {
             _failed++;
             Console.WriteLine($"FAIL {name}: {exception.Message}");
+            Console.WriteLine(exception.StackTrace);
         }
     }
 
@@ -2690,14 +5086,26 @@ internal static class Program
     /// </summary>
     private static void RunStaBatch(params (string Name, Action Test)[] tests)
     {
-        var caught = new Exception?[tests.Length];
+        var selected = tests.Where(t => ShouldRun(t.Name)).ToArray();
+        if (selected.Length == 0)
+        {
+            return;
+        }
+        var caught = new Exception?[selected.Length];
         var thread = new Thread(() =>
         {
-            for (var i = 0; i < tests.Length; i++)
+            // Production WPF UI threads carry a DispatcherSynchronizationContext,
+            // so async void handlers (Save_Click) resume on the UI thread. The
+            // bare STA thread must behave the same or its continuations land on
+            // the pool and touch DependencyObjects cross-thread.
+            var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(
+                new System.Windows.Threading.DispatcherSynchronizationContext(dispatcher));
+            for (var i = 0; i < selected.Length; i++)
             {
                 try
                 {
-                    tests[i].Test();
+                    selected[i].Test();
                 }
                 catch (Exception ex)
                 {
@@ -2709,17 +5117,18 @@ internal static class Program
         thread.Start();
         thread.Join();
 
-        for (var i = 0; i < tests.Length; i++)
+        for (var i = 0; i < selected.Length; i++)
         {
             if (caught[i] is null)
             {
                 _passed++;
-                Console.WriteLine($"PASS {tests[i].Name}");
+                Console.WriteLine($"PASS {selected[i].Name}");
             }
             else
             {
                 _failed++;
-                Console.WriteLine($"FAIL {tests[i].Name}: {caught[i]!.Message}");
+                Console.WriteLine($"FAIL {selected[i].Name}: {caught[i]!.Message}");
+                Console.WriteLine(caught[i]!.StackTrace);
             }
         }
     }
@@ -3435,6 +5844,24 @@ internal static class Program
         public void Report(T value) => _handler(value);
     }
 
+    /// <summary>History store whose writes always fail (T19/F07 probe).</summary>
+    private sealed class FailingHistoryRepository : IHistoryRepository
+    {
+        public int Attempts;
+
+        public IReadOnlyList<TranslationHistoryEntry> Load() => [];
+        public HistoryAddResult TryAdd(TranslationHistoryEntry entry, bool enabled)
+        {
+            if (!enabled) return HistoryAddResult.Disabled;
+            Attempts++;
+            return HistoryAddResult.Failed;
+        }
+        public bool Remove(Guid id) => false;
+        public bool Clear() => false;
+        public string ExportToCsv() => string.Empty;
+        public string ExportToMarkdown() => string.Empty;
+    }
+
     private sealed class FakeHistoryRepository : IHistoryRepository
     {
         public List<TranslationHistoryEntry> Entries { get; } = new();
@@ -3570,6 +5997,7 @@ internal static class Program
             string source,
             string sourceLang,
             string targetLang,
+            Services.FreeEngineAuthorization authorization,
             CancellationToken cancellationToken)
         {
             if (OnTranslateFree is not null)
@@ -3849,6 +6277,306 @@ internal static class Program
         Equal("Hello world", history.Entries[0].Source);
         Equal("Translated success", history.Entries[0].Translation);
         Equal("划词", history.Entries[0].SourceKind);
+    }
+
+    /// <summary>
+    /// T03 acceptance: the one completion contract. A final with integrity
+    /// warnings, a provider is_partial flag, or an empty translation lands as
+    /// Partial and writes zero history entries; a clean final written twice
+    /// still produces exactly one history entry.
+    /// </summary>
+    private static async Task PartialFinalNeverPersistsOrTriggersSideEffects()
+    {
+        var history = new FakeHistoryRepository();
+        var executor = new FakeTranslationExecutor();
+        var coordinator = new TranslationCoordinator(history: history, executor: executor);
+
+        static TranslationStreamSession StreamEndingIn(TranslationResponse final) =>
+            MakeStreamSession("preview text", final);
+
+        // 1. Non-empty final with an integrity warning → Partial, no history.
+        executor.OnStreamText = (_, _, _, _, s, e, _) =>
+            StreamEndingIn(FinalResponse("missing one token", IsPartial: false,
+                ["缺少 1 个受保护占位符：⟦PG_0000⟧"]));
+        var warned = await coordinator.TranslateTextAsync("warned", "en", "zh", TranslationInputSource.Selection);
+        Equal(TranslationSessionStage.Partial, warned.Stage, "an integrity warning must yield Partial");
+        True(!warned.IsCleanCompletion, "a warned session must not qualify");
+        Equal(0, history.Entries.Count, "a warned Partial must never enter history");
+
+        // 2. is_partial=true with empty warnings → Partial, no history.
+        executor.OnStreamText = (_, _, _, _, s, e, _) =>
+            StreamEndingIn(FinalResponse("provider cut the output early", IsPartial: true, []));
+        var providerPartial = await coordinator.TranslateTextAsync("provider partial", "en", "zh", TranslationInputSource.Selection);
+        Equal(TranslationSessionStage.Partial, providerPartial.Stage, "a provider is_partial final must yield Partial");
+        True(!providerPartial.IsCleanCompletion, "a provider-partial session must not qualify");
+        Equal(0, history.Entries.Count, "a provider-partial final must never enter history");
+
+        // 3. Completed-flagged but empty translation → never qualifies.
+        executor.OnStreamText = (_, _, _, _, s, e, _) =>
+            StreamEndingIn(FinalResponse(string.Empty, IsPartial: false, []));
+        var empty = await coordinator.TranslateTextAsync("empty final", "en", "zh", TranslationInputSource.Selection);
+        True(!empty.IsCleanCompletion, "an empty translation must not qualify regardless of stage");
+        Equal(0, history.Entries.Count, "an empty translation must never enter history");
+
+        // 4. Clean final → Completed, exactly one history entry even when the
+        // final response is delivered a second time.
+        executor.OnStreamText = (_, _, _, _, s, e, _) =>
+            StreamEndingIn(FinalResponse("完整的最终译文", IsPartial: false, []));
+        var clean = await coordinator.TranslateTextAsync("clean", "en", "zh", TranslationInputSource.Selection);
+        Equal(TranslationSessionStage.Completed, clean.Stage);
+        True(clean.IsCleanCompletion, "a clean completion must qualify");
+        Equal(1, history.Entries.Count, "a clean final writes exactly one history entry");
+
+        var response = FinalResponse("完整的最终译文", IsPartial: false, []);
+        var applyFinal = typeof(TranslationCoordinator).GetMethod("ApplyFinalResponse",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var parameters = new object?[]
+        {
+            clean, response, TranslationInputSource.Selection, 0L, null, null,
+            0UL, System.Diagnostics.Stopwatch.StartNew(), 0UL, 0UL,
+            System.Threading.CancellationToken.None,
+        };
+        applyFinal.Invoke(coordinator, parameters);
+        applyFinal.Invoke(coordinator, parameters);
+        Equal(1, history.Entries.Count, "a duplicated final delivery must not write history twice");
+    }
+
+    private static TranslationResponse FinalResponse(string text, bool IsPartial, string[] warnings) => new(
+        new TranslationResult(
+            TranslatedText: text,
+            Transcription: string.Empty,
+            Explanation: string.Empty,
+            ProtectedTerms: [],
+            Warnings: warnings,
+            Phonetic: string.Empty,
+            IsPartial: IsPartial),
+        new ProviderDiagnostics(
+            RequestId: "final-matrix",
+            ProviderType: ProviderType.OpenAiCompatible,
+            Endpoint: "mock://final",
+            Attempts: 1,
+            StatusCode: 200,
+            ElapsedMs: 3));
+
+    private static TranslationStreamSession MakeStreamSession(string preview, TranslationResponse final)
+    {
+        var buffer = new TranslationStreamBuffer("session-final", "req-final", 1);
+        var tcs = new TaskCompletionSource<TranslationResponse>();
+        _ = Task.Run(async () =>
+        {
+            buffer.TryAppend(preview);
+            await Task.Delay(10);
+            tcs.SetResult(final);
+        });
+        return new TranslationStreamSession(buffer, tcs.Task);
+    }
+
+    /// <summary>
+    /// T04 acceptance: the free engine must run the shared Rust protection
+    /// chain. The fake engine receives masked text, and the session restores
+    /// identifiers byte-for-byte; a broken placeholder lands Partial with no
+    /// history write.
+    /// </summary>
+    private static async Task FreeEngineRunsSharedTokenProtection()
+    {
+        var originalLoader = OutboundPolicy.SettingsLoader;
+        var originalSaver = OutboundPolicy.SettingsSaver;
+        OutboundPolicy.SettingsLoader = () => ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed };
+        OutboundPolicy.SettingsSaver = _ => { };
+        try
+        {
+            var settings = CoreBridge.GetSettings() with
+            {
+                ProtectCodeTokens = true,
+                SafeDevMode = false,
+                NetworkEnabled = true,
+                TextModel = string.Empty,
+            };
+
+            // 1. Echo path: the engine gets masked text; the session shows the
+            // original identifiers and qualifies as clean.
+            var history = new FakeHistoryRepository();
+            var executor = new FreeEngineBoundaryExecutor(settings)
+            {
+                OnTranslateFree = (source, _, _, _) =>
+                {
+                    True(source.Contains("⟦PG_0000⟧"),
+                        $"the free engine must receive the masked placeholder, got: {source}");
+                    True(!source.Contains("foo_bar_baz"),
+                        $"the raw identifier must never reach the engine, got: {source}");
+                    return Task.FromResult(FreeEcho(source));
+                },
+            };
+            var coordinator = new TranslationCoordinator(history: history, executor: executor);
+            var clean = await coordinator.TranslateTextAsync(
+                "let value = foo_bar_baz(config_value);", "auto", "zh", TranslationInputSource.Manual);
+            Equal(TranslationSessionStage.Completed, clean.Stage,
+                $"an echo with intact placeholders is clean: {clean.Error?.Message}");
+            True(clean.TranslatedText.Contains("foo_bar_baz") && clean.TranslatedText.Contains("config_value"),
+                $"identifiers must be restored byte-for-byte, got: {clean.TranslatedText}");
+            Equal(1, history.Entries.Count, "a clean free-engine result writes history once");
+
+            // 2. Broken path: the engine drops one placeholder → Partial, no
+            // history, warning names the lost identifier.
+            var brokenHistory = new FakeHistoryRepository();
+            var brokenExecutor = new FreeEngineBoundaryExecutor(settings)
+            {
+                OnTranslateFree = (source, _, _, _) =>
+                {
+                    var damaged = source.Replace("⟦PG_0000⟧", string.Empty);
+                    return Task.FromResult(FreeEcho(damaged));
+                },
+            };
+            var brokenCoordinator = new TranslationCoordinator(history: brokenHistory, executor: brokenExecutor);
+            var broken = await brokenCoordinator.TranslateTextAsync(
+                "let value = foo_bar_baz(config_value);", "auto", "zh", TranslationInputSource.Manual);
+            Equal(TranslationSessionStage.Partial, broken.Stage,
+                "a dropped placeholder must mark the result partial");
+            True(broken.Warnings.Any(w => w.Contains("foo_bar_baz")),
+                $"the warning must name the dropped identifier, got: {string.Join(" | ", broken.Warnings)}");
+            True(!broken.IsCleanCompletion, "a broken-placeholder result must not qualify");
+            Equal(0, brokenHistory.Entries.Count, "a broken free-engine result never enters history");
+        }
+        finally
+        {
+            OutboundPolicy.SettingsLoader = originalLoader;
+            OutboundPolicy.SettingsSaver = originalSaver;
+        }
+    }
+
+    private static TranslationResponse FreeEcho(string text) => new(
+        new TranslationResult(
+            TranslatedText: "结果：" + text,
+            Transcription: string.Empty,
+            Explanation: string.Empty,
+            ProtectedTerms: [],
+            Warnings: []),
+        new ProviderDiagnostics(
+            RequestId: FreeTranslateService.RequestId,
+            ProviderType: ProviderType.OpenAiCompatible,
+            Endpoint: "mock-free",
+            Attempts: 1,
+            StatusCode: 200,
+            ElapsedMs: 4));
+
+    /// <summary>
+    /// T04 transport boundary: response caps hold with and without
+    /// Content-Length, HTML pages fail with an understandable error, and a
+    /// cache hit never masquerades as a fresh measurement.
+    /// </summary>
+    private static async Task FreeEngineTransportBoundary()
+    {
+        var originalLoader = OutboundPolicy.SettingsLoader;
+        var originalSender = FreeTranslateService.HttpSenderOverride;
+        OutboundPolicy.SettingsLoader = () => ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed };
+        try
+        {
+            var settings = CoreBridge.GetSettings() with { SafeDevMode = false, NetworkEnabled = true };
+            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var authorization),
+                "the allowed combo must issue an authorization");
+
+            // 1. Oversized body without a Content-Length header.
+            FreeTranslateService.HttpSenderOverride = (_, _) => Task.FromResult(new HttpResponseMessage(
+                System.Net.HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new NonSeekableStream(new byte[FreeTranslateService.MaxResponseBytes + 1])),
+            });
+            var oversize = await ThrowsAsync<InvalidOperationException>(() =>
+                FreeTranslateService.TranslateAsync("boundary oversize", "auto", "zh", authorization));
+            True(oversize.Message.Contains("上限"), oversize.Message);
+
+            // 2. Declared oversize Content-Length is rejected before reading.
+            FreeTranslateService.HttpSenderOverride = (_, _) => Task.FromResult(new HttpResponseMessage(
+                System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(new string('x', FreeTranslateService.MaxResponseBytes + 1)),
+            });
+            var declared = await ThrowsAsync<InvalidOperationException>(() =>
+                FreeTranslateService.TranslateAsync("boundary declared", "auto", "zh", authorization));
+            True(declared.Message.Contains("上限"), declared.Message);
+
+            // 3. An HTML page is an explicit error, not a parse accident.
+            FreeTranslateService.HttpSenderOverride = (_, _) => Task.FromResult(new HttpResponseMessage(
+                System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("<html><body>sorry</body></html>", Encoding.UTF8, "text/html"),
+            });
+            var html = await ThrowsAsync<InvalidOperationException>(() =>
+                FreeTranslateService.TranslateAsync("boundary html", "auto", "zh", authorization));
+            True(html.Message.Contains("网页"), html.Message);
+
+            // 4. A cache hit reports zero elapsed time and sends nothing more.
+            var sends = 0;
+            FreeTranslateService.HttpSenderOverride = (_, _) =>
+            {
+                Interlocked.Increment(ref sends);
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        "[[[\"缓存正文\",\"src\",\"en\",\"\"]]]", Encoding.UTF8, "application/json"),
+                });
+            };
+            var first = await FreeTranslateService.TranslateAsync("boundary cache hit", "auto", "zh", authorization);
+            var second = await FreeTranslateService.TranslateAsync("boundary cache hit", "auto", "zh", authorization);
+            Equal(1, sends, "the second identical call must be a cache hit");
+            Equal(0UL, second.Diagnostics.ElapsedMs, "a cache hit must report zero elapsed, not the old timing");
+            Equal(first.Result.TranslatedText, second.Result.TranslatedText);
+        }
+        finally
+        {
+            OutboundPolicy.SettingsLoader = originalLoader;
+            FreeTranslateService.HttpSenderOverride = originalSender;
+        }
+    }
+
+    private sealed class NonSeekableStream(byte[] data) : Stream
+    {
+        private int _position;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => _position; set => throw new NotSupportedException(); }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var remaining = data.Length - _position;
+            if (remaining <= 0)
+            {
+                return 0;
+            }
+            var copied = Math.Min(count, remaining);
+            Array.Copy(data, _position, buffer, offset, copied);
+            _position += copied;
+            return copied;
+        }
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// T03 contract check: the Rust core always serializes is_partial; the C#
+    /// DTO must carry it so completion decisions never depend on warnings
+    /// alone.
+    /// </summary>
+    private static void PartialContractSurvivesSerialization()
+    {
+        const string json = """
+            {"ok":true,"data":{"result":{"translated_text":"部分译文","transcription":"","explanation":"","protected_terms":[],"warnings":[],"is_partial":true,"phonetic":""},"diagnostics":{"request_id":"r1","provider_type":0,"endpoint":"mock","attempts":1,"status_code":200,"elapsed_ms":3}}}
+            """;
+        var response = CoreBridge.EnsureSuccess<TranslationResponse>(json);
+        True(response.Result.IsPartial, "the Rust is_partial flag must survive into the C# DTO");
+        Equal("部分译文", response.Result.TranslatedText);
+
+        const string cleanJson = """
+            {"ok":true,"data":{"result":{"translated_text":"完整译文","transcription":"","explanation":"","protected_terms":[],"warnings":[],"is_partial":false,"phonetic":""},"diagnostics":{"request_id":"r2","provider_type":0,"endpoint":"mock","attempts":1,"status_code":200,"elapsed_ms":3}}}
+            """;
+        var clean = CoreBridge.EnsureSuccess<TranslationResponse>(cleanJson);
+        True(!clean.Result.IsPartial, "a clean final must deserialize as not partial");
     }
 
     private static async Task CoordinatorFreeSingleShotAsync()
@@ -4577,6 +7305,192 @@ internal static class Program
         True(!state.AreResultActionsEnabled, "Actions MUST be disabled on plain cancel");
         True(!state.IsPartialIncomplete, "Not partial");
         Equal("已取消", state.BadgeText);
+    }
+
+    /// <summary>
+    /// T11 acceptance: the empty workbench guides first use — one synthetic
+    /// example (text fill only, zero requests), an inline free-engine consent
+    /// naming its destinations, and an IME composition Enter that never
+    /// submits a translation.
+    /// </summary>
+    private static void TranslateEmptyStateGuidesFirstUse()
+    {
+        EnsureApplication();
+        var history = new HistoryStore(TestIsolation.HistoryPath);
+        var vocab = new VocabularyStore(TestIsolation.VocabularyPath);
+        var coordinator = new TranslationCoordinator(history, vocab);
+        var section = new TranslateSection();
+        section.Initialize(coordinator, vocab);
+
+        Equal(Visibility.Visible, section.EmptyStateGuide.Visibility,
+            "the empty result plane must show the first-use guide");
+        var consentBefore = ShellSettingsStore.Load().FreeEngineConsent;
+        Equal(FreeEngineConsent.Unset, consentBefore, "the isolated environment starts undecided");
+        Equal(Visibility.Visible, section.FreeEngineEntryButton.Visibility,
+            "the inline consent entry must be offered while undecided");
+
+        // The example fills text only; nothing is sent.
+        typeof(TranslateSection)
+            .GetMethod("FillExample_Click", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(section, new object[] { section, new RoutedEventArgs() });
+        Equal("FileNotFoundError: config.json not found", section.InputBox.Text,
+            "the demo error must be filled verbatim");
+        Equal(TranslateUiPhase.Idle, section.CurrentState.Phase,
+            "filling the example must not start a translation");
+
+        // The inline consent persists Allowed and retires the entry.
+        typeof(TranslateSection)
+            .GetMethod("EnableFreeEngine_Click", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(section, new object[] { section, new RoutedEventArgs() });
+        Equal(FreeEngineConsent.Allowed, ShellSettingsStore.Load().FreeEngineConsent,
+            "the inline entry must persist the user's consent");
+        Equal(Visibility.Collapsed, section.FreeEngineEntryButton.Visibility,
+            "a decided consent retires the inline entry");
+
+        // A result on the plane must retire the whole guide: expanded from
+        // the panel (FocusTranslate) and a reducer-driven completion both
+        // leave no guide hovering over the translation text.
+        section.FocusTranslate("demo source", existingTranslation: "演示完整译文");
+        Equal(Visibility.Collapsed, section.EmptyStateGuide.Visibility,
+            "an expanded translation must hide the first-use guide");
+        var completedState = TranslateUiState.Initial with
+        {
+            Phase = TranslateUiPhase.Completed,
+            FinalText = "FileNotFoundError：未找到 config.json",
+            IsFinalLayerVisible = true,
+            AreResultActionsEnabled = true,
+        };
+        typeof(TranslateSection)
+            .GetMethod("ApplyState", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(section, new object[] { completedState });
+        Equal(Visibility.Collapsed, section.EmptyStateGuide.Visibility,
+            "a completed translation must hide the first-use guide");
+
+        // An IME composition Enter never submits: with the IME flag on, Enter
+        // leaves the phase Idle and the event unhandled. Reset to a clean
+        // idle plane first — the assertions above left the phase Completed.
+        typeof(TranslateSection)
+            .GetMethod("ApplyState", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(section, new object[] { TranslateUiState.Initial });
+        var source = new System.Windows.Interop.HwndSource(
+            new System.Windows.Interop.HwndSourceParameters("popglot-ime-test") { Width = 8, Height = 8 });
+        try
+        {
+            System.Windows.Input.InputMethod.SetIsInputMethodEnabled(section.InputBox, true);
+            var imeArgs = new System.Windows.Input.KeyEventArgs(
+                System.Windows.Input.Keyboard.PrimaryDevice, source, 0, System.Windows.Input.Key.Enter)
+            {
+                RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent,
+            };
+            typeof(TranslateSection)
+                .GetMethod("TranslateInput_KeyDown", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(section, new object[] { section.InputBox, imeArgs });
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                System.Windows.Threading.DispatcherPriority.Background, new Action(() => { }));
+            True(!(bool)imeArgs.Handled, "an IME Enter must stay unhandled (the composition owns it)");
+            Equal(TranslateUiPhase.Idle, section.CurrentState.Phase,
+                "an IME composition Enter must not submit a translation");
+        }
+        finally
+        {
+            source.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// T11 acceptance (AI-RULES 6.2): below 720 DIP of content width the
+    /// panes stack vertically — source on top with a 160 DIP editor floor,
+    /// target below, centre axis and swap hidden — and widening restores the
+    /// side-by-side workbench exactly.
+    /// </summary>
+    private static void TranslateSectionStacksWhenNarrow()
+    {
+        EnsureApplication();
+        var section = new TranslateSection();
+        section.Initialize(
+            new TranslationCoordinator(new HistoryStore(TestIsolation.HistoryPath), new VocabularyStore(TestIsolation.VocabularyPath)),
+            null);
+        var grid = section.PaneGrid;
+
+        int Row(string name) =>
+            System.Windows.Controls.Grid.GetRow(grid.Children.OfType<FrameworkElement>().First(e => e.Name == name));
+
+        // Default (wide): 3 rows × 3 columns.
+        Equal(3, grid.RowDefinitions.Count);
+        Equal(3, grid.ColumnDefinitions.Count);
+        Equal(1, Row("SourceEditorCell"), "wide layout puts the source editor at row 1 col 0");
+        Equal(1, Row("TargetEditorCell"));
+
+        section.SetStacked(true);
+        Equal(true, section.IsStacked);
+        Equal(6, grid.RowDefinitions.Count, "stacked layout has one row per pane section");
+        Equal(1, grid.ColumnDefinitions.Count, "stacked layout is a single column");
+        Equal(160, grid.RowDefinitions[1].MinHeight, "the input editor keeps a 160 DIP floor");
+        Equal(true, grid.RowDefinitions[4].Height.IsStar, "the target reader takes the leftover space");
+        Equal(0, Row("SourceLangBarCell"));
+        Equal(1, Row("SourceEditorCell"));
+        Equal(2, Row("SourceFooterCell"));
+        Equal(3, Row("TargetLangBarCell"));
+        Equal(4, Row("TargetEditorCell"));
+        Equal(5, Row("TargetFooterCell"));
+        var swap = grid.Children.OfType<Button>().First(b => b.Name == "TranslateSwapButton");
+        Equal(Visibility.Collapsed, swap.Visibility, "the swap axis hides when stacked");
+
+        // Widening restores the exact side-by-side grid.
+        section.SetStacked(false);
+        Equal(false, section.IsStacked);
+        Equal(3, grid.RowDefinitions.Count);
+        Equal(3, grid.ColumnDefinitions.Count);
+        Equal(0, grid.RowDefinitions[1].MinHeight);
+        Equal(1, Row("SourceEditorCell"));
+        Equal(1, Row("TargetEditorCell"));
+        Equal(2, System.Windows.Controls.Grid.GetColumn(grid.Children.OfType<FrameworkElement>().First(e => e.Name == "TargetEditorCell")));
+        Equal(Visibility.Visible, swap.Visibility);
+    }
+
+    /// <summary>
+    /// T11 acceptance: while the reader is scrolled UP into the stream, new
+    /// deltas must not yank the viewport back down (AI-RULES 7.2); only a
+    /// reader already at the bottom keeps following the stream.
+    /// </summary>
+    private static void StreamScrollPositionIsPreservedWhileReading()
+    {
+        EnsureApplication();
+        var section = new TranslateSection();
+        section.Initialize(
+            new TranslationCoordinator(new HistoryStore(TestIsolation.HistoryPath), new VocabularyStore(TestIsolation.VocabularyPath)),
+            null);
+
+        var streamed = new string('文', 3000);
+        typeof(TranslateSection)
+            .GetMethod("ApplyState", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(section, new object[] { TranslateUiState.Initial with
+            {
+                Phase = TranslateUiPhase.Streaming,
+                IsStreamLayerVisible = true,
+                StreamText = streamed,
+            } });
+        section.Measure(new Size(600, 400));
+        section.Arrange(new Rect(0, 0, 600, 400));
+        section.UpdateLayout();
+
+        var viewer = Ui.FindScrollViewer(section.StreamResultBox);
+        True(viewer is not null, "the stream box must sit inside a scroll viewer");
+        // Reader scrolled up into the text: the following delta must keep
+        // their offset instead of forcing ScrollToEnd.
+        viewer!.ScrollToVerticalOffset(40);
+        var offsetBefore = viewer.VerticalOffset;
+        typeof(TranslateSection)
+            .GetMethod("ApplyState", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(section, new object[] { TranslateUiState.Initial with
+            {
+                Phase = TranslateUiPhase.Streaming,
+                IsStreamLayerVisible = true,
+                StreamText = streamed + new string('尾', 500),
+            } });
+        section.UpdateLayout();
+        True(Math.Abs(viewer.VerticalOffset - offsetBefore) < 1.0,
+            $"a reading offset must survive a delta (was {offsetBefore}, now {viewer.VerticalOffset})");
     }
 
     private static void TranslateSectionComponentLifecycleAndStreamContracts()

@@ -344,6 +344,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     {
         _coordinator = coordinator;
         _vocabulary = vocabulary;
+        RefreshFreeEngineEntryVisibility();
     }
 
     // ================= Public accessors for MainWindow =================
@@ -353,6 +354,9 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     internal TextBox InputBox => TranslateInput;
     internal TextBox ResultBox => TranslateResult;
     internal TextBox StreamResultBox => TranslateStreamResult;
+    internal StackPanel EmptyStateGuide => TranslateEmptyState;
+    internal Button FreeEngineEntryButton => EnableFreeEngineButton;
+    internal System.Windows.Controls.Grid PaneGrid => TranslatePaneGrid;
     internal Border StreamIndicator => TranslateStreamIndicator;
     internal TextBlock AutoDetectHint => TranslateAutoDetectHint;
     internal TextBlock ExplanationText => TranslateExplanation;
@@ -381,6 +385,90 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             TranslateStatus.MaxWidth = 260;
         }
     }
+
+    private bool _stacked;
+
+    /// <summary>
+    /// Below 720 DIP of content width the panes stack vertically (AI-RULES
+    /// 6.2): source on top with at least 160 DIP of editor, target below,
+    /// the swap button and centre axis hidden instead of squeezing the text.
+    /// </summary>
+    internal void SetStacked(bool stacked)
+    {
+        if (_stacked == stacked)
+        {
+            return;
+        }
+        _stacked = stacked;
+
+        TranslatePaneGrid.RowDefinitions.Clear();
+        TranslatePaneGrid.ColumnDefinitions.Clear();
+        if (stacked)
+        {
+            for (var row = 0; row < 6; row++)
+            {
+                var inputRow = row == 1;
+                TranslatePaneGrid.RowDefinitions.Add(new RowDefinition
+                {
+                    Height = inputRow ? GridLength.Auto : row == 4 ? new GridLength(1, GridUnitType.Star) : GridLength.Auto,
+                    MinHeight = inputRow ? 160 : 0,
+                });
+            }
+            TranslatePaneGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            Place(SourceLangBarCell, 0);
+            Place(SourceEditorCell, 1);
+            Place(SourceFooterCell, 2);
+            Place(TargetLangBarCell, 3);
+            Place(TargetEditorCell, 4);
+            Place(TargetFooterCell, 5);
+            TargetLangBarCell.BorderThickness = new Thickness(0, 1, 0, 1);
+
+            TranslateSwapButton.Visibility = Visibility.Collapsed;
+            AxisTopCell.Visibility = Visibility.Collapsed;
+            AxisFooterCell.Visibility = Visibility.Collapsed;
+            AxisDividerLine.Visibility = Visibility.Collapsed;
+            EmptyStateHint.Text = "在上方输入或粘贴文本，按 Enter 翻译";
+            return;
+        }
+
+        TranslatePaneGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        TranslatePaneGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        TranslatePaneGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        TranslatePaneGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        TranslatePaneGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(40) });
+        TranslatePaneGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        Place(SourceLangBarCell, 0, 0);
+        Place(SourceEditorCell, 1, 0);
+        Place(SourceFooterCell, 2, 0);
+        Place(AxisTopCell, 0, 1);
+        System.Windows.Controls.Grid.SetRow(TranslateSwapButton, 0);
+        System.Windows.Controls.Grid.SetColumn(TranslateSwapButton, 1);
+        System.Windows.Controls.Grid.SetRowSpan(AxisDividerLine, 2);
+        Place(AxisDividerLine, 1, 1);
+        Place(AxisFooterCell, 2, 1);
+        Place(TargetLangBarCell, 0, 2);
+        Place(TargetEditorCell, 1, 2);
+        Place(TargetFooterCell, 2, 2);
+        TargetLangBarCell.BorderThickness = new Thickness(0, 0, 0, 1);
+
+        TranslateSwapButton.Visibility = Visibility.Visible;
+        AxisTopCell.Visibility = Visibility.Visible;
+        AxisFooterCell.Visibility = Visibility.Visible;
+        AxisDividerLine.Visibility = Visibility.Visible;
+        EmptyStateHint.Text = "在左侧输入或粘贴文本，按 Enter 翻译";
+
+        static void Place(System.Windows.UIElement element, int row, int column = 0)
+        {
+            System.Windows.Controls.Grid.SetRow(element, row);
+            System.Windows.Controls.Grid.SetColumn(element, column);
+            System.Windows.Controls.Grid.SetColumnSpan(element, 1);
+        }
+    }
+
+    internal bool IsStacked => _stacked;
+
     internal TextBlock EngineBadge => TranslateEngineBadge;
     internal TextBlock StatusBlock => TranslateStatus;
 
@@ -391,6 +479,12 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     private async void TranslateInput_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter || (Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+        {
+            return;
+        }
+        // An IME (Chinese pinyin etc.) consumes Enter to confirm the current
+        // composition — that Enter must never submit a translation.
+        if (System.Windows.Input.InputMethod.GetIsInputMethodEnabled(TranslateInput))
         {
             return;
         }
@@ -523,7 +617,8 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
                     MarkdownPresenter.RenderToFlowDocument(
                         TranslateRichResult.Document,
                         state.FinalText,
-                        Application.Current?.Resources ?? Resources);
+                        Application.Current?.Resources ?? Resources,
+                        resultActionsEnabled: state.AreResultActionsEnabled);
                     TranslateRichResult.Visibility = Visibility.Visible;
                     TranslateResult.Visibility = Visibility.Collapsed;
                 }
@@ -544,6 +639,53 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
         TranslateExplanation.Text = state.ExplanationText;
         TranslateExplanationBox.Visibility = state.IsExplanationVisible ? Visibility.Visible : Visibility.Collapsed;
+
+        // First-use guidance lives only on the empty, idle result plane.
+        var showEmptyState = !state.IsProgressVisible &&
+            !state.IsStreamLayerVisible &&
+            string.IsNullOrWhiteSpace(state.FinalText);
+        TranslateEmptyState.Visibility = showEmptyState ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Fills the agreed demo error — text only, no request. The user's next
+    /// action (Enter or the button) decides whether anything goes online.
+    /// </summary>
+    private void FillExample_Click(object sender, RoutedEventArgs e)
+    {
+        TranslateInput.Text = "FileNotFoundError: config.json not found";
+        TranslateInput.CaretIndex = TranslateInput.Text.Length;
+        TranslateInput.Focus();
+        TranslateStatus.Text = "已填入示例，按 Enter 或点「翻译」开始。";
+    }
+
+    /// <summary>
+    /// Inline first-use consent for the built-in public engine, with the
+    /// destinations named. Saving here is the same action the privacy page
+    /// performs; nothing is sent until the user actually translates.
+    /// </summary>
+    private void EnableFreeEngine_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var shell = ShellSettingsStore.Load();
+            var updated = shell with { FreeEngineConsent = FreeEngineConsent.Allowed };
+            ShellSettingsStore.Save(updated);
+            EnableFreeEngineButton.Visibility = Visibility.Collapsed;
+            TranslateStatus.Text = "已允许内置公共翻译；首次翻译会连接 translate.googleapis.com。";
+        }
+        catch (Exception exception)
+        {
+            TranslateStatus.Text = $"保存授权失败：{exception.Message}";
+        }
+    }
+
+    private void RefreshFreeEngineEntryVisibility()
+    {
+        var consent = ShellSettingsStore.Load().FreeEngineConsent;
+        EnableFreeEngineButton.Visibility = consent == FreeEngineConsent.Unset
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     private void TranslateInput_TextChanged(object sender, TextChangedEventArgs e) =>
@@ -624,19 +766,20 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     // ================= Result actions =================
 
     private void TranslateSourceSpeak_Click(object sender, RoutedEventArgs e) =>
-        SpeakOrStop(TranslateInput.Text);
+        SpeakOrStop(TranslateInput.Text, Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto));
 
     private void TranslateResultSpeak_Click(object sender, RoutedEventArgs e) =>
-        SpeakOrStop(TranslateResult.Text);
+        SpeakOrStop(MarkdownPresenter.ToPlainText(TranslateResult.Text),
+            Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN"));
 
-    private static void SpeakOrStop(string text)
+    private void SpeakOrStop(string text, string languageTag)
     {
         if (TtsService.IsSpeaking)
         {
             TtsService.Stop();
             return;
         }
-        TtsService.Speak(text);
+        TtsService.Speak(text, languageTag);
     }
 
     private void TranslateSourceCopy_Click(object sender, RoutedEventArgs e) => _ = CopySourceToClipboardAsync();
@@ -657,12 +800,12 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             TranslateStatus.Text = "先翻译一段内容再收藏。";
             return;
         }
-        var starred = _vocabulary.ToggleStar(
-            source, translation,
-            string.Empty, string.Empty,
-            Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto),
-            Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN"));
-        TranslateStatus.Text = starred ? "已加入生词本" : "已从生词本移除";
+        var sourceLang = Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto);
+        var targetLang = Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN");
+        var result = _vocabulary.ToggleStar(source, translation, string.Empty, string.Empty, sourceLang, targetLang);
+        TranslateStatus.Text = result.Persisted
+            ? (result.Starred ? "已加入生词本" : "已从生词本移除")
+            : result.DescribeFailureZh();
     }
 
     private void TranslateMergeLines_Click(object sender, RoutedEventArgs e)
@@ -688,7 +831,10 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
     private async Task CopyResultToClipboardAsync()
     {
-        if (await Helpers.CopyToClipboardAsync(TranslateResult.Text))
+        // Same formatter as the floating panel and quick search so every
+        // entry point copies the identical agreed plain text.
+        var clean = MarkdownPresenter.ToPlainText(TranslateResult.Text);
+        if (await Helpers.CopyToClipboardAsync(clean))
         {
             TranslateStatus.Text = "已复制译文。";
         }

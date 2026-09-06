@@ -285,6 +285,7 @@ public partial class SettingsWindow : Window
         Helpers.SelectComboByTag(GeneralSection.ThemeCombo, settings.Theme.ToString());
         CaptureSection.SetShellSettings(settings);
         CaptureSection.RefreshFreeEngineState();
+        CaptureSection.RefreshCloudSpeechState();
     }
 
     private void LoadPolicySettings()
@@ -408,7 +409,11 @@ public partial class SettingsWindow : Window
                 GeneralSection.AutoCopy.IsChecked == true,
                 GeneralSection.StartWithWindows.IsChecked == true,
                 ShortcutsSection.ShowWindowHotkey.BindingValue ?? _shellSettings.ShowWindowHotkey ?? HotkeyBinding.ShowWindowDefault,
-                FreeEngineConsent: _shellSettings.FreeEngineConsent);
+                FreeEngineConsent: _shellSettings.FreeEngineConsent,
+                // Consents and one-time hints live outside this form; saving it
+                // must never silently reset them to the defaults.
+                CloseHintShown: _shellSettings.CloseHintShown,
+                CloudSpeechEnabled: _shellSettings.CloudSpeechEnabled);
 
             var validationError = shellSettings.ValidateHotkeys();
             if (validationError is not null)

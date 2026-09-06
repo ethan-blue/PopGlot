@@ -56,8 +56,10 @@ public partial class DataSection : System.Windows.Controls.UserControl
         {
             return;
         }
-        _vocabulary.Clear();
-        StatusChanged?.Invoke("生词本已清空。", StatusTone.Info);
+        var cleared = _vocabulary.Clear();
+        StatusChanged?.Invoke(
+            cleared ? "生词本已清空。" : "清空生词本失败：文件正被占用。",
+            cleared ? StatusTone.Info : StatusTone.Error);
         DataCleared?.Invoke();
     }
 }

@@ -66,6 +66,18 @@ public static class ThemeAuditHelper
 
         // Primary button: token text colour on the neutral primary fill: >= 4.5:1
         AssertRatio(name, "PrimaryTextBrush", map["PrimaryTextBrush"], "PrimaryBrush", map["PrimaryBrush"], 4.5);
+        AssertRatio(name, "PrimaryTextBrush (hover)", map["PrimaryTextBrush"], "PrimaryHoverBrush", map["PrimaryHoverBrush"], 4.5);
+        AssertRatio(name, "PrimaryTextBrush (pressed)", map["PrimaryTextBrush"], "PrimaryPressedBrush", map["PrimaryPressedBrush"], 4.5);
+
+        // Danger button hover/pressed: the dark theme swaps to a deepened
+        // soft fill + red text precisely because white-on-bright-red fails.
+        AssertRatio(name, "DangerHoverTextBrush", map["DangerHoverTextBrush"], "DangerHoverBrush", map["DangerHoverBrush"], 4.5);
+        AssertRatio(name, "DangerPressedTextBrush", map["DangerPressedTextBrush"], "DangerPressedBrush", map["DangerPressedBrush"], 4.5);
+
+        // Focus ring: must clear non-text contrast against resting surfaces
+        // (the old AccentBorder ring was 2.10:1 on the light canvas).
+        AssertRatio(name, "FocusBrush (canvas)", map["FocusBrush"], "CanvasBrush", map["CanvasBrush"], 3.0);
+        AssertRatio(name, "FocusBrush (surface)", map["FocusBrush"], "SurfaceBrush", map["SurfaceBrush"], 3.0);
 
         // Homepage reading plane consistency: luminance difference between InputBrush and ResultSurfaceBrush <= 2%
         var inputLum = ThemeContrast.Luminance(map["InputBrush"]);

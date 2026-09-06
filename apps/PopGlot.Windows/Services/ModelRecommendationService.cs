@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace PopGlot.Windows.Services;
@@ -72,9 +74,38 @@ internal sealed record ModelBenchmarkMetric(
     double TotalDurationMs,
     bool Success = true)
 {
+    /// <summary>How long a measurement stays eligible for recommendations.</summary>
+    public static readonly TimeSpan FreshnessWindow = TimeSpan.FromDays(7);
+
+    /// <summary>Injectable clock so tests can age samples deterministically.</summary>
+    public static Func<DateTimeOffset> Clock { get; set; } = () => DateTimeOffset.UtcNow;
+
+    /// <summary>
+    /// The numbers must be finite and non-negative; a failed probe or a NaN
+    /// from a broken timer must never reach a score.
+    /// </summary>
+    public bool HasValidNumbers =>
+        Success &&
+        IsFiniteNonNegative(TtftMs) &&
+        IsFiniteNonNegative(CharsPerSecond) &&
+        IsFiniteNonNegative(TotalDurationMs);
+
+    private static bool IsFiniteNonNegative(double value) =>
+        !double.IsNaN(value) && !double.IsInfinity(value) && value >= 0;
+
+    /// <summary>
+    /// True when this observation matches the context exactly AND carries
+    /// valid numbers AND is still inside the freshness window. Expired data
+    /// stays on disk as history but must not influence the current ranking.
+    /// </summary>
     public bool MatchesContext(ModelBenchmarkContext? context, string targetModelId)
     {
-        if (context is null || !Success)
+        if (context is null || !HasValidNumbers)
+        {
+            return false;
+        }
+
+        if (Clock() - Timestamp > FreshnessWindow)
         {
             return false;
         }
@@ -97,6 +128,13 @@ internal sealed record ModelBenchmarkMetric(
         return NormalizeEndpoint(Endpoint) == NormalizeEndpoint(context.Endpoint);
     }
 
+    /// <summary>
+    /// Normalizes ONLY scheme, host and a redundant default port. The path
+    /// keeps its case (<c>/Model</c> and <c>/model</c> are different routes on
+    /// real servers) and a query string never enters the value in the clear —
+    /// queries frequently carry keys, so only a short fingerprint distinguishes
+    /// them (the same query still matches; a different one does not).
+    /// </summary>
     public static string NormalizeEndpoint(string? endpoint)
     {
         if (string.IsNullOrWhiteSpace(endpoint))
@@ -105,12 +143,27 @@ internal sealed record ModelBenchmarkMetric(
         }
 
         var trimmed = endpoint.Trim().TrimEnd('/');
-        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
         {
-            return $"{uri.Scheme}://{uri.Authority}{uri.AbsolutePath.TrimEnd('/')}".ToLowerInvariant();
+            return trimmed.ToLowerInvariant();
         }
 
-        return trimmed.ToLowerInvariant();
+        var authority = uri.Authority;
+        var isDefaultPort = (uri.Scheme == "https" && uri.Port == 443) ||
+                            (uri.Scheme == "http" && uri.Port == 80);
+        if (isDefaultPort && authority.EndsWith($":{uri.Port}", StringComparison.OrdinalIgnoreCase))
+        {
+            authority = authority[..^($"{uri.Port}".Length + 1)];
+        }
+
+        var normalized = $"{uri.Scheme}://{authority}{uri.AbsolutePath}".TrimEnd('/');
+        if (uri.Query.Length > 1)
+        {
+            var fingerprint = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(uri.Query)))[..8];
+            normalized = $"{normalized}?{fingerprint}";
+        }
+        return normalized;
     }
 }
 
@@ -213,13 +266,15 @@ internal static class ModelRecommendationService
             evaluations.Add(eval);
         }
 
-        // If the current configured model wasn't present in the catalog list, preserve it as a candidate anyway
+        // If the current configured model wasn't present in the catalog list, preserve it as a candidate anyway.
+        // No capability is invented for it: an unknown model stays Unknown in
+        // BOTH modalities (F14: a text target must never fabricate vision).
         if (!currentEvaluated && !string.IsNullOrWhiteSpace(currentNormalized))
         {
             var syntheticDescriptor = new ModelDescriptor(
                 Id: currentNormalized,
                 TextGeneration: CapabilityState.Unknown,
-                VisionInput: request.TargetUsage == ModelTargetUsage.Vision ? CapabilityState.Unknown : CapabilityState.Supported,
+                VisionInput: CapabilityState.Unknown,
                 CapabilitySource: "CurrentConfiguration");
 
             var syntheticEval = EvaluateModel(syntheticDescriptor, request, isCurrentSelected: true);
@@ -324,20 +379,30 @@ internal static class ModelRecommendationService
             evidence |= RecommendationEvidenceSource.FamilyHeuristics;
         }
 
-        // 5. Benchmark Matching
+        // 5. Benchmark Matching — all valid, matching samples aggregate into
+        // one median evidence point; the sample count rides along so the UI
+        // can say "试测" when n < 5 instead of implying a stable ranking.
         ModelBenchmarkMetric? matchedBenchmark = null;
         if (request.BenchmarkMetrics is not null && request.BenchmarkContext is not null)
         {
-            foreach (var metric in request.BenchmarkMetrics)
+            var matching = request.BenchmarkMetrics
+                .Where(metric => metric.MatchesContext(request.BenchmarkContext, modelId))
+                .OrderBy(metric => metric.Timestamp)
+                .ToList();
+            if (matching.Count > 0)
             {
-                if (metric.MatchesContext(request.BenchmarkContext, modelId))
+                var representative = matching[^1]; // newest observation carries identity fields
+                matchedBenchmark = representative with
                 {
-                    matchedBenchmark = metric;
-                    evidence |= RecommendationEvidenceSource.LocalBenchmark;
-                    detailedReasons.Add(
-                        $"匹配当前端点与本机实测基准 (Prompt: {metric.PromptVersion}, TTFT: {metric.TtftMs:F0}ms, 速度: {metric.CharsPerSecond:F1} 字符/秒)");
-                    break;
-                }
+                    TtftMs = Median(matching.Select(metric => metric.TtftMs)),
+                    CharsPerSecond = Median(matching.Select(metric => metric.CharsPerSecond)),
+                    TotalDurationMs = Median(matching.Select(metric => metric.TotalDurationMs)),
+                };
+                evidence |= RecommendationEvidenceSource.LocalBenchmark;
+                var trialNote = matching.Count < 5 ? "（试测，样本不足 5）" : $"（n={matching.Count}）";
+                detailedReasons.Add(
+                    $"匹配当前端点与本机实测基准{trialNote} (Prompt: {representative.PromptVersion}, " +
+                    $"TTFT 中位: {matchedBenchmark.TtftMs:F0}ms, 速度中位: {matchedBenchmark.CharsPerSecond:F1} 字符/秒)");
             }
         }
 
@@ -396,6 +461,14 @@ internal static class ModelRecommendationService
         }
 
         return NonGenerativePattern.IsMatch(model.Id ?? string.Empty);
+    }
+
+    /// <summary>Median of a non-empty sample set (mean of the two middle values for even counts).</summary>
+    private static double Median(IEnumerable<double> samples)
+    {
+        var sorted = samples.OrderBy(value => value).ToList();
+        var middle = sorted.Count / 2;
+        return sorted.Count % 2 == 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
     }
 
     private static double? ExtractParameterSize(string modelId)
@@ -589,7 +662,11 @@ internal static class ModelRecommendationService
 
         if (benchmark is not null && benchmark.Success)
         {
-            parts.Add($"实测响应快（TTFT ~{benchmark.TtftMs:F0}ms）");
+            // n < 5 is a trial, not a stable measurement; the wording must
+            // never oversell it.
+            parts.Add(benchmark.TtftMs > 0
+                ? $"本机实测响应（TTFT 中位 ~{benchmark.TtftMs:F0}ms，试测样本，仅供参考）"
+                : $"本机实测样本（仅供参考）");
         }
         else if (isReasoner)
         {

@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:PopGlot.Windows"
         xmlns:sections="clr-namespace:PopGlot.Windows.Sections"
-        Title="PopGlot" Width="1120" Height="760" MinWidth="920" MinHeight="640"
+        Title="PopGlot" Width="1120" Height="760" MinWidth="520" MinHeight="560"
         Icon="/PopGlot;component/Assets/PopGlot-v3.ico"
         Background="{DynamicResource CanvasBrush}" Foreground="{DynamicResource TextPrimaryBrush}"
         WindowStartupLocation="CenterScreen">

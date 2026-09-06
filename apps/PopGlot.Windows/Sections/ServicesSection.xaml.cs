@@ -1237,17 +1237,18 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         var isLocal = ProviderSettings.IsLocalBaseUrl(BaseUrlTextBox.Text);
         var descriptors = GetCandidateDescriptors();
 
-        // 1. Text model recommendation
+        // Ranking logic lives in the coordinator; the view only renders.
         var currentText = TextModelCombo.Text?.Trim();
-        var textRequest = new ModelRecommendationRequest(
-            ProviderType: providerType,
-            IsLocal: isLocal,
-            Models: descriptors,
-            TargetUsage: ModelTargetUsage.Text,
-            Preference: _currentPreference,
-            CurrentModelId: currentText);
+        var sharedVision = UseTextModelForVisionCheckBox.IsChecked == true;
+        var (textResult, visionResult) = ServiceDraftCoordinator.ComputeRecommendations(
+            providerType,
+            isLocal,
+            descriptors,
+            _currentPreference,
+            currentText,
+            VisionModelCombo.Text?.Trim(),
+            sharedVision);
 
-        var textResult = ModelRecommendationService.Recommend(textRequest);
         PopulateRecommendationChips(
             TextRecommendationChipsPanel,
             textResult.Candidates.Where(c => c.IsEligible).Take(3),
@@ -1265,45 +1266,33 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             TextEvidenceBadgeText,
             selectedTextEval);
 
-        // 2. Vision model recommendation
-        var sharedVision = UseTextModelForVisionCheckBox.IsChecked == true;
-        if (sharedVision)
+        if (visionResult is null)
         {
             VisionRecommendationChipsPanel.Children.Clear();
             if (VisionRecommendationReasonRow is not null)
             {
                 VisionRecommendationReasonRow.Visibility = Visibility.Collapsed;
             }
+            return;
         }
-        else
-        {
-            var currentVision = VisionModelCombo.Text?.Trim();
-            var visionRequest = new ModelRecommendationRequest(
-                ProviderType: providerType,
-                IsLocal: isLocal,
-                Models: descriptors,
-                TargetUsage: ModelTargetUsage.Vision,
-                Preference: _currentPreference,
-                CurrentModelId: currentVision);
 
-            var visionResult = ModelRecommendationService.Recommend(visionRequest);
-            PopulateRecommendationChips(
-                VisionRecommendationChipsPanel,
-                visionResult.Candidates.Where(c => c.IsEligible).Take(3),
-                isVision: true);
+        var currentVision = VisionModelCombo.Text?.Trim();
+        PopulateRecommendationChips(
+            VisionRecommendationChipsPanel,
+            visionResult.Candidates.Where(c => c.IsEligible).Take(3),
+            isVision: true);
 
-            var selectedVisionEval = visionResult.AllEvaluations.FirstOrDefault(e =>
-                !string.IsNullOrWhiteSpace(currentVision) &&
-                string.Equals(e.Model.Id?.Trim(), currentVision, StringComparison.OrdinalIgnoreCase))
-                ?? visionResult.RecommendedModel;
+        var selectedVisionEval = visionResult.AllEvaluations.FirstOrDefault(e =>
+            !string.IsNullOrWhiteSpace(currentVision) &&
+            string.Equals(e.Model.Id?.Trim(), currentVision, StringComparison.OrdinalIgnoreCase))
+            ?? visionResult.RecommendedModel;
 
-            UpdateRecommendationReason(
-                VisionRecommendationReasonRow,
-                VisionRecommendationReasonText,
-                VisionEvidenceBadge,
-                VisionEvidenceBadgeText,
-                selectedVisionEval);
-        }
+        UpdateRecommendationReason(
+            VisionRecommendationReasonRow,
+            VisionRecommendationReasonText,
+            VisionEvidenceBadge,
+            VisionEvidenceBadgeText,
+            selectedVisionEval);
     }
 
     private void PopulateRecommendationChips(
@@ -1540,25 +1529,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 string.Equals(uri.Host, host, StringComparison.OrdinalIgnoreCase));
     }
 
-    internal static IReadOnlyDictionary<string, string> ParseExtraHeaders(string text)
-    {
-        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var rawLine in text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
-        {
-            var line = rawLine.Trim();
-            if (line.Length == 0)
-            {
-                continue;
-            }
-            var separator = line.IndexOf(':', StringComparison.Ordinal);
-            if (separator <= 0 || separator == line.Length - 1)
-            {
-                throw new InvalidOperationException($"自定义请求头格式无效：{line}（应为 Header: Value）");
-            }
-            headers[line[..separator].Trim()] = line[(separator + 1)..].Trim();
-        }
-        return headers;
-    }
+    internal static IReadOnlyDictionary<string, string> ParseExtraHeaders(string text) =>
+        ServiceDraftCoordinator.ParseHeaders(text);
 
     // ================= Draft connection test =================
 
@@ -1932,9 +1904,12 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         try
         {
             var name = ServiceNameTextBox.Text.Trim();
-            if (string.IsNullOrWhiteSpace(name))
+            // Pure draft validation lives in the coordinator; the save
+            // orchestration (credential order, rollback) stays with the view.
+            var validationError = ServiceDraftCoordinator.Validate(name, BaseUrlTextBox.Text);
+            if (validationError is not null)
             {
-                throw new InvalidOperationException("请先填写服务名称。");
+                throw new InvalidOperationException(validationError);
             }
             var draft = BuildProfileFromForm(name);
             var config = ProfileManager.Load();
@@ -2097,40 +2072,22 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     internal ProviderProfile BuildProfileFromForm(string name)
     {
-        var baseUrl = BaseUrlTextBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(baseUrl))
-        {
-            throw new InvalidOperationException("API Base URL 不能为空。");
-        }
-        var isLocal = ProviderSettings.IsLocalBaseUrl(baseUrl);
+        // Thin view adapter: read the controls, hand plain values to the
+        // coordinator, which owns validation and construction.
         var textModel = TextModelCombo.Text.Trim();
-        var visionModel = UseTextModelForVisionCheckBox.IsChecked == true
-            ? textModel
-            : VisionModelCombo.Text.Trim();
-        if (!baseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase) && !isLocal)
-        {
-            throw new InvalidOperationException("API Base URL 必须使用 HTTPS；仅本机或局域网服务允许 HTTP。");
-        }
-        return new ProviderProfile
-        {
-            Name = name,
-            ProviderType = Helpers.SelectedEnum(ProviderTypeComboBox, ProviderType.OpenAiCompatible),
-            ApiBaseUrl = baseUrl,
-            TextEndpoint = string.IsNullOrWhiteSpace(TextEndpointTextBox.Text)
-                ? "/chat/completions" : TextEndpointTextBox.Text.Trim(),
-            VisionEndpoint = string.IsNullOrWhiteSpace(VisionEndpointTextBox.Text)
-                ? "/chat/completions" : VisionEndpointTextBox.Text.Trim(),
-            TextModel = textModel,
-            VisionModel = visionModel,
-            ExtraHeaders = new Dictionary<string, string>(
-                ParseExtraHeaders(ExtraHeadersTextBox.Text),
-                StringComparer.OrdinalIgnoreCase),
-            AnthropicVersion = string.IsNullOrWhiteSpace(AnthropicVersionTextBox.Text)
-                ? "2023-06-01" : AnthropicVersionTextBox.Text.Trim(),
-            SupportsText = !string.IsNullOrWhiteSpace(textModel),
-            SupportsVision = !string.IsNullOrWhiteSpace(visionModel),
-            AllowInsecureTls = AllowInsecureTlsCheckBox.IsChecked == true,
-            IsLocal = isLocal,
-        };
+        var inputs = new ServiceDraftInputs(
+            Name: name,
+            BaseUrl: BaseUrlTextBox.Text.Trim(),
+            ProviderType: Helpers.SelectedEnum(ProviderTypeComboBox, ProviderType.OpenAiCompatible),
+            TextEndpoint: TextEndpointTextBox.Text.Trim(),
+            VisionEndpoint: VisionEndpointTextBox.Text.Trim(),
+            TextModel: textModel,
+            VisionModel: UseTextModelForVisionCheckBox.IsChecked == true
+                ? textModel
+                : VisionModelCombo.Text.Trim(),
+            ExtraHeaders: ParseExtraHeaders(ExtraHeadersTextBox.Text),
+            AnthropicVersion: AnthropicVersionTextBox.Text,
+            AllowInsecureTls: AllowInsecureTlsCheckBox.IsChecked == true);
+        return ServiceDraftCoordinator.BuildDraft(inputs);
     }
 }

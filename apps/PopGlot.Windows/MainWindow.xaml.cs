@@ -102,9 +102,9 @@ public partial class MainWindow : Window
             var (summary, tone) = DescribeEngine(settings, hasKey, consent);
             if (UsesFreeEngine(settings, hasKey, consent))
             {
-                // The free engine is the active text route: the probe result
-                // replaces the static guess below, so show a probing state.
-                EngineSummary.Text = "内置免费引擎 · 检测中…";
+                // 免费引擎是当前文字线路，但可达性只能由用户主动探测得出：
+                // 打开/激活窗口绝不发请求，这里只显示“未检测”。
+                EngineSummary.Text = "内置免费引擎 · 未检测";
             }
             else
             {
@@ -117,13 +117,6 @@ public partial class MainWindow : Window
                 StatusTone.Info => "TextSecondaryBrush",
                 _ => "SuccessBrush",
             });
-
-            // When the built-in free engine is the active text route, probe it
-            // once so the footer shows verified reachability, not a guess.
-            if (UsesFreeEngine(settings, hasKey, consent))
-            {
-                _ = UpdateFreeEngineHealthAsync(force: false);
-            }
         }
         catch (Exception)
         {
@@ -142,21 +135,28 @@ public partial class MainWindow : Window
         consent != FreeEngineConsent.Denied;
 
     /// <summary>
-    /// Probes the free engine and paints the result into the footer — but only
-    /// when the free engine is the active text route. With a configured
-    /// provider the footer must keep showing the active model; the probe
-    /// result is still cached and surfaces in the switcher menu.
+    /// Probes the free engine and paints the result into the footer. Only a
+    /// user-initiated click reaches here, and the click must pass the same
+    /// outbound authorization and network gates as a translation; force only
+    /// refreshes the health cache, it never bypasses the gates.
     /// </summary>
     private async Task UpdateFreeEngineHealthAsync(bool force)
     {
         try
         {
+            var settings = CoreBridge.GetSettings();
+            if (!OutboundPolicy.AllowsFreeEngine(settings, out var gateDenial, out var authorization))
+            {
+                PaintFreeEngineNotProbed(gateDenial);
+                return;
+            }
+
             var paintsFooter = IsActiveRouteFreeEngine();
             if (force && paintsFooter)
             {
                 EngineSummary.Text = "内置免费引擎 · 检测中…";
             }
-            var health = await FreeTranslateService.GetHealthAsync(force);
+            var health = await FreeTranslateService.GetHealthAsync(force, authorization);
             if (!System.Windows.Application.Current.Dispatcher.CheckAccess())
             {
                 return; // window may be gone; RefreshEngineStatus will repaint next time
@@ -183,6 +183,20 @@ public partial class MainWindow : Window
         {
             // Probe failures already land in health.Error; never crash the footer.
         }
+    }
+
+    /// <summary>Footer state for “we have not verified reachability”.</summary>
+    private void PaintFreeEngineNotProbed(TranslationError? denial)
+    {
+        if (!System.Windows.Application.Current.Dispatcher.CheckAccess())
+        {
+            return; // window may be gone; RefreshEngineStatus will repaint next time
+        }
+        EngineSummary.Text = "免费引擎未检测";
+        EngineDot.Background = (Brush)FindResource("TextSecondaryBrush");
+        EngineHealthButton.ToolTip = denial is null
+            ? "免费引擎未检测 · 点击重新检测"
+            : $"未检测：{denial.Message}";
     }
 
     private bool IsActiveRouteFreeEngine()
@@ -255,11 +269,13 @@ public partial class MainWindow : Window
         }
 
         // 免费引擎是可显式选择的文字线路（仅文字；截图视觉线路不变），
-        // 并附带最近一次探测结果，选中前就知道通不通。
+        // 并附带最近一次探测结果；未探测过就如实显示“未检测”。
         var freeActive = config.PreferFreeEngine;
-        var freeState = FreeTranslateService.LastHealth.Ok
-            ? $"可用 · {FreeTranslateService.LastHealth.LatencyMs} ms"
-            : "当前不可用";
+        var freeState = !FreeTranslateService.HasHealthResult
+            ? "未检测"
+            : FreeTranslateService.LastHealth.Ok
+                ? $"可用 · {FreeTranslateService.LastHealth.LatencyMs} ms"
+                : "当前不可用";
         var freeItem = new MenuItem
         {
             Header = $"内置免费引擎 · {freeState} · 仅文字" + (freeActive ? "（当前）" : string.Empty),
@@ -468,14 +484,16 @@ public partial class MainWindow : Window
     // ================= Navigation =================
 
     /// <summary>
-    /// Compact breakpoint: below 900 DIP of content width the pages drop
-    /// secondary affordances instead of squeezing both panes. Never stacks
-    /// the dual panes — this is a desktop workbench.
+    /// Responsive breakpoints driven by the CONTENT area, never the screen:
+    /// below 880 DIP the pages drop secondary affordances, below 720 DIP the
+    /// dual panes stack vertically with the input editor keeping ≥160 DIP
+    /// (AI-RULES 6.2) — the text is never shrunk to keep buttons inline.
     /// </summary>
     private void ContentGrid_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         var compact = e.NewSize.Width < 880;
         TranslateSection.SetCompact(compact);
+        TranslateSection.SetStacked(e.NewSize.Width < 720);
     }
 
     private void Nav_Checked(object sender, RoutedEventArgs e)

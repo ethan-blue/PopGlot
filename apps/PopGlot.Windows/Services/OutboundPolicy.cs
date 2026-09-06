@@ -17,6 +17,15 @@ internal enum FreeEngineDecision
 }
 
 /// <summary>
+/// Proof that <see cref="OutboundPolicy"/> authorized free-engine traffic for
+/// one send scope, carrying the exact network settings the decision was made
+/// against. Issued only on the Allowed/AllowOnce paths; the last send layer
+/// (<see cref="FreeTranslateService"/>) refuses to transmit without one, so a
+/// UI or health-probe caller can never bypass the policy.
+/// </summary>
+internal sealed record FreeEngineAuthorization(ProviderSettings Settings, bool IsOnceOnly);
+
+/// <summary>
 /// The single authority on whether the built-in free web engine may send text.
 /// Windows and services must never re-derive this from booleans themselves.
 /// </summary>
@@ -40,10 +49,15 @@ internal static class OutboundPolicy
     /// SafeDevMode and disabled network deny unconditionally; otherwise the
     /// persisted consent decides, and the very first use asks.
     /// </summary>
+    public static bool AllowsFreeEngine(ProviderSettings settings, out TranslationError? denial) =>
+        AllowsFreeEngine(settings, out denial, out _);
+
     public static bool AllowsFreeEngine(
         ProviderSettings settings,
-        out TranslationError? denial)
+        out TranslationError? denial,
+        out FreeEngineAuthorization? authorization)
     {
+        authorization = null;
         if (settings.SafeDevMode || !settings.NetworkEnabled)
         {
             denial = new TranslationError(
@@ -66,6 +80,7 @@ internal static class OutboundPolicy
         if (consent == FreeEngineConsent.Allowed)
         {
             denial = null;
+            authorization = new FreeEngineAuthorization(settings, IsOnceOnly: false);
             return true;
         }
 
@@ -79,11 +94,15 @@ internal static class OutboundPolicy
         {
             PersistConsent(FreeEngineConsent.Allowed);
             denial = null;
+            authorization = new FreeEngineAuthorization(settings, IsOnceOnly: false);
             return true;
         }
         if (decision == FreeEngineDecision.AllowOnce)
         {
             denial = null;
+            // AllowOnce covers exactly the send it was asked for — never a
+            // later automatic health probe.
+            authorization = new FreeEngineAuthorization(settings, IsOnceOnly: true);
             return true;
         }
         if (ConsentPrompt is null)

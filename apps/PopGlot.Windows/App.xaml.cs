@@ -53,9 +53,83 @@ public partial class App : Application
 
     private ShellSettings _shellSettings = ShellSettings.Default;
 
+    private static (string markerPath, string dataDir)? ReadSmokeMarkerPath(string[] args)
+    {
+        for (var i = 0; i < args.Length - 1; i++)
+        {
+            if (!args[i].Equals("--smoke-startup", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            var markerPath = args[i + 1];
+            var dataDir = i + 2 < args.Length && !args[i + 2].StartsWith("--", StringComparison.Ordinal)
+                ? args[i + 2]
+                : Path.Combine(Path.GetTempPath(), $"popglot-smoke-{Guid.NewGuid():N}");
+            return (markerPath, dataDir);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Executes the real startup sequence against an isolated data directory
+    /// and records when the tray became usable. Deliberately runs the same
+    /// steps as a normal launch — this is a measurement mode, not a shortcut.
+    /// </summary>
+    private void RunStartupSmoke(string markerPath, string dataDir)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        string? failure = null;
+        try
+        {
+            StoragePaths.RootOverride = dataDir;
+            _shellSettings = ShellSettingsStore.Load();
+            ThemeService.Apply(_shellSettings.Theme);
+            CoreBridge.Initialize();
+            TtsService.CleanupStaleTempFiles();
+            _hotkeyOwner = CreateHotkeyOwnerWindow();
+            _hotkeys = new HotkeyService(_hotkeyOwner);
+            _hotkeys.Pressed += (_, action) => HandleHotkey(action);
+            CreateTrayIcon();
+        }
+        catch (Exception exception)
+        {
+            failure = $"{exception.GetType().Name}: {exception.Message}";
+        }
+        stopwatch.Stop();
+
+        try
+        {
+            var payload = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                trayAvailableMs = stopwatch.ElapsedMilliseconds,
+                failure,
+                startedUtc = DateTimeOffset.UtcNow,
+                version = typeof(App).Assembly.GetName().Version?.ToString(),
+            });
+            File.WriteAllText(markerPath, payload);
+        }
+        catch
+        {
+            // A marker write failure must not keep the process alive.
+        }
+        Shutdown(failure is null ? 0 : 1);
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // ---- Performance smoke mode (T15): `--smoke-startup <marker> [dataDir]` ----
+        // Runs the REAL startup steps — settings, native core, hotkeys, tray —
+        // against an explicitly given data directory, records the elapsed
+        // milliseconds to the marker file, and exits. It never touches the
+        // user's real configuration; normal launches never see this path.
+        var smoke = ReadSmokeMarkerPath(e.Args);
+        if (smoke is not null)
+        {
+            RunStartupSmoke(smoke.Value.markerPath, smoke.Value.dataDir);
+            return;
+        }
 
         // Crash barriers of last resort: the credential vault and profile
         // store can throw Win32Exception from innocent-looking async paths
@@ -87,6 +161,7 @@ public partial class App : Application
             ThemeService.Apply(_shellSettings.Theme);
             CoreBridge.Initialize();
             TtsService.CleanupStaleTempFiles();
+            DiagnosticsLog.CleanupIfStale(StoragePaths.Logs, force: true);
             AnnounceStartupNotice();
             // Free-engine first-use authorization lives in
             // 「设置 → 隐私与数据」— no runtime popup interrupts translation.
@@ -150,30 +225,18 @@ public partial class App : Application
 
     private void InterceptCrash(Exception exception)
     {
-        LogCrashToFile(exception);
-        TryNotifyCrash(exception);
-    }
-
-    private static void LogCrashToFile(Exception exception)
-    {
+        DiagnosticsLog.Log(exception);
+        // The failing operation must not keep a wedged request running behind
+        // a UI thread that just faulted; cancel it so the app returns to a
+        // usable state instead of waiting on a callback that may never come.
         try
         {
-            var dir = System.IO.Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "PopGlot", "logs");
-            System.IO.Directory.CreateDirectory(dir);
-            var file = System.IO.Path.Combine(dir, $"crash-{DateTime.Now:yyyyMMdd}.log");
-            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {exception.GetType().Name}: {exception.Message}"
-
-                       + Environment.NewLine
-
-                       + exception.StackTrace + Environment.NewLine + Environment.NewLine;
-            System.IO.File.AppendAllText(file, line);
+            CoreBridge.CancelActiveRequest();
         }
-        catch (Exception)
+        catch
         {
-            // Logging is best-effort; never throw from the crash handler.
         }
+        TryNotifyCrash(exception);
     }
 
     private void TryNotifyCrash(Exception exception)
@@ -195,7 +258,9 @@ public partial class App : Application
                 ? $"（已拦截并记录，另静默拦截 {_crashSuppressedCount} 次）"
                 : "（已拦截并记录，程序继续运行）";
             _crashSuppressedCount = 0;
-            Notify("PopGlot 遇到问题", $"{exception.Message}{suffix}", Forms.ToolTipIcon.Error);
+            // The balloon shows a sanitized summary — never the raw exception
+            // text, which can contain headers, keys or URL queries.
+            Notify("PopGlot 遇到问题", $"{DiagnosticsLog.CrashSummary(exception)}{suffix}", Forms.ToolTipIcon.Error);
         }
         catch (Exception)
         {
@@ -714,14 +779,22 @@ public partial class App : Application
     /// </summary>
     private static Drawing.Icon LoadAppIconFromResource()
     {
-        var resource = Application.GetResourceStream(
-            new Uri("pack://application:,,,/Assets/PopGlot-v3.ico"));
-        if (resource is not null)
+        try
         {
-            using var stream = resource.Stream;
-            return new Drawing.Icon(stream);
+            // GetResourceStream THROWS when the resource is missing (it does
+            // not return null): a partial or mixed-file install must degrade
+            // to the system icon, not fail the whole startup over an icon.
+            var resource = Application.GetResourceStream(
+                new Uri("pack://application:,,,/Assets/PopGlot-v3.ico"));
+            if (resource is not null)
+            {
+                using var stream = resource.Stream;
+                return new Drawing.Icon(stream);
+            }
         }
-        // Resource missing must not crash the tray; fall back to the Forms default.
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or UriFormatException)
+        {
+        }
         return System.Drawing.SystemIcons.Application;
     }
 

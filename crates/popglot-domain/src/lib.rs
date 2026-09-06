@@ -52,6 +52,11 @@ pub struct ProviderSettings {
     /// Master offline switch. When enabled, no outbound model request is made
     /// regardless of every other permission.
     pub safe_dev_mode: bool,
+    /// Independent, explicit permission for services hosted on another LAN
+    /// device (RFC1918 / IPv6 ULA). A private-range URL never grants this by
+    /// itself: content sent there has already left the machine.
+    #[serde(default)]
+    pub allow_lan_endpoints: bool,
     /// Opt-in for private relays reached by bare IP or self-signed TLS.
     pub allow_insecure_tls: bool,
     pub api_key_configured: bool,
@@ -85,6 +90,9 @@ pub struct VisionProviderSettings {
     pub anthropic_version: String,
     #[serde(default)]
     pub allow_insecure_tls: bool,
+    /// Explicit permission for a vision service on another LAN device.
+    #[serde(default)]
+    pub allow_lan_endpoints: bool,
 }
 
 impl Default for ProviderSettings {
@@ -108,6 +116,8 @@ impl Default for ProviderSettings {
             // Screenshots never leave the machine unless the user opts in.
             allow_image_upload_in_auto: false,
             safe_dev_mode: false,
+            // A LAN service on another device is never trusted by default.
+            allow_lan_endpoints: false,
             allow_insecure_tls: false,
             api_key_configured: false,
             source_language: AUTO_LANGUAGE.to_owned(),
@@ -165,6 +175,7 @@ impl ProviderSettings {
             mode: TranslationMode,
             allow_image_upload_in_auto: Option<bool>,
             safe_dev_mode: bool,
+            allow_lan_endpoints: Option<bool>,
             allow_insecure_tls: bool,
             api_key_configured: bool,
             source_language: String,
@@ -194,6 +205,7 @@ impl ProviderSettings {
                     mode: defaults.mode,
                     allow_image_upload_in_auto: None,
                     safe_dev_mode: defaults.safe_dev_mode,
+                    allow_lan_endpoints: None,
                     allow_insecure_tls: defaults.allow_insecure_tls,
                     api_key_configured: defaults.api_key_configured,
                     source_language: defaults.source_language.clone(),
@@ -222,6 +234,7 @@ impl ProviderSettings {
             mode: shadow.mode,
             allow_image_upload_in_auto: shadow.allow_image_upload_in_auto.unwrap_or(false),
             safe_dev_mode: shadow.safe_dev_mode,
+            allow_lan_endpoints: shadow.allow_lan_endpoints.unwrap_or(false),
             allow_insecure_tls: shadow.allow_insecure_tls,
             api_key_configured: shadow.api_key_configured,
             source_language: shadow.source_language,
@@ -254,6 +267,9 @@ impl ProviderSettings {
                 vision.anthropic_version.clone()
             },
             allow_insecure_tls: vision.allow_insecure_tls,
+            // The vision route carries its own LAN permission, independent of
+            // the text route's.
+            allow_lan_endpoints: vision.allow_lan_endpoints,
             supports_vision: true,
             supports_text: false,
             vision_provider: None,
@@ -302,6 +318,10 @@ pub struct ProviderProfile {
     pub allow_insecure_tls: bool,
     pub credential_target: String,
     pub is_local: bool,
+    /// Explicit permission for a service on another LAN device. Never derived
+    /// from the URL alone; older configs deserialize as false.
+    #[serde(default)]
+    pub allow_lan_endpoints: bool,
 }
 
 impl Default for ProviderProfile {
@@ -329,6 +349,7 @@ impl ProviderProfile {
             allow_insecure_tls: false,
             credential_target: "PopGlot/provider/openai-default".to_owned(),
             is_local: false,
+            allow_lan_endpoints: false,
         }
     }
 
@@ -350,6 +371,7 @@ impl ProviderProfile {
             allow_insecure_tls: false,
             credential_target: "PopGlot/provider/deepseek".to_owned(),
             is_local: false,
+            allow_lan_endpoints: false,
         }
     }
 
@@ -371,6 +393,7 @@ impl ProviderProfile {
             allow_insecure_tls: false,
             credential_target: "PopGlot/provider/ollama-local".to_owned(),
             is_local: true,
+            allow_lan_endpoints: false,
         }
     }
 
@@ -392,6 +415,7 @@ impl ProviderProfile {
             allow_insecure_tls: false,
             credential_target: "PopGlot/provider/gemini".to_owned(),
             is_local: false,
+            allow_lan_endpoints: false,
         }
     }
 
@@ -413,6 +437,7 @@ impl ProviderProfile {
             allow_insecure_tls: false,
             credential_target: "PopGlot/provider/claude".to_owned(),
             is_local: false,
+            allow_lan_endpoints: false,
         }
     }
 
@@ -443,6 +468,7 @@ impl ProviderProfile {
             mode: prefs.mode,
             allow_image_upload_in_auto: policy.allow_image_upload_in_auto,
             safe_dev_mode: policy.safe_dev_mode,
+            allow_lan_endpoints: self.allow_lan_endpoints,
             allow_insecure_tls: self.allow_insecure_tls || policy.allow_insecure_tls,
             api_key_configured: false,
             source_language: prefs.source_language.clone(),
@@ -589,12 +615,21 @@ impl CoreProductConfig {
     }
 }
 
-/// Whether a Base URL addresses loopback or an RFC1918 private network.
-///
-/// Substring matching (the previous approach) misclassified public hosts such
-/// as `relay-10.example.com` as local and silently skipped the credential gate.
+/// Where an endpoint's host actually lives. The three classes carry
+/// different permissions: loopback stays on the machine, a private-range
+/// address is another device on the LAN, anything else is the internet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EndpointClass {
+    Loopback,
+    PrivateNetwork,
+    Internet,
+}
+
+/// Classifies an endpoint's host. Unknown or malformed input is classified
+/// conservatively as [`EndpointClass::Internet`].
 #[must_use]
-pub fn is_local_base_url(base_url: &str) -> bool {
+pub fn classify_endpoint(base_url: &str) -> EndpointClass {
     let trimmed = base_url.trim();
     // `Url::parse` needs a scheme; accept a bare `host:port` too.
     let candidate = if trimmed.contains("://") {
@@ -602,15 +637,27 @@ pub fn is_local_base_url(base_url: &str) -> bool {
     } else {
         format!("http://{trimmed}")
     };
-    let Ok(parsed) = url_host(&candidate) else {
-        return false;
+    let Ok(host) = url_host(&candidate) else {
+        return EndpointClass::Internet;
     };
-    is_local_host(&parsed)
+    classify_host(&host)
+}
+
+/// Whether a Base URL addresses the machine itself or an RFC1918/ULA private
+/// network — the cases that may skip the credential gate and use plain HTTP.
+///
+/// Substring matching (the previous approach) misclassified public hosts such
+/// as `relay-10.example.com` as local and silently skipped the credential gate.
+#[must_use]
+pub fn is_local_base_url(base_url: &str) -> bool {
+    !matches!(classify_endpoint(base_url), EndpointClass::Internet)
 }
 
 fn url_host(candidate: &str) -> Result<String, ()> {
     // Minimal host extraction that does not pull a URL crate into the domain
-    // layer: strip scheme, credentials, port, and path.
+    // layer: strip scheme, credentials, port, and path. A malformed port
+    // makes the whole URL unclassifiable, so it errors into the conservative
+    // Internet class.
     let after_scheme = candidate
         .split_once("://")
         .map_or(candidate, |(_, rest)| rest);
@@ -621,35 +668,57 @@ fn url_host(candidate: &str) -> Result<String, ()> {
     let authority = authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host);
-    let host = if let Some(end) = authority.strip_prefix('[').and_then(|rest| rest.find(']')) {
-        // IPv6 literal: `[::1]:11434`
-        &authority[1..=end]
-    } else {
-        authority.split(':').next().unwrap_or_default()
-    };
-    if host.is_empty() {
-        Err(())
-    } else {
-        Ok(host.to_ascii_lowercase())
+    let (host, port) =
+        if let Some(end) = authority.strip_prefix('[').and_then(|rest| rest.find(']')) {
+            // IPv6 literal: `[::1]:11434`
+            let rest = &authority[end + 1..];
+            let port = rest.strip_prefix(':').unwrap_or_default();
+            (&authority[1..=end], port)
+        } else {
+            match authority.split_once(':') {
+                Some((host, port)) => (host, port),
+                None => (authority, ""),
+            }
+        };
+    if host.is_empty() || (!port.is_empty() && port.parse::<u16>().is_err()) {
+        return Err(());
     }
+    Ok(host.to_ascii_lowercase())
 }
 
-fn is_local_host(host: &str) -> bool {
-    if matches!(host, "localhost" | "::1" | "[::1]") || host.ends_with(".localhost") {
-        return true;
+fn classify_host(host: &str) -> EndpointClass {
+    if matches!(host, "localhost" | "::1") || host.ends_with(".localhost") {
+        return EndpointClass::Loopback;
     }
-    let octets: Vec<u8> = host
-        .split('.')
-        .filter_map(|part| part.parse::<u8>().ok())
-        .collect();
-    if octets.len() != 4 || host.split('.').count() != 4 {
-        return false;
+    if let Ok(address) = host.parse::<std::net::Ipv4Addr>() {
+        let octets = address.octets();
+        return match (octets[0], octets[1]) {
+            (127, _) => EndpointClass::Loopback,
+            (10, _) | (192, 168) => EndpointClass::PrivateNetwork,
+            (172, second) if (16..=31).contains(&second) => EndpointClass::PrivateNetwork,
+            _ => EndpointClass::Internet,
+        };
     }
-    match (octets[0], octets[1]) {
-        (127 | 10, _) | (192, 168) => true,
-        (172, second) => (16..=31).contains(&second),
-        _ => false,
+    if let Ok(address) = host.parse::<std::net::Ipv6Addr>() {
+        let segments = address.segments();
+        if segments[0] == 1
+            && segments[1] == 0
+            && segments[2] == 0
+            && segments[3] == 0
+            && segments[4] == 0
+            && segments[5] == 0
+            && segments[6] == 0
+            && segments[7] == 1
+        {
+            return EndpointClass::Loopback; // ::1
+        }
+        // Unique local addresses: fc00::/7 (fc/fd first byte).
+        if segments[0] & 0xFE00 == 0xFC00 {
+            return EndpointClass::PrivateNetwork;
+        }
+        return EndpointClass::Internet;
     }
+    EndpointClass::Internet
 }
 
 /// Wire protocol used by the active model provider.
@@ -684,20 +753,32 @@ impl ProviderType {
     }
 }
 
-/// Observable inputs to automatic routing. No opaque model-side decision is used.
+/// Observable inputs to screenshot routing. The shell collects every fact
+/// before capture; the domain owns the decision. No opaque model-side or
+/// pseudo-quality input exists: fields the shell cannot actually observe
+/// were removed rather than fed constants.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-// These flags are independent observations from capture/OCR, not mutually
-// exclusive states. Named booleans keep the routing contract direct.
+// Independent user permissions / platform observations, each answering a
+// different question — collapsing them into an enum would hide real
+// combinations the decision table must distinguish.
 #[allow(clippy::struct_excessive_bools)]
 pub struct RoutingContext {
     pub requested_mode: TranslationMode,
+    /// A vision profile exists with a named model and is reachable
+    /// (network on / safe mode off / key where required).
     pub vision_configured: bool,
+    /// The vision endpoint class as the shell classified it
+    /// ("loopback" | "private" | "internet"); "unknown" is refused like
+    /// "internet" but reported distinctly in the reason.
+    pub vision_endpoint_class: String,
+    /// The user's separate allow-upload-to-vision permission.
     pub image_upload_allowed: bool,
+    /// The user's separate allow-LAN-endpoints permission.
+    pub allow_lan_endpoints: bool,
+    /// Windows OCR language packs are installed.
     pub local_ocr_available: bool,
-    pub looks_like_code: bool,
-    pub complex_layout: bool,
-    pub image_quality: f32,
-    pub ocr_confidence: f32,
+    /// A text route exists to carry the translation phase of `VisionOcr`.
+    pub text_route_available: bool,
 }
 
 impl RoutingContext {
@@ -714,12 +795,11 @@ impl RoutingContext {
         Self {
             requested_mode: settings.mode,
             vision_configured: settings.vision_is_configured() && can_reach_model,
+            vision_endpoint_class: "internet".to_owned(),
             image_upload_allowed: settings.allow_image_upload_in_auto,
+            allow_lan_endpoints: settings.allow_lan_endpoints,
             local_ocr_available,
-            looks_like_code: false,
-            complex_layout: false,
-            image_quality: 1.0,
-            ocr_confidence: 1.0,
+            text_route_available: true,
         }
     }
 }
@@ -736,86 +816,169 @@ pub struct RoutingDecision {
 #[must_use]
 pub fn select_route(context: &RoutingContext) -> RoutingDecision {
     match context.requested_mode {
-        TranslationMode::LocalOcr => local_or_blocked(
-            context,
-            "forced_local_ocr",
-            "已按设置使用本地 OCR；截图不会上传给视觉模型。",
-        ),
-        TranslationMode::VisionDirect | TranslationMode::VisionOcr => {
-            if !context.vision_configured {
-                local_or_blocked(
-                    context,
-                    "vision_not_configured",
-                    "视觉模型不可用，已安全回退到本地 OCR 与文本模型。",
-                )
-            } else if !context.image_upload_allowed {
-                local_or_blocked(
-                    context,
-                    "image_upload_not_allowed",
-                    "当前隐私设置不允许上传截图，已安全回退到本地 OCR。",
+        // Explicit LocalOcr: local recognition when the engine exists; a
+        // refusal to upload otherwise — never a silent picture upload.
+        TranslationMode::LocalOcr => {
+            if context.local_ocr_available {
+                local_decision(
+                    "forced_local_ocr",
+                    "已按设置使用本地 OCR；截图不会上传给视觉模型。",
                 )
             } else {
-                vision_decision("forced_vision", "已按设置使用视觉模型直接识别并翻译截图。")
+                RoutingDecision {
+                    selected_mode: TranslationMode::LocalOcr,
+                    reason_code: "forced_local_ocr_without_engine".to_owned(),
+                    explanation_zh: "已指定本地 OCR，但系统没有可用的 OCR 语言包。".to_owned(),
+                    may_upload_image: false,
+                }
             }
         }
+        TranslationMode::VisionDirect => select_vision_direct(context),
+        TranslationMode::VisionOcr => select_vision_ocr(context),
         TranslationMode::Auto => select_auto_route(context),
     }
 }
 
-fn select_auto_route(context: &RoutingContext) -> RoutingDecision {
+/// Vision usability as a fact triple: (usable, `leaves_device`, block reason).
+/// An unavailable-but-requested vision route BLOCKS with a precise reason —
+/// explicit user choices never silently degrade to another pipeline.
+fn vision_admission(context: &RoutingContext) -> Result<(bool, bool), String> {
     if !context.vision_configured {
-        return local_or_blocked(
-            context,
-            "auto_no_vision_model",
-            "未配置可用的视觉模型，自动模式使用本地 OCR 与文本模型。",
+        return Err("未配置可用的图片服务，请先选择图片模型。".to_owned());
+    }
+    let class = context.vision_endpoint_class.as_str();
+    let leaves_device = class != "loopback";
+    if !context.image_upload_allowed && leaves_device {
+        return Err("所选图片服务为远程服务，但当前未允许截图离开设备。".to_owned());
+    }
+    if class == "private" && !context.allow_lan_endpoints {
+        return Err(
+            "该图片服务位于局域网的另一台设备；需在设置中单独允许局域网模型，并允许截图上传。"
+                .to_owned(),
         );
     }
-    if !context.image_upload_allowed {
-        return local_or_blocked(
-            context,
-            "auto_upload_disabled",
-            "自动模式未获准上传截图，使用本地 OCR 与文本模型。",
-        );
+    if class != "loopback" && class != "private" && class != "internet" {
+        return Err("图片服务地址无法分类，已按远程地址处理并被当前设置阻止。".to_owned());
     }
-    // Without a local OCR engine there is nothing to fall back to, so a
-    // permitted vision model is the only route that can produce a result.
-    if !context.local_ocr_available {
-        return vision_decision(
-            "auto_no_local_ocr",
-            "系统没有可用的 OCR 语言包，改用视觉模型识别并翻译。",
-        );
-    }
-    if context.looks_like_code && context.ocr_confidence >= 0.55 {
-        return local_decision(
-            "auto_code_exactness",
-            "检测到代码且 OCR 置信度可用，为保证标识符准确而使用本地 OCR。",
-        );
-    }
-    if context.complex_layout || context.image_quality < 0.45 || context.ocr_confidence < 0.55 {
-        return vision_decision(
-            "auto_visual_complexity",
-            "检测到复杂布局或较低 OCR 置信度，使用视觉模型理解并翻译。",
-        );
-    }
-    local_decision(
-        "auto_local_first",
-        "本地优先自动：默认优先使用本地 OCR 识别与翻译，无需上传截图。",
-    )
+    Ok((true, leaves_device))
 }
 
-/// Local OCR is the safe answer, but only when an OCR engine actually exists.
-fn local_or_blocked(context: &RoutingContext, code: &str, explanation: &str) -> RoutingDecision {
-    if context.local_ocr_available {
-        local_decision(code, explanation)
-    } else {
-        RoutingDecision {
-            selected_mode: TranslationMode::LocalOcr,
-            reason_code: format!("{code}_without_ocr"),
-            explanation_zh:
-                "系统没有安装 Windows OCR 语言包，且当前不允许上传截图；请安装语言包或在设置中开启截图上传。"
-                    .to_owned(),
+/// `VisionDirect`: an explicit user choice. Either the selected vision profile
+/// is executable, or the operation is blocked — never silently OCR.
+fn select_vision_direct(context: &RoutingContext) -> RoutingDecision {
+    match vision_admission(context) {
+        Ok((true, leaves_device)) => RoutingDecision {
+            selected_mode: TranslationMode::VisionDirect,
+            reason_code: "forced_vision".to_owned(),
+            explanation_zh: if !leaves_device {
+                "本地视觉服务直接识别并翻译截图，图片不离开本机。".to_owned()
+            } else if context.vision_endpoint_class == "private" {
+                "已授权局域网视觉模型直接识别并翻译截图（截图将发送到局域网另一台设备）。"
+                    .to_owned()
+            } else {
+                "已按设置使用所选视觉模型直接识别并翻译截图。".to_owned()
+            },
+            // The flag answers AI-RULES 4.1's question: does the image leave
+            // the device? A loopback pipeline still runs, nothing is uploaded.
+            may_upload_image: leaves_device,
+        },
+        Ok((false, _)) => unreachable!("vision_admission never reports usable-but-blocked"),
+        Err(reason) => RoutingDecision {
+            selected_mode: TranslationMode::VisionDirect,
+            reason_code: if context.vision_configured {
+                "vision_permission_blocked".to_owned()
+            } else {
+                "vision_not_configured".to_owned()
+            },
+            explanation_zh: reason,
             may_upload_image: false,
+        },
+    }
+}
+
+/// `VisionOcr`: the vision model only transcribes; a text route must exist to
+/// carry the translation. Missing either half blocks with a precise reason.
+fn select_vision_ocr(context: &RoutingContext) -> RoutingDecision {
+    if !context.text_route_available {
+        return RoutingDecision {
+            selected_mode: TranslationMode::VisionOcr,
+            reason_code: "vision_ocr_no_text_route".to_owned(),
+            explanation_zh: "视觉识别 + 文本翻译需要同时配置图片模型与文字模型。".to_owned(),
+            may_upload_image: false,
+        };
+    }
+    match vision_admission(context) {
+        Ok((true, leaves_device)) => RoutingDecision {
+            selected_mode: TranslationMode::VisionOcr,
+            reason_code: "vision_ocr_two_stage".to_owned(),
+            explanation_zh: if !leaves_device {
+                "本地视觉服务识别截图文字，译文由文本模型流式生成，图片不离开本机。".to_owned()
+            } else if context.vision_endpoint_class == "private" {
+                "已授权局域网视觉服务识别截图文字（截图将发送到局域网另一台设备），译文由文本模型流式生成。".to_owned()
+            } else {
+                "已授权视觉模型识别截图文字（截图将上传），译文由文本模型流式生成。".to_owned()
+            },
+            may_upload_image: leaves_device,
+        },
+        Ok((false, _)) => unreachable!("vision_admission never reports usable-but-blocked"),
+        Err(reason) => RoutingDecision {
+            selected_mode: TranslationMode::VisionOcr,
+            reason_code: if context.vision_configured {
+                "vision_permission_blocked".to_owned()
+            } else {
+                "vision_not_configured".to_owned()
+            },
+            explanation_zh: reason,
+            may_upload_image: false,
+        },
+    }
+}
+
+/// Auto stays honestly LOCAL-FIRST: local OCR when available, otherwise a
+/// usable vision route. No pseudo-quality signal participates.
+fn select_auto_route(context: &RoutingContext) -> RoutingDecision {
+    if context.local_ocr_available {
+        return local_decision(
+            "auto_local_first",
+            "自动模式优先使用本地 OCR；截图不会上传，识别出的文字进入统一文字翻译线路。",
+        );
+    }
+    match vision_admission(context) {
+        Ok((true, leaves_device)) if !leaves_device => RoutingDecision {
+            selected_mode: TranslationMode::VisionDirect,
+            reason_code: "auto_local_visual".to_owned(),
+            explanation_zh: "本地 OCR 不可用；使用本地视觉服务，图片不离开本机。".to_owned(),
+            may_upload_image: false,
+        },
+        Ok((true, leaves_device)) => {
+            if context.text_route_available {
+                RoutingDecision {
+                    selected_mode: TranslationMode::VisionOcr,
+                    reason_code: "auto_remote_vision_two_stage".to_owned(),
+                    explanation_zh: if context.vision_endpoint_class == "private" {
+                        "本地 OCR 不可用；已授权局域网视觉模型识别截图（截图将发送到局域网另一台设备），译文由文本模型生成。".to_owned()
+                    } else {
+                        "本地 OCR 不可用；已授权视觉模型识别截图（截图将上传），译文由文本模型生成。".to_owned()
+                    },
+                    may_upload_image: true,
+                }
+            } else {
+                RoutingDecision {
+                    selected_mode: TranslationMode::VisionDirect,
+                    reason_code: "auto_remote_vision_direct".to_owned(),
+                    explanation_zh: "本地 OCR 不可用；已授权视觉模型直接识别并翻译截图。"
+                        .to_owned(),
+                    may_upload_image: leaves_device,
+                }
+            }
         }
+        Ok((false, _)) => unreachable!("vision_admission never reports usable-but-blocked"),
+        Err(reason) => RoutingDecision {
+            selected_mode: TranslationMode::LocalOcr,
+            reason_code: "auto_unavailable".to_owned(),
+            explanation_zh: format!("本地 OCR 不可用，且没有可用的视觉线路：{reason}"),
+            may_upload_image: false,
+        },
     }
 }
 
@@ -825,15 +988,6 @@ fn local_decision(code: &str, explanation: &str) -> RoutingDecision {
         reason_code: code.to_owned(),
         explanation_zh: explanation.to_owned(),
         may_upload_image: false,
-    }
-}
-
-fn vision_decision(code: &str, explanation: &str) -> RoutingDecision {
-    RoutingDecision {
-        selected_mode: TranslationMode::VisionDirect,
-        reason_code: code.to_owned(),
-        explanation_zh: explanation.to_owned(),
-        may_upload_image: true,
     }
 }
 
@@ -851,11 +1005,80 @@ pub struct ProtectedText {
     pub tokens: Vec<ProtectedToken>,
 }
 
-/// Restored translation plus the placeholders the model failed to echo back.
+/// Restored translation plus exactly-once integrity findings: placeholders
+/// the model dropped, spelled more than once, or unknown indexes that never
+/// belonged to this request. Any non-empty finding makes the result
+/// incomplete.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RestoredText {
     pub text: String,
     pub dropped_terms: Vec<String>,
+    #[serde(default)]
+    pub duplicated_terms: Vec<String>,
+    #[serde(default)]
+    pub unknown_placeholders: Vec<String>,
+}
+
+/// Placeholder namespaces. The first is the stable default; the others are
+/// only used when the source text already contains `PG_\d{4}`-shaped
+/// literals, so a user's own `PG_0000` can never collide with a mask.
+const TOKEN_NAMESPACES: [&str; 4] = ["PG", "PGZ", "PGQ", "PGV"];
+
+/// Any placeholder spelling for the given namespace inside the source text.
+fn contains_placeholder_namespace(input: &str, namespace: &str) -> bool {
+    let marker = format!("{namespace}_");
+    let mut cursor = 0;
+    while let Some(position) = input[cursor..].find(&marker) {
+        let start = cursor + position + marker.len();
+        let digits = input
+            .get(start..start + 4)
+            .is_some_and(|slice| slice.bytes().all(|byte| byte.is_ascii_digit()));
+        if digits {
+            return true;
+        }
+        cursor = start;
+        while cursor < input.len() && !input.is_char_boundary(cursor) {
+            cursor += 1;
+        }
+        if cursor >= input.len() {
+            break;
+        }
+    }
+    false
+}
+
+/// Every placeholder-shaped spelling, longest alternative first so a bare
+/// `PG_0000` inside `[[PG_0000]]` is never matched separately.
+fn placeholder_occurrence_regex() -> &'static Regex {
+    static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"⟦\s*PG[ZQV]?_\d{4}\s*⟧|\[\[\s*PG[ZQV]?_\d{4}\s*\]\]|\[\s*PG[ZQV]?_\d{4}\s*\]|\{\s*PG[ZQV]?_\d{4}\s*\}|<\s*PG[ZQV]?_\d{4}\s*>|\bPG[ZQV]?_\d{4}\b",
+        )
+        .expect("placeholder occurrence regex must compile")
+    });
+    &PATTERN
+}
+
+fn parse_placeholder_index(spelling: &str) -> Option<usize> {
+    let digits: String = spelling.chars().filter(char::is_ascii_digit).collect();
+    if digits.len() == 4 {
+        digits.parse().ok()
+    } else {
+        None
+    }
+}
+
+/// Placeholder-shaped spellings in `text` whose index was never issued for
+/// this request (index ≥ `issued_count`), kept visible and reported.
+#[must_use]
+pub fn unknown_placeholders_in(text: &str, issued_count: usize) -> Vec<String> {
+    placeholder_occurrence_regex()
+        .find_iter(text)
+        .filter_map(|found| {
+            parse_placeholder_index(found.as_str())
+                .and_then(|index| (index >= issued_count).then(|| found.as_str().trim().to_owned()))
+        })
+        .collect()
 }
 
 /// Tokens that are unambiguously machine syntax in any context.
@@ -921,6 +1144,14 @@ pub fn protect_tokens(input: &str) -> ProtectedText {
     }
     ranges.sort_unstable();
 
+    // If the source already contains placeholder-shaped literals, mask with a
+    // namespace the text does not use, so restoration can tell the model's
+    // echo of a mask apart from the user's own "PG_0000".
+    let namespace = TOKEN_NAMESPACES
+        .iter()
+        .find(|candidate| !contains_placeholder_namespace(input, candidate))
+        .unwrap_or(&TOKEN_NAMESPACES[0]);
+
     let mut tokens = Vec::new();
     let mut sanitized_text = String::with_capacity(input.len());
     let mut cursor = 0;
@@ -929,7 +1160,7 @@ pub fn protect_tokens(input: &str) -> ProtectedText {
             continue;
         }
         sanitized_text.push_str(&input[cursor..start]);
-        let placeholder = format!("⟦PG_{:04}⟧", tokens.len());
+        let placeholder = format!("⟦{namespace}_{:04}⟧", tokens.len());
         sanitized_text.push_str(&placeholder);
         tokens.push(ProtectedToken {
             placeholder,
@@ -945,44 +1176,357 @@ pub fn protect_tokens(input: &str) -> ProtectedText {
     }
 }
 
-/// Restores protected tokens, tolerating the placeholder normalisations that
-/// models routinely apply (ASCII brackets, stripped brackets, added spaces).
+/// Restores protected tokens with exactly-once semantics.
 ///
-/// Terms the model dropped entirely are reported instead of silently lost, so
-/// the shell can warn that an identifier is missing from the translation.
+/// Every placeholder must appear exactly once, in any accepted variant.
+/// Missing placeholders are reported in `dropped_terms`, placeholders the
+/// model echoed twice or more in `duplicated_terms` (the first occurrence is
+/// restored, the rest stay visible as evidence), and placeholder indexes this
+/// request never issued in `unknown_placeholders`. All three findings make
+/// the result incomplete.
 #[must_use]
 pub fn restore_tokens(translated: &str, tokens: &[ProtectedToken]) -> RestoredText {
-    let mut restored = translated.to_owned();
-    let mut dropped = Vec::new();
+    let mut counts = vec![0usize; tokens.len()];
+    let mut unknown: Vec<String> = Vec::new();
 
-    for (index, token) in tokens.iter().enumerate() {
-        let variants = protected_token_variants(&token.placeholder, index);
-        let matched = variants.iter().find(|variant| restored.contains(*variant));
-        match matched {
-            Some(variant) => restored = restored.replace(variant, &token.original),
-            None => dropped.push(token.original.clone()),
+    let mut matches: Vec<(usize, usize, Option<usize>)> = placeholder_occurrence_regex()
+        .find_iter(translated)
+        .map(|found| {
+            let index = parse_placeholder_index(found.as_str());
+            (found.start(), found.end(), index)
+        })
+        .collect();
+
+    let mut restored = String::with_capacity(translated.len());
+    let mut cursor = 0;
+    for (start, end, index) in matches.drain(..) {
+        restored.push_str(&translated[cursor..start]);
+        match index {
+            Some(token_index) if token_index < tokens.len() => {
+                counts[token_index] += 1;
+                if counts[token_index] == 1 {
+                    restored.push_str(&tokens[token_index].original);
+                } else {
+                    // Keep the extra occurrence visible instead of guessing
+                    // which one the model meant.
+                    restored.push_str(&translated[start..end]);
+                }
+            }
+            _ => {
+                if !unknown.contains(&translated[start..end].to_owned()) {
+                    unknown.push(translated[start..end].to_owned());
+                }
+                restored.push_str(&translated[start..end]);
+            }
         }
+        cursor = end;
     }
+    restored.push_str(&translated[cursor..]);
 
     RestoredText {
+        dropped_terms: tokens
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| counts[*index] == 0)
+            .map(|(_, token)| token.original.clone())
+            .collect(),
+        duplicated_terms: tokens
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| counts[*index] > 1)
+            .map(|(_, token)| token.original.clone())
+            .collect(),
+        unknown_placeholders: unknown,
         text: restored,
-        dropped_terms: dropped,
     }
 }
 
 /// Returns the placeholder spellings accepted by [`restore_tokens`].
 #[must_use]
-pub fn protected_token_variants(placeholder: &str, index: usize) -> Vec<String> {
-    let ascii = placeholder.replace('⟦', "[").replace('⟧', "]");
-    let bare = placeholder.replace(['⟦', '⟧'], "");
+pub fn protected_token_variants(placeholder: &str) -> Vec<String> {
+    let inner = placeholder
+        .trim_start_matches('⟦')
+        .trim_end_matches('⟧')
+        .trim();
     vec![
         placeholder.to_owned(),
-        ascii,
-        format!("[[PG_{index:04}]]"),
-        format!("{{PG_{index:04}}}"),
-        format!("<PG_{index:04}>"),
-        bare,
+        format!("[{inner}]"),
+        format!("[[{inner}]]"),
+        format!("{{{inner}}}"),
+        format!("<{inner}>"),
+        inner.to_owned(),
     ]
+}
+
+// ==================== Long-input session planning ====================
+
+/// Per-segment source budget (Unicode scalar values). Sized so one segment's
+/// adaptive output budget stays well inside a single request window.
+pub const MAX_SEGMENT_CHARS: usize = 800;
+
+/// A session translates at most this many segments; beyond that the request
+/// is refused BEFORE anything is sent instead of silently truncating.
+pub const MAX_SEGMENTS: usize = 8;
+
+/// Why a source cannot be translated as one budgeted session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SegmentRejectReason {
+    /// A single fenced code block exceeds the per-segment budget; cutting it
+    /// would corrupt the code, so the user must shorten it themselves.
+    OversizedCodeBlock,
+    /// Segmentation would need more than [`MAX_SEGMENTS`] requests; the
+    /// session refuses up front rather than half-translating.
+    TooManySegments,
+}
+
+/// How a source will be translated within the session budget.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SegmentPlan {
+    /// Short enough for a single request — the historical behavior, with the
+    /// adaptive output budget unchanged.
+    Single,
+    /// Ordered segments; concatenating their translations in order yields the
+    /// full translation. Concatenating the segments themselves yields the
+    /// original source byte-for-byte.
+    Segments(Vec<String>),
+    /// Refused up front: nothing may be sent.
+    Rejected(SegmentRejectReason),
+}
+
+/// An atomic piece of the source: either a fenced code block (never split)
+/// or a prose chunk already reduced to at most `max_chars`.
+struct SourceAtom {
+    text: String,
+    is_code: bool,
+}
+
+/// Splits `source` into atoms at blank-line paragraph boundaries, keeping each
+/// separator attached to the following atom so concatenation is lossless.
+/// Fenced code blocks are atomic. Prose atoms longer than `max_chars` are
+/// further split at line, sentence, and finally word boundaries.
+fn source_atoms(source: &str, max_chars: usize) -> Result<Vec<SourceAtom>, SegmentRejectReason> {
+    let mut atoms: Vec<SourceAtom> = Vec::new();
+    let mut rest = source;
+
+    while !rest.is_empty() {
+        // A fenced code block opens here: capture through its closing fence
+        // (or the end of input) as one atomic piece.
+        if let Some(open_end) = fence_end(rest) {
+            let close = match rest[open_end..].find("\n```") {
+                Some(position) => {
+                    // Include the closing fence line itself.
+                    let mut end = open_end + position + 4;
+                    if rest[end..].starts_with('\r') {
+                        end += 1;
+                    }
+                    if rest[end..].starts_with('\n') {
+                        end += 1;
+                    }
+                    end
+                }
+                None => rest.len(),
+            };
+            atoms.push(SourceAtom {
+                text: rest[..close].to_owned(),
+                is_code: true,
+            });
+            rest = &rest[close..];
+            continue;
+        }
+
+        // Prose: take everything up to the next fence or end of input.
+        let prose_end = find_next_fence(rest).unwrap_or(rest.len());
+        let prose = &rest[..prose_end];
+        split_prose(prose, max_chars, &mut atoms);
+        rest = &rest[prose_end..];
+    }
+
+    // An oversized atomic code block can never fit a segment.
+    if atoms
+        .iter()
+        .any(|atom| atom.is_code && atom.text.chars().count() > max_chars)
+    {
+        return Err(SegmentRejectReason::OversizedCodeBlock);
+    }
+    Ok(atoms)
+}
+
+/// Position where a code fence opens at the start of a line, relative to
+/// `text`, plus the length of the opening fence line.
+fn find_next_fence(text: &str) -> Option<usize> {
+    let mut cursor = 0;
+    while let Some(position) = text[cursor..].find("```") {
+        let absolute = cursor + position;
+        let at_line_start = absolute == 0 || text.as_bytes()[absolute - 1] == b'\n';
+        if at_line_start {
+            return Some(absolute);
+        }
+        cursor = absolute + 3;
+    }
+    None
+}
+
+/// If `text` starts with an opening code fence, returns the offset just after
+/// the fence line's newline.
+fn fence_end(text: &str) -> Option<usize> {
+    if !text.starts_with("```") {
+        return None;
+    }
+    let line_end = text.find('\n')?;
+    let mut after = line_end + 1;
+    if text[after..].starts_with('\r') {
+        after += 1;
+    }
+    Some(after)
+}
+
+/// Splits prose into atoms of at most `max_chars` at the best available
+/// boundary, descending through paragraph → line → sentence → space → hard
+/// character cut. Hard cuts never split a surrogate pair (Rust `char`
+/// iteration cannot, by construction).
+fn split_prose(prose: &str, max_chars: usize, atoms: &mut Vec<SourceAtom>) {
+    for paragraph in split_keep_separator(prose, "\n\n") {
+        if paragraph.chars().count() <= max_chars {
+            if !paragraph.is_empty() {
+                atoms.push(SourceAtom {
+                    text: paragraph,
+                    is_code: false,
+                });
+            }
+            continue;
+        }
+        for line in split_keep_separator(&paragraph, "\n") {
+            if line.chars().count() <= max_chars {
+                if !line.is_empty() {
+                    atoms.push(SourceAtom {
+                        text: line,
+                        is_code: false,
+                    });
+                }
+                continue;
+            }
+            for sentence in
+                split_keep_separator_any(&line, &["。", "！", "？", ".", "!", "?", "；", ";"])
+            {
+                if sentence.chars().count() <= max_chars {
+                    if !sentence.is_empty() {
+                        atoms.push(SourceAtom {
+                            text: sentence,
+                            is_code: false,
+                        });
+                    }
+                    continue;
+                }
+                for word in split_keep_separator_any(&sentence, &[" ", "，", ",", "、", "：", ":"])
+                {
+                    if word.chars().count() <= max_chars {
+                        if !word.is_empty() {
+                            atoms.push(SourceAtom {
+                                text: word,
+                                is_code: false,
+                            });
+                        }
+                        continue;
+                    }
+                    // Last resort for boundary-less prose (CJK runs): hard
+                    // cut at a char boundary.
+                    for chunk in hard_chunks(&word, max_chars) {
+                        atoms.push(SourceAtom {
+                            text: chunk,
+                            is_code: false,
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Splits on a literal separator, keeping the separator attached to the END
+/// of the preceding piece, so concatenation reproduces the input exactly.
+fn split_keep_separator(text: &str, separator: &str) -> Vec<String> {
+    if separator.is_empty() || !text.contains(separator) {
+        return if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![text.to_owned()]
+        };
+    }
+    let mut pieces: Vec<String> = Vec::new();
+    let mut rest = text;
+    while let Some(position) = rest.find(separator) {
+        let end = position + separator.len();
+        pieces.push(rest[..end].to_owned());
+        rest = &rest[end..];
+    }
+    if !rest.is_empty() {
+        pieces.push(rest.to_owned());
+    }
+    pieces
+}
+
+fn split_keep_separator_any(text: &str, separators: &[&str]) -> Vec<String> {
+    let mut pieces = vec![text.to_owned()];
+    for separator in separators {
+        let mut next: Vec<String> = Vec::new();
+        for piece in pieces {
+            next.extend(split_keep_separator(&piece, separator));
+        }
+        pieces = next;
+    }
+    pieces
+}
+
+fn hard_chunks(text: &str, max_chars: usize) -> Vec<String> {
+    text.chars()
+        .collect::<Vec<_>>()
+        .chunks(max_chars)
+        .map(|chunk| chunk.iter().collect())
+        .collect()
+}
+
+/// Plans how `source` is translated within one session's request budget.
+///
+/// Concatenating the returned segments reproduces the source exactly; the
+/// shell translates them in order and concatenates the translations.
+#[must_use]
+pub fn plan_translation_segments(
+    source: &str,
+    max_segment_chars: usize,
+    max_segments: usize,
+) -> SegmentPlan {
+    if source.chars().count() <= max_segment_chars {
+        return SegmentPlan::Single;
+    }
+
+    let Ok(atoms) = source_atoms(source, max_segment_chars) else {
+        return SegmentPlan::Rejected(SegmentRejectReason::OversizedCodeBlock);
+    };
+
+    // Greedy packing: append atoms while the budget holds, otherwise open a
+    // new segment. Empty atoms carry no content and no separators.
+    let mut segments: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_chars = 0usize;
+    for atom in &atoms {
+        let atom_chars = atom.text.chars().count();
+        if current_chars + atom_chars > max_segment_chars && !current.is_empty() {
+            segments.push(std::mem::take(&mut current));
+            current_chars = 0;
+        }
+        current.push_str(&atom.text);
+        current_chars += atom_chars;
+    }
+    if !current.is_empty() {
+        segments.push(current);
+    }
+
+    if segments.len() > max_segments {
+        return SegmentPlan::Rejected(SegmentRejectReason::TooManySegments);
+    }
+    SegmentPlan::Segments(segments)
 }
 
 #[cfg(test)]
@@ -993,12 +1537,249 @@ mod tests {
         RoutingContext {
             requested_mode: mode,
             vision_configured: true,
+            vision_endpoint_class: "internet".to_owned(),
             image_upload_allowed: true,
+            allow_lan_endpoints: false,
             local_ocr_available: true,
-            looks_like_code: false,
-            complex_layout: false,
-            image_quality: 0.9,
-            ocr_confidence: 0.9,
+            text_route_available: true,
+        }
+    }
+
+    // ==================== Routing decision table (T13) ====================
+    // The AI-RULES/TASKS decision table, exercised row by row through the
+    // SAME `select_route` entry the preview and the execution share.
+
+    #[test]
+    fn forced_local_never_uploads() {
+        let decision = select_route(&context(TranslationMode::LocalOcr));
+        assert_eq!(decision.selected_mode, TranslationMode::LocalOcr);
+        assert_eq!(decision.reason_code, "forced_local_ocr");
+        assert!(!decision.may_upload_image);
+    }
+
+    #[test]
+    fn forced_local_without_engine_blocks_instead_of_uploading() {
+        let mut input = context(TranslationMode::LocalOcr);
+        input.local_ocr_available = false;
+        let decision = select_route(&input);
+        assert!(!decision.may_upload_image);
+        assert_eq!(decision.reason_code, "forced_local_ocr_without_engine");
+    }
+
+    #[test]
+    fn vision_direct_runs_when_admitted() {
+        let decision = select_route(&context(TranslationMode::VisionDirect));
+        assert_eq!(decision.selected_mode, TranslationMode::VisionDirect);
+        assert_eq!(decision.reason_code, "forced_vision");
+        assert!(decision.may_upload_image);
+    }
+
+    #[test]
+    fn vision_direct_blocks_without_configured_vision() {
+        let mut input = context(TranslationMode::VisionDirect);
+        input.vision_configured = false;
+        let decision = select_route(&input);
+        assert_eq!(decision.selected_mode, TranslationMode::VisionDirect);
+        assert_eq!(decision.reason_code, "vision_not_configured");
+        assert!(!decision.may_upload_image);
+        // The explicit choice BLOCKS; it must not silently become OCR.
+        assert_ne!(decision.selected_mode, TranslationMode::LocalOcr);
+    }
+
+    #[test]
+    fn vision_direct_blocks_when_upload_not_allowed() {
+        let mut input = context(TranslationMode::VisionDirect);
+        input.image_upload_allowed = false;
+        let decision = select_route(&input);
+        assert_eq!(decision.reason_code, "vision_permission_blocked");
+        assert!(!decision.may_upload_image);
+    }
+
+    #[test]
+    fn vision_direct_needs_lan_permission_for_private_endpoint() {
+        let mut input = context(TranslationMode::VisionDirect);
+        input.vision_endpoint_class = "private".to_owned();
+        input.allow_lan_endpoints = false;
+        let decision = select_route(&input);
+        assert_eq!(decision.reason_code, "vision_permission_blocked");
+        assert!(decision.explanation_zh.contains("局域网"));
+
+        input.allow_lan_endpoints = true;
+        let admitted = select_route(&input);
+        assert_eq!(admitted.selected_mode, TranslationMode::VisionDirect);
+        assert!(admitted.may_upload_image);
+        assert!(admitted.explanation_zh.contains("局域网"));
+    }
+
+    #[test]
+    fn loopback_vision_does_not_leave_the_device() {
+        let mut input = context(TranslationMode::VisionDirect);
+        input.vision_endpoint_class = "loopback".to_owned();
+        input.image_upload_allowed = false; // remote-only permission, irrelevant locally
+        let decision = select_route(&input);
+        assert_eq!(decision.selected_mode, TranslationMode::VisionDirect);
+        assert!(
+            !decision.may_upload_image,
+            "MayUploadImage answers 'does the image leave the device?' — loopback never does"
+        );
+        assert!(decision.explanation_zh.contains("不离开本机"));
+    }
+
+    #[test]
+    fn vision_ocr_needs_both_vision_and_a_text_route() {
+        let decision = select_route(&context(TranslationMode::VisionOcr));
+        assert_eq!(decision.selected_mode, TranslationMode::VisionOcr);
+        assert_eq!(decision.reason_code, "vision_ocr_two_stage");
+
+        let mut no_text = context(TranslationMode::VisionOcr);
+        no_text.text_route_available = false;
+        let blocked = select_route(&no_text);
+        assert_eq!(blocked.reason_code, "vision_ocr_no_text_route");
+        assert!(!blocked.may_upload_image);
+    }
+
+    #[test]
+    fn auto_prefers_local_ocr() {
+        let decision = select_route(&context(TranslationMode::Auto));
+        assert_eq!(decision.selected_mode, TranslationMode::LocalOcr);
+        assert_eq!(decision.reason_code, "auto_local_first");
+        assert!(!decision.may_upload_image);
+    }
+
+    #[test]
+    fn auto_without_local_ocr_prefers_two_stage_for_remote_vision() {
+        let mut input = context(TranslationMode::Auto);
+        input.local_ocr_available = false;
+        let decision = select_route(&input);
+        assert_eq!(decision.selected_mode, TranslationMode::VisionOcr);
+        assert_eq!(decision.reason_code, "auto_remote_vision_two_stage");
+        assert!(decision.may_upload_image);
+    }
+
+    #[test]
+    fn auto_without_local_ocr_uses_local_visual_directly() {
+        let mut input = context(TranslationMode::Auto);
+        input.local_ocr_available = false;
+        input.vision_endpoint_class = "loopback".to_owned();
+        let decision = select_route(&input);
+        assert_eq!(decision.selected_mode, TranslationMode::VisionDirect);
+        assert_eq!(decision.reason_code, "auto_local_visual");
+    }
+
+    #[test]
+    fn auto_without_local_ocr_and_without_text_route_goes_direct() {
+        let mut input = context(TranslationMode::Auto);
+        input.local_ocr_available = false;
+        input.text_route_available = false;
+        let decision = select_route(&input);
+        assert_eq!(decision.selected_mode, TranslationMode::VisionDirect);
+        assert_eq!(decision.reason_code, "auto_remote_vision_direct");
+    }
+
+    #[test]
+    fn auto_is_explicit_when_neither_path_exists() {
+        let mut input = context(TranslationMode::Auto);
+        input.local_ocr_available = false;
+        input.vision_configured = false;
+        let decision = select_route(&input);
+        assert_eq!(decision.reason_code, "auto_unavailable");
+        assert!(!decision.may_upload_image);
+    }
+
+    #[test]
+    fn unknown_endpoint_class_is_refused_conservatively() {
+        let mut input = context(TranslationMode::VisionDirect);
+        input.vision_endpoint_class = "somewhere-else".to_owned();
+        let decision = select_route(&input);
+        assert_eq!(decision.reason_code, "vision_permission_blocked");
+        assert!(!decision.may_upload_image);
+    }
+
+    #[test]
+    fn same_word_twice_gets_two_occurrence_tokens() {
+        let source = "let v = foo_bar + foo_bar;";
+        let protected = protect_tokens(source);
+        assert_eq!(
+            protected.tokens.len(),
+            2,
+            "each occurrence is its own token"
+        );
+        assert_ne!(
+            protected.tokens[0].placeholder,
+            protected.tokens[1].placeholder
+        );
+
+        let echo = format!(
+            "检查 {} 和 {} 两次",
+            protected.tokens[0].placeholder, protected.tokens[1].placeholder
+        );
+        let restored = restore_tokens(&echo, &protected.tokens);
+        assert_eq!(restored.text, "检查 foo_bar 和 foo_bar 两次");
+        assert!(restored.dropped_terms.is_empty());
+        assert!(restored.duplicated_terms.is_empty());
+        assert!(restored.unknown_placeholders.is_empty());
+    }
+
+    #[test]
+    fn duplicated_placeholder_is_reported_and_kept_visible() {
+        let protected = protect_tokens("let v = foo_bar;");
+        assert_eq!(protected.tokens.len(), 1);
+        let restored = restore_tokens("结果 PG_0000 加 PG_0000", &protected.tokens);
+        assert_eq!(restored.duplicated_terms, vec!["foo_bar"]);
+        assert_eq!(restored.text, "结果 foo_bar 加 PG_0000");
+    }
+
+    #[test]
+    fn dropped_placeholder_is_reported() {
+        let protected = protect_tokens("let v = foo_bar;");
+        let restored = restore_tokens("译文里占位符没了", &protected.tokens);
+        assert_eq!(restored.dropped_terms, vec!["foo_bar"]);
+    }
+
+    #[test]
+    fn unknown_placeholder_index_is_reported_and_kept() {
+        let protected = protect_tokens("let v = foo_bar;");
+        let restored = restore_tokens("含未知 [[PG_0007]] 标记", &protected.tokens);
+        assert_eq!(restored.unknown_placeholders, vec!["[[PG_0007]]"]);
+        assert!(restored.text.contains("[[PG_0007]]"));
+    }
+
+    #[test]
+    fn source_placeholder_literal_does_not_collide() {
+        let source = "PG_0000 是用户写的字面量，调用 foo_bar 试试";
+        let protected = protect_tokens(source);
+        assert!(
+            protected
+                .tokens
+                .iter()
+                .all(|t| !t.placeholder.contains("⟦PG_")),
+            "the default namespace must be avoided when the source contains PG_0000"
+        );
+        // The user's literal must survive untouched after restoration.
+        let restored = restore_tokens(&protected.sanitized_text, &protected.tokens);
+        assert!(restored.text.contains("PG_0000 是用户写的字面量"));
+        assert!(restored.dropped_terms.is_empty());
+        assert!(restored.unknown_placeholders.is_empty());
+    }
+
+    #[test]
+    fn compat_spellings_restore_exactly_once() {
+        let protected = protect_tokens("let v = foo_bar;");
+        let placeholder_inner = protected.tokens[0]
+            .placeholder
+            .trim_start_matches('⟦')
+            .trim_end_matches('⟧');
+        for spelling in [
+            protected.tokens[0].placeholder.clone(),
+            format!("[{placeholder_inner}]"),
+            format!("[[{placeholder_inner}]]"),
+            format!("{{{placeholder_inner}}}"),
+            format!("<{placeholder_inner}>"),
+            placeholder_inner.to_owned(),
+        ] {
+            let restored = restore_tokens(&format!("值是 {spelling} 结束"), &protected.tokens);
+            assert_eq!(restored.text, "值是 foo_bar 结束", "spelling: {spelling}");
+            assert!(restored.dropped_terms.is_empty() && restored.duplicated_terms.is_empty());
         }
     }
 
@@ -1027,45 +1808,14 @@ mod tests {
     }
 
     #[test]
-    fn forced_local_never_uploads() {
-        let decision = select_route(&context(TranslationMode::LocalOcr));
-        assert_eq!(decision.selected_mode, TranslationMode::LocalOcr);
-        assert!(!decision.may_upload_image);
-    }
-
-    #[test]
-    fn auto_prefers_local_for_code_exactness() {
-        let mut input = context(TranslationMode::Auto);
-        input.looks_like_code = true;
-        let decision = select_route(&input);
-        assert_eq!(decision.reason_code, "auto_code_exactness");
-    }
-
-    #[test]
-    fn auto_uses_vision_for_complex_layout() {
-        let mut input = context(TranslationMode::Auto);
-        input.complex_layout = true;
-        let decision = select_route(&input);
-        assert_eq!(decision.selected_mode, TranslationMode::VisionDirect);
-        assert!(decision.may_upload_image);
-    }
-
-    #[test]
-    fn auto_uses_vision_when_no_ocr_language_pack_exists() {
-        let mut input = context(TranslationMode::Auto);
-        input.local_ocr_available = false;
-        let decision = select_route(&input);
-        assert_eq!(decision.selected_mode, TranslationMode::VisionDirect);
-        assert_eq!(decision.reason_code, "auto_no_local_ocr");
-    }
-
-    #[test]
-    fn blocked_route_is_explicit_when_neither_path_is_available() {
+    fn forced_local_never_uploads_original_guard() {
+        // Kept from the earlier contract: a forced LocalOcr on a machine
+        // without OCR packs must never turn into an upload.
         let mut input = context(TranslationMode::LocalOcr);
         input.local_ocr_available = false;
+        input.image_upload_allowed = false;
         let decision = select_route(&input);
         assert!(!decision.may_upload_image);
-        assert!(decision.reason_code.ends_with("_without_ocr"));
     }
 
     #[test]
@@ -1131,6 +1881,34 @@ mod tests {
         assert!(!is_local_base_url("https://172.200.1.1/v1"));
     }
 
+    /// The shared classification fixture from AI-RULES section 4.1: both the
+    /// Rust domain and the C# shell must reach the same conclusion per row.
+    #[test]
+    fn endpoint_classification_fixture_agrees_with_the_contract() {
+        use EndpointClass::{Internet, Loopback, PrivateNetwork};
+        let cases: &[(&str, EndpointClass)] = &[
+            ("http://localhost:11434", Loopback),
+            ("http://127.0.0.1:8080/v1", Loopback),
+            ("http://127.10.20.30/v1", Loopback),
+            ("http://[::1]:11434", Loopback),
+            ("https://localhost.example.com", Internet),
+            ("https://api.openai.com/v1", Internet),
+            ("http://192.168.1.20:8080", PrivateNetwork),
+            ("http://172.16.0.4:8000/v1", PrivateNetwork),
+            ("http://172.200.1.1/v1", Internet),
+            ("http://10.0.0.5/v1", PrivateNetwork),
+            ("http://[fd00::1]:11434", PrivateNetwork),
+            ("http://user:secret@10.0.0.5:11434/v1", PrivateNetwork),
+            ("http://LOCALHOST:11434", Loopback),
+            ("http://10.0.0.5:notaport/", Internet),
+            ("not a url at all", Internet),
+            ("", Internet),
+        ];
+        for (url, expected) in cases {
+            assert_eq!(&classify_endpoint(url), expected, "fixture: {url}");
+        }
+    }
+
     #[test]
     fn legacy_config_without_permission_fields_stays_offline() {
         // A v1/v2 file knows nothing about `network_enabled` or
@@ -1179,5 +1957,123 @@ mod tests {
         let json = serde_json::to_string(&ProviderSettings::default()).expect("serialize");
         let parsed: ProviderSettings = serde_json::from_str(&json).expect("parse own output");
         assert_eq!(parsed, ProviderSettings::default());
+    }
+
+    // ==================== plan_translation_segments ====================
+
+    #[test]
+    fn short_source_plans_single() {
+        assert_eq!(
+            plan_translation_segments("hello world", MAX_SEGMENT_CHARS, MAX_SEGMENTS),
+            SegmentPlan::Single
+        );
+        // Exactly at the budget is still one request.
+        let exact = "a".repeat(MAX_SEGMENT_CHARS);
+        assert_eq!(
+            plan_translation_segments(&exact, MAX_SEGMENT_CHARS, MAX_SEGMENTS),
+            SegmentPlan::Single
+        );
+    }
+
+    #[test]
+    fn long_prose_segments_on_paragraph_boundaries_and_reconstructs_exactly() {
+        let paragraph = "This is a technical paragraph about foo_bar_baz and config.json loading. ";
+        let source = format!("{}\n\n{}", paragraph.repeat(10), paragraph.repeat(10));
+        let plan = plan_translation_segments(&source, MAX_SEGMENT_CHARS, MAX_SEGMENTS);
+        let SegmentPlan::Segments(segments) = plan else {
+            panic!("expected segments, got {plan:?}");
+        };
+        assert!(segments.len() >= 2 && segments.len() <= MAX_SEGMENTS);
+        for segment in &segments {
+            assert!(segment.chars().count() <= MAX_SEGMENT_CHARS);
+        }
+        // Lossless: concatenation reproduces the source byte-for-byte.
+        assert_eq!(segments.concat(), source);
+    }
+
+    #[test]
+    fn cjk_prose_hard_splits_at_char_boundaries_without_loss() {
+        let source = "这是一段没有空格也没有标点的很长中文内容。".repeat(40);
+        let plan = plan_translation_segments(&source, MAX_SEGMENT_CHARS, MAX_SEGMENTS);
+        let SegmentPlan::Segments(segments) = plan else {
+            panic!("expected segments, got {plan:?}");
+        };
+        for segment in &segments {
+            assert!(segment.chars().count() <= MAX_SEGMENT_CHARS);
+        }
+        assert_eq!(segments.concat(), source, "reconstruction must be lossless");
+    }
+
+    #[test]
+    fn fenced_code_block_stays_atomic_inside_a_segment() {
+        let code = "```rust\nfn main() {\n    println!(\"hello\");\n}\n```\n";
+        let prose = "Explains the code above in plain language. ".repeat(25);
+        let source = format!("{code}{prose}");
+        let plan = plan_translation_segments(&source, MAX_SEGMENT_CHARS, MAX_SEGMENTS);
+        let SegmentPlan::Segments(segments) = plan else {
+            panic!("expected segments, got {plan:?}");
+        };
+        assert_eq!(segments.concat(), source);
+        // The complete fenced block must appear intact inside ONE segment.
+        assert!(
+            segments
+                .iter()
+                .any(|segment| segment.contains("```rust\nfn main()")),
+            "the code block must not be split across segments"
+        );
+    }
+
+    #[test]
+    fn oversized_code_block_rejects_before_any_send() {
+        let big_code = format!("```text\n{}\n```\n", "x".repeat(2000));
+        let plan = plan_translation_segments(&big_code, MAX_SEGMENT_CHARS, MAX_SEGMENTS);
+        assert_eq!(
+            plan,
+            SegmentPlan::Rejected(SegmentRejectReason::OversizedCodeBlock)
+        );
+    }
+
+    #[test]
+    fn unmixed_cjk_mass_rejects_on_segment_count() {
+        // ~64KiB of CJK would need ~80 segments: refuse up front.
+        let source = "翻".repeat(64 * 1024);
+        let plan = plan_translation_segments(&source, MAX_SEGMENT_CHARS, MAX_SEGMENTS);
+        assert_eq!(
+            plan,
+            SegmentPlan::Rejected(SegmentRejectReason::TooManySegments)
+        );
+    }
+
+    #[test]
+    fn long_technical_article_plans_and_preserves_code_and_identifiers() {
+        let article = format!(
+            "{}\n\n```bash\nset -euo pipefail\ncargo test --workspace\n```\n\n{}",
+            "The build failed with a FileNotFoundError for config.json. ".repeat(15),
+            "Retry with the correct path foo_bar_baz and verify the layout. ".repeat(15)
+        );
+        assert!(article.chars().count() > MAX_SEGMENT_CHARS);
+        let plan = plan_translation_segments(&article, MAX_SEGMENT_CHARS, MAX_SEGMENTS);
+        let SegmentPlan::Segments(segments) = plan else {
+            panic!("expected segments, got {plan:?}");
+        };
+        assert!(segments.len() <= MAX_SEGMENTS);
+        assert_eq!(segments.concat(), article, "lossless reconstruction");
+        assert!(
+            segments
+                .iter()
+                .any(|segment| segment.contains("cargo test --workspace")),
+            "the fenced commands must stay intact"
+        );
+    }
+
+    #[test]
+    fn unclosed_fence_takes_rest_of_input_atomically() {
+        let source = format!("```python\nprint('hi')\n{}", "more code\n".repeat(200));
+        let plan = plan_translation_segments(&source, MAX_SEGMENT_CHARS, MAX_SEGMENTS);
+        // The unterminated block is atomic and oversized → explicit reject.
+        assert_eq!(
+            plan,
+            SegmentPlan::Rejected(SegmentRejectReason::OversizedCodeBlock)
+        );
     }
 }

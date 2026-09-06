@@ -64,8 +64,8 @@
         <Setter Property="Control.Template">
             <Setter.Value>
                 <ControlTemplate>
-                    <Rectangle Margin="-2" RadiusX="8" RadiusY="8" StrokeThickness="1.5"
-                               Stroke="{DynamicResource AccentBorderBrush}" Opacity="0.9"
+                    <Rectangle Margin="-2" RadiusX="8" RadiusY="8" StrokeThickness="2"
+                               Stroke="{DynamicResource FocusBrush}"
                                SnapsToDevicePixels="True" />
                 </ControlTemplate>
             </Setter.Value>
@@ -73,11 +73,27 @@
     </Style>
 
     <!-- ==================== Typography ==================== -->
+    <!--
+        Deliberately NO Foreground setter here: a style setter would override
+        the inherited Control.Foreground of every host (primary buttons,
+        danger hover, menu items), which is exactly the bug that painted
+        dark text on the brand blue. Text colour arrives by inheritance from
+        the Window ambient default (below) or from the nearest control.
+    -->
     <Style TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
-        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
         <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
+    </Style>
+
+    <!-- Ambient text colour: every window seeds TextPrimaryBrush so bare
+         TextBlocks match the previous implicit-style default, while content
+         inside buttons/menus still picks up the nearer control foreground. -->
+    <Style TargetType="Window">
+        <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
+        <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
+        <Setter Property="UseLayoutRounding" Value="True" />
     </Style>
 
     <!--
@@ -429,13 +445,13 @@
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Surface" Property="Background" Value="{DynamicResource DangerBrush}" />
-                            <Setter Property="Foreground" Value="#FFFFFF" />
+                            <Setter TargetName="Surface" Property="Background" Value="{DynamicResource DangerHoverBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource DangerHoverTextBrush}" />
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="Surface" Property="Background" Value="{DynamicResource DangerBrush}" />
-                            <Setter TargetName="Surface" Property="Opacity" Value="0.85" />
-                            <Setter Property="Foreground" Value="#FFFFFF" />
+                            <Setter TargetName="Surface" Property="Background" Value="{DynamicResource DangerPressedBrush}" />
+                            <Setter Property="Opacity" Value="0.95" />
+                            <Setter Property="Foreground" Value="{DynamicResource DangerPressedTextBrush}" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter TargetName="Surface" Property="Opacity" Value="0.45" />

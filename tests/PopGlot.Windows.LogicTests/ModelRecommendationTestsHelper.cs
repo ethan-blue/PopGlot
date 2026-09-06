@@ -12,6 +12,7 @@ public static class ModelRecommendationTestsHelper
 {
     public static void RunAllTests()
     {
+        RunT14AcceptanceTests();
         TestUnknownsAndNullsPreserved();
         TestNonGenerativeFilteredOut();
         TestThreePreferences();
@@ -437,6 +438,144 @@ public static class ModelRecommendationTestsHelper
             "Primary reason should mention lightweight / flash");
         Assert(result.Summary.Contains("gemini-1.5-flash"), "Summary should mention recommended model ID");
         Assert(result.Summary.Contains("手动覆盖"), "Summary should remind user they can override");
+    }
+
+    // ==================== T14 acceptance additions ====================
+
+    public static void RunT14AcceptanceTests()
+    {
+        TestSyntheticCurrentNeverInventsVision();
+        TestEndpointNormalizationPreservesCaseAndQueries();
+        TestInvalidAndExpiredSamplesNeverRank();
+        TestMedianAggregationAndTrialLabel();
+    }
+
+    private static void TestSyntheticCurrentNeverInventsVision()
+    {
+        // A configured model absent from the catalog must stay Unknown in
+        // BOTH modalities — a text target must not fabricate vision support.
+        var request = new ModelRecommendationRequest(
+            ProviderType: ProviderType.OpenAiCompatible,
+            IsLocal: false,
+            Models: [new("known-model", CapabilityState.Supported, CapabilityState.Supported, "Catalog")],
+            TargetUsage: ModelTargetUsage.Text,
+            Preference: ModelPreference.Balanced,
+            CurrentModelId: "my-custom-untested-model");
+
+        var result = ModelRecommendationService.Recommend(request);
+        var synthetic = result.Candidates.First(c => c.Model.Id == "my-custom-untested-model");
+        Assert(synthetic.Model.VisionInput == CapabilityState.Unknown,
+            "a synthetic current model must NOT be marked vision Supported");
+        Assert(synthetic.Model.TextGeneration == CapabilityState.Unknown,
+            "a synthetic current model must stay text Unknown too");
+        Assert(result.UserCanOverride, "the unknown model must still be selectable by the user");
+    }
+
+    private static void TestEndpointNormalizationPreservesCaseAndQueries()
+    {
+        // Path case is significant on real servers: /Model != /model.
+        Assert(
+            ModelBenchmarkMetric.NormalizeEndpoint("https://api.example.com/v1/Model") !=
+            ModelBenchmarkMetric.NormalizeEndpoint("https://api.example.com/v1/model"),
+            "path case must survive normalization");
+        // Scheme/host case and trailing slash are NOT significant.
+        Assert(
+            ModelBenchmarkMetric.NormalizeEndpoint("HTTPS://API.Example.com/v1/Model/") ==
+            ModelBenchmarkMetric.NormalizeEndpoint("https://api.example.com/v1/Model"),
+            "scheme/host case and trailing slash must fold");
+        // Default ports fold.
+        Assert(
+            ModelBenchmarkMetric.NormalizeEndpoint("https://api.example.com:443/v1") ==
+            ModelBenchmarkMetric.NormalizeEndpoint("https://api.example.com/v1"),
+            "the default port must fold");
+        Assert(
+            ModelBenchmarkMetric.NormalizeEndpoint("http://api.example.com:8080/v1") !=
+            ModelBenchmarkMetric.NormalizeEndpoint("http://api.example.com/v1"),
+            "a non-default port must not fold");
+        // Different queries must not conflate; the same query must match; and
+        // the raw query (possible secrets) must not appear in the value.
+        var withKeyA = ModelBenchmarkMetric.NormalizeEndpoint("http://127.0.0.1:9000/rpc?key=SECRET-A");
+        var withKeyB = ModelBenchmarkMetric.NormalizeEndpoint("http://127.0.0.1:9000/rpc?key=SECRET-B");
+        var withKeyAAgain = ModelBenchmarkMetric.NormalizeEndpoint("http://127.0.0.1:9000/rpc?key=SECRET-A");
+        Assert(withKeyA != withKeyB, "different query targets must not conflate");
+        Assert(withKeyA == withKeyAAgain, "the same query must match itself");
+        Assert(!withKeyA.Contains("SECRET"), "the raw query must never be stored in the clear");
+    }
+
+    private static void TestInvalidAndExpiredSamplesNeverRank()
+    {
+        var context = new ModelBenchmarkContext(
+            "https://api.example.com/v1", "prompt-v1", "machine-1");
+        var models = new List<ModelDescriptor>
+        {
+            new("candidate-model", CapabilityState.Supported, CapabilityState.Unknown, "Catalog"),
+        };
+
+        var nanMetric = new ModelBenchmarkMetric(
+            "https://api.example.com/v1", "candidate-model", "prompt-v1", "machine-1",
+            DateTimeOffset.UtcNow, double.NaN, 50, 500);
+        var negativeMetric = nanMetric with { TtftMs = -100, CharsPerSecond = -5 };
+        var staleMetric = nanMetric with
+        {
+            TtftMs = 10,
+            CharsPerSecond = 999,
+            Timestamp = DateTimeOffset.UtcNow - TimeSpan.FromDays(8), // beyond the 7-day window
+        };
+
+        var request = new ModelRecommendationRequest(
+            ProviderType: ProviderType.OpenAiCompatible,
+            IsLocal: false,
+            Models: models,
+            TargetUsage: ModelTargetUsage.Text,
+            Preference: ModelPreference.Speed,
+            BenchmarkContext: context,
+            BenchmarkMetrics: [nanMetric, negativeMetric, staleMetric]);
+
+        var result = ModelRecommendationService.Recommend(request);
+        var eval = result.Candidates.First(c => c.Model.Id == "candidate-model");
+        Assert(eval.BenchmarkEvidence == null,
+            "NaN, negative and expired samples must never become benchmark evidence");
+        Assert(!eval.EvidenceSources.HasFlag(RecommendationEvidenceSource.LocalBenchmark),
+            "no LocalBenchmark evidence may be recorded from invalid samples");
+    }
+
+    private static void TestMedianAggregationAndTrialLabel()
+    {
+        ModelBenchmarkMetric.Clock = () => new DateTimeOffset(2026, 9, 5, 12, 0, 0, TimeSpan.Zero);
+        try
+        {
+            var context = new ModelBenchmarkContext(
+                "https://api.example.com/v1", "prompt-v1", "machine-1");
+            var samples = new List<double> { 100, 900, 300, 200 }; // median TTFT = 250
+            var metrics = samples.Select((ttft, index) => new ModelBenchmarkMetric(
+                "https://api.example.com/v1", "candidate-model", "prompt-v1", "machine-1",
+                ModelBenchmarkMetric.Clock().AddMinutes(-index), ttft, 40, 400)).ToList();
+
+            var models = new List<ModelDescriptor>
+            {
+                new("candidate-model", CapabilityState.Supported, CapabilityState.Unknown, "Catalog"),
+            };
+            var request = new ModelRecommendationRequest(
+                ProviderType: ProviderType.OpenAiCompatible,
+                IsLocal: false,
+                Models: models,
+                TargetUsage: ModelTargetUsage.Text,
+                Preference: ModelPreference.Speed,
+                BenchmarkContext: context,
+                BenchmarkMetrics: metrics);
+
+            var result = ModelRecommendationService.Recommend(request);
+            var eval = result.Candidates.First(c => c.Model.Id == "candidate-model");
+            Assert(eval.BenchmarkEvidence is not null, "matching samples must aggregate");
+            Assert(Math.Abs(eval.BenchmarkEvidence!.TtftMs - 250) < 0.01,
+                $"the median TTFT (250) must be adopted, got {eval.BenchmarkEvidence.TtftMs}");
+            Assert(eval.DetailedReasons.Any(reason => reason.Contains("试测") && reason.Contains("不足 5")),
+                "n < 5 must be labelled a trial, not a stable ranking");
+        }
+        finally
+        {
+            ModelBenchmarkMetric.Clock = () => DateTimeOffset.UtcNow;
+        }
     }
 
     private static void Assert(bool condition, string message)

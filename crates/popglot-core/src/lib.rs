@@ -402,12 +402,21 @@ impl AppCore {
         }
         let restoration = restorer.finish();
         let mut response = stream_result?;
+        Self::apply_restoration(&mut response, &protected.tokens, restoration);
+        Ok(response)
+    }
+
+    /// Applies exactly-once restoration to a finished translation: the restored
+    /// text and protected terms always land; dropped, duplicated or unknown
+    /// placeholders mark the result partial with an explanatory warning each.
+    fn apply_restoration(
+        response: &mut TranslationResponse,
+        tokens: &[popglot_domain::ProtectedToken],
+        restoration: popglot_domain::RestoredText,
+    ) {
         response.result.translated_text = restoration.text;
-        response.result.protected_terms = protected
-            .tokens
-            .iter()
-            .map(|token| token.original.clone())
-            .collect();
+        response.result.protected_terms =
+            tokens.iter().map(|token| token.original.clone()).collect();
         if !restoration.dropped_terms.is_empty() {
             response.result.is_partial = true;
             response.result.warnings.push(format!(
@@ -415,7 +424,20 @@ impl AppCore {
                 restoration.dropped_terms.join("、")
             ));
         }
-        Ok(response)
+        if !restoration.duplicated_terms.is_empty() {
+            response.result.is_partial = true;
+            response.result.warnings.push(format!(
+                "这些占位符在译文中重复出现，结果不完整：{}",
+                restoration.duplicated_terms.join("、")
+            ));
+        }
+        if !restoration.unknown_placeholders.is_empty() {
+            response.result.is_partial = true;
+            response.result.warnings.push(format!(
+                "译文中出现了本请求未发出的占位符：{}",
+                restoration.unknown_placeholders.join("、")
+            ));
+        }
     }
 
     /// Pure lock-free text translation snapshot execution.
@@ -477,19 +499,7 @@ impl AppCore {
 
         if !protected.tokens.is_empty() {
             let restored = restore_tokens(&response.result.translated_text, &protected.tokens);
-            response.result.translated_text = restored.text;
-            response.result.protected_terms = protected
-                .tokens
-                .iter()
-                .map(|token| token.original.clone())
-                .collect();
-            if !restored.dropped_terms.is_empty() {
-                response.result.is_partial = true;
-                response.result.warnings.push(format!(
-                    "模型未在译文中保留这些代码元素：{}",
-                    restored.dropped_terms.join("、")
-                ));
-            }
+            Self::apply_restoration(&mut response, &protected.tokens, restored);
         }
         Ok(response)
     }
@@ -723,6 +733,7 @@ mod tests {
                 extra_headers: BTreeMap::default(),
                 anthropic_version: String::new(),
                 allow_insecure_tls: false,
+                allow_lan_endpoints: false,
             }),
             ..ProviderSettings::default()
         };
@@ -872,9 +883,11 @@ mod tests {
         let with_key = core.plan_screenshot_route(true, true);
         assert_eq!(with_key.reason_code, "auto_local_first");
 
-        // No OCR language pack: vision is the only route that can produce text.
+        // No OCR language pack: remote vision runs the two-stage pipeline
+        // (recognize with the vision model, translate with the text model).
         let no_ocr = core.plan_screenshot_route(false, true);
-        assert_eq!(no_ocr.selected_mode, TranslationMode::VisionDirect);
+        assert_eq!(no_ocr.selected_mode, TranslationMode::VisionOcr);
+        assert_eq!(no_ocr.reason_code, "auto_remote_vision_two_stage");
 
         // The offline switch outranks everything.
         core.settings.safe_dev_mode = true;

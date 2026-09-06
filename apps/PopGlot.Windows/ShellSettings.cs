@@ -224,7 +224,8 @@ internal sealed record ShellSettings(
     bool StartWithWindows = false,
     HotkeyBinding? ShowWindowHotkey = null,
     FreeEngineConsent FreeEngineConsent = FreeEngineConsent.Unset,
-    bool CloseHintShown = false)
+    bool CloseHintShown = false,
+    bool CloudSpeechEnabled = false)
 {
     public const int CurrentSchemaVersion = 3;
 
@@ -240,7 +241,8 @@ internal sealed record ShellSettings(
         StartWithWindows: false,
         ShowWindowHotkey: HotkeyBinding.ShowWindowDefault,
         FreeEngineConsent: FreeEngineConsent.Unset,
-        CloseHintShown: false);
+        CloseHintShown: false,
+        CloudSpeechEnabled: false);
 
     public IReadOnlyDictionary<HotkeyAction, HotkeyBinding> Hotkeys
     {
@@ -291,10 +293,7 @@ internal sealed record ShellSettings(
 
 internal static class ShellSettingsStore
 {
-    private static readonly string DefaultSettingsPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "PopGlot",
-        "windows-shell.json");
+    private static readonly string DefaultSettingsPath = StoragePaths.ShellSettings;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -347,7 +346,10 @@ internal static class ShellSettingsStore
                         ? consent
                         : FreeEngineConsent.Unset
                     : FreeEngineConsent.Unset,
-                persisted.CloseHintShown ?? false);
+                persisted.CloseHintShown ?? false,
+                // Cloud speech (Microsoft voice service) is an independent
+                // consent that upgrades never grant implicitly.
+                persisted.CloudSpeechEnabled ?? false);
         }
         catch (Exception exception) when (exception is IOException or JsonException or UnauthorizedAccessException)
         {
@@ -385,7 +387,8 @@ internal static class ShellSettingsStore
             settings.StartWithWindows,
             settings.ShowWindowHotkey?.Serialize(),
             settings.FreeEngineConsent.ToString(),
-            settings.CloseHintShown);
+            settings.CloseHintShown,
+            settings.CloudSpeechEnabled);
 
         // Write through a temporary file so a crash mid-write cannot leave the
         // user without settings on the next launch.
@@ -410,5 +413,6 @@ internal static class ShellSettingsStore
         bool? StartWithWindows,
         string? ShowWindowHotkey = null,
         string? FreeEngineConsent = null,
-        bool? CloseHintShown = null);
+        bool? CloseHintShown = null,
+        bool? CloudSpeechEnabled = null);
 }

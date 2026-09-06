@@ -53,10 +53,20 @@ public readonly record struct TranslationStreamDrainBatch(
 /// <summary>
 /// Thread-safe, bounded streaming buffer and session event component for translation deltas.
 /// <para>
-/// Meets spec 2.4 / 2.9:
-/// - O(1) synchronous TryAppend / TryAppendUtf8 non-blocking entry points suitable for native callbacks.
-/// - Merges consecutive deltas into a pending StringBuilder under short lock; never drops characters silently.
-/// - Hard character and byte limits with abort return value for native backpressure signaling.
+/// Complexity contract (T16: stated honestly against input size):
+/// - TryAppend / TryAppendUtf8 append to a pending StringBuilder under a short
+///   lock. Appending k characters costs O(k) work and allocates as the builder
+///   grows — "O(1)" only in the amortized per-call sense for small deltas, not
+///   in bytes copied.
+/// - Drain copies the pending text out (O(pending) allocation per drain); the
+///   accumulated-text cache is rebuilt whenever pending is merged, so total
+///   work over a stream is quadratic in the number of merge points, not O(1).
+///   Callers should drain on a cadence (the coordinator's 40 ms pump) instead
+///   of per-delta.
+/// - Lock hold times are bounded by one append or one copy — no long
+///   critical sections — but this is a lock-based structure, not lock-free.
+/// - Never drops characters silently; hard character/byte limits with abort
+///   return values for native backpressure signaling.
 /// - Consumer can periodically and atomically Drain pending deltas; final drain guarantees zero tail loss.
 /// - SessionId, RequestId, and Epoch fencing to prevent stale stream pollution.
 /// - High-precision metrics: delta count, char count, byte count, flush count, first-delta timestamp / TTFT calculation.
@@ -185,7 +195,8 @@ public sealed class TranslationStreamBuffer : IDisposable
 
     /// <summary>
     /// Synchronously appends string delta. Returns false if stream is closed or hard limits are exceeded.
-    /// Non-blocking, O(1) lock duration, safe for native callback invocation.
+    /// Safe for native callback invocation: the lock is held only for this
+    /// append (O(delta length) work, allocation as the builder grows).
     /// </summary>
     public bool TryAppend(string? text)
     {
@@ -202,7 +213,8 @@ public sealed class TranslationStreamBuffer : IDisposable
 
     /// <summary>
     /// Synchronously appends character span. Returns false if stream is closed or hard limits are exceeded.
-    /// Non-blocking, zero-allocation, O(1) lock duration.
+    /// The call itself allocates nothing; the underlying builder still grows
+    /// by the appended length under a short lock.
     /// </summary>
     public bool TryAppend(ReadOnlySpan<char> chars)
     {
@@ -220,7 +232,8 @@ public sealed class TranslationStreamBuffer : IDisposable
 
     /// <summary>
     /// Synchronously appends UTF-8 bytes span directly. Returns false if stream is closed or hard limits are exceeded.
-    /// Non-blocking, stackalloc-optimized, O(1) lock duration.
+    /// Small conversions use stackalloc; the lock is held only for the
+    /// append itself.
     /// </summary>
     public bool TryAppendUtf8(ReadOnlySpan<byte> utf8)
     {

@@ -2,7 +2,7 @@
 
 PopGlot 是一个 Windows-first 的轻量 AI 翻译桌面助手。首要场景是程序员阅读英文报错、代码变量、命令、路径和技术文档；底层同时为普通屏幕翻译和未来 macOS/Linux Shell 保留清晰边界。
 
-当前版本 **0.1.2**。版本号从 0.0.1 起算，按 `docs/VERSIONING.md` 的规则只做增量递增（0.0.2、0.0.3…，大功能批次进 0.1.0）；此前误打的 `v0.3.0` tag 已撤回作废。逐版本变更见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **0.1.4**。版本号从 0.0.1 起算，按 `docs/VERSIONING.md` 的规则只做增量递增（0.0.2、0.0.3…，大功能批次进 0.1.0）；此前误打的 `v0.3.0` tag 已撤回作废。逐版本变更见 [CHANGELOG.md](CHANGELOG.md)。
 
 当前仓库已经包含可用的 Windows 核心交互：选中文字后按快捷键即可安全读取选区、恢复剪贴板并流式翻译；截图框选会捕获内存 PNG，交由本地 OCR 或（在获得明确授权后）视觉 Provider 处理。划词、截图和手动输入共享统一的低延迟流式浮窗、取消、错误、复制与本地历史模型。开箱即用：未配置密钥时走内置免费引擎；「安全离线模式」可一键切断全部外发请求。
 
@@ -15,14 +15,14 @@ PopGlot 是一个 Windows-first 的轻量 AI 翻译桌面助手。首要场景�
 
 ### 产物校验（SHA256）
 
-从 GitHub Releases 下载 `PopGlot-v0.1.2-win-x64.zip` 与对应 `PopGlot-v0.1.2-win-x64.zip.sha256` 后，可在 PowerShell 中运行以下命令校验完整性：
+从 GitHub Releases 下载 `PopGlot-v0.1.4-win-x64.zip` 与对应 `PopGlot-v0.1.4-win-x64.zip.sha256` 后，可在 PowerShell 中运行以下命令校验完整性：
 
 ```powershell
 # 计算下载包 SHA256 哈希
-(Get-FileHash -Path .\PopGlot-v0.1.2-win-x64.zip -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash -Path .\PopGlot-v0.1.4-win-x64.zip -Algorithm SHA256).Hash.ToLower()
 
 # 对比 sha256 文件内容
-Get-Content .\PopGlot-v0.1.2-win-x64.zip.sha256
+Get-Content .\PopGlot-v0.1.4-win-x64.zip.sha256
 ```
 
 ## 当前能力
@@ -35,7 +35,7 @@ Get-Content .\PopGlot-v0.1.2-win-x64.zip.sha256
 - **冷启动与延迟加载**：启动只创建托盘、主题与隐藏热键窗口；主窗口在首次使用时才构建，冷启动尽快到达可用托盘。
 - **剪贴板安全事务**：划词使用有界剪贴板事务模拟 `Ctrl+C`；复制成功、失败或取消都会按序列号规则恢复，且不会覆盖用户随后复制的新内容。
 - **多显示器与像素对齐**：多显示器选区遮罩、真实内存截图与统一结果浮窗；全流程按物理像素定位，混合 DPI 与副屏下浮窗和选区均精准对齐；`Esc` 先取消流式请求、再关闭浮窗。
-- **16 种语言与智能路线**：浮窗与设置页共用统一语言表；`Auto / LocalOcr / VisionDirect` 三种截图线路由 Rust Core 统一裁决，设置页实时显示"当前实际线路"及原因。
+- **16 种语言与智能路线**：浮窗与设置页共用统一语言表；`Auto / LocalOcr / VisionDirect / VisionOcr` 四种截图线路由 Rust domain 的共享决策表统一裁决（设置预览与实际执行走同一条路径），设置页实时显示"当前实际线路"及原因；Auto 诚实本地优先，不作画质/复杂度假设。
 - **Windows 内置离线 OCR**：已接入系统 OCR，按源语言挑选识别引擎；未安装语言包时给出明确指引。
 - **API Key 安全存储**：凭据仅保存至 Windows Credential Manager，不写普通 JSON 或日志，各服务拥有独立凭据槽位。
 - **程序员 Token 保护**：异常名、标识符、路径、URL、命令参数等在翻译前遮蔽、翻译后逐字节还原；弱标识符规则只在文本具备代码特征时启用，纯散文不误伤。
@@ -92,7 +92,7 @@ cargo run --example live_provider_bench -- --live --i-understand-cost --subset m
 ## 构建与运行
 
 ```powershell
-# 完整验证（包含 Rust 检查、WPF 构建与全量 113 项 Windows 逻辑测试）
+# 完整验证（包含 Rust 检查、WPF 构建与全量 Windows 逻辑测试；当前规模以命令输出为准，2026-09-05 为 163 项）
 ./scripts/verify.ps1
 
 # 运行托盘应用
@@ -112,11 +112,11 @@ WPF 项目构建时会自动构建 `popglot-ffi` 并将 `popglot_ffi.dll` 复制
 
 ## 配置与隐私
 
-非秘密设置位于 `%LOCALAPPDATA%\PopGlot`（服务配置在 `product-config.json`，schema v6；核心设置在 `provider-settings.json`，schema v3）。API Key 使用 Windows Credential Manager，且**每个服务有独立凭据项**（`PopGlot/provider/<id>`）；旧的通用凭据项 `PopGlot/OpenAICompatibleApiKey` 为兼容初始版本保留，代表"当前活动 Provider 的 Key"。
+非秘密设置位于 `%LOCALAPPDATA%\PopGlot`（服务配置在 `product-config.json`，schema v7——v6 及更早版本首次运行时自动无损迁移；核心设置在 `provider-settings.json`，schema v3）。API Key 使用 Windows Credential Manager，且**每个服务有独立凭据项**（`PopGlot/provider/<id>`）；旧的通用凭据项 `PopGlot/OpenAICompatibleApiKey` 为兼容初始版本保留，代表"当前活动 Provider 的 Key"。
 
 - `LocalOcr` 模式的产品契约是永不上传截图。
 - `Auto` 只有在用户明确允许、视觉模型已配置且路由认为必要时才能上传截图。
-- `VisionDirect` 失败后必须安全回退到本地 OCR + 文本模型。
+- `VisionDirect` 是显式用户选择：所选视觉服务不可执行时明确阻断并给出原因，绝不静默改走其他线路。
 - `safe_dev_mode` 是总开关，覆盖包括内置免费引擎在内的一切外发请求。
 - `network_enabled` 关闭后模型请求在发出 HTTP 前失败，内置免费引擎同样被拒绝；只有本地模型（Ollama / LM Studio 等）地址仍可工作。
 - 保存配置不联网；「测试连接」仅在用户主动点击时发送最小文本到内存中的草稿配置，不保存、不覆盖凭据、不含截图。

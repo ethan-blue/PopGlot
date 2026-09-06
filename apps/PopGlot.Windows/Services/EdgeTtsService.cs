@@ -1,14 +1,15 @@
 using System.IO;
 using System.Net.WebSockets;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 namespace PopGlot.Windows.Services;
 
 /// <summary>
-/// Ultra-high quality, natural neural Text-To-Speech powered by Microsoft Edge Read Aloud protocol.
-/// Requires zero API key or configuration.
+/// Natural neural Text-To-Speech over the Microsoft Edge Read Aloud protocol.
+/// Destination: speech.platform.bing.com (Microsoft voice service). The user
+/// must have enabled cloud speech explicitly; nothing here is contacted for
+/// offline playback.
 /// </summary>
 internal static class EdgeTtsService
 {
@@ -16,6 +17,12 @@ internal static class EdgeTtsService
     private const string Endpoint = "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1";
     private const string ChromiumUserAgent =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0";
+
+    private const int MaxSourceCharacters = 5_000;
+    private const int MaxAudioBytes = 8 * 1024 * 1024;
+
+    /// <summary>Test seam: supplies a fake transport so synthesis is verifiable offline.</summary>
+    internal static Func<Uri, CancellationToken, Task<WebSocket>>? WebSocketFactory { get; set; }
 
     public static async Task<string> SynthesizeToMp3FileAsync(
         string text,
@@ -28,6 +35,10 @@ internal static class EdgeTtsService
         {
             throw new ArgumentException("Text cannot be empty", nameof(text));
         }
+        if (trimmed.Length > MaxSourceCharacters)
+        {
+            throw new InvalidOperationException($"云端朗读单次最多 {MaxSourceCharacters} 个字符。");
+        }
 
         var voice = preferredVoice ?? ResolveDefaultVoice(trimmed);
         var locale = voice[..voice.LastIndexOf('-', voice.LastIndexOf('-') - 1)];
@@ -35,16 +46,9 @@ internal static class EdgeTtsService
         var connectionId = Guid.NewGuid().ToString("N");
         var uri = new Uri($"{Endpoint}?TrustedClientToken={TrustedToken}&ConnectionId={connectionId}");
 
-        using var ws = new ClientWebSocket();
-        ws.Options.SetRequestHeader("User-Agent", ChromiumUserAgent);
-        ws.Options.SetRequestHeader("Origin", "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold");
-        ws.Options.SetRequestHeader("Pragma", "no-cache");
-        ws.Options.SetRequestHeader("Cache-Control", "no-cache");
-
-        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
-
-        await ws.ConnectAsync(uri, linkedCts.Token);
+        using var ws = WebSocketFactory is { } factory
+            ? await factory(uri, cancellationToken)
+            : await ConnectAsync(uri, cancellationToken);
 
         // 1. Send speech.config
         var dateHeader = DateTime.UtcNow.ToString("r");
@@ -54,8 +58,7 @@ internal static class EdgeTtsService
             "Path:speech.config\r\n\r\n" +
             "{\"context\":{\"synthesis\":{\"audio\":{\"metadataoptions\":{\"sentenceBoundaryEnabled\":\"false\",\"wordBoundaryEnabled\":\"false\"},\"outputFormat\":\"audio-24khz-48kbitrate-mono-mp3\"}}}}";
 
-        var configBytes = Encoding.UTF8.GetBytes(configMessage);
-        await ws.SendAsync(configBytes, WebSocketMessageType.Text, true, linkedCts.Token);
+        await SendTextMessageAsync(ws, configMessage, cancellationToken);
 
         // 2. Send SSML request
         var requestId = Guid.NewGuid().ToString("N");
@@ -70,66 +73,179 @@ internal static class EdgeTtsService
             "Content-Type:application/ssml+xml\r\n" +
             $"Path:ssml\r\n\r\n{ssml}";
 
-        var ssmlBytes = Encoding.UTF8.GetBytes(ssmlMessage);
-        await ws.SendAsync(ssmlBytes, WebSocketMessageType.Text, true, linkedCts.Token);
+        await SendTextMessageAsync(ws, ssmlMessage, cancellationToken);
 
-        // 3. Receive binary audio payload chunks
+        // 3. Receive messages, assembling fragments per protocol message.
         using var audioStream = new MemoryStream();
-        var buffer = new byte[16 * 1024];
-
-        while (ws.State == WebSocketState.Open && !linkedCts.IsCancellationRequested)
+        var turnEnded = false;
+        while (ws.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
         {
-            var result = await ws.ReceiveAsync(buffer, linkedCts.Token);
-            if (result.MessageType == WebSocketMessageType.Close)
+            var (messageType, payload) = await ReceiveMessageAsync(ws, cancellationToken);
+            if (messageType == WebSocketMessageType.Close)
             {
                 break;
             }
-
-            if (result.MessageType == WebSocketMessageType.Text)
+            if (messageType == WebSocketMessageType.Text)
             {
-                var textPayload = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                var textPayload = Encoding.UTF8.GetString(payload);
                 if (textPayload.Contains("Path:turn.end", StringComparison.Ordinal))
                 {
+                    turnEnded = true;
                     break;
                 }
+                continue;
             }
-            else if (result.MessageType == WebSocketMessageType.Binary)
+
+            // Binary frame: 2-byte big-endian header length, then headers, then audio.
+            if (payload.Length >= 2)
             {
-                if (result.Count >= 2)
+                var headerLength = (payload[0] << 8) | payload[1];
+                var payloadOffset = 2 + headerLength;
+                if (payload.Length > payloadOffset)
                 {
-                    // 2-byte big-endian header length
-                    var headerLength = (buffer[0] << 8) | buffer[1];
-                    var payloadOffset = 2 + headerLength;
-                    if (result.Count > payloadOffset)
+                    if (audioStream.Length + (payload.Length - payloadOffset) > MaxAudioBytes)
                     {
-                        var dataLength = result.Count - payloadOffset;
-                        audioStream.Write(buffer, payloadOffset, dataLength);
+                        throw new InvalidOperationException("云端朗读音频超过大小上限，已中止。");
                     }
+                    audioStream.Write(payload, payloadOffset, payload.Length - payloadOffset);
                 }
             }
+        }
+
+        if (!turnEnded)
+        {
+            // A connection that died (or was closed by the service) before the
+            // turn finished must not present truncated audio as success.
+            audioStream.SetLength(0);
+            throw cancellationToken.IsCancellationRequested
+                ? new OperationCanceledException(cancellationToken)
+                : new InvalidOperationException("云端朗读连接在完成前中断，未获得完整音频。");
         }
 
         if (audioStream.Length == 0)
         {
-            throw new InvalidOperationException("No audio bytes received from Edge TTS service.");
+            throw new InvalidOperationException("云端语音服务没有返回音频内容。");
         }
 
         var tempPath = Path.Combine(Path.GetTempPath(), $"popglot-edgetts-{Guid.NewGuid():N}.mp3");
-        await File.WriteAllBytesAsync(tempPath, audioStream.ToArray(), linkedCts.Token);
+        await File.WriteAllBytesAsync(tempPath, audioStream.ToArray(), cancellationToken);
         return tempPath;
     }
 
-    public static string ResolveDefaultVoice(string text)
+    private static async Task<WebSocket> ConnectAsync(Uri uri, CancellationToken cancellationToken)
+    {
+        var ws = new ClientWebSocket();
+        ws.Options.SetRequestHeader("User-Agent", ChromiumUserAgent);
+        ws.Options.SetRequestHeader("Origin", "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold");
+        ws.Options.SetRequestHeader("Pragma", "no-cache");
+        ws.Options.SetRequestHeader("Cache-Control", "no-cache");
+        await ws.ConnectAsync(uri, cancellationToken);
+        return ws;
+    }
+
+    private static async Task SendTextMessageAsync(WebSocket ws, string message, CancellationToken ct)
+    {
+        var bytes = Encoding.UTF8.GetBytes(message);
+        await ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
+    }
+
+    /// <summary>
+    /// Receives ONE complete protocol message. WS messages may arrive in any
+    /// number of fragments: the two-byte binary header cannot be parsed until
+    /// EndOfMessage, and a text marker like turn.end may be split anywhere.
+    /// </summary>
+    private static async Task<(WebSocketMessageType Type, byte[] Payload)> ReceiveMessageAsync(
+        WebSocket ws, CancellationToken ct)
+    {
+        using var message = new MemoryStream();
+        WebSocketMessageType type;
+        bool endOfMessage;
+        do
+        {
+            var buffer = new byte[16 * 1024];
+            var result = await ws.ReceiveAsync(buffer, ct);
+            type = result.MessageType;
+            endOfMessage = result.EndOfMessage;
+            if (type == WebSocketMessageType.Close)
+            {
+                return (type, []);
+            }
+            message.Write(buffer, 0, result.Count);
+            if (message.Length > MaxAudioBytes)
+            {
+                throw new InvalidOperationException("云端朗读单条消息超过大小上限，已中止。");
+            }
+        }
+        while (!endOfMessage);
+        return (type, message.ToArray());
+    }
+
+    /// <summary>
+    /// Resolves the cloud voice. An explicit language tag from the app wins
+    /// (the user chose the language); character-script detection is only the
+    /// fallback for unknown tags, and emoji or accented letters never imply a
+    /// language by themselves.
+    /// </summary>
+    public static string ResolveVoice(string? languageTag, string text)
+    {
+        if (!string.IsNullOrWhiteSpace(languageTag) &&
+            !languageTag.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            var tag = languageTag.ToLowerInvariant();
+            var prefix = tag.Split('-')[0];
+            return prefix switch
+            {
+                "zh" => tag.StartsWith("zh-tw", StringComparison.OrdinalIgnoreCase) ||
+                        tag.StartsWith("zh-hk", StringComparison.OrdinalIgnoreCase)
+                    ? "zh-TW-HsiaoChenNeural"
+                    : "zh-CN-XiaoxiaoNeural",
+                "ja" => "ja-JP-NanamiNeural",
+                "ko" => "ko-KR-SunHiNeural",
+                "ru" => "ru-RU-SvetlanaNeural",
+                "de" => "de-DE-KatjaNeural",
+                "fr" => "fr-FR-DeniseNeural",
+                "es" => "es-ES-ElviraNeural",
+                "pt" => "pt-BR-FranciscaNeural",
+                "it" => "it-IT-ElsaNeural",
+                "ar" => "ar-EG-SalmaNeural",
+                _ => "en-US-JennyNeural",
+            };
+        }
+
+        // Script fallback only: unambiguous scripts decide. The old
+        // `ch >= 'ä'` range comparison sent emoji and French accents to the
+        // German voice.
+        foreach (var ch in text)
+        {
+            if (ch is >= '一' and <= '鿿') return "zh-CN-XiaoxiaoNeural";
+            if (ch is >= '぀' and <= 'ヿ') return "ja-JP-NanamiNeural";
+            if (ch is >= '가' and <= '힯') return "ko-KR-SunHiNeural";
+            if (ch is >= 'Ѐ' and <= 'ӿ') return "ru-RU-SvetlanaNeural";
+            if (ch is >= '؀' and <= 'ۿ') return "ar-EG-SalmaNeural";
+        }
+        return ResolveAccentHintVoice(text);
+    }
+
+    /// <summary>Legacy entry: script fallback without a language tag.</summary>
+    public static string ResolveDefaultVoice(string text) => ResolveVoice(null, text);
+
+    /// <summary>
+    /// Distinct accented letters hint French or German; anything else falls
+    /// back to the neutral English voice instead of guessing a language.
+    /// </summary>
+    private static string ResolveAccentHintVoice(string text)
     {
         foreach (var ch in text)
         {
-            if (ch is >= '一' and <= '鿿') return "zh-CN-XiaoxiaoNeural"; // 微软晓晓（自然中文女声）
-            if (ch is >= '぀' and <= 'ヿ') return "ja-JP-NanamiNeural";   // 日文女声
-            if (ch is >= '가' and <= '힯') return "ko-KR-SunHiNeural";   // 韩文女声
-            if (ch is >= 'Ѐ' and <= 'ӿ') return "ru-RU-SvetlanaNeural"; // 俄语女声
-            if (ch is >= 'ä' or 'ö' or 'ü' or 'ß') return "de-DE-KatjaNeural"; // 德语
-            if (ch is >= 'é' or 'è' or 'à' or 'ç') return "fr-FR-DeniseNeural"; // 法语
+            if (ch is 'à' or 'â' or 'ç' or 'é' or 'è' or 'ê' or 'ë' or 'î' or 'ï' or 'ô' or 'ù' or 'û' or 'œ')
+            {
+                return "fr-FR-DeniseNeural";
+            }
+            if (ch is 'ä' or 'ö' or 'ü' or 'ß')
+            {
+                return "de-DE-KatjaNeural";
+            }
         }
-        return "en-US-JennyNeural"; // 微软 Jenny（自然美音女声）
+        return "en-US-JennyNeural";
     }
 }
