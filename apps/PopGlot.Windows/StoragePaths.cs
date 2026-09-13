@@ -21,6 +21,7 @@ internal static class StoragePaths
 
     private static string BaseDir =>
         RootOverride ??
+        Environment.GetEnvironmentVariable("POPGLOT_DATA_ROOT") ??
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "PopGlot");

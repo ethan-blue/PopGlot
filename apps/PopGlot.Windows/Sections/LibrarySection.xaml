@@ -13,8 +13,8 @@
         <!-- Top ToolBar: title, mode switch, quick search, export and clear -->
         <Grid Grid.Row="0" Margin="0,0,0,8">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="资料库" Style="{StaticResource PageTitle}" FontSize="15"
-                           FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,12,0" />
+                <TextBlock Text="资料库" Style="{StaticResource PageTitle}"
+                           VerticalAlignment="Center" Margin="0,0,12,0" />
                 <RadioButton x:Name="ModeHistory" Style="{StaticResource SegmentButton}"
                              GroupName="LibraryMode" IsChecked="True" Content="历史"
                              Checked="Mode_Checked" Tag="History" />
@@ -29,6 +29,12 @@
                          AutomationProperties.Name="搜索历史与生词"
                          local:Ui.Placeholder="搜索原文或译文…"
                          TextChanged="LibrarySearch_TextChanged" />
+                <Button x:Name="RetryVocabularyButton" Style="{StaticResource GhostButton}"
+                        Content="重试加载" Padding="10,4" Margin="8,0,0,0"
+                        Visibility="Collapsed"
+                        ToolTip="生词本文件上次未能安全读取；重试将重新尝试加载，失败不改动现有内容"
+                        AutomationProperties.Name="重试加载生词本"
+                        Click="RetryVocabularyButton_Click" />
                 <Button x:Name="ExportMenuButton" Style="{StaticResource GhostButton}"
                         Content="导出" Padding="10,4" Margin="8,0,0,0"
                         Click="ExportMenuButton_Click" />
@@ -41,11 +47,11 @@
         <!-- ==================== Master–Detail Surface ==================== -->
         <Border Grid.Row="1" Background="{DynamicResource SurfaceBrush}"
                 BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                CornerRadius="4">
+                CornerRadius="10">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="320" MinWidth="220" MaxWidth="460" />
-                    <ColumnDefinition Width="1" />
+                    <ColumnDefinition Width="4" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
 
@@ -64,13 +70,23 @@
                         <TextBlock x:Name="LibraryEmptyHint"
                                    Style="{StaticResource Caption}" MaxWidth="220"
                                    TextAlignment="Center" HorizontalAlignment="Center" />
+                        <Button x:Name="InlineRetryVocabularyButton" Style="{StaticResource PrimaryButton}"
+                                Content="重试加载" Padding="14,6" Margin="0,12,0,0"
+                                HorizontalAlignment="Center"
+                                Visibility="Collapsed"
+                                ToolTip="重新尝试安全读取生词本"
+                                AutomationProperties.Name="重试加载生词本"
+                                Click="RetryVocabularyButton_Click" />
                     </StackPanel>
 
                     <ListBox x:Name="LibraryListBox" Grid.Row="0"
                              Background="Transparent" BorderThickness="0"
+                             VirtualizingStackPanel.IsVirtualizing="True"
+                             VirtualizingStackPanel.VirtualizationMode="Recycling"
+                             ScrollViewer.CanContentScroll="True"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
                              KeyDown="LibraryList_KeyDown"
-                             SelectionChanged="LibraryList_SelectionChanged"
-                             ScrollViewer.VerticalScrollBarVisibility="Auto">
+                             SelectionChanged="LibraryList_SelectionChanged">
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding TitleOneLine}" />
@@ -114,9 +130,20 @@
                     </Border>
                 </Grid>
 
-                <!-- ==================== Hairline Separator ==================== -->
-                <Rectangle Grid.Column="1" Fill="{DynamicResource BorderSubtleBrush}"
-                           HorizontalAlignment="Stretch" />
+                <!-- ==================== Column Splitter ==================== -->
+                <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Stretch"
+                              Cursor="SizeWE" ShowsPreview="False">
+                    <GridSplitter.Style>
+                        <Style TargetType="GridSplitter">
+                            <Setter Property="Background" Value="{DynamicResource BorderSubtleBrush}" />
+                            <Style.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </GridSplitter.Style>
+                </GridSplitter>
 
                 <!-- ==================== Detail Column: Property List Inspector ==================== -->
                 <Grid Grid.Column="2" Background="{DynamicResource CanvasBrush}">
@@ -145,7 +172,7 @@
                                 <!-- Property list header table -->
                                 <Border Background="{DynamicResource SurfaceRaisedBrush}"
                                         BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                                        CornerRadius="4" Padding="12,8" Margin="0,0,0,12">
+                                        CornerRadius="6" Padding="12,8" Margin="0,0,0,12">
                                     <Grid>
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto" />
@@ -179,7 +206,7 @@
                                            Margin="0,0,0,4" />
                                 <Border Background="{DynamicResource InputBrush}"
                                         BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                                        CornerRadius="4" Padding="12,10">
+                                        CornerRadius="6" Padding="12,10">
                                     <TextBlock x:Name="DetailSource" FontSize="13" LineHeight="20"
                                                TextWrapping="Wrap"
                                                Foreground="{DynamicResource TextSecondaryBrush}" />
@@ -191,7 +218,7 @@
                                            Margin="0,12,0,4" />
                                 <Border Background="{DynamicResource InputBrush}"
                                         BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                                        CornerRadius="4" Padding="12,10">
+                                        CornerRadius="6" Padding="12,10">
                                     <TextBlock x:Name="DetailTranslation" FontSize="14.5" LineHeight="22"
                                                TextWrapping="Wrap"
                                                Foreground="{DynamicResource TextPrimaryBrush}" />

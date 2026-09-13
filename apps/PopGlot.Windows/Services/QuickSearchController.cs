@@ -25,6 +25,7 @@ internal sealed class QuickSearchState
     public string FinalRenderedText { get; private set; } = string.Empty;
     public string? Phonetic { get; private set; }
     public string? Explanation { get; private set; }
+    public string? ErrorMessage { get; private set; }
     public string StatusText { get; private set; } = "输入后按 Enter 翻译";
 
     public bool IsResultVisible { get; private set; }
@@ -55,6 +56,7 @@ internal sealed class QuickSearchState
         FinalRenderedText = string.Empty;
         Phonetic = null;
         Explanation = null;
+        ErrorMessage = null;
         IsResultVisible = true;
         IsStreamLayerVisible = true;
         IsRichBoxVisible = false;
@@ -143,6 +145,7 @@ internal sealed class QuickSearchState
             AccumulatedText = session.TranslatedText;
             Phonetic = session.Phonetic;
             Explanation = session.Explanation;
+            ErrorMessage = null;
             IsResultVisible = true;
             IsStreamLayerVisible = false;
             IsRichBoxVisible = true;
@@ -165,6 +168,9 @@ internal sealed class QuickSearchState
             }
             Phonetic = session.Phonetic;
             Explanation = session.Explanation;
+            ErrorMessage = session.Error != null
+                ? $"{session.Error.Message} {session.Error.ActionableSuggestion}".Trim()
+                : null;
             IsResultVisible = !string.IsNullOrEmpty(AccumulatedText);
             IsStreamLayerVisible = !string.IsNullOrEmpty(AccumulatedText);
             IsRichBoxVisible = false;
@@ -191,7 +197,8 @@ internal sealed class QuickSearchState
             AccumulatedText = session.TranslatedText;
         }
         var hasPartial = !string.IsNullOrEmpty(AccumulatedText);
-        IsResultVisible = hasPartial;
+        // WIN-01: Show result area so user sees error card & settings repair path
+        IsResultVisible = true;
         IsStreamLayerVisible = hasPartial;
         IsRichBoxVisible = false;
         IsIncompleteBadgeVisible = hasPartial;
@@ -201,6 +208,7 @@ internal sealed class QuickSearchState
         var err = session.Error != null
             ? $"{session.Error.Message} {session.Error.ActionableSuggestion}".Trim()
             : "翻译失败";
+        ErrorMessage = err;
         StatusText = hasPartial ? $"{err}（已保留部分内容）" : err;
         return true;
     }
@@ -216,6 +224,7 @@ internal sealed class QuickSearchState
         IsProgressVisible = false;
         IsStreamIndicatorVisible = false;
         FinalRenderedText = string.Empty;
+        ErrorMessage = null;
         var hasPartial = !string.IsNullOrEmpty(AccumulatedText);
         IsResultVisible = hasPartial;
         IsStreamLayerVisible = hasPartial;
@@ -240,13 +249,15 @@ internal sealed class QuickSearchState
         IsStreamIndicatorVisible = false;
         FinalRenderedText = string.Empty;
         var hasPartial = !string.IsNullOrEmpty(AccumulatedText);
-        IsResultVisible = hasPartial;
+        // WIN-01: Show result card on exception so user sees error & settings button
+        IsResultVisible = true;
         IsStreamLayerVisible = hasPartial;
         IsRichBoxVisible = false;
         IsIncompleteBadgeVisible = hasPartial;
         CanCopy = hasPartial;
         CanSpeak = hasPartial;
         CanStar = false;
+        ErrorMessage = $"翻译失败: {ex.Message}";
         StatusText = hasPartial ? $"翻译失败: {ex.Message}（已保留部分内容）" : $"翻译失败: {ex.Message}";
         return true;
     }
@@ -274,6 +285,7 @@ internal sealed class QuickSearchState
             FinalRenderedText = string.Empty;
             Phonetic = null;
             Explanation = null;
+            ErrorMessage = null;
             IsIncompleteBadgeVisible = false;
             CanCopy = false;
             CanSpeak = false;
@@ -293,6 +305,7 @@ internal sealed class QuickSearchState
         Stage = QuickSearchUiStage.Idle;
         AccumulatedText = string.Empty;
         FinalRenderedText = string.Empty;
+        ErrorMessage = null;
         IsResultVisible = false;
         IsStreamLayerVisible = false;
         IsRichBoxVisible = false;

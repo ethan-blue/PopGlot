@@ -21,8 +21,38 @@ public partial class DataSection : System.Windows.Controls.UserControl
     public DataSection()
     {
         InitializeComponent();
-        _clearHistoryConfirm = ConfirmButton.Attach(ClearHistoryButton, "确认清空？", ClearHistory);
-        _clearVocabularyConfirm = ConfirmButton.Attach(ClearVocabularyButton, "确认清空？", ClearVocabulary);
+        _clearHistoryConfirm = ConfirmButton.Attach(
+            ClearHistoryButton,
+            () => $"将清空 {HistoryCount()} 条历史记录",
+            ClearHistory);
+        _clearVocabularyConfirm = ConfirmButton.Attach(
+            ClearVocabularyButton,
+            () => $"将清空 {VocabularyCount()} 个生词",
+            ClearVocabulary);
+    }
+
+    private int HistoryCount()
+    {
+        try
+        {
+            return _history?.Load().Count ?? 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private int VocabularyCount()
+    {
+        try
+        {
+            return _vocabulary?.GetAll().Count ?? 0;
+        }
+        catch
+        {
+            return 0;
+        }
     }
 
     internal void Initialize(HistoryStore history, VocabularyStore? vocabulary)

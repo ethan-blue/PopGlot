@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 using PopGlot.Windows.Sections;
 using PopGlot.Windows.Services;
 
@@ -49,6 +50,7 @@ public partial class TranslationPanelWindow : Window
     private readonly Action<string, string?, string?, string?>? _openInMain;
     private readonly TranslationCoordinator _coordinator;
     private readonly TranslationPanelStreamGate _gate = new();
+    private readonly EventHandler _themeChangedHandler;
 
     private CancellationTokenSource? _operation;
     private Func<CancellationToken, long, Task>? _retry;
@@ -56,11 +58,13 @@ public partial class TranslationPanelWindow : Window
     private string _translation = string.Empty;
     private string _sourceKind = "划词";
     private bool _userMoved;
+    private Point? _lockedTopLeftPixels;
     private bool _languageChangeSuspended = true;
     private bool _readyForKeyboard;
     private bool _closing;
     private int _openDropDowns;
     private long _inputAcquisitionMs;
+    private long _lastStreamRenderTicks;
 
     internal TranslationPanelWindow(
         Rect anchorPixels,
@@ -88,18 +92,33 @@ public partial class TranslationPanelWindow : Window
 
         TrackDropDown(SourceLangCombo);
         TrackDropDown(TargetLangCombo);
+        IsVisibleChanged += OnIsVisibleChanged;
 
         TtsService.SpeakingStateChanged += OnTtsSpeakingStateChanged;
 
         // Opaque window now: DWM rounds the corners and draws the shadow,
         // and the immersive-dark attribute keeps the frame theme-correct.
+        _themeChangedHandler = (_, _) =>
+        {
+            if (Dispatcher.CheckAccess())
+            {
+                ThemeService.ApplyWindowChrome(this);
+            }
+            else
+            {
+                _ = Dispatcher.BeginInvoke(() => ThemeService.ApplyWindowChrome(this));
+            }
+        };
         ThemeService.ApplyWindowChrome(this);
+        ThemeService.ThemeChanged += _themeChangedHandler;
 
+        SourceInitialized += (_, _) => PositionNearAnchor();
         Loaded += OnLoaded;
         SizeChanged += (_, _) => PositionNearAnchor();
         Closed += (_, _) =>
         {
             _closing = true;
+            ThemeService.ThemeChanged -= _themeChangedHandler;
             TtsService.SpeakingStateChanged -= OnTtsSpeakingStateChanged;
             CancelOperation();
         };
@@ -128,9 +147,17 @@ public partial class TranslationPanelWindow : Window
     {
         Dispatcher.BeginInvoke(() =>
         {
-            var brush = (Brush)FindResource(isSpeaking ? "AccentBrush" : "TextSecondaryBrush");
-            SourceSpeakIcon.Fill = brush;
-            ResultSpeakIcon.Fill = brush;
+            if (isSpeaking)
+            {
+                var brush = (Brush)FindResource("AccentBrush");
+                SourceSpeakIcon.Fill = brush;
+                ResultSpeakIcon.Fill = brush;
+            }
+            else
+            {
+                SourceSpeakIcon.ClearValue(System.Windows.Shapes.Shape.FillProperty);
+                ResultSpeakIcon.ClearValue(System.Windows.Shapes.Shape.FillProperty);
+            }
             SourceSpeakBtn.ToolTip = isSpeaking ? "停止朗读" : "朗读原文";
             ResultSpeakBtn.ToolTip = isSpeaking ? "停止朗读" : "朗读译文";
         });
@@ -149,7 +176,7 @@ public partial class TranslationPanelWindow : Window
 
     // ================= Entry points =================
 
-    internal async Task StartSelectionAsync(ClipboardSelectionService selectionService)
+    internal async Task StartSelectionAsync(ClipboardSelectionService selectionService, nint targetWindow = 0)
     {
         ArgumentNullException.ThrowIfNull(selectionService);
         _sourceKind = "划词";
@@ -160,7 +187,7 @@ public partial class TranslationPanelWindow : Window
             RenderState(TranslationSessionState.ReadingSelection);
             SourceLabel.Text = "所选文字";
             var inputTimer = Stopwatch.StartNew();
-            var source = await selectionService.ReadSelectionAsync(cancellation);
+            var source = await selectionService.ReadSelectionAsync(cancellation, targetWindow);
             inputTimer.Stop();
             _inputAcquisitionMs = inputTimer.ElapsedMilliseconds;
             SourceInputBox.Text = source;
@@ -414,6 +441,7 @@ public partial class TranslationPanelWindow : Window
 
         if (update.Kind == TranslationStreamUpdateKind.Reset)
         {
+            _lastStreamRenderTicks = 0;
             _translation = string.Empty;
             TranslationTextBox.Text = string.Empty;
             ResultSkeleton.Visibility = Visibility.Visible;
@@ -434,6 +462,17 @@ public partial class TranslationPanelWindow : Window
                 TranslationRichBox.Visibility = Visibility.Collapsed;
             }
             StreamIndicator.Visibility = Visibility.Visible;
+
+            // PERF-LIST-01: 60ms throttle on intermediate text pumps to avoid layout thrashing.
+            // When the final completion signal arrives, HandleSessionResultAsync forces a full final render.
+            var now = Stopwatch.GetTimestamp();
+            var elapsedMs = Stopwatch.GetElapsedTime(_lastStreamRenderTicks, now).TotalMilliseconds;
+            if (_lastStreamRenderTicks != 0 && elapsedMs < 60)
+            {
+                return;
+            }
+            _lastStreamRenderTicks = now;
+
             // Stick-to-bottom: follow the stream only while the reader sits at
             // the bottom, so scrolling up to re-read is never overridden.
             var stickToBottom = Ui.IsScrolledToBottom(Ui.FindScrollViewer(TranslationTextBox));
@@ -533,6 +572,7 @@ public partial class TranslationPanelWindow : Window
 
     private void RenderPreparingState(string status)
     {
+        _lastStreamRenderTicks = 0;
         StatusText.Text = status;
         Progress.Visibility = Visibility.Visible;
         ResultSkeleton.Visibility = Visibility.Visible;
@@ -561,6 +601,7 @@ public partial class TranslationPanelWindow : Window
         TranslationTextBox.Text = partialText;
         StreamIndicator.Visibility = Visibility.Collapsed;
         SetResultActionsEnabled(false);
+        ResultCopyBtn.IsEnabled = !string.IsNullOrWhiteSpace(partialText);
 
         WarningText.Text = "已取消，内容不完整";
         WarningBox.Visibility = Visibility.Visible;
@@ -608,6 +649,7 @@ public partial class TranslationPanelWindow : Window
         TranslationTextBox.Text = partialText;
         StreamIndicator.Visibility = Visibility.Collapsed;
         SetResultActionsEnabled(false);
+        ResultCopyBtn.IsEnabled = !string.IsNullOrWhiteSpace(partialText);
 
         WarningText.Text = "生成中断，内容不完整";
         WarningBox.Visibility = Visibility.Visible;
@@ -615,6 +657,7 @@ public partial class TranslationPanelWindow : Window
         ExplanationText.Foreground = (Brush)FindResource("TextSecondaryBrush");
         ExplanationText.Visibility = Visibility.Visible;
         ExplanationBox.Visibility = Visibility.Visible;
+        ErrorSettingsButton.Visibility = Visibility.Visible;
         EngineBadge.Text = "生成中断";
         EngineBadge.Foreground = (Brush)FindResource("DangerBrush");
         StatusDot.Background = (Brush)FindResource("DangerBrush");
@@ -711,6 +754,7 @@ public partial class TranslationPanelWindow : Window
         StreamIndicator.Visibility = Visibility.Collapsed;
         TranslationTextBox.Foreground = (Brush)FindResource("TextPrimaryBrush");
         ExplanationText.Foreground = (Brush)FindResource("TextSecondaryBrush");
+        ErrorSettingsButton.Visibility = Visibility.Collapsed;
 
         try
         {
@@ -769,7 +813,16 @@ public partial class TranslationPanelWindow : Window
             : pipelineNote;
 
         var settings = _shellSettings();
-        UpdateStarIcon(_vocabulary?.IsStarred(source, SourceLanguage, TargetLanguage) == true);
+        // PERF-HOTKEY-02: Move vocabulary star check out of the critical first-frame rendering path
+        // to avoid holding lock(_gate) during initial render.
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+        {
+            if (!_closing && _vocabulary is not null)
+            {
+                var starred = _vocabulary.IsStarred(source, SourceLanguage, TargetLanguage);
+                UpdateStarIcon(starred);
+            }
+        });
         if (_gate.ShouldTriggerAutoCopy(settings.CopyTranslationAutomatically))
         {
             var clean = MarkdownPresenter.ToPlainText(_translation);
@@ -804,13 +857,14 @@ public partial class TranslationPanelWindow : Window
     {
         RenderState(TranslationSessionState.Failed);
         SetTranslationContent(FriendlyError(message), isMarkdown: false);
-        TranslationTextBox.Foreground = (Brush)FindResource("DangerBrush");
+        TranslationTextBox.Foreground = (Brush)FindResource("TextPrimaryBrush");
         // The headline is deliberately short; the raw provider message stays
         // available underneath because it is what makes the problem fixable.
         ExplanationText.Text = message;
-        ExplanationText.Foreground = (Brush)FindResource("DangerBrush");
+        ExplanationText.Foreground = (Brush)FindResource("TextSecondaryBrush");
         ExplanationText.Visibility = Visibility.Visible;
         ExplanationBox.Visibility = Visibility.Visible;
+        ErrorSettingsButton.Visibility = Visibility.Visible;
         PhoneticText.Visibility = Visibility.Collapsed;
         TermsList.Visibility = Visibility.Collapsed;
         WarningBox.Visibility = Visibility.Collapsed;
@@ -911,7 +965,7 @@ public partial class TranslationPanelWindow : Window
 
     private async void ResultCopy_Click(object sender, RoutedEventArgs e)
     {
-        if (!_gate.CanPerformResultActions || string.IsNullOrWhiteSpace(_translation))
+        if (!_gate.CanCopy || string.IsNullOrWhiteSpace(_translation))
         {
             return;
         }
@@ -923,7 +977,7 @@ public partial class TranslationPanelWindow : Window
             ResultCopyIcon.Fill = (Brush)FindResource("AccentBrush");
             await Task.Delay(1400);
             ResultCopyIcon.Data = (Geometry)FindResource("IconCopy");
-            ResultCopyIcon.Fill = (Brush)FindResource("TextSecondaryBrush");
+            ResultCopyIcon.ClearValue(System.Windows.Shapes.Shape.FillProperty);
         }
         else
         {
@@ -945,7 +999,7 @@ public partial class TranslationPanelWindow : Window
             SourceCopyIcon.Fill = (Brush)FindResource("AccentBrush");
             await Task.Delay(1400);
             SourceCopyIcon.Data = (Geometry)FindResource("IconCopy");
-            SourceCopyIcon.Fill = (Brush)FindResource("TextSecondaryBrush");
+            SourceCopyIcon.ClearValue(System.Windows.Shapes.Shape.FillProperty);
         }
         else
         {
@@ -1105,14 +1159,14 @@ public partial class TranslationPanelWindow : Window
         TtsService.Speak(text, languageTag);
     }
 
-    private void StarToggle_Click(object sender, RoutedEventArgs e)
+    private async void StarToggle_Click(object sender, RoutedEventArgs e)
     {
         if (!_gate.CanPerformResultActions || _vocabulary is null) return;
         var source = SourceInputBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(_translation)) return;
 
         var clean = MarkdownPresenter.ToPlainText(_translation);
-        var result = _vocabulary.ToggleStar(
+        var result = await _vocabulary.ToggleStarAsync(
             source,
             clean,
             PhoneticText.Text.Trim('[', ']'),
@@ -1268,6 +1322,13 @@ public partial class TranslationPanelWindow : Window
         PositionNearAnchor();
     }
 
+    /// <summary>A05: the gate approves automatic side effects only while the
+    /// window is actually visible; every Hide/Show path flows through here.</summary>
+    private void OnIsVisibleChanged(object? sender, DependencyPropertyChangedEventArgs e)
+    {
+        _gate.WindowVisible = e.NewValue is true;
+    }
+
     /// <summary>
     /// Lets the panel accept keys, and arms the focus-loss auto-close.
     /// </summary>
@@ -1293,15 +1354,24 @@ public partial class TranslationPanelWindow : Window
         base.OnPreviewKeyDown(e);
         if (e.Key == Key.Escape)
         {
+            // A06: transient surfaces own Escape first — an open context menu
+            // or a language drop-down closes itself instead of the panel
+            // reacting. IME composition behaviour is NOT covered by any test
+            // here and stays an explicit E3 verification TODO.
+            if (_openDropDowns > 0 || IsContextMenuOpen())
+            {
+                return;
+            }
             e.Handled = true;
-            // Escape cancels a running request first, and only closes an idle panel;
-            // otherwise a slow request could not be abandoned without losing the partial result.
+            // C05 Esc ladder: the first Escape cancels a running request and
+            // keeps the partial result; the next one hides the panel with
+            // its session intact. Closing/destroying is never an Esc outcome.
             if (_operation is { IsCancellationRequested: false })
             {
                 CancelOperation();
                 return;
             }
-            Close();
+            Hide();
             return;
         }
 
@@ -1328,8 +1398,8 @@ public partial class TranslationPanelWindow : Window
     protected override void OnDeactivated(EventArgs e)
     {
         base.OnDeactivated(e);
-        // Closing the window itself raises WM_ACTIVATE; calling Close() again
-        // from here throws "cannot call Close during window closing".
+        // Closing the window itself raises WM_ACTIVATE; reacting here would
+        // fight an in-progress close.
         if (_closing || !_readyForKeyboard || PinToggle.IsChecked == true || _openDropDowns > 0)
         {
             return;
@@ -1339,17 +1409,36 @@ public partial class TranslationPanelWindow : Window
             return;
         }
         // A ComboBox drop-down or a text-box context menu lives in its own HWND
-        // and deactivates this window. Closing then would make the language
-        // pickers unusable, so only close when focus really left the app.
+        // and deactivates this window. Hiding then would make the language
+        // pickers unusable, so only react when focus really left the app.
         if (ForegroundBelongsToThisProcess())
         {
             return;
         }
-        Close();
+        // C05/F08: auto-hide is a visibility change only — a running request
+        // keeps going to its deadline and the session can be restored from
+        // the tray. The window is never destroyed by focus loss.
+        Hide();
     }
+
+    /// <summary>
+    /// C05: set by the host when the panel must really die (session
+    /// replacement, app exit). Without it, a close request cancels the
+    /// in-flight request, keeps the partial and hides instead.
+    /// </summary>
+    internal bool ForceClose { get; set; }
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
+        if (!ForceClose)
+        {
+            // C05: X/Alt+F4 cancel the in-flight request and keep the
+            // partial; the panel hides and stays restorable from the tray.
+            e.Cancel = true;
+            CancelOperation();
+            Hide();
+            return;
+        }
         _closing = true;
         base.OnClosing(e);
     }
@@ -1369,6 +1458,32 @@ public partial class TranslationPanelWindow : Window
     {
         comboBox.DropDownOpened += (_, _) => _openDropDowns++;
         comboBox.DropDownClosed += (_, _) => _openDropDowns = Math.Max(0, _openDropDowns - 1);
+    }
+
+    /// <summary>A06: true while any ContextMenu inside this window is open —
+    /// such a menu must consume Escape itself.</summary>
+    private bool IsContextMenuOpen()
+    {
+        var queue = new Queue<System.Windows.Media.Visual>();
+        queue.Enqueue(this);
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            var count = System.Windows.Media.VisualTreeHelper.GetChildrenCount(current);
+            for (var i = 0; i < count; i++)
+            {
+                var child = System.Windows.Media.VisualTreeHelper.GetChild(current, i);
+                if (child is FrameworkElement { ContextMenu: { IsOpen: true } })
+                {
+                    return true;
+                }
+                if (child is System.Windows.Media.Visual visual)
+                {
+                    queue.Enqueue(visual);
+                }
+            }
+        }
+        return false;
     }
 
     private const int WmEnterSizeMove = 0x0231;
@@ -1391,8 +1506,14 @@ public partial class TranslationPanelWindow : Window
         return 0;
     }
 
-    private void PinToggle_Changed(object sender, RoutedEventArgs e) =>
-        StatusText.Text = PinToggle.IsChecked == true ? "浮窗已固定" : "浮窗已取消固定";
+    private void PinToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        var pinned = PinToggle.IsChecked == true;
+        StatusText.Text = pinned ? "浮窗已固定" : "浮窗已取消固定";
+        var tooltip = pinned ? "取消固定（失焦不隐藏）" : "固定浮窗";
+        PinToggle.ToolTip = tooltip;
+        System.Windows.Automation.AutomationProperties.SetName(PinToggle, tooltip);
+    }
 
     private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
@@ -1408,15 +1529,32 @@ public partial class TranslationPanelWindow : Window
 
     private void PositionNearAnchor()
     {
-        if (_userMoved || !IsLoaded || ActualWidth <= 0 || ActualHeight <= 0)
+        if (_userMoved)
         {
             return;
         }
         var scale = ScreenGeometry.ScaleOf(this);
-        var sizePixels = new Size(ActualWidth * scale.X, ActualHeight * scale.Y);
+        var widthDip = ActualWidth > 0 ? ActualWidth : (Width > 0 ? Width : 540);
+        var heightDip = ActualHeight > 0 ? ActualHeight : (Height > 0 ? Height : 360);
+        var sizePixels = new Size(widthDip * scale.X, heightDip * scale.Y);
         var workArea = ScreenGeometry.WorkAreaForAnchor(_anchorPixels);
-        var topLeft = WindowPositioner.NearAnchor(_anchorPixels, sizePixels, workArea);
-        ScreenGeometry.MoveToPixels(this, topLeft);
+
+        if (_lockedTopLeftPixels is null)
+        {
+            var topLeft = WindowPositioner.NearAnchor(_anchorPixels, sizePixels, workArea);
+            _lockedTopLeftPixels = topLeft;
+            ScreenGeometry.MoveToPixels(this, topLeft);
+            return;
+        }
+
+        // WIN-04: Once initial anchor position is locked, do not re-flip candidates during streaming.
+        // Clamp vertically and horizontally within the work area (touching bottom shifts upward, no side flip).
+        const double edge = 12;
+        var currentX = _lockedTopLeftPixels.Value.X;
+        var currentY = _lockedTopLeftPixels.Value.Y;
+        var clampedX = Math.Clamp(currentX, workArea.Left + edge, Math.Max(workArea.Left + edge, workArea.Right - sizePixels.Width - edge));
+        var clampedY = Math.Clamp(currentY, workArea.Top + edge, Math.Max(workArea.Top + edge, workArea.Bottom - sizePixels.Height - edge));
+        ScreenGeometry.MoveToPixels(this, new Point(clampedX, clampedY));
     }
 
     private void CancelOperation()
@@ -1439,9 +1577,22 @@ public partial class TranslationPanelWindow : Window
 
     private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
 
+    /// <summary>
+    /// A05: the close hotkey is a user intent — it cancels the running
+    /// request and hides, exactly like X/Alt+F4. Distinct from blur
+    /// auto-hide, which keeps the request running but suspends automatic
+    /// side effects while hidden.
+    /// </summary>
+    internal void CloseAsUserIntent()
+    {
+        CancelOperation();
+        Hide();
+    }
+
     protected override void OnClosed(EventArgs e)
     {
         _closing = true;
+        ThemeService.ThemeChanged -= _themeChangedHandler;
         TtsService.Stop();
         CancelOperation();
         // 面板关闭后重试不再可能发生：释放截图与重试闭包（闭包本身

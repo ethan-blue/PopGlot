@@ -5,8 +5,6 @@
 
     <!-- Compact desktop property list -->
     <StackPanel Margin="0,6,0,0">
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,14" />
-
         <TextBlock Text="本地存储" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
 
         <Grid Style="{StaticResource SettingsRow}">

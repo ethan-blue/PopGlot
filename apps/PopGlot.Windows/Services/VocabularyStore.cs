@@ -1,6 +1,8 @@
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 
 namespace PopGlot.Windows.Services;
 
@@ -23,6 +25,23 @@ internal enum VocabularySaveStatus
     EntryTooLarge,
     StoreFull,
     FileTooLarge,
+    /// <summary>C02: the file on disk could not be safely read, so mutations are refused to protect it.</summary>
+    StoreUnreadable,
+}
+
+/// <summary>C02: how the last load of the storage file ended.</summary>
+internal enum VocabularyLoadState
+{
+    /// <summary>File read and parsed (or absent — a fresh store).</summary>
+    Ok,
+    /// <summary>File exceeds MaxFileBytes; never deserialized, never overwritten.</summary>
+    TooLarge,
+    /// <summary>File locked by another process; contents unknown, mutations blocked.</summary>
+    Locked,
+    /// <summary>Access denied; contents unknown, mutations blocked.</summary>
+    NoAccess,
+    /// <summary>Unparseable content; quarantined as .corrupt-*, store continues empty.</summary>
+    Corrupt,
 }
 
 internal sealed record VocabularySaveResult(bool Persisted, bool Starred, VocabularySaveStatus Status)
@@ -39,6 +58,8 @@ internal sealed record VocabularySaveResult(bool Persisted, bool Starred, Vocabu
             "未保存到本机：生词本已达 10000 条上限，请先导出并清理。",
         VocabularySaveStatus.FileTooLarge =>
             "未保存到本机：生词本文件超过 32MiB 上限，请先导出并清理。",
+        VocabularySaveStatus.StoreUnreadable =>
+            "未保存到本机：生词本文件无法安全读取（超过 32MiB 上限或被其他程序占用），已进入只读保护，新收藏不会写入。请在本机数据目录中清理该文件后重试。",
         _ => "未保存到本机，请重试。",
     };
 }
@@ -59,16 +80,87 @@ internal sealed class VocabularyStore : IVocabularyRepository
     internal const int MaxEntryCharacters = 8_000;
     internal const int MaxFileBytes = 32 * 1024 * 1024;
 
-    private static readonly string DefaultStoragePath = StoragePaths.Vocabulary;
+    // Resolve lazily; a cached path can escape an isolation root when the CLR
+    // eagerly runs static field initializers before the test bootstrap.
+    private static string DefaultStoragePath => StoragePaths.Vocabulary;
 
     private readonly string _storagePath;
     private readonly Lock _gate = new();
     private List<VocabularyWord> _words = [];
 
+    private sealed record PersistRequest(string? Json, TaskCompletionSource<bool>? Completion);
+
+    private readonly Channel<PersistRequest> _persistChannel = Channel.CreateUnbounded<PersistRequest>(
+        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+    private readonly Task _writerTask;
+
+    /// <summary>A08: strict UTF-8 — silently-decoded garbage is corruption.</summary>
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+    private static readonly byte[] Utf8Bom = [0xEF, 0xBB, 0xBF];
+
+    /// <summary>C02: how the last load ended; drives the read-only protection.</summary>
+    public VocabularyLoadState LoadState { get; private set; } = VocabularyLoadState.Ok;
+
+    /// <summary>
+    /// A08: true when a corrupt file was copied aside AND the copy was
+    /// verified byte-identical, so the original content is recoverable
+    /// elsewhere even though the live file stays read-only.
+    /// </summary>
+    public bool QuarantinedSafely { get; private set; }
+
+    /// <summary>
+    /// True when the file holds (or may hold) data this process could not
+    /// read — including corrupt files, whose default fate is read-only
+    /// (A08). Mutations stay blocked so a later save can never replace the
+    /// unreadable original with an empty or one-entry snapshot.
+    /// </summary>
+    private bool LoadBlocked =>
+        LoadState is VocabularyLoadState.TooLarge or VocabularyLoadState.Locked
+            or VocabularyLoadState.NoAccess or VocabularyLoadState.Corrupt;
+
     public VocabularyStore(string? customPath = null)
     {
         _storagePath = customPath ?? DefaultStoragePath;
         Load();
+        _writerTask = Task.Run(ProcessPersistenceQueueAsync);
+    }
+
+    public string? LastPersistError { get; private set; }
+
+    private async Task ProcessPersistenceQueueAsync()
+    {
+        var reader = _persistChannel.Reader;
+        try
+        {
+            while (await reader.WaitToReadAsync().ConfigureAwait(false))
+            {
+                while (reader.TryRead(out var request))
+                {
+                    var ok = true;
+                    if (request.Json is not null)
+                    {
+                        ok = WriteSnapshotToDisk(request.Json);
+                    }
+                    request.Completion?.TrySetResult(ok);
+                }
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    /// <summary>
+    /// Blocks until all pending writes in the background persistence queue
+    /// are committed to disk. Safe for testing and application exit.
+    /// </summary>
+    public void Flush(int timeoutMs = 5000)
+    {
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (_persistChannel.Writer.TryWrite(new PersistRequest(null, tcs)))
+        {
+            tcs.Task.Wait(timeoutMs);
+        }
     }
 
     internal string StoragePath => _storagePath;
@@ -99,6 +191,19 @@ internal sealed class VocabularyStore : IVocabularyRepository
         string targetLang = "zh-CN",
         List<string>? tags = null)
     {
+        return ToggleStarAsync(word, translation, phonetic, explanation, sourceLang, targetLang, tags)
+            .GetAwaiter().GetResult();
+    }
+
+    public async Task<VocabularySaveResult> ToggleStarAsync(
+        string word,
+        string translation,
+        string phonetic = "",
+        string explanation = "",
+        string sourceLang = "auto",
+        string targetLang = "zh-CN",
+        List<string>? tags = null)
+    {
         if (string.IsNullOrWhiteSpace(word))
         {
             return new VocabularySaveResult(false, false, VocabularySaveStatus.WriteFailed);
@@ -107,11 +212,17 @@ internal sealed class VocabularyStore : IVocabularyRepository
 
         bool willBeStarred;
         List<VocabularyWord> next;
-        // The whole read → persist → commit runs under the gate: writing the
-        // file outside the lock made two concurrent toggles build from the
-        // same base and silently drop each other's word.
+        List<VocabularyWord> previous;
+        string json;
+        TaskCompletionSource<bool> tcs;
+
         lock (_gate)
         {
+            // C02: an unreadable file must never be replaced by a snapshot.
+            if (LoadBlocked)
+            {
+                return new VocabularySaveResult(false, false, VocabularySaveStatus.StoreUnreadable);
+            }
             var existing = _words.FirstOrDefault(w => SameIdentity(w, trimmed, sourceLang, targetLang));
             if (existing is not null)
             {
@@ -146,47 +257,113 @@ internal sealed class VocabularyStore : IVocabularyRepository
                 ];
             }
 
-            if (!TryPersist(next, out var status))
+            try
             {
-                // Disk refused: the in-memory snapshot keeps the previous
-                // state, so the UI cannot show a star that was never saved.
-                return new VocabularySaveResult(false, !willBeStarred, status);
+                json = JsonSerializer.Serialize(next, new JsonSerializerOptions { WriteIndented = true });
+                if (Encoding.UTF8.GetByteCount(json) > MaxFileBytes)
+                {
+                    return new VocabularySaveResult(false, !willBeStarred, VocabularySaveStatus.FileTooLarge);
+                }
+            }
+            catch
+            {
+                return new VocabularySaveResult(false, !willBeStarred, VocabularySaveStatus.WriteFailed);
             }
 
+            previous = _words;
             _words = next;
+            tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _persistChannel.Writer.TryWrite(new PersistRequest(json, tcs));
         }
+
+        var written = await tcs.Task.ConfigureAwait(false);
+        if (!written)
+        {
+            lock (_gate)
+            {
+                _words = previous;
+            }
+            return new VocabularySaveResult(false, !willBeStarred, VocabularySaveStatus.WriteFailed);
+        }
+
         return VocabularySaveResult.Saved(willBeStarred);
     }
 
     public bool Remove(Guid id)
     {
+        TaskCompletionSource<bool> tcs;
+        List<VocabularyWord> previous;
         lock (_gate)
         {
+            // C02: refuse to persist while the on-disk file is unreadable.
+            if (LoadBlocked)
+            {
+                return false;
+            }
             if (_words.All(w => w.Id != id))
             {
                 return true; // Nothing to remove; the requested state already holds.
             }
             var next = _words.Where(w => w.Id != id).ToList();
-            if (!TryPersist(next, out _))
+            string json;
+            try
+            {
+                json = JsonSerializer.Serialize(next, new JsonSerializerOptions { WriteIndented = true });
+                if (Encoding.UTF8.GetByteCount(json) > MaxFileBytes)
+                {
+                    return false;
+                }
+            }
+            catch
             {
                 return false;
             }
+            previous = _words;
             _words = next;
-            return true;
+            tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _persistChannel.Writer.TryWrite(new PersistRequest(json, tcs));
         }
+        var written = tcs.Task.GetAwaiter().GetResult();
+        if (!written)
+        {
+            lock (_gate)
+            {
+                _words = previous;
+            }
+            return false;
+        }
+        return true;
     }
 
     public bool Clear()
     {
+        TaskCompletionSource<bool> tcs;
+        List<VocabularyWord> previous;
         lock (_gate)
         {
-            if (!TryPersist([], out _))
+            // C02: clearing must never be the operation that destroys an
+            // unreadable file full of unknown entries.
+            if (LoadBlocked)
             {
                 return false;
             }
-            _words = [];
-            return true;
+            var next = new List<VocabularyWord>();
+            var json = JsonSerializer.Serialize(next, new JsonSerializerOptions { WriteIndented = true });
+            previous = _words;
+            _words = next;
+            tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _persistChannel.Writer.TryWrite(new PersistRequest(json, tcs));
         }
+        var written = tcs.Task.GetAwaiter().GetResult();
+        if (!written)
+        {
+            lock (_gate)
+            {
+                _words = previous;
+            }
+            return false;
+        }
+        return true;
     }
 
     /// <summary>Word equality is case-sensitive (code identifiers); language tags compare loosely.</summary>
@@ -299,50 +476,186 @@ internal sealed class VocabularyStore : IVocabularyRepository
         try
         {
             if (!File.Exists(_storagePath)) return;
-            var json = File.ReadAllText(_storagePath, Encoding.UTF8);
-            var items = JsonSerializer.Deserialize<List<VocabularyWord>>(json);
-            if (items is not null)
+            // A08: ONE handle, cumulatively bounded — a stat-then-read race
+            // (file growing between check and read) can no longer pull an
+            // unbounded payload into memory, and strict UTF-8 decoding means
+            // silently-decoded garbage counts as corruption.
+            var payload = ReadBounded(_storagePath, MaxFileBytes);
+            if (payload is null)
             {
-                // A JSON array may contain null entries; they are not data.
-                _words = items.Where(item => item is not null).ToList();
+                LoadState = VocabularyLoadState.TooLarge;
+                return;
             }
+            // System.Text.Json accepts a UTF-8 BOM when parsing bytes, but not
+            // a decoded U+FEFF at the start of a string. Older PopGlot files
+            // were commonly written with this standard BOM, so strip exactly
+            // that byte prefix before strict UTF-8 decoding.
+            var offset = payload.AsSpan().StartsWith(Utf8Bom) ? Utf8Bom.Length : 0;
+            var json = StrictUtf8.GetString(payload, offset, payload.Length - offset);
+            using var document = JsonDocument.Parse(json);
+            List<VocabularyWord>? items = document.RootElement.ValueKind switch
+            {
+                JsonValueKind.Array => JsonSerializer.Deserialize<List<VocabularyWord>>(json),
+                // Older builds persisted the first starred entry as one JSON
+                // object. That is valid user data, not corruption. The next
+                // real mutation will migrate it atomically to the array format.
+                JsonValueKind.Object =>
+                    JsonSerializer.Deserialize<VocabularyWord>(json) is { } legacy
+                        ? [legacy]
+                        : null,
+                _ => throw new JsonException("Vocabulary root must be an array or a legacy word object."),
+            };
+            if (items is null)
+            {
+                throw new JsonException("Vocabulary payload could not be deserialized.");
+            }
+            // A JSON array may contain null entries; they are not data.
+            _words = items.Where(item => item is not null).ToList();
         }
-        catch (Exception)
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
-            // Corrupt file preservation: quarantine bad file so user data is not lost.
-            try
-            {
-                if (File.Exists(_storagePath))
-                {
-                    var corruptPath = $"{_storagePath}.corrupt-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}";
-                    File.Copy(_storagePath, corruptPath, overwrite: true);
-                }
-            }
-            catch
-            {
-            }
+            // The file could not be READ, but it may still hold valid data
+            // (locked by a sync client, permission denied). Mutations are
+            // blocked so the unreadable original is never overwritten.
+            LoadState = exception is IOException
+                ? VocabularyLoadState.Locked
+                : VocabularyLoadState.NoAccess;
+        }
+        catch (Exception exception)
+        {
+            DiagnosticsLog.Log(exception, DiagnosticsLog.DiagnosticsStage.Vocabulary);
+            // A08: corrupt content defaults to read-only. The original is
+            // quarantined and the copy VERIFIED before anything may treat
+            // the store as empty-and-writable again (via RetryLoad plus an
+            // explicit user choice to start fresh).
+            LoadState = VocabularyLoadState.Corrupt;
+            QuarantinedSafely = TryQuarantine();
         }
     }
 
     /// <summary>
-    /// Writes the snapshot atomically (temp file → flush → replace) and returns
-    /// whether the disk actually accepted it. Called with the caller's lock
-    /// held; never mutates <see cref="_words"/> itself.
+    /// A08: a single-handle read with a hard cumulative cap. Returns null
+    /// when the file exceeds the cap — before or during the read — so the
+    /// payload can never exceed the budget.
     /// </summary>
-    private bool TryPersist(List<VocabularyWord> snapshot, out VocabularySaveStatus status)
+    private static byte[]? ReadBounded(string path, long cap)
     {
-        status = VocabularySaveStatus.Persisted;
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (stream.Length > cap)
+        {
+            return null;
+        }
+        var payload = new byte[stream.Length];
+        var total = 0;
+        int read;
+        while (total < payload.Length &&
+               (read = stream.Read(payload, total, (int)Math.Min(payload.Length - total, 64 * 1024))) > 0)
+        {
+            total += read;
+            if (total > cap)
+            {
+                return null;
+            }
+        }
+        if (total < payload.Length)
+        {
+            Array.Resize(ref payload, total);
+        }
+        return payload;
+    }
+
+    /// <summary>
+    /// A08: copies the unreadable file aside and verifies the copy byte for
+    /// byte (hash) before claiming the content is preserved anywhere.
+    /// </summary>
+    private bool TryQuarantine()
+    {
+        try
+        {
+            if (!File.Exists(_storagePath))
+            {
+                return false;
+            }
+            string originalHash;
+            using (var original = File.OpenRead(_storagePath))
+            {
+                originalHash = Convert.ToHexString(SHA256.HashData(original));
+            }
+
+            // One verified copy is enough for one unchanged payload. Without
+            // this check every application start created another identical
+            // .corrupt file and eventually filled the data directory.
+            var directory = Path.GetDirectoryName(_storagePath) ?? ".";
+            var prefix = Path.GetFileName(_storagePath) + ".corrupt-";
+            foreach (var existing in Directory.EnumerateFiles(directory, prefix + "*"))
+            {
+                try
+                {
+                    using var candidate = File.OpenRead(existing);
+                    if (Convert.ToHexString(SHA256.HashData(candidate)) == originalHash)
+                    {
+                        return true;
+                    }
+                }
+                catch
+                {
+                    // An unreadable old copy is not evidence; create a new one.
+                }
+            }
+
+            var corruptPath = $"{_storagePath}.corrupt-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}";
+            File.Copy(_storagePath, corruptPath, overwrite: true);
+            string backupHash;
+            using (var backup = File.OpenRead(corruptPath))
+            {
+                backupHash = Convert.ToHexString(SHA256.HashData(backup));
+            }
+            return originalHash == backupHash;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// A08/V04: re-runs the load in a scratch instance and commits the
+    /// snapshot ONLY when it reads healthy, clearing the read-only state. A
+    /// failed retry changes nothing on disk, keeps the previously valid
+    /// in-memory snapshot and the failure reason visible — it never blanks
+    /// the content the user is looking at.
+    /// </summary>
+    public bool RetryLoad()
+    {
+        Flush();
+        lock (_gate)
+        {
+            var fresh = new VocabularyStore(_storagePath);
+            if (fresh.LoadState == VocabularyLoadState.Ok)
+            {
+                LoadState = VocabularyLoadState.Ok;
+                QuarantinedSafely = false;
+                _words = fresh.GetAll().ToList();
+                return true;
+            }
+            // V04: keep the previous valid snapshot; only the state metadata
+            // follows the fresh read so the UI shows the current reason.
+            LoadState = fresh.LoadState;
+            QuarantinedSafely = fresh.QuarantinedSafely;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Writes the snapshot atomically (temp file → flush → replace) on the background single-writer task.
+    /// </summary>
+    private bool WriteSnapshotToDisk(string json)
+    {
         var tempPath = string.Empty;
         try
         {
-            var json = JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = true });
             var bytes = Encoding.UTF8.GetBytes(json);
-            if (bytes.Length > MaxFileBytes)
-            {
-                status = VocabularySaveStatus.FileTooLarge;
-                return false;
-            }
-
             var dir = Path.GetDirectoryName(_storagePath);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             {
@@ -362,15 +675,16 @@ internal sealed class VocabularyStore : IVocabularyRepository
                 File.Copy(_storagePath, bakPath, overwrite: true);
             }
             File.Move(tempPath, _storagePath, overwrite: true);
+            LastPersistError = null;
             return true;
         }
-        catch
+        catch (Exception exception)
         {
+            LastPersistError = exception.Message;
             if (!string.IsNullOrEmpty(tempPath))
             {
                 try { File.Delete(tempPath); } catch { }
             }
-            status = VocabularySaveStatus.WriteFailed;
             return false;
         }
     }

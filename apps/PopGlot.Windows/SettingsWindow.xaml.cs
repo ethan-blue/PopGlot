@@ -42,9 +42,21 @@ public partial class SettingsWindow : Window
     private bool _loading = true;
     private SettingsEditState _state = SettingsEditState.Loading;
     private string _settingsBaseline = string.Empty;
+
+    /// <summary>
+    /// V03: true while the OS startup registration is still pending a retry
+    /// (a save attempted it and failed). While set, the form NEVER returns
+    /// to Clean from draft convergence alone — the mismatch is between the
+    /// registry and the disk, invisible to a control comparison — and the
+    /// save button stays alive as the retry entry. Cleared when a startup
+    /// action finally succeeds.
+    /// </summary>
+    private bool _startupRetryPending;
     private string _routeBaseline = string.Empty;
     private bool _routePendingShown;
     private readonly EventHandler _themeChangedHandler;
+    private bool _componentInitialized;
+    private bool _themeSubscribed;
 
     /// <summary>True while the form differs from the saved baseline.</summary>
     internal bool IsDirty => _state == SettingsEditState.Dirty;
@@ -60,6 +72,7 @@ public partial class SettingsWindow : Window
         _themeChangedHandler = (_, _) => ThemeService.ApplyWindowChrome(this);
 
         InitializeComponent();
+        _componentInitialized = true;
 
         DataSection.Initialize(history, vocabulary);
         CaptureSection.SetShellSettings(shellSettings);
@@ -70,8 +83,9 @@ public partial class SettingsWindow : Window
             CaptureSection.RefreshRoutePreview();
             // Running requests keep the snapshot they started with; only
             // translations started afterwards see the new service.
-            SetStatus("模型服务已更新，即时生效。", StatusTone.Info);
+            SetStatus("翻译引擎已更新，即时生效。", StatusTone.Info);
         };
+        ProviderSection.EditorOpenStateChanged += UpdateSaveBar;
         CaptureSection.StatusChanged += SetStatus;
         CaptureSection.ProviderDirty += EvaluateDraftState;
         CaptureSection.SidebarChanged += () => _shellSettings = CaptureSection.CurrentShellSettings;
@@ -85,7 +99,10 @@ public partial class SettingsWindow : Window
 
         ThemeService.ApplyWindowChrome(this);
         ThemeService.ThemeChanged += _themeChangedHandler;
+        _themeSubscribed = true;
         StateChanged += (_, _) => UpdateMaximizeButtonGlyph();
+        SizeChanged += (_, e) => UpdateResponsiveLayout(e.NewSize.Width);
+        Loaded += (_, _) => UpdateResponsiveLayout(ActualWidth);
 
         foreach (var recorder in ShortcutRecorders())
         {
@@ -127,6 +144,47 @@ public partial class SettingsWindow : Window
         ShortcutsSection.ShowWindowHotkey.Recorded += MarkDirtyHandler;
 
         Watch(DataSection.HistoryEnabled);
+
+        // C07: an explicit re-enable for a Task-Manager-disabled entry. This
+        // is the ONLY path that clears an OS disable — never a silent heal.
+        GeneralSection.StartupRepair.Click += async (_, _) =>
+        {
+            GeneralSection.StartupRepair.IsEnabled = false;
+            try
+            {
+                // A03: the button is an explicit, immediate re-enable; the truth
+                // comes from re-reading the OS state afterwards, not from the
+                // write call's return value (an un-disable can silently fail).
+                await Task.Run(() => StartupRegistration.TrySet(true));
+                var after = await StartupRegistration.ReadStateAsync(desiredEnabled: true);
+                GeneralSection.UpdateStartupState(after);
+                SetStatus(
+                    after.EffectiveEnabled
+                        ? "已重新启用开机自动启动。"
+                        : "重新启用未生效：Windows 仍报告该启动项被禁用或写入被拒绝。请重试或检查安全软件。",
+                    after.EffectiveEnabled ? StatusTone.Success : StatusTone.Error);
+            }
+            finally
+            {
+                GeneralSection.StartupRepair.IsEnabled = true;
+            }
+        };
+    }
+
+    /// <summary>C07: reads the real startup state and paints the hint row.</summary>
+    private async void RefreshStartupState()
+    {
+        try
+        {
+            var desired = GeneralSection.StartWithWindows.IsChecked == true;
+            var state = await StartupRegistration.ReadStateAsync(desired);
+            GeneralSection.UpdateStartupState(state);
+        }
+        catch
+        {
+            // The state row is informational; a read failure must never
+            // break loading the settings window.
+        }
     }
 
     private void MarkDirtyHandler(object sender, RoutedEventArgs e) => EvaluateDraftState();
@@ -158,6 +216,13 @@ public partial class SettingsWindow : Window
     private void RecomputeStateFromDraft()
     {
         _state = StateFromDraft(CaptureSettingsDraft(), _settingsBaseline);
+        // V03: a pending startup retry is not visible to a control-vs-
+        // baseline comparison (the mismatch lives in the registry), so it
+        // must pin the form out of Clean on its own.
+        if (_startupRetryPending && _state == SettingsEditState.Clean)
+        {
+            _state = SettingsEditState.Dirty;
+        }
         UpdateSaveBar();
         UpdateRouteDraftPending();
     }
@@ -202,6 +267,12 @@ public partial class SettingsWindow : Window
     }
 
     private string CaptureSettingsDraft() =>
+        CaptureSettingsDraftSnapshot().Serialize();
+
+    /// <summary>V03: the structured draft, so a BASELINE can be built from
+    /// the disk truth (correcting one field) instead of re-reading controls
+    /// whose startup toggle carries the user's un-retried intent.</summary>
+    private SettingsFormSnapshot CaptureSettingsDraftSnapshot() =>
         SettingsFormSnapshot.Create(
             ShortcutsSection.SelectionHotkey.BindingValue?.Serialize(),
             ShortcutsSection.ScreenshotHotkey.BindingValue?.Serialize(),
@@ -214,7 +285,7 @@ public partial class SettingsWindow : Window
             GeneralSection.IncludeExplanation.IsChecked == true,
             GeneralSection.ProtectTokens.IsChecked == true,
             Helpers.SelectedEnum(GeneralSection.ThemeCombo, ThemePreference.System).ToString(),
-            CaptureRouteDraftSnapshot()).Serialize();
+            CaptureRouteDraftSnapshot());
 
     private RouteDraftSnapshot CaptureRouteDraftSnapshot() =>
         RouteDraftSnapshot.Create(
@@ -232,9 +303,10 @@ public partial class SettingsWindow : Window
     /// </summary>
     private void UpdateSaveBar()
     {
-        var showActions = _state is SettingsEditState.Dirty or SettingsEditState.Saving;
+        var isEditorOpen = ProviderSection.Visibility == Visibility.Visible && ProviderSection.IsEditorOpen;
+        var showActions = (_state is SettingsEditState.Dirty or SettingsEditState.Saving) && !isEditorOpen;
         SaveActionsPanel.Visibility = showActions ? Visibility.Visible : Visibility.Collapsed;
-        UnsavedBadge.Visibility = _state == SettingsEditState.Dirty
+        UnsavedBadge.Visibility = (_state == SettingsEditState.Dirty) && !isEditorOpen
             ? Visibility.Visible
             : Visibility.Collapsed;
         SaveButton.IsEnabled = _state == SettingsEditState.Dirty;
@@ -281,7 +353,10 @@ public partial class SettingsWindow : Window
         DataSection.HistoryEnabled.IsChecked = settings.HistoryEnabled;
         GeneralSection.CloseOnFocusLoss.IsChecked = settings.ClosePanelOnFocusLoss;
         GeneralSection.AutoCopy.IsChecked = settings.CopyTranslationAutomatically;
-        GeneralSection.StartWithWindows.IsChecked = settings.StartWithWindows || StartupRegistration.IsEnabled();
+        // C07: the toggle is the DESIRE, never "desire OR reality". The
+        // real registry state paints beside it (hint text + re-enable).
+        GeneralSection.StartWithWindows.IsChecked = settings.StartWithWindows;
+        RefreshStartupState();
         Helpers.SelectComboByTag(GeneralSection.ThemeCombo, settings.Theme.ToString());
         CaptureSection.SetShellSettings(settings);
         CaptureSection.RefreshFreeEngineState();
@@ -324,6 +399,17 @@ public partial class SettingsWindow : Window
             return;
         }
         ShowPage((sender as RadioButton)?.Tag as string);
+    }
+
+    /// <summary>
+    /// Direct entry from the main-window 添加翻译引擎 call to action:
+    /// opens the engine page and immediately starts the add-engine flow.
+    /// Navigation only — no network probe, no consent change, no dialog.
+    /// </summary>
+    internal void ShowProviderAddFlow()
+    {
+        ShowPage("Provider");
+        ProviderSection.BeginAddEngineFlow();
     }
 
     // Internal for the logic tests: page browsing must never dirty the form.
@@ -383,6 +469,20 @@ public partial class SettingsWindow : Window
         }
 
         SettingsScroll?.ScrollToTop();
+        UpdateSaveBar();
+        UpdateResponsiveLayout(ActualWidth);
+    }
+
+    /// <summary>
+    /// Unified breakpoint (< 700 DIP client area): stacks form fields vertically
+    /// so API Key inputs and test buttons on 680 DIP minimum width never crowd or clip.
+    /// </summary>
+    private void UpdateResponsiveLayout(double windowWidth)
+    {
+        if (windowWidth <= 0) return;
+        var compact = windowWidth < 700;
+        GeneralSection?.SetCompact(compact);
+        ProviderSection?.SetCompact(compact);
     }
 
     // ================= Save / revert =================
@@ -456,24 +556,77 @@ public partial class SettingsWindow : Window
                     $"设置未能写入磁盘（{commitException.Message}）。已回滚本次全部修改。");
             }
 
-            if (!StartupRegistration.TrySet(shellSettings.StartWithWindows))
+            // A01: a plain save only does what the desired state actually
+            // needs (create/remove/repair-path). It NEVER clears a Task-
+            // Manager disable — that stays with the re-enable button.
+            GeneralSection.StartWithWindows.IsEnabled = false;
+            StartupState startupState;
+            StartupSaveAction startupAction;
+            bool startupOk;
+            try
             {
-                SetStatus("设置已保存，但无法写入开机启动项（可能被安全软件拦截）。", StatusTone.Warning);
+                startupState = await StartupRegistration.ReadStateAsync(shellSettings.StartWithWindows);
+                startupAction = StartupRegistration.PlanSaveAction(startupState);
+                // V02: the save handler executes the plan through the Run-only
+                // adapters — a plain save NEVER reaches TrySet, so it can never
+                // delete or rewrite the OS StartupApproved record.
+                startupOk = await Task.Run(() => StartupRegistration.ExecuteSaveAction(startupAction));
+            }
+            finally
+            {
+                GeneralSection.StartWithWindows.IsEnabled = true;
+            }
+            var startupSaveFailed = !startupOk;
+            if (!startupOk)
+            {
+                // V03: the baseline is what the disk actually holds; a failed
+                // rollback is stated as such and stays retryable.
+                var rolledBack = shellSettings with { StartWithWindows = _shellSettings.StartWithWindows };
+                var rollbackWritten = true;
+                try
+                {
+                    await Task.Run(() => ShellSettingsStore.Save(rolledBack));
+                }
+                catch
+                {
+                    rollbackWritten = false;
+                }
+                var (baseline, status, isError) = StartupRegistration.ResolveStartupSaveFailure(
+                    shellSettings, _shellSettings, rollbackWritten);
+                // V03 round 2: the toggle keeps the USER'S INTENT — it is the
+                // pending retry target, deliberately left different from the
+                // committed baseline. Clicking save again re-runs the
+                // original action; unchecking it is the explicit way to
+                // abandon the target (the form then converges to Clean).
+                shellSettings = baseline;
+                SetStatus(status, isError ? StatusTone.Error : StatusTone.Success);
             }
             else
             {
+                _startupRetryPending = false;
                 SetStatus("设置已保存，即时生效。", StatusTone.Success);
             }
+            RefreshStartupState();
 
             _shellSettings = shellSettings;
             CaptureSection.SetShellSettings(shellSettings);
             CaptureSection.RefreshRoutePreview();
             // The commit landed: rebuild the baselines from the saved form so
             // the state machine returns to Clean on evidence, not on trust.
-            _settingsBaseline = CaptureSettingsDraft();
+            // V03: after a failed startup write the baseline is still the
+            // disk truth, but the form stays DIRTY — the save button must
+            // stay operable so the user can retry the startup registration.
+            // V03: the committed baseline is built from what the DISK holds
+            // (the saved snapshot with the startup field corrected to its
+            // saved value) — never by re-reading the controls, whose startup
+            // toggle deliberately carries the user's un-retried intent.
+            _settingsBaseline = (CaptureSettingsDraftSnapshot()
+                with { StartWithWindows = shellSettings.StartWithWindows })
+                .Serialize();
+            _startupRetryPending = startupSaveFailed;
             _routeBaseline = CaptureRouteDraft();
             _routePendingShown = false;
-            _state = SettingsEditState.Clean;
+            _state = startupSaveFailed ? SettingsEditState.Dirty : SettingsEditState.Clean;
             UpdateSaveBar();
             CaptureSection.SetRouteDraftPending(false);
 
@@ -538,20 +691,20 @@ public partial class SettingsWindow : Window
     private void SetStatus(string message, StatusTone tone)
     {
         StatusTextBlock.Text = message;
-        StatusTextBlock.Foreground = (Brush)FindResource(tone switch
+        var resourceKey = tone switch
         {
             StatusTone.Success => "SuccessBrush",
             StatusTone.Warning => "WarningBrush",
             StatusTone.Error => "DangerBrush",
             _ => "AccentBrush",
-        });
-        StatusDot.Background = (Brush)FindResource(tone switch
-        {
-            StatusTone.Success => "SuccessBrush",
-            StatusTone.Warning => "WarningBrush",
-            StatusTone.Error => "DangerBrush",
-            _ => "AccentBrush",
-        });
+        };
+
+        // Keep the status colors as dynamic references. FindResource can
+        // legitimately return WPF's deferred-resource sentinel while a
+        // window is being initialized or a theme dictionary is switching;
+        // casting that sentinel to Brush crashes the status update path.
+        StatusTextBlock.SetResourceReference(TextBlock.ForegroundProperty, resourceKey);
+        StatusDot.SetResourceReference(Border.BackgroundProperty, resourceKey);
     }
 
     // ================= Window caption =================
@@ -586,6 +739,13 @@ public partial class SettingsWindow : Window
 
     protected override void OnClosing(CancelEventArgs e)
     {
+        // WPF can close a half-constructed window after InitializeComponent
+        // throws. Named controls are not safe to access in that state.
+        if (!_componentInitialized)
+        {
+            base.OnClosing(e);
+            return;
+        }
         // Resolve drafts inside the window instead of a system dialog: keep
         // the window open, land on the relevant surface, and say what to do.
         if (ForceClose)
@@ -620,7 +780,11 @@ public partial class SettingsWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
-        ThemeService.ThemeChanged -= _themeChangedHandler;
+        if (_themeSubscribed)
+        {
+            ThemeService.ThemeChanged -= _themeChangedHandler;
+            _themeSubscribed = false;
+        }
         base.OnClosed(e);
     }
 }

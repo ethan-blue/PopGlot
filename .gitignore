@@ -29,3 +29,8 @@ appsettings.local.json
 # Local publish output
 dist/
 .alma/
+
+# One-off local repair and acceptance helpers.
+/scripts/tmp-*.ps1
+/scripts/dbg-*.ps1
+/scripts/apply_*.py

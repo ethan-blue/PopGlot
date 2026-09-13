@@ -18,12 +18,59 @@ internal enum FreeEngineDecision
 
 /// <summary>
 /// Proof that <see cref="OutboundPolicy"/> authorized free-engine traffic for
-/// one send scope, carrying the exact network settings the decision was made
-/// against. Issued only on the Allowed/AllowOnce paths; the last send layer
-/// (<see cref="FreeTranslateService"/>) refuses to transmit without one, so a
-/// UI or health-probe caller can never bypass the policy.
+/// one request scope, carrying the exact network settings the decision was
+/// made against. Issued only on the Allowed/AllowOnce paths; the last send
+/// layer (<see cref="FreeTranslateService"/>) refuses to transmit without one,
+/// so a UI or health-probe caller can never bypass the policy.
 /// </summary>
-internal sealed record FreeEngineAuthorization(ProviderSettings Settings, bool IsOnceOnly);
+/// <remarks>
+/// C01: the authorization is a per-request token, never stored in a UI or
+/// singleton field. <see cref="TryClaimSend"/> is the atomic send boundary —
+/// an AllowOnce permission dies with its first real send, and every send
+/// re-reads the live policy, so a revocation between the decision and a
+/// later endpoint fallback stops the remaining sends.
+/// </remarks>
+internal sealed class FreeEngineAuthorization
+{
+    private int _consumed;
+
+    public ProviderSettings Settings { get; }
+
+    public bool IsOnceOnly { get; }
+
+    public FreeEngineAuthorization(ProviderSettings settings, bool IsOnceOnly)
+    {
+        Settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        this.IsOnceOnly = IsOnceOnly;
+    }
+
+    /// <summary>True once this authorization has backed a real send (AllowOnce only).</summary>
+    public bool IsConsumed => Volatile.Read(ref _consumed) == 1;
+
+    /// <summary>
+    /// Atomically claims ONE real HTTP send at the transport boundary and
+    /// re-reads the live policy. The live check runs BEFORE the consume, so
+    /// a refused request never burns the permit; the consume is the last
+    /// step before the transport call, so a failed send attempt stays
+    /// consumed (no refund) but a request that never reaches submission
+    /// does not. AllowOnce succeeds exactly once, and dies with an explicit
+    /// later denial even though it was originally issued against Unset.
+    /// </summary>
+    public bool TryClaimSend(out string? refusal)
+    {
+        refusal = null;
+        if (!OutboundPolicy.SendStillAllowed(Settings, IsOnceOnly, out refusal))
+        {
+            return false;
+        }
+        if (IsOnceOnly && Interlocked.Exchange(ref _consumed, 1) != 0)
+        {
+            refusal = "“仅本次允许”已用于上一次发送；没有再次发送任何请求。可在「设置 → 隐私与数据」中选择始终允许。";
+            return false;
+        }
+        return true;
+    }
+}
 
 /// <summary>
 /// The single authority on whether the built-in free web engine may send text.
@@ -43,6 +90,48 @@ internal static class OutboundPolicy
     /// <summary>Test seam: where consent is persisted. Production uses the real store.</summary>
     internal static Func<ShellSettings> SettingsLoader { get; set; } = () => ShellSettingsStore.Load();
     internal static Action<ShellSettings> SettingsSaver { get; set; } = settings => ShellSettingsStore.Save(settings);
+
+    /// <summary>
+    /// Live view of the core settings for send-boundary re-checks. Production
+    /// binds CoreBridge.GetSettings (in-memory cached, refreshed on save) in
+    /// App startup; when null the send boundary falls back to the snapshot
+    /// the decision was issued against.
+    /// </summary>
+    internal static Func<ProviderSettings>? LiveSettingsLoader { get; set; }
+
+    /// <summary>
+    /// The per-send re-check behind <see cref="FreeEngineAuthorization.TryClaimSend"/>.
+    /// Consent is always read live — including for once-only tokens, which
+    /// were issued against Unset but must still die on an explicit later
+    /// denial. Safe-dev-mode/network fall back to the decision snapshot when
+    /// no live loader is installed (pure/test hosts only; production binds
+    /// the loader in App startup). Fails closed.
+    /// </summary>
+    internal static bool SendStillAllowed(ProviderSettings snapshot, bool isOnceOnly, out string? refusal)
+    {
+        refusal = null;
+        var current = LiveSettingsLoader?.Invoke() ?? snapshot;
+        if (current.SafeDevMode || !current.NetworkEnabled)
+        {
+            refusal = "已开启安全离线模式或网络翻译已关闭；未发送任何请求。";
+            return false;
+        }
+        var consent = SettingsLoader().FreeEngineConsent;
+        if (isOnceOnly)
+        {
+            if (consent == FreeEngineConsent.Denied)
+            {
+                refusal = "内置免费引擎的授权已被撤销；未发送任何请求。";
+                return false;
+            }
+        }
+        else if (consent != FreeEngineConsent.Allowed)
+        {
+            refusal = "内置免费引擎的授权已被撤销或尚未允许；未发送任何请求。可在「设置 → 隐私与数据」中重新允许。";
+            return false;
+        }
+        return true;
+    }
 
     /// <summary>
     /// Decides whether a no-config text translation may leave the machine.

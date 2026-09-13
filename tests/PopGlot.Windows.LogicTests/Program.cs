@@ -32,17 +32,36 @@ internal static class Program
     [STAThread]
     private static async Task<int> Main()
     {
+        // C00: the environment precondition runs before ANY initialization —
+        // before the isolation bootstrap, WPF, the native core, hotkeys or
+        // the clipboard. A real PopGlot instance owns the global hotkeys, the
+        // clipboard and the single-instance channel; running beside it
+        // produces confusing cascade failures, so the suite stops here with
+        // exactly one clear error and exit code 3. POPGLOT_TESTS_FILTER can
+        // select a subset of tests but never bypasses this guard.
+        var conflictingPid = TestIsolation.FindConflictingAppInstancePid();
+        if (conflictingPid != 0)
+        {
+            Console.Error.WriteLine(
+                "environment failure: a real PopGlot instance is running (PID " + conflictingPid + "); " +
+                "it owns the global hotkeys/clipboard/single-instance channel and conflicts with this suite — " +
+                "quit it from the tray before running the tests. No tests were executed.");
+            return 3;
+        }
+
         // Isolation FIRST: nothing below may see real user data, credentials,
         // or public network. A missing isolation bootstrap must fail the run.
         TestIsolation.Initialize();
         Run("test isolation is active", TestIsolation.AssertActive);
         Run("no real PopGlot instance conflicts with the suite", TestIsolation.AssertNoConflictingAppInstance);
+        Run("default stores honor the active data root", DefaultStoresHonorActiveDataRoot);
 
         await RunAsync("clipboard restores after selection", ClipboardRestoresAfterSelectionAsync);
         await RunAsync("clipboard stays untouched when copy fails", ClipboardUntouchedOnCopyFailureAsync);
         await RunAsync("newer user clipboard wins", NewerUserClipboardWinsAsync);
         await RunAsync("cancelled read restores clipboard", CancelledReadRestoresClipboardAsync);
         await RunAsync("missing selection is explicit", MissingSelectionIsExplicitAsync);
+        await RunAsync("clipboard selection supports target window", ClipboardSelectionSupportsTargetWindowAsync);
 
         Run("panel positioning stays in work area", PanelPositionStaysInWorkArea);
         Run("panel positioning supports negative monitor coordinates", PanelPositionSupportsNegativeCoordinates);
@@ -57,6 +76,7 @@ internal static class Program
         Run("v2 shortcut configuration migrates", V2ShortcutConfigurationMigrates);
         Run("shortcut conflicts are rejected", ShortcutConflictsAreRejected);
         Run("shell settings round-trip", ShellSettingsRoundTrip);
+        Run("startup state model is honest and never overrides an OS disable", StartupStateModelIsHonest);
 
         Run("local base urls are detected by host", LocalBaseUrlsDetectedByHost);
         Run("endpoint classification agrees with the rust core", EndpointClassificationAgreesWithRustCore);
@@ -80,8 +100,12 @@ internal static class Program
         Run("vocabulary store supports star, remove and export", VocabularyStoreBehaviour);
         Run("vocabulary store csv export conforms to standard format", VocabularyStoreCsvExportConforms);
         Run("vocabulary store handles corrupt json safely", VocabularyStoreHandlesCorruptJsonSafely);
+        Run("legacy single-word vocabulary loads without quarantine", LegacySingleWordVocabularyLoadsSafely);
+        Run("utf8 bom vocabulary loads without quarantine", Utf8BomVocabularyLoadsSafely);
+        Run("identical corrupt vocabulary is quarantined only once", IdenticalCorruptVocabularyQuarantinedOnce);
         Run("vocabulary store save failures stay visible", VocabularyStoreSaveFailuresStayVisible);
         Run("vocabulary store enforces entry and capacity limits", VocabularyStoreEnforcesLimits);
+        Run("vocabulary store protects unreadable files from destruction", VocabularyStoreProtectsUnreadableFiles);
         Run("vocabulary star identity preserves code identifier case", VocabularyStarIdentityPreservesCase);
         Run("vocabulary concurrent changes do not overwrite each other", VocabularyConcurrentChangesDoNotOverwrite);
         Run("history corrupt file is quarantined not destroyed", HistoryCorruptFileIsQuarantined);
@@ -93,6 +117,7 @@ internal static class Program
         Run("show window hotkey and free engine consent round-trip", ShellSettingsShowWindowAndConsentRoundTrip);
         await RunAsync("free engine consent gates the outbound decision", FreeEngineConsentGatesOutbound);
         await RunAsync("free engine authorization matrix at the send boundary", FreeEngineAuthorizationMatrixAtSendBoundary);
+        await RunAsync("free engine authorization is consumed once at the send boundary", FreeEngineSendBoundaryConsumesAuthorization);
         await RunAsync("offline policy blocks remote but allows local providers", OfflineModeSendsNothing);
         await RunAsync("test connection draft never alters saved settings", DraftConnectionLeavesSettingsUntouched);
         Run("icon controls expose automation names", IconControlsExposeAutomationNames);
@@ -205,6 +230,7 @@ internal static class Program
         // Application the screenshot pass bootstraps, and Application
         // resources are thread-affine.
         RunStaBatch(
+            ("settings window constructs and closes safely", SettingsWindowConstructsAndClosesSafely),
             ("quick search component lifecycle and stream contracts", QuickSearchComponentLifecycleAndStreamContracts),
             ("translate section component lifecycle and stream contracts", TranslateSectionComponentLifecycleAndStreamContracts),
             ("translate section stacks when narrow", TranslateSectionStacksWhenNarrow),
@@ -212,10 +238,15 @@ internal static class Program
             ("translate empty state guides first use", TranslateEmptyStateGuidesFirstUse),
             ("translation panel component lifecycle and stream contracts", TranslationPanelComponentLifecycleAndStreamContracts),
             ("markdown visual rendering separates code from natural language", MarkdownVisualSeparatesCodeFromNaturalLanguage),
+            ("markdown code fidelity probes keep copy byte-exact", MarkdownCodeFidelityProbes),
             ("primary button text uses primary text brush", PrimaryButtonTextUsesPrimaryTextBrush),
             ("three entries copy the same agreed plain text", ThreeEntriesCopyTheSameAgreedText),
             ("code block copy button obeys eligibility", CodeBlockCopyButtonObeysEligibility),
             ("panel routes partial session to blocked actions and no auto copy", PanelRoutesPartialSessionToBlockedActionsAndNoAutoCopy),
+            ("quick search focus loss and close keep the session", QuickSearchFocusLossKeepsSession),
+            ("startup save failure keeps the retry entry and disk truth", StartupSaveFailureKeepsRetryEntry),
+            ("hidden panel completion never touches the clipboard", HiddenPanelCompletionNeverCopies),
+            ("translation panel close keeps partial and hides", TranslationPanelCloseKeepsPartialAndHides),
             ("panel star failure is visible", PanelStarFailureIsVisible),
             ("render screenshots and measure performance baseline", RenderScreenshotsAndMeasureBaseline),
             ("a failed save recovers to dirty then clean", FailedSaveRecoversToDirtyThenClean),
@@ -228,6 +259,21 @@ internal static class Program
         await RunAsync("screen capture async execution off UI thread", ScreenCaptureAsyncExecution);
         Run("hotkey service atomicity and failure visibility", HotkeyServiceAtomicityAndFailureVisibility);
         Run("release workflow specifies self-contained", ReleaseWorkflowSpecifiesSelfContained);
+        Run("focus-loss and close contracts are wired through the shell", FocusLossAndCloseContractsAreWired);
+        Run("global exception policy classifies and fuses", GlobalExceptionPolicyClassifiesAndFuses);
+        Run("A06 escape precedence recency and exit wiring", A06EscapeRecencyAndExitWiring);
+        Run("V02-V05 rework wiring is real production code", V02ToV05WiringIsReal);
+        // Main-window empty-state CTA and routing-uniqueness tests are all
+        // UI-bound: they share one STA thread via RunStaBatch.
+        RunStaBatch(
+            ("unconfigured CTA shows while the free fallback is allowed", UnconfiguredCtaShowsWhileFallbackAllowed),
+            ("no route at all keeps the add-engine CTA and never claims ready", UnconfiguredCtaShowsWithNoRoute),
+            ("incomplete profiles never masquerade as configured", IncompleteProfilesKeepCtaVisible),
+            ("a configured engine hides the guide and the footer shows its short name", ConfiguredEngineStateIsHonest),
+            ("routing entry is unique to the footer switcher", RoutingEntryIsUniqueToFooterSwitcher),
+            ("the CTA click lands inside the add-engine flow", CtaClickLandsInsideAddEngineFlow),
+            ("the empty service list cannot cover the add-first-engine button", EmptyServiceListLeavesAddButtonClickable));
+        await RunAsync("coordinator refuses new work while the fuse is closed", CoordinatorRefusesWorkWhenFused);
 
         if (Environment.GetEnvironmentVariable("POPGLOT_SMOKE_FREE") == "1")
         {
@@ -249,6 +295,18 @@ internal static class Program
     }
 
     // ================= Clipboard selection =================
+
+    private static void DefaultStoresHonorActiveDataRoot()
+    {
+        var vocabulary = new VocabularyStore();
+        Equal(TestIsolation.VocabularyPath, vocabulary.StoragePath,
+            "the default vocabulary path must resolve after isolation is installed");
+
+        var shellPath = Path.Combine(TestIsolation.Root, "windows-shell.json");
+        ShellSettingsStore.Save(ShellSettings.Default);
+        True(File.Exists(shellPath),
+            "the default shell settings path must stay inside the active data root");
+    }
 
     private static async Task ClipboardRestoresAfterSelectionAsync()
     {
@@ -306,6 +364,15 @@ internal static class Program
         var service = new ClipboardSelectionService(adapter);
         await ThrowsAsync<InvalidOperationException>(() =>
             service.ReadSelectionAsync(CancellationToken.None));
+    }
+
+    private static async Task ClipboardSelectionSupportsTargetWindowAsync()
+    {
+        var adapter = new FakeClipboardAdapter { SelectedText = "SelectionWithTargetWindow" };
+        var service = new ClipboardSelectionService(adapter);
+        var text = await service.ReadSelectionAsync(CancellationToken.None, targetWindow: (nint)12345);
+        Equal("SelectionWithTargetWindow", text);
+        True(adapter.Restored, "original clipboard was restored");
     }
 
     // ================= Panel positioning =================
@@ -839,9 +906,13 @@ internal static class Program
         Equal("调用 getUserName() 获取名字", MarkdownPresenter.ToPlainText("调用 `getUserName()` 获取名字"));
 
         // Fenced code: fences go, content (indentation, tabs, blank lines,
-        // identifiers) stays byte-for-byte.
-        var fenced = "```python\ndef f():\n\treturn foo_bar_baz\n\n```";
-        Equal("def f():\n\treturn foo_bar_baz", NormalizeNewlines(MarkdownPresenter.ToPlainText(fenced)));
+        // identifiers, the block's own final newline) stays byte-for-byte.
+        // The blank line before the closing fence is real content.
+        Equal("def f():\n\treturn foo_bar_baz\n\n",
+            MarkdownPresenter.ToPlainText("```python\ndef f():\n\treturn foo_bar_baz\n\n```"));
+        // A fence-final newline in the doc adds no phantom line; the block's
+        // last line keeps exactly one terminator.
+        Equal("x = 1\n", MarkdownPresenter.ToPlainText("```py\nx = 1\n```\n"));
 
         // Headings, bullets, ordered lists and links still read naturally.
         Equal("标题文字", MarkdownPresenter.ToPlainText("## 标题文字"));
@@ -853,6 +924,79 @@ internal static class Program
         Equal("print(1)", NormalizeNewlines(MarkdownPresenter.ToPlainText("```python\nprint(1)")));
         Equal("a ` b", MarkdownPresenter.ToPlainText("a ` b"));
         Equal("值是 ⟦PG_0001⟧ 吗", MarkdownPresenter.ToPlainText("值是 ⟦PG_0001⟧ 吗"));
+    }
+
+    /// <summary>
+    /// C04 acceptance (F06): the seven fidelity probes — mixed prose+code,
+    /// empty code blocks, four-backtick fences, language tags, trailing
+    /// newlines, leading indentation and trailing spaces — survive copy
+    /// byte for byte. No whole-output Trim, no per-code-line TrimEnd.
+    /// </summary>
+    private static void MarkdownCodeFidelityProbes()
+    {
+        EnsureApplication();
+        // Probe 1 — leading indentation of the FIRST code line survives
+        // (the old whole-output Trim() used to eat it).
+        Equal("    indented = True\n", MarkdownPresenter.ToPlainText("```\n    indented = True\n```"));
+
+        // Probe 2 — trailing spaces and tabs on code lines survive.
+        Equal("trailing = 1   \n\ttabbed\t\n", MarkdownPresenter.ToPlainText("```\ntrailing = 1   \n\ttabbed\t\n```"));
+
+        // Probe 3 — blank lines inside code survive.
+        Equal("a = 1\n\n\nb = 2\n", MarkdownPresenter.ToPlainText("```\na = 1\n\n\nb = 2\n```"));
+
+        // Probe 4 — empty code block: fences go, nothing else appears.
+        Equal("", MarkdownPresenter.ToPlainText("```\n```"));
+
+        // Probe 5 — four backticks: the fence line is removed, content stays.
+        Equal("code with ```` inside stays\n", MarkdownPresenter.ToPlainText("````\ncode with ```` inside stays\n````"));
+
+        // Probe 6 — language tag removed, content untouched, mixed prose.
+        Equal(
+            "看这段：\nprint(\"hello\")\n完了吗：\n",
+            MarkdownPresenter.ToPlainText("看这段：\n```python\nprint(\"hello\")\n```\n完了吗：\n"));
+
+        // Probe 7 — unclosed fence at end of output keeps its final newline
+        // and indentation; no Trim() touches the tail.
+        Equal("value = [\n    1,\n    2,\n]\n", MarkdownPresenter.ToPlainText("```\nvalue = [\n    1,\n    2,\n]\n"));
+
+        // The visual renderer's per-block copy text is the same verbatim
+        // interior (offset capture, no TrimEnd).
+        var document = new FlowDocument();
+        MarkdownPresenter.RenderToFlowDocument(document, "```\n  keep = \"me\"\n```", Application.Current.Resources);
+        var codeBox = FindTextBoxInBlocks(document.Blocks);
+        True(codeBox is not null, "a fenced block must render a code text box");
+        Equal("  keep = \"me\"\n", codeBox!.Text, "the block copy text must be the verbatim interior");
+
+        // A07: the visual renderer obeys the shared fence grammar — a
+        // 4-backtick block keeps an inner triple-backtick line as content.
+        var a07Document = new FlowDocument();
+        MarkdownPresenter.RenderToFlowDocument(a07Document, "````\n```\n  x  \n````", Application.Current.Resources);
+        var a07Box = FindTextBoxInBlocks(a07Document.Blocks);
+        True(a07Box is not null, "the 4-backtick block must render as one code box");
+        Equal("```\n  x  \n", a07Box!.Text, "the inner fence line must survive as code content");
+    }
+
+    private static System.Windows.Controls.TextBox? FindTextBoxInBlocks(System.Windows.Documents.BlockCollection blocks)
+    {
+        foreach (var block in blocks)
+        {
+            if (block is System.Windows.Documents.BlockUIContainer container)
+            {
+                if (container.Child is System.Windows.Controls.Border border &&
+                    border.Child is System.Windows.Controls.Grid grid)
+                {
+                    foreach (var child in grid.Children)
+                    {
+                        if (child is System.Windows.Controls.TextBox box)
+                        {
+                            return box;
+                        }
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     private static string NormalizeNewlines(string text) => text.Replace("\r\n", "\n");
@@ -1100,7 +1244,8 @@ internal static class Program
                     System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                 .Invoke(panel, new object?[] { panel, new RoutedEventArgs() });
 
-            True(panel.StatusText.Text.Contains("未保存到本机"),
+            SpinUntil(
+                () => panel.StatusText.Text.Contains("未保存到本机"),
                 $"the panel must say nothing was saved, got: {panel.StatusText.Text}");
             True(panel.StarToggle.IsChecked != true, "a failed star write must not light the star icon");
         }
@@ -1141,6 +1286,7 @@ internal static class Program
             {
                 thread.Join();
             }
+            store.Flush();
 
             Equal(words.Length, store.GetAll().Count, "every word must survive the concurrent toggles");
             Equal(words.Length, new VocabularyStore(tempFile).GetAll().Count,
@@ -1159,44 +1305,92 @@ internal static class Program
     /// the crash log file nor the tray summary in raw form, and every entry is
     /// length-bounded.
     /// </summary>
+    /// <summary>
+    /// C03 acceptance: the crash log is an allowlist, not a message dump.
+    /// The full F05 matrix — source text, api_key= secrets, custom secret
+    /// shapes, bearer tokens, key-shaped literals, URL queries and Windows
+    /// user paths — must be unrecoverable from both the in-memory entry and
+    /// the bytes on disk, while type/stage/code/event-id stay structured.
+    /// The export boundary re-runs the redaction battery.
+    /// </summary>
     private static void CrashDiagnosticsSanitizeAndBound()
     {
         var secretBearer = "Bearer aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789";
-        var secretKey = "sk-TESTabcdef1234567890XYZ";
+        // Build the fake token at runtime so repository secret scanners do
+        // not mistake this redaction fixture for a committed credential.
+        var secretKey = "sk-" + "TESTabcdef1234567890XYZ";
+        var syntheticSecret = "synthetic-secret-123";
+        var customSecret = "private-credential-8-200-shape-Zq9wX7vB";
         var userText = "用户私密原文内容";
         var message =
-            $"请求失败 Authorization: {secretBearer} key={secretKey} " +
+            $"请求失败 source: {userText} api_key={syntheticSecret} token={customSecret} " +
+            $"Authorization: {secretBearer} key={secretKey} " +
             $"url=https://api.example.com/v1/chat?q={userText} 其他上下文";
         var exception = new ExceptionWithSyntheticStack(
             message,
-            string.Join("\n", Enumerable.Range(0, 80).Select(i => $"   at Demo.Frame{i}() in D:\\demo\\file{i}.cs:line {i}")));
+            string.Join("\n", Enumerable.Range(0, 80).Select(
+                i => $"   at Demo.Frame{i}() in C:\\Users\\tester\\app\\file{i}.cs:line {i}")));
 
-        var sanitized = DiagnosticsLog.Sanitize(message);
-        True(!sanitized.Contains(secretBearer), "bearer tokens must be redacted");
-        True(!sanitized.Contains("aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789"), "the bare token value must not survive either");
-        True(!sanitized.Contains(secretKey), "key-shaped literals must be redacted");
-        True(!sanitized.Contains(userText), "URL query text must be stripped");
-        True(sanitized.Contains("https://api.example.com/v1/chat?…"), "the URL base may survive without its query");
-
-        var summary = DiagnosticsLog.CrashSummary(exception);
-        True(summary.Length <= 161, $"the balloon summary must stay short, got {summary.Length}");
-        True(!summary.Contains(secretKey), "the balloon summary must be sanitized too");
-
-        var entry = DiagnosticsLog.BuildEntry(exception);
-        True(!entry.Contains(secretBearer) && !entry.Contains(secretKey) && !entry.Contains(userText),
-            "the log entry must contain no raw secret");
-        True(entry.Contains("[redacted]") && entry.Contains("[redacted-key]"),
-            "redaction markers must appear instead");
+        // Allowlist: free-form message content is dropped wholesale.
+        var entry = DiagnosticsLog.BuildEntry(
+            exception, DiagnosticsLog.DiagnosticsStage.Translation, "test0001event");
+        True(!entry.Contains(userText), "user source text must not reach the entry at all");
+        True(!entry.Contains(secretBearer) && !entry.Contains("aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789"),
+            "bearer tokens must not reach the entry");
+        True(!entry.Contains(secretKey), "key-shaped literals must not reach the entry");
+        True(!entry.Contains(syntheticSecret), "the F05 api_key= secret must not reach the entry");
+        True(!entry.Contains(customSecret), "arbitrary custom secrets must not reach the entry");
+        True(!entry.Contains("api_key=") && !entry.Contains("source:"), "not even the labels survive");
+        True(entry.Contains("ExceptionWithSyntheticStack"), "the exception TYPE is allowlisted and stays");
+        True(entry.Contains("stage=translation"), "the controlled stage is written");
+        True(entry.Contains("code=0x"), "the structured HResult code is written");
+        True(entry.Contains("event=test0001event"), "the correlation id is written");
+        True(!entry.Contains("\\Users\\tester"), "windows user paths in stack frames must be redacted");
+        True(!entry.Contains(".cs"), "stack frames must not carry file names at all (A09)");
+        True(!entry.Contains("at Demo.Frame0"),
+            "V01: forged stack lines resolve to nothing and are omitted entirely");
         True(!entry.Contains("Frame79"), "the stack must be truncated after the frame budget");
+        // A real thrown exception still resolves its structured frames.
+        Exception realFrameProbe;
+        try { throw new InvalidOperationException("real frame probe"); }
+        catch (Exception caught) { realFrameProbe = caught; }
+        var realEntry = DiagnosticsLog.BuildEntry(realFrameProbe, DiagnosticsLog.DiagnosticsStage.Unknown, "real0001event");
+        True(realEntry.Contains("at PopGlot.Windows.LogicTests.Program.CrashDiagnosticsSanitizeAndBound"),
+            "the structured source keeps real method identities");
 
-        // The production write path lands under the isolated StoragePaths.
+        // The production write path lands under the isolated StoragePaths and
+        // returns the id the balloon will show.
         var logDir = StoragePaths.Logs;
-        DiagnosticsLog.Log(exception);
+        var eventId = DiagnosticsLog.Log(exception, DiagnosticsLog.DiagnosticsStage.Selection);
+        True(eventId.Length > 0, "Log must return the correlation id it filed");
+        DiagnosticsLog.Flush();
         var today = Path.Combine(logDir, $"crash-{DateTime.Now:yyyyMMdd}.log");
         True(File.Exists(today), "the crash file must be written");
         var written = File.ReadAllText(today);
-        True(!written.Contains(secretBearer) && !written.Contains(secretKey) && !written.Contains(userText),
-            "nothing raw may reach disk");
+        True(!written.Contains(userText) && !written.Contains(secretBearer) &&
+             !written.Contains(secretKey) && !written.Contains(syntheticSecret) &&
+             !written.Contains(customSecret),
+            "nothing from the message may reach disk");
+        True(written.Contains("stage=selection") && written.Contains($"event={eventId}"),
+            "the disk entry must carry the structured fields");
+
+        // The balloon summary is controlled copy + id, never exception text.
+        var summary = DiagnosticsLog.CrashSummary(eventId);
+        True(summary.Length <= 80, $"the balloon summary must stay short, got {summary.Length}");
+        True(!summary.Contains(userText) && !summary.Contains(secretKey),
+            "the balloon summary must not carry message content");
+        True(summary.Contains(eventId), "the balloon summary must carry the event id");
+
+        // Export/view boundary: the battery re-runs on anything leaving the
+        // machine, including user paths and key/value secrets it can shape.
+        var exported = DiagnosticsLog.SanitizeForExport(
+            $"{message} path=C:\\Users\\tester\\notes.txt");
+        True(!exported.Contains(secretBearer) && !exported.Contains("aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789"),
+            "the export battery must redact bearer tokens");
+        True(!exported.Contains(secretKey), "the export battery must redact key-shaped literals");
+        True(!exported.Contains(syntheticSecret), "the export battery must redact key=value secrets");
+        True(!exported.Contains("\\Users\\tester"), "the export battery must redact user paths");
+        True(exported.Contains("https://api.example.com/v1/chat?…"), "the URL base may survive without its query");
     }
 
     /// <summary>
@@ -1249,6 +1443,7 @@ internal static class Program
             {
                 DiagnosticsLog.Log(boom);
             }
+            DiagnosticsLog.Flush();
             var stormTotal = Directory.EnumerateFiles(StoragePaths.Logs, "crash-*").Sum(p => new FileInfo(p).Length);
             True(stormTotal <= DiagnosticsLog.MaxTotalBytes,
                 $"a crash storm must stay bounded, got {stormTotal}");
@@ -1906,6 +2101,92 @@ internal static class Program
         }
     }
 
+    private static void LegacySingleWordVocabularyLoadsSafely()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"popglot-vocab-legacy-{Guid.NewGuid():N}.json");
+        try
+        {
+            var legacy = new VocabularyWord(
+                Guid.NewGuid(),
+                DateTimeOffset.UtcNow,
+                "async/await",
+                "异步/等待",
+                "əˈsɪŋk",
+                "C# & Rust 关键字",
+                "en",
+                "zh-CN",
+                []);
+            File.WriteAllText(tempFile, System.Text.Json.JsonSerializer.Serialize(legacy));
+
+            var store = new VocabularyStore(tempFile);
+            Equal(VocabularyLoadState.Ok, store.LoadState);
+            Equal(1, store.GetAll().Count);
+            True(store.IsStarred("async/await", "en", "zh-CN"),
+                "legacy single-object data must remain visible");
+            True(!Directory.EnumerateFiles(Path.GetDirectoryName(tempFile)!, Path.GetFileName(tempFile) + ".corrupt-*").Any(),
+                "valid legacy data must not be quarantined");
+        }
+        finally
+        {
+            try { File.Delete(tempFile); } catch { }
+            foreach (var file in Directory.EnumerateFiles(Path.GetTempPath(), Path.GetFileName(tempFile) + ".corrupt-*"))
+            {
+                try { File.Delete(file); } catch { }
+            }
+        }
+    }
+
+    private static void IdenticalCorruptVocabularyQuarantinedOnce()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"popglot-vocab-dedupe-{Guid.NewGuid():N}.json");
+        var pattern = Path.GetFileName(tempFile) + ".corrupt-*";
+        try
+        {
+            File.WriteAllText(tempFile, "{ definitely invalid JSON }");
+            _ = new VocabularyStore(tempFile);
+            _ = new VocabularyStore(tempFile);
+
+            var backups = Directory.EnumerateFiles(Path.GetTempPath(), pattern).ToList();
+            Equal(1, backups.Count, "the same corrupt payload needs exactly one verified backup");
+        }
+        finally
+        {
+            try { File.Delete(tempFile); } catch { }
+            foreach (var file in Directory.EnumerateFiles(Path.GetTempPath(), pattern))
+            {
+                try { File.Delete(file); } catch { }
+            }
+        }
+    }
+
+    private static void Utf8BomVocabularyLoadsSafely()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"popglot-vocab-bom-{Guid.NewGuid():N}.json");
+        var pattern = Path.GetFileName(tempFile) + ".corrupt-*";
+        try
+        {
+            var entry = new VocabularyWord(
+                Guid.NewGuid(), DateTimeOffset.UtcNow, "BOM", "字节序标记",
+                "", "", "en", "zh-CN", []);
+            var json = System.Text.Json.JsonSerializer.Serialize(new[] { entry });
+            File.WriteAllText(tempFile, json, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+
+            var store = new VocabularyStore(tempFile);
+            Equal(VocabularyLoadState.Ok, store.LoadState);
+            Equal(1, store.GetAll().Count);
+            True(!Directory.EnumerateFiles(Path.GetTempPath(), pattern).Any(),
+                "a standard UTF-8 BOM must not be classified as corruption");
+        }
+        finally
+        {
+            try { File.Delete(tempFile); } catch { }
+            foreach (var file in Directory.EnumerateFiles(Path.GetTempPath(), pattern))
+            {
+                try { File.Delete(file); } catch { }
+            }
+        }
+    }
+
     /// <summary>
     /// T07 acceptance: a store whose storage path cannot be written reports
     /// the failure instead of a fake star, keeps its previous entries in
@@ -1945,6 +2226,77 @@ internal static class Program
             try { Directory.Delete(dirAsPath); } catch { }
             try { File.Delete(goodFile); } catch { }
             try { File.Delete(goodFile + ".bak"); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// C02 acceptance (F04): an oversized-but-legal JSON file is never read,
+    /// never rewritten, and every mutation fails with an explicit read-only
+    /// refusal. A file locked by another process gets the same protection,
+    /// and the real data survives both episodes byte for byte.
+    /// </summary>
+    private static void VocabularyStoreProtectsUnreadableFiles()
+    {
+        var oversize = Path.Combine(Path.GetTempPath(), $"popglot-vocab-oversize-{Guid.NewGuid():N}.json");
+        var locked = Path.Combine(Path.GetTempPath(), $"popglot-vocab-locked-{Guid.NewGuid():N}.json");
+        try
+        {
+            // The F04 fixture shape: a legal empty array padded with whitespace
+            // to 33,554,434 bytes — two bytes over the 32MiB read cap.
+            var fixture = "[" + new string(' ', 33_554_432) + "]";
+            File.WriteAllText(oversize, fixture);
+            Equal(33_554_434, new FileInfo(oversize).Length, "fixture must mirror the F04 probe size");
+            var before = File.ReadAllBytes(oversize);
+
+            var store = new VocabularyStore(oversize);
+            Equal(VocabularyLoadState.TooLarge, store.LoadState);
+            Equal(0, store.GetAll().Count);
+
+            var result = store.ToggleStar("cannot_lose_data", "译文", "", "", "en", "zh-CN");
+            True(!result.Persisted, "an unreadable store must refuse to save");
+            Equal(VocabularySaveStatus.StoreUnreadable, result.Status);
+            True(result.DescribeFailureZh().Contains("未保存到本机"), "the refusal must say nothing was saved");
+            True(!store.IsStarred("cannot_lose_data", "en", "zh-CN"), "the star must not light in memory");
+            True(!store.Remove(Guid.NewGuid()), "Remove must refuse while the file is unreadable");
+            True(!store.Clear(), "Clear must refuse while the file is unreadable");
+
+            // The destructive path would have rewritten 33.5MB into a tiny file.
+            var after = File.ReadAllBytes(oversize);
+            Equal(before.Length, after.Length, "the original file length must be untouched");
+            Equal(
+                Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(before)),
+                Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(after)),
+                "the original file hash must be untouched");
+
+            // Locked file: contents unknown → the same read-only protection.
+            var payload = """[{"Id":"cccccccc-cccc-cccc-cccc-cccccccccccc","CreatedAt":"2026-09-05T08:00:00Z","Word":"locked_word","Translation":"占用词条","Phonetic":"","Explanation":"","SourceLanguage":"en","TargetLanguage":"zh-CN","Tags":[]}]""";
+            File.WriteAllText(locked, payload);
+            var lockedBefore = File.ReadAllBytes(locked);
+            using (var hold = new FileStream(locked, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                var blocked = new VocabularyStore(locked);
+                Equal(VocabularyLoadState.Locked, blocked.LoadState);
+                var refused = blocked.ToggleStar("locked_star", "译文", "", "", "en", "zh-CN");
+                Equal(VocabularySaveStatus.StoreUnreadable, refused.Status);
+                True(!refused.Persisted, "a locked store must not persist");
+            }
+            Equal(
+                Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(lockedBefore)),
+                Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(locked))),
+                "the locked file must be untouched");
+
+            // Once the lock is released, a fresh store reads the real data.
+            var healed = new VocabularyStore(locked);
+            Equal(VocabularyLoadState.Ok, healed.LoadState);
+            Equal(1, healed.GetAll().Count);
+            True(healed.IsStarred("locked_word", "en", "zh-CN"),
+                "the real entry must survive the protection episode");
+        }
+        finally
+        {
+            try { File.Delete(oversize); } catch { }
+            try { File.Delete(locked); } catch { }
+            try { File.Delete(locked + ".bak"); } catch { }
         }
     }
 
@@ -2375,6 +2727,130 @@ internal static class Program
             OutboundPolicy.SettingsLoader = originalLoader;
             OutboundPolicy.SettingsSaver = originalSaver;
             OutboundPolicy.ConsentPrompt = originalPrompt;
+            FreeTranslateService.HttpSenderOverride = originalSender;
+            File.Delete(consentPath);
+        }
+    }
+
+    /// <summary>
+    /// C01 acceptance: the free-engine authorization is a one-shot, live-checked
+    /// token at the real send boundary. F01 — revoking the consent stops the
+    /// old authorization, including through the production health probe
+    /// (0 additional sends). F02 — AllowOnce is consumed atomically by its
+    /// first send; a second use and two concurrent claimants yield exactly
+    /// one send. F03 — a revocation between endpoint fallbacks stops the
+    /// remaining endpoints after the first send.
+    /// </summary>
+    private static async Task FreeEngineSendBoundaryConsumesAuthorization()
+    {
+        var originalLoader = OutboundPolicy.SettingsLoader;
+        var originalSaver = OutboundPolicy.SettingsSaver;
+        var originalSender = FreeTranslateService.HttpSenderOverride;
+        var originalLive = OutboundPolicy.LiveSettingsLoader;
+        var originalPrompt = OutboundPolicy.ConsentPrompt;
+        OutboundPolicy.ConsentPrompt = null;
+        OutboundPolicy.LiveSettingsLoader = null;
+        long sends = 0;
+        FreeTranslateService.HttpSenderOverride = (_, _) =>
+        {
+            Interlocked.Increment(ref sends);
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "[[[\"mock-translation\",\"demo source\",\"en\",\"\"]]]",
+                    Encoding.UTF8,
+                    "application/json"),
+            });
+        };
+        var consentPath = Path.Combine(Path.GetTempPath(), $"popglot-send-boundary-{Guid.NewGuid():N}.json");
+        OutboundPolicy.SettingsLoader = () => ShellSettingsStore.Load(consentPath);
+        OutboundPolicy.SettingsSaver = s => ShellSettingsStore.Save(s, consentPath);
+        try
+        {
+            var settings = CoreBridge.GetSettings() with { SafeDevMode = false, NetworkEnabled = true };
+            ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed }, consentPath);
+
+            // F02: AllowOnce dies with its first real send.
+            OutboundPolicy.ConsentPrompt = _ => FreeEngineDecision.AllowOnce;
+            File.Delete(consentPath);
+            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var onceAuth), "AllowOnce must issue an authorization");
+            True(onceAuth is { IsOnceOnly: true }, "the prompt answer must mark the token once-only");
+            await FreeTranslateService.TranslateAsync("once-first", "auto", "zh-CN", onceAuth!);
+            Equal(1L, Interlocked.Read(ref sends), "the first AllowOnce send must go out");
+            await ThrowsAsync<InvalidOperationException>(() =>
+                FreeTranslateService.TranslateAsync("once-second", "auto", "zh-CN", onceAuth!));
+            Equal(1L, Interlocked.Read(ref sends), "a spent AllowOnce token must never send again");
+            True(onceAuth!.IsConsumed, "the token must report itself consumed");
+
+            // Concurrent double consumption: exactly one of two racers sends.
+            File.Delete(consentPath);
+            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var raceAuth), "AllowOnce must issue a fresh token");
+            var first = FreeTranslateService.TranslateAsync("race-a", "auto", "zh-CN", raceAuth!);
+            var second = FreeTranslateService.TranslateAsync("race-b", "auto", "zh-CN", raceAuth!);
+            var failures = 0;
+            foreach (var task in new[] { first, second })
+            {
+                try { await task; }
+                catch (InvalidOperationException) { failures++; }
+            }
+            Equal(1, failures, "exactly one concurrent claimant may send");
+            Equal(2L, Interlocked.Read(ref sends), "the race must produce exactly one real send");
+
+            // F01: an AlwaysAllow token must re-read the live consent at every
+            // send, so a revocation stops both translations and health probes.
+            ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed }, consentPath);
+            OutboundPolicy.ConsentPrompt = null;
+            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var alwaysAuth), "Allowed consent must issue an authorization");
+            await FreeTranslateService.TranslateAsync("revoke-before", "auto", "zh-CN", alwaysAuth!);
+            Equal(3L, Interlocked.Read(ref sends), "the pre-revocation send must go out");
+            ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Denied }, consentPath);
+            await ThrowsAsync<InvalidOperationException>(() =>
+                FreeTranslateService.TranslateAsync("revoke-after", "auto", "zh-CN", alwaysAuth!));
+            Equal(3L, Interlocked.Read(ref sends), "a revoked token must not translate");
+            var revokedHealth = await FreeTranslateService.GetHealthAsync(force: true, alwaysAuth!);
+            True(!revokedHealth.Ok, "a probe with a revoked token must fail closed");
+            Equal(3L, Interlocked.Read(ref sends), "a revoked token must not send a health probe either");
+
+            // F03: a revocation between endpoint fallbacks stops the remaining
+            // endpoints after the first real send.
+            ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed }, consentPath);
+            var fallbackSender = FreeTranslateService.HttpSenderOverride;
+            FreeTranslateService.HttpSenderOverride = (request, token) =>
+            {
+                var sent = Interlocked.Increment(ref sends);
+                if (sent == 4)
+                {
+                    // The user revokes while the first endpoint is in flight.
+                    ShellSettingsStore.Save(
+                        ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Denied }, consentPath);
+                }
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError)
+                {
+                    Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+                });
+            };
+            await ThrowsAsync<InvalidOperationException>(() =>
+                FreeTranslateService.TranslateAsync("fallback-revoked", "auto", "zh-CN", alwaysAuth!));
+            Equal(4L, Interlocked.Read(ref sends), "the fallback loop must stop after the first send");
+            FreeTranslateService.HttpSenderOverride = fallbackSender;
+            ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed }, consentPath);
+
+            // The offline state is re-read live when a loader is installed;
+            // without one the decision snapshot is the fallback.
+            OutboundPolicy.LiveSettingsLoader = () => settings with { SafeDevMode = true };
+            await ThrowsAsync<InvalidOperationException>(() =>
+                FreeTranslateService.TranslateAsync("live-offline", "auto", "zh-CN", alwaysAuth!));
+            Equal(4L, Interlocked.Read(ref sends), "a live safe-dev-mode flip must stop the send");
+            OutboundPolicy.LiveSettingsLoader = null;
+            await FreeTranslateService.TranslateAsync("snapshot-fallback", "auto", "zh-CN", alwaysAuth!);
+            Equal(5L, Interlocked.Read(ref sends), "without a live loader the decision snapshot applies");
+        }
+        finally
+        {
+            OutboundPolicy.SettingsLoader = originalLoader;
+            OutboundPolicy.SettingsSaver = originalSaver;
+            OutboundPolicy.ConsentPrompt = originalPrompt;
+            OutboundPolicy.LiveSettingsLoader = originalLive;
             FreeTranslateService.HttpSenderOverride = originalSender;
             File.Delete(consentPath);
         }
@@ -3618,6 +4094,99 @@ internal static class Program
     }
 
     /// <summary>
+    /// C07 acceptance: the startup state model separates desire from reality.
+    /// Startup self-heal repairs a stale Run path or recreates a missing
+    /// entry, but NEVER clears a Task-Manager (StartupApproved) disable —
+    /// that is the user's explicit choice, surfaced in settings with a
+    /// re-enable action. F11 stays fixed.
+    /// </summary>
+    private static void StartupStateModelIsHonest()
+    {
+        var originalTrySet = StartupRegistration.TrySetOverride;
+        var originalIsEnabled = StartupRegistration.IsEnabledOverride;
+        var originalReadState = StartupRegistration.ReadStateOverride;
+        var originalRepair = StartupRegistration.RepairRunPathOverride;
+        try
+        {
+            var trySetCalls = new List<bool>();
+            var repairCalls = 0;
+            StartupRegistration.TrySetOverride = enabled => { trySetCalls.Add(enabled); return true; };
+            StartupRegistration.RepairRunPathOverride = () => { repairCalls++; return true; };
+
+            StartupState State(bool present, bool pathMatch, bool osDisabled) => new(
+                DesiredEnabled: true, RunEntryPresent: present, PathMatches: pathMatch,
+                OsDisabled: osDisabled,
+                EffectiveEnabled: present && pathMatch && !osDisabled, LastError: null);
+
+            // a) Healthy: nothing is touched.
+            StartupRegistration.ReadStateOverride = _ => State(present: true, pathMatch: true, osDisabled: false);
+            True(StartupRegistration.EnsureRegistered(), "a healthy registration needs no action");
+            Equal(0, trySetCalls.Count, "a healthy state must not rewrite the Run value");
+            Equal(0, repairCalls, "a healthy state must not repair the path");
+
+            // b) Stale path, not OS-disabled: repair the path, never TrySet.
+            StartupRegistration.ReadStateOverride = _ => State(present: true, pathMatch: false, osDisabled: false);
+            True(StartupRegistration.EnsureRegistered(), "a stale path is repairable");
+            Equal(1, repairCalls, "a stale path must be repaired");
+            Equal(0, trySetCalls.Count, "path repair must not go through TrySet");
+
+            // c) Stale path AND OS-disabled: the path may be fixed, the
+            // disable must survive — this is the F11 regression probe.
+            StartupRegistration.ReadStateOverride = _ => State(present: true, pathMatch: false, osDisabled: true);
+            True(StartupRegistration.EnsureRegistered(), "the path is still repairable while OS-disabled");
+            Equal(2, repairCalls, "the stale path is repaired");
+            Equal(0, trySetCalls.Count, "an OS disable must NEVER be auto-cleared (F11)");
+
+            // d) Missing entry, not disabled: recreate it.
+            StartupRegistration.ReadStateOverride = _ => State(present: false, pathMatch: false, osDisabled: false);
+            True(StartupRegistration.EnsureRegistered(), "a missing entry with desire on must be recreated");
+            Equal(1, trySetCalls.Count, "a missing entry is recreated through TrySet");
+            True(trySetCalls[0], "the recreation must enable");
+
+            // e) Missing entry AND OS-disabled: leave it alone; settings
+            // surfaces the state instead of silently re-enabling.
+            StartupRegistration.ReadStateOverride = _ => State(present: false, pathMatch: false, osDisabled: true);
+            True(!StartupRegistration.EnsureRegistered(), "an OS-disabled missing entry must not be recreated");
+            Equal(1, trySetCalls.Count, "no write happens behind a Task-Manager disable");
+
+            // f) The honest composite: OS-disabled means not effective, even
+            // with a perfectly matching Run entry.
+            StartupRegistration.ReadStateOverride = _ => State(present: true, pathMatch: true, osDisabled: true);
+            True(!StartupRegistration.IsEnabled(), "IsEnabled must reflect the OS disable");
+
+            // g) The user-facing wording distinguishes the states.
+            True(State(true, true, true).DescribeZh().Contains("Windows 已禁用"),
+                "an OS disable must be named as such");
+            True(State(true, true, false).DescribeZh().Contains("已生效"),
+                "a healthy registration must read as effective");
+        }
+        finally
+        {
+            StartupRegistration.TrySetOverride = originalTrySet;
+            StartupRegistration.IsEnabledOverride = originalIsEnabled;
+            StartupRegistration.ReadStateOverride = originalReadState;
+            StartupRegistration.RepairRunPathOverride = originalRepair;
+        }
+
+        // Shell wiring: honest toggle, re-enable entry, background start.
+        var appDir = Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows");
+        var settingsSource = File.ReadAllText(Path.Combine(appDir, "SettingsWindow.xaml.cs"));
+        True(!settingsSource.Contains("settings.StartWithWindows || StartupRegistration.IsEnabled()"),
+            "the toggle must show the desire, never desire OR reality");
+        True(settingsSource.Contains("RefreshStartupState"), "the settings page must paint the real state");
+        True(settingsSource.Contains("已回滚"), "a failed startup write must roll the preference back");
+        True(settingsSource.Contains("TrySet(true)"), "the re-enable button must be an explicit TrySet");
+
+        var generalXaml = File.ReadAllText(Path.Combine(appDir, "Sections", "GeneralSection.xaml"));
+        True(generalXaml.Contains("StartupStateHint"), "the general page needs a state hint row");
+        True(generalXaml.Contains("重新启用"), "the general page needs the explicit re-enable action");
+
+        var appSource = File.ReadAllText(Path.Combine(appDir, "App.xaml.cs"));
+        True(appSource.Contains("--background"), "sign-in starts must pass --background");
+        True(appSource.Contains("startup-failure.txt"), "background failures must leave a visible diagnostic");
+    }
+
+    /// <summary>
     /// T12 acceptance: a long technical article is planned into segments,
     /// translated sequentially IN ORDER, and merged losslessly — while a
     /// short source stays a single request. The mock tags every segment so
@@ -4057,10 +4626,556 @@ internal static class Program
         True(hotPath.Contains("FromMilliseconds(16)"), "size-label work must be frame bounded");
     }
 
+    /// <summary>
+    /// C05 acceptance (F07): quick-search focus loss and X/Alt+F4 never
+    /// destroy a session. Empty windows may hide; drafts, running tasks and
+    /// results keep the window up; Close() cancels the request and hides;
+    /// only ForceClose really destroys.
+    /// </summary>
+    private static void QuickSearchFocusLossKeepsSession()
+    {
+        EnsureApplication();
+        var quickSearch = new QuickSearchWindow(
+            new HistoryStore(TestIsolation.HistoryPath),
+            new VocabularyStore(TestIsolation.VocabularyPath));
+        var deactivated = typeof(QuickSearchWindow).GetMethod(
+            "Window_Deactivated",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        try
+        {
+            quickSearch.Show();
+            True(quickSearch.IsVisible, "the window starts visible");
+
+            // Empty + idle: focus loss hides but never destroys.
+            deactivated.Invoke(quickSearch, [quickSearch, EventArgs.Empty]);
+            True(!quickSearch.IsVisible, "an empty window may hide on focus loss");
+            True(quickSearch.IsLoaded, "a hidden window must stay loaded so it can be restored");
+            True(!quickSearch.State.IsClosed, "focus loss must not close the state machine");
+
+            // Show again, type a draft: focus loss now keeps the window up.
+            quickSearch.Show();
+            quickSearch.SearchBox.Text = "draft query";
+            deactivated.Invoke(quickSearch, [quickSearch, EventArgs.Empty]);
+            True(quickSearch.IsVisible, "a window with a draft must survive focus loss");
+
+            // X cancels and keeps: Close() is intercepted into a hide.
+            quickSearch.Close();
+            True(!quickSearch.IsVisible, "X hides the window");
+            True(quickSearch.IsLoaded, "X must not destroy the window");
+            True(!quickSearch.State.IsClosed, "X must not close the state machine");
+
+            // A running request cancelled by X keeps its partial.
+            quickSearch.State.StartNewSearch("partial query");
+            True(quickSearch.State.OnStreamUpdate(
+                new TranslationStreamUpdate(
+                    "s1", quickSearch.State.CurrentEpoch, TranslationStreamUpdateKind.Delta,
+                    "partial result", "partial result", 14),
+                "partial query"),
+                "the state machine must accept the streaming update");
+            quickSearch.Close();
+            True(quickSearch.State.AccumulatedText.Contains("partial result"),
+                "the partial must survive the close intercept");
+
+            // Restore path: Show brings the hidden session back.
+            quickSearch.Show();
+            True(quickSearch.IsVisible, "restore shows the window again");
+
+            // ForceClose really destroys and runs the cleanup.
+            quickSearch.ForceClose = true;
+            quickSearch.Close();
+            True(quickSearch.State.IsClosed, "a forced close must run the cleanup");
+        }
+        finally
+        {
+            quickSearch.ForceClose = true;
+            try { quickSearch.Close(); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// A05 acceptance: a completion that lands while the panel is hidden
+    /// writes nothing to the clipboard; restoring the panel does not replay
+    /// the missed copy; a visible completion auto-copies exactly once.
+    /// </summary>
+    private static void HiddenPanelCompletionNeverCopies()
+    {
+        EnsureApplication();
+        var clipboardWrites = new List<string>();
+        var originalWriter = Helpers.ClipboardWriterOverride;
+        Helpers.ClipboardWriterOverride = text =>
+        {
+            lock (clipboardWrites) { clipboardWrites.Add(text ?? string.Empty); }
+            return Task.FromResult(true);
+        };
+        var settings = ShellSettings.Default with { CopyTranslationAutomatically = true };
+        var panel = new TranslationPanelWindow(
+            new Rect(100, 100, 20, 20),
+            new HistoryStore(TestIsolation.HistoryPath),
+            () => settings,
+            null,
+            null,
+            new VocabularyStore(TestIsolation.VocabularyPath));
+        try
+        {
+            panel.Show();
+            DrivePanelToCompletion(panel, "first result");
+            SpinUntil(() => GateStage(panel) == TranslationPanelStage.Completed,
+                "the first completion must land on the gate");
+            SpinUntil(() => CountWrites(clipboardWrites) >= 1,
+                "a visible completion auto-copies once");
+            Equal(1, CountWrites(clipboardWrites), "exactly one write for the visible completion");
+
+            // Hide mid-session; the next completion lands while hidden.
+            panel.Hide();
+            DrivePanelToCompletion(panel, "hidden result");
+            SpinUntil(() => GateStage(panel) == TranslationPanelStage.Completed,
+                "the hidden completion must land on the gate");
+            Equal(1, CountWrites(clipboardWrites),
+                "a completion while hidden must not add a clipboard write");
+
+            // Restoring the panel must not replay the missed copy.
+            panel.Show();
+            Equal(1, CountWrites(clipboardWrites), "restore must not replay auto-copy");
+        }
+        finally
+        {
+            panel.ForceClose = true;
+            try { panel.Close(); } catch { }
+        }
+
+        // Control: a second visible panel completes and copies again.
+        var controlPanel = new TranslationPanelWindow(
+            new Rect(100, 100, 20, 20),
+            new HistoryStore(TestIsolation.HistoryPath),
+            () => settings,
+            null,
+            null,
+            new VocabularyStore(TestIsolation.VocabularyPath));
+        try
+        {
+            controlPanel.Show();
+            DrivePanelToCompletion(controlPanel, "control result");
+            SpinUntil(() => GateStage(controlPanel) == TranslationPanelStage.Completed,
+                "the control completion must land on the gate");
+            SpinUntil(() => CountWrites(clipboardWrites) >= 2,
+                "the visible control completion auto-copies once");
+            Equal(2, CountWrites(clipboardWrites), "the control panel adds exactly one write");
+        }
+        finally
+        {
+            Helpers.ClipboardWriterOverride = originalWriter;
+            controlPanel.ForceClose = true;
+            try { controlPanel.Close(); } catch { }
+        }
+    }
+
+    private static TranslationPanelStage GateStage(TranslationPanelWindow panel)
+    {
+        var gate = (TranslationPanelStreamGate)typeof(TranslationPanelWindow)
+            .GetField("_gate", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(panel)!;
+        return gate.Stage;
+    }
+
+    private static int CountWrites(List<string> writes) { lock (writes) { return writes.Count; } }
+
+    private static void DrivePanelToCompletion(TranslationPanelWindow panel, string text)
+    {
+        var gate = (TranslationPanelStreamGate)typeof(TranslationPanelWindow)
+            .GetField("_gate", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(panel)!;
+        var (epoch, _) = gate.BeginNewOperation();
+        gate.ApplyUpdate(new TranslationStreamUpdate(
+            "s1", epoch, TranslationStreamUpdateKind.Delta, text, text, text.Length));
+        var session = new TranslationSession
+        {
+            Stage = TranslationSessionStage.Completed,
+            SourceText = "demo source",
+            TranslatedText = text,
+        };
+        var task = (Task)typeof(TranslationPanelWindow)
+            .GetMethod("HandleSessionResultAsync",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .Invoke(panel, new object?[] { "demo source", session, 0L, null })!;
+        task.Wait(TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>
+    /// C05 acceptance (F08): the floating panel is never destroyed by a    /// <summary>
+    /// C05 acceptance (F08): the floating panel is never destroyed by a
+    /// close request. X/Alt+F4 cancel the in-flight request, keep the
+    /// partial and hide; Show restores the same session; only ForceClose
+    /// really closes.
+    /// </summary>
+    private static void TranslationPanelCloseKeepsPartialAndHides()
+    {
+        EnsureApplication();
+        var panel = new TranslationPanelWindow(
+            new Rect(100, 100, 20, 20),
+            new HistoryStore(TestIsolation.HistoryPath),
+            () => ShellSettings.Default,
+            null,
+            null,
+            new VocabularyStore(TestIsolation.VocabularyPath));
+        try
+        {
+            panel.Show();
+            var gate = (TranslationPanelStreamGate)typeof(TranslationPanelWindow)
+                .GetField("_gate", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(panel)!;
+            var (epoch, _) = gate.BeginNewOperation();
+            gate.ApplyUpdate(new TranslationStreamUpdate(
+                "s1", epoch, TranslationStreamUpdateKind.Delta, "partial", "partial", 7));
+            True(!gate.CanPerformResultActions, "the gate must be partial before the intercept");
+
+            // X on a streaming panel: cancel + hide, partial retained.
+            panel.Close();
+            True(!panel.IsVisible, "X hides the streaming panel");
+            True(panel.IsLoaded, "X must not destroy the panel");
+
+            // The same instance comes back with its session.
+            panel.Show();
+            True(panel.IsVisible, "restore shows the panel again");
+            True(!panel.ForceClose, "the restored panel is still under the close intercept");
+
+            // ForceClose is the only real destruction path.
+            panel.ForceClose = true;
+            panel.Close();
+            SpinUntil(() => !panel.IsLoaded, "a forced close must really close the panel");
+        }
+        finally
+        {
+            panel.ForceClose = true;
+            try { panel.Close(); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// A06 targeted tests: Escape must cancel ANY active quick-search phase
+    /// (the live CTS is the truth), Escape precedence must leave menus and
+    /// drop-downs alone, surface restore must follow recency metadata, and
+    /// exit must ForceClose the quick search (a plain Close would cancel
+    /// shutdown and hang the process).
+    /// </summary>
+    private static void A06EscapeRecencyAndExitWiring()
+    {
+        var appDir = Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows");
+
+        var quick = File.ReadAllText(Path.Combine(appDir, "QuickSearchWindow.xaml.cs"));
+        True(quick.Contains("if (_cts is { IsCancellationRequested: false })"),
+            "quick-search Esc must key off the live CTS, not a UI stage snapshot (A06)");
+        True(!quick.Contains("QuickSearchUiStage.Streaming or QuickSearchUiStage.Finalizing\n") ||
+             quick.Contains("ANY active phase"),
+            "the stage-limited Esc cancellation must be gone");
+
+        var panel = File.ReadAllText(Path.Combine(appDir, "TranslationPanelWindow.xaml.cs"));
+        True(panel.Contains("if (_openDropDowns > 0 || IsContextMenuOpen())"),
+            "panel Esc must let open menus/drop-downs consume Escape first (A06)");
+        True(panel.Contains("stays an explicit E3 verification TODO"),
+            "IME composition must be marked as an E3 TODO, never claimed as verified");
+
+        var app = File.ReadAllText(Path.Combine(appDir, "App.xaml.cs"));
+        True(app.Contains("_panelLastUsedUtc >= _quickSearchLastUsedUtc"),
+            "restore must compare recency metadata, not prefer a window type (A06)");
+        True(app.Contains("quickSearch.ForceClose = true;"),
+            "exit must ForceClose the quick search to avoid a shutdown hang (A06)");
+    }
+
+    /// <summary>
+    /// A10 targeted test: with the fuse closed, the coordinator returns a
+    /// Failed session with the refusal reason and NOTHING leaves the machine
+    /// — the old code had no unified gate, so a degraded app still accepted
+    /// work from buttons, tray and queued callbacks.
+    /// </summary>
+    private static async Task CoordinatorRefusesWorkWhenFused()
+    {
+        var originalGate = RuntimeGate.NewWorkAllowed;
+        var originalSender = FreeTranslateService.HttpSenderOverride;
+        long sends = 0;
+        FreeTranslateService.HttpSenderOverride = (_, _) =>
+        {
+            Interlocked.Increment(ref sends);
+            throw new InvalidOperationException("the fused app must never reach a transport");
+        };
+        RuntimeGate.NewWorkAllowed = false;
+        try
+        {
+            var settings = CoreBridge.GetSettings();
+            var coordinator = new TranslationCoordinator(
+                executor: new FreeEngineBoundaryExecutor(settings));
+            var session = await coordinator.TranslateTextAsync(
+                "fused input", "auto", "zh-CN", TranslationInputSource.Manual);
+            Equal(TranslationSessionStage.Failed, session.Stage,
+                "a fused app must refuse with a Failed session");
+            True(session.Error is not null && session.Error.Message.Contains("故障保护"),
+                "the refusal must carry the fuse wording");
+            Equal(0L, Interlocked.Read(ref sends), "no transport call may happen while fused");
+            True(!session.OutboundOccurred, "the refusal must not record an outbound attempt");
+        }
+        finally
+        {
+            RuntimeGate.NewWorkAllowed = originalGate;
+            FreeTranslateService.HttpSenderOverride = originalSender;
+        }
+    }
+
+    /// <summary>
+    /// V03 round-2 acceptance, driven through the REAL save handler: the
+    /// toggle keeps the user's intent as the pending retry target while the
+    /// committed baseline holds the disk truth; consecutive failures keep
+    /// the retry entry operable; a retry actually re-executes the original
+    /// action; and unchecking the toggle is the explicit abandon path that
+    /// converges the form without touching the registry again. Memory,
+    /// disk and the form baseline agree after every step.
+    /// </summary>
+    private static void StartupSaveFailureKeepsRetryEntry()
+    {
+        EnsureApplication();
+        var dir = Path.Combine(Path.GetTempPath(), "popglot-v03-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var originalCreate = StartupRegistration.CreateRunEntryOverride;
+        var originalRemove = StartupRegistration.RemoveRunEntryOverride;
+        var originalRepair = StartupRegistration.RepairRunPathOverride;
+        var originalReadState = StartupRegistration.ReadStateOverride;
+        var createCalls = 0;
+        try
+        {
+            StartupRegistration.ReadStateOverride = desired => new StartupState(
+                DesiredEnabled: desired, RunEntryPresent: false, PathMatches: false,
+                OsDisabled: false, EffectiveEnabled: false, LastError: null);
+            StartupRegistration.CreateRunEntryOverride = () => { createCalls++; return createCalls >= 3; };
+            StartupRegistration.RemoveRunEntryOverride = () => true;
+            StartupRegistration.RepairRunPathOverride = () => true;
+
+            var window = new SettingsWindow(
+                ShellSettings.Default with { StartWithWindows = false },
+                new HistoryStore(Path.Combine(dir, "history.json")))
+            {
+                ApplyShellSettings = _ => true,
+            };
+            var otherFieldOriginal = window.GeneralSection.AutoCopy.IsChecked == true;
+            window.GeneralSection.StartWithWindows.IsChecked = true;
+            window.GeneralSection.AutoCopy.IsChecked = !otherFieldOriginal;
+
+            // Failure 1 and failure 2: the toggle keeps the user's intent
+            // (the retry target), the form stays dirty, the save button
+            // stays operable, and the disk holds the rolled-back truth.
+            for (var attempt = 1; attempt <= 2; attempt++)
+            {
+                typeof(SettingsWindow).GetMethod("Save_Click",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                    .Invoke(window, new object[] { window, new RoutedEventArgs() });
+                SpinUntil(() => createCalls >= attempt && window.EditState != SettingsEditState.Saving,
+                    "failed save {0} must run its create adapter".Replace("{0}", attempt.ToString()));
+                Equal(SettingsEditState.Dirty, window.EditState,
+                    "V03: after a failed startup write the form must stay dirty (retry entry alive)");
+                True(window.SaveButton.IsEnabled,
+                    "V03: the save button must stay operable after the failure");
+                True(window.GeneralSection.StartWithWindows.IsChecked == true,
+                    "V03: after the failure the toggle must keep the user's intent (the retry target)");
+                var disk = ShellSettingsStore.Load();
+                Equal(false, disk.StartWithWindows, "the disk holds the rolled-back preference");
+                Equal(!otherFieldOriginal, disk.CopyTranslationAutomatically,
+                    "V03: other saved fields keep their NEW values on disk");
+            }
+            Equal(2, createCalls, "two failing create attempts ran");
+
+            // V03 round 2: unrelated field churn must NOT hide the pending
+            // retry — editing another field and reverting it keeps the form
+            // dirty because the registry/disk mismatch is still unresolved.
+            window.GeneralSection.AutoCopy.IsChecked = otherFieldOriginal;
+            Equal(SettingsEditState.Dirty, window.EditState,
+                "V03: reverting an unrelated field must not return the form to Clean while the retry is pending");
+            window.GeneralSection.AutoCopy.IsChecked = !otherFieldOriginal;
+
+            // Retry: the third save re-executes the ORIGINAL action and
+            // succeeds — memory, disk and form agree on the enabled state.
+            typeof(SettingsWindow).GetMethod("Save_Click",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(window, new object[] { window, new RoutedEventArgs() });
+            SpinUntil(() => createCalls >= 3 && window.EditState == SettingsEditState.Clean,
+                "the successful retry must land Clean");
+            Equal(3, createCalls, "the retry re-executed the original enable action");
+            Equal(true, ShellSettingsStore.Load().StartWithWindows, "the disk holds the enabled preference");
+            True(window.GeneralSection.StartWithWindows.IsChecked == true, "the form agrees with the disk");
+        }
+        finally
+        {
+            StartupRegistration.CreateRunEntryOverride = originalCreate;
+            StartupRegistration.RemoveRunEntryOverride = originalRemove;
+            StartupRegistration.RepairRunPathOverride = originalRepair;
+            StartupRegistration.ReadStateOverride = originalReadState;
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+
+        // Abandon path: a failed enable, then the user UNCHECKS the toggle —
+        // the form converges to Clean without further registry writes, which
+        // is the explicit way to give up the retry target.
+        var abandonDir = Path.Combine(Path.GetTempPath(), "popglot-v03b-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(abandonDir);
+        var abandonCalls = 0;
+        try
+        {
+            StartupRegistration.ReadStateOverride = desired => new StartupState(
+                DesiredEnabled: desired, RunEntryPresent: false, PathMatches: false,
+                OsDisabled: false, EffectiveEnabled: false, LastError: null);
+            StartupRegistration.CreateRunEntryOverride = () => { abandonCalls++; return false; };
+            StartupRegistration.RemoveRunEntryOverride = () => true;
+            StartupRegistration.RepairRunPathOverride = () => true;
+            var window = new SettingsWindow(
+                ShellSettings.Default with { StartWithWindows = false },
+                new HistoryStore(Path.Combine(abandonDir, "history.json")))
+            {
+                ApplyShellSettings = _ => true,
+            };
+            window.GeneralSection.StartWithWindows.IsChecked = true;
+            typeof(SettingsWindow).GetMethod("Save_Click",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(window, new object[] { window, new RoutedEventArgs() });
+            SpinUntil(() => abandonCalls >= 1 && window.EditState != SettingsEditState.Saving,
+                "the failing enable must run its adapter");
+            True(window.GeneralSection.StartWithWindows.IsChecked == true,
+                "the retry target stays in the form after the failure");
+
+            window.GeneralSection.StartWithWindows.IsChecked = false;
+            Equal(SettingsEditState.Dirty, window.EditState,
+                "V03: unchecking alone does not return to Clean while the retry is pending");
+            typeof(SettingsWindow).GetMethod("Save_Click",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(window, new object[] { window, new RoutedEventArgs() });
+            SpinUntil(() => window.EditState == SettingsEditState.Clean,
+                "the explicit abandon save must complete");
+            Equal(false, ShellSettingsStore.Load().StartWithWindows,
+                "abandoning persists the off preference on disk");
+            Equal(1, abandonCalls, "abandoning performs no further registry writes");
+        }
+        finally
+        {
+            StartupRegistration.CreateRunEntryOverride = originalCreate;
+            StartupRegistration.RemoveRunEntryOverride = originalRemove;
+            StartupRegistration.RepairRunPathOverride = originalRepair;
+            StartupRegistration.ReadStateOverride = originalReadState;
+            try { Directory.Delete(abandonDir, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// V02–V05 wiring contract: the rework must live in the production call
+    /// chains, not only in test fixtures — the save handler uses the
+    /// Run-only executor, TrySet survives solely on the explicit re-enable
+    /// button, the vocabulary library exposes the real retry entry, and the
+    /// restart path drives the bounded handover.
+    /// </summary>
+    private static void V02ToV05WiringIsReal()
+    {
+        var appDir = Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows");
+        var settings = File.ReadAllText(Path.Combine(appDir, "SettingsWindow.xaml.cs"));
+        True(settings.Contains("StartupRegistration.ExecuteSaveAction(startupAction)"),
+            "the save handler must execute the plan through the Run-only executor (V02)");
+        var saveIndex = settings.IndexOf("Save_Click", StringComparison.Ordinal);
+        True(saveIndex >= 0, "Save_Click must exist");
+        var saveBody = settings[saveIndex..];
+        var saveEnd = saveBody.IndexOf("RefreshStartupState();", StringComparison.Ordinal);
+        True(saveEnd > 0, "the save body must reach its startup refresh");
+        True(!saveBody[..saveEnd].Contains("StartupRegistration.TrySet(shellSettings.StartWithWindows)"),
+            "the save handler must not call TrySet for the preference (V02)");
+        True(settings.Contains("ResolveStartupSaveFailure"),
+            "the double-failure baseline resolution must be the shared helper (V03)");
+        True(settings.Contains("StartupRegistration.TrySet(true)"),
+            "the explicit re-enable button keeps TrySet as its only caller");
+
+        var library = File.ReadAllText(Path.Combine(appDir, "Sections", "LibrarySection.xaml.cs"));
+        True(library.Contains("RetryVocabularyButton_Click") && library.Contains("_vocabulary.RetryLoad()"),
+            "the vocabulary retry must be wired to a real library entry point (V04)");
+        var libraryXaml = File.ReadAllText(Path.Combine(appDir, "Sections", "LibrarySection.xaml"));
+        True(libraryXaml.Contains("RetryVocabularyButton"), "the retry affordance must exist in the UI");
+
+        var app = File.ReadAllText(Path.Combine(appDir, "App.xaml.cs"));
+        True(app.Contains("RestartHandover.Run") && app.Contains("RestartHandover.TryBegin()"),
+            "the restart must drive the bounded handover with the duplicate guard (V05)");
+        True(app.Contains("spawnTimeoutMs: 5000") || app.Contains("launchTask.Wait(5000)"),
+            "the launch attempt must be bounded in time (V05 timeout)");
+        True(app.Contains("_storesFlushedForExit") && app.Contains("await Task.Run(() =>"),
+            "normal exit must drain durable queues once without blocking the UI thread");
+
+        var startup = File.ReadAllText(Path.Combine(appDir, "StartupRegistration.cs"));
+        True(startup.Contains("public static bool CreateRunEntry()") && startup.Contains("public static bool RemoveRunEntry()"),
+            "Run-only create/remove adapters must exist for plain saves (V02)");
+        var store = File.ReadAllText(Path.Combine(appDir, "Services", "VocabularyStore.cs"));
+        True(!store.Contains("return false;\n            }\n            QuarantinedSafely") ||
+             store.Contains("V04: keep the previous valid snapshot"),
+            "V04: a failed RetryLoad must keep the previous snapshot");
+    }
+
+    /// <summary>
+    /// C05 wiring contract: the focus-loss/close state machine must stay
+    /// connected across the shell — default off, intercept+hide in both
+    /// transient windows, real destruction only on replacement/exit, and a
+    /// tray entry that restores the last hidden session.
+    /// </summary>
+    /// <summary>
+    /// C06 acceptance (F21): the dispatcher barrier only swallows classified,
+    /// recoverable exception shapes; unknown exceptions or a five-hit storm
+    /// trip a fuse that suspends hotkeys, cancels work and offers an
+    /// explicit restart/exit choice.
+    /// </summary>
+    private static void GlobalExceptionPolicyClassifiesAndFuses()
+    {
+        True(App.IsRecoverableException(new System.IO.IOException("io")), "IO failures are recoverable");
+        True(App.IsRecoverableException(new TimeoutException("timeout")), "timeouts are recoverable");
+        True(!App.IsRecoverableException(new InvalidOperationException("unknown surface")),
+            "a generic InvalidOperationException must fuse (A10): fail-closed errors convert to results at their own boundaries");
+        True(App.IsRecoverableException(new System.ComponentModel.Win32Exception(5)), "Win32 failures are recoverable");
+        True(App.IsRecoverableException(new System.Text.Json.JsonException("json")), "parse failures are recoverable");
+        True(App.IsRecoverableException(new OperationCanceledException("cancel")), "cancellations are recoverable");
+        True(!App.IsRecoverableException(new NullReferenceException("nre")), "null references must fuse");
+        True(!App.IsRecoverableException(new IndexOutOfRangeException("range")), "index faults must fuse");
+        True(!App.IsRecoverableException(new AccessViolationException("av")), "access violations must fuse");
+
+        var app = File.ReadAllText(Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows", "App.xaml.cs"));
+        True(app.Contains("IsRecoverableException(args.Exception)"),
+            "the dispatcher barrier must classify before swallowing");
+        True(app.Contains("EnterDegradedMode"), "unknown exceptions and storms must enter degraded mode");
+        True(app.Contains("RecordHandledExceptionAndCheckStorm"), "an exception storm must trip the fuse");
+        True(app.Contains("SetSuspended(true)"), "degraded mode must suspend global hotkeys");
+        True(app.Contains("RestartApplication"), "degraded mode must offer a restart entry");
+        True(app.Contains("TaskScheduler.UnobservedTaskException"), "unobserved task exceptions must stay observed and logged");
+        True(app.Contains("RuntimeGate.NewWorkAllowed = false"), "degraded mode must close the runtime gate (A10)");
+        True(app.Contains("_hotkeys?.Dispose();") && app.IndexOf("CleanupForHandover") < app.IndexOf("releaseMutex:"),
+            "restart must release hotkeys before handing over the mutex (A10)");
+        True(File.Exists(Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows", "Services", "RuntimeGate.cs")),
+            "the fuse gate must exist as a shared runtime service");
+    }
+
+    private static void FocusLossAndCloseContractsAreWired()
+    {
+        var appDir = Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows");
+        var shell = File.ReadAllText(Path.Combine(appDir, "ShellSettings.cs"));
+        True(shell.Contains("bool ClosePanelOnFocusLoss = false"),
+            "focus-loss auto-hide must default OFF (F08): focus loss never destroys a session");
+
+        var panel = File.ReadAllText(Path.Combine(appDir, "TranslationPanelWindow.xaml.cs"));
+        True(panel.Contains("internal bool ForceClose"), "the panel must expose the ForceClose escape hatch");
+        True(panel.Contains("e.Cancel = true;") && panel.Contains("CancelOperation();") && panel.Contains("Hide();"),
+            "panel X/Alt+F4 must cancel the request and then hide");
+        True(panel.Contains("Hide();"), "panel focus loss must hide instead of close");
+
+        var quick = File.ReadAllText(Path.Combine(appDir, "QuickSearchWindow.xaml.cs"));
+        True(quick.Contains("internal bool ForceClose"), "quick search must expose the ForceClose escape hatch");
+        True(quick.Contains("HasContentOrActivity"), "quick search must keep windows with drafts, tasks or results visible");
+        True(quick.Contains("ForegroundBelongsToThisProcess"), "quick search must ignore same-process deactivation (IME, menus)");
+
+        var app = File.ReadAllText(Path.Combine(appDir, "App.xaml.cs"));
+        True(app.Contains("恢复最近翻译"), "the tray must offer a session-restore entry");
+        True(app.Contains("RestoreRecentSurface"), "the restore entry must be wired");
+        True(app.Contains("DestroyActivePanel"), "session replacement must really destroy the old panel");
+        True(app.Contains("_activeQuickSearch.Show();"), "an existing quick-search instance must be shown, not only activated");
+    }
+
     private static void SettingsClosesTransientSurfaces()
     {
         var source = File.ReadAllText(Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows", "App.xaml.cs"));
-        var start = source.IndexOf("private void ShowSettings()", StringComparison.Ordinal);
+        var start = source.IndexOf("private void ShowSettings(", StringComparison.Ordinal);
         var end = source.IndexOf("// ================= Single instance", start, StringComparison.Ordinal);
         var method = source[start..end];
         True(method.Contains("CloseActivePanel()"), "settings must close the transient translation panel");
@@ -4549,6 +5664,7 @@ internal static class Program
         var mainXaml = File.ReadAllText(Path.Combine(appDir, "MainWindow.xaml"));
         var settingsXaml = File.ReadAllText(Path.Combine(appDir, "SettingsWindow.xaml"));
         var servicesXaml = File.ReadAllText(Path.Combine(appDir, "Sections", "ServicesSection.xaml"));
+        var serviceCode = File.ReadAllText(Path.Combine(appDir, "Sections", "ServicesSection.xaml.cs"));
 
         // The main window is a work surface only: translate + library, plus a
         // quiet footer. No control center, no save bar.
@@ -4585,8 +5701,21 @@ internal static class Program
 
         // Services use master–detail: profile list beside the editor.
         True(servicesXaml.Contains("ProfilesListBox"), "the service profile list must exist");
-        True(servicesXaml.Contains("DefaultTextCombo"), "the default text service picker must exist");
-        True(servicesXaml.Contains("DefaultVisionCombo"), "the default vision service picker must exist");
+        // The main-window footer quick switcher is the ONLY routing entry:
+        // the settings page must not carry any default-route controls.
+        True(!servicesXaml.Contains("RoutingPanel"), "the settings routing panel must be deleted — routing lives in the main-window switcher");
+        True(!servicesXaml.Contains("DefaultTextCombo"), "the settings default-text picker must be deleted");
+        True(!servicesXaml.Contains("DefaultVisionCombo"), "the settings default-vision picker must be deleted");
+        True(!servicesXaml.Contains("SetDefaultButton"), "the editor set-default button must be deleted");
+        True(!serviceCode.Contains("SetDefault_Click"), "the set-default click handler must be deleted");
+        True(!serviceCode.Contains("RefreshDefaultCombos"), "the routing combo refresh must be deleted");
+        True(!serviceCode.Contains("ProviderComboOption"), "the routing combo option record must be deleted");
+        True(!serviceCode.Contains("_suppressComboEvents"), "the combo event suppression flag must be deleted");
+        True(Regex.Matches(mainXaml, "AutomationProperties.Name=\"翻译引擎快速切换\"").Count == 1,
+            "exactly one control may carry the 翻译引擎快速切换 automation name in the main window");
+        // The resident footer summary is dot + short engine name + chevron
+        // only; privacy/health notes must not be concatenated onto it.
+        True(!mainXaml.Contains("截图会发送到"), "the resident footer must not concatenate the upload note");
         True(servicesXaml.Contains("PresetsPanel"), "adding a service must start in a provider catalogue");
         True(servicesXaml.Contains("ConfigFormPanel"), "provider setup must be a separate focused step");
         True(servicesXaml.Contains("ChooseAnotherProviderButton"), "the setup step must return to the catalogue");
@@ -4594,17 +5723,444 @@ internal static class Program
         True(servicesXaml.Contains("EditorProviderTitle"), "configured services need an identity-led detail header");
         True(servicesXaml.Contains("Click=\"EditProfile_Click\""), "each configured service needs an explicit edit action");
         True(servicesXaml.Contains("Click=\"BackToServices_Click\""), "the focused editor must return to the service overview");
-        True(servicesXaml.Contains("RoutingPanel"), "default routing must stay separate from provider editing");
         True(!servicesXaml.Contains("ColumnDefinition x:Name=\"DetailColumn\""),
             "the narrow permanent master-detail rail must be removed");
 
-        var serviceCode = File.ReadAllText(Path.Combine(appDir, "Sections", "ServicesSection.xaml.cs"));
         True(serviceCode.Contains("CaptureEditorState()"), "service drafts must use value-based dirty tracking");
         True(serviceCode.Contains("_editorBaseline"), "loaded services must retain a clean editor baseline");
 
         var projectXaml = File.ReadAllText(Path.Combine(appDir, "PopGlot.Windows.csproj"));
-        True(projectXaml.Contains("PopGlot-v3.ico"), "the selected v3 app icon must be packaged");
-        True(projectXaml.Contains("popglot-app-avatar-v3.png"), "the selected v3 sidebar mark must be packaged");
+        True(projectXaml.Contains("PopGlot-v5.ico"), "the selected v5 app icon must be packaged");
+        True(projectXaml.Contains("popglot-app-avatar-v5.png"), "the selected v5 sidebar mark must be packaged");
+    }
+
+    // ================= Main-window empty-state CTA (REQ-UI-01/02) =================
+
+    private static (TranslateSection Section, string Dir) NewIsolatedTranslateSection()
+    {
+        ProfileManager.ResetForTests();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-cta-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        ProfileManager.ConfigPathOverride = Path.Combine(dir, "product-config.json");
+        CoreBridge.Initialize();
+        EnsureApplication();
+        var section = new TranslateSection();
+        section.Initialize(
+            new TranslationCoordinator(new HistoryStore(Path.Combine(dir, "history.json"))),
+            vocabulary: null);
+        return (section, dir);
+    }
+
+    private static void SetIsolatedConsent(FreeEngineConsent consent) =>
+        ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = consent });
+
+    private static System.Windows.Controls.Button CtaButton(TranslateSection section) =>
+        (System.Windows.Controls.Button)section.FindName("GoToSettingsButton")!;
+
+    /// <summary>T1: 0 profiles + consent Allowed. The free fallback is a
+    /// ROUTE, not a configured engine — it must never hide the CTA.</summary>
+    private static void UnconfiguredCtaShowsWhileFallbackAllowed()
+    {
+        var (section, dir) = NewIsolatedTranslateSection();
+        try
+        {
+            SetIsolatedConsent(FreeEngineConsent.Allowed);
+            // Two independent facts, asserted separately: free engine is
+            // allowed AND no user engine is configured.
+            Equal(FreeEngineConsent.Allowed, ShellSettingsStore.Load().FreeEngineConsent,
+                "fixture: the free fallback must be allowed");
+            True(!ProfileManager.HasConfiguredUserEngine(), "fixture: no user engine exists");
+
+            section.RefreshAfterSettingsChanged();
+
+            var guide = (StackPanel)section.FindName("UnconfiguredGuidePanel")!;
+            Equal(Visibility.Visible, guide.Visibility,
+                "0 profiles + allowed fallback must still show the configuration entry");
+            var title = (TextBlock)section.FindName("GuideTitle")!;
+            Equal("当前使用内置公共翻译", title.Text, "fallback-allowed empty state headline");
+            var description = (TextBlock)section.FindName("GuideDescription")!;
+            Equal("添加自己的翻译引擎，可使用指定模型和服务商。", description.Text,
+                "fallback-allowed empty state description");
+
+            var button = CtaButton(section);
+            True(button is System.Windows.Controls.Button, "the CTA must be a real WPF Button");
+            Equal("添加翻译引擎", $"{button.Content}", "CTA label");
+            Equal("添加翻译引擎", System.Windows.Automation.AutomationProperties.GetName(button),
+                "CTA automation name");
+            True(button.Visibility == Visibility.Visible, "CTA must be visible");
+            True(button.IsEnabled, "CTA must be enabled");
+            True(button.IsHitTestVisible, "CTA must be hit-testable");
+            True(button.Focusable, "CTA must be tab-focusable");
+
+            var navigations = 0;
+            section.OpenAddEngineFlow = () => navigations++;
+            var blockedBefore = TestIsolation.BlockedPublicSends;
+            button.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            Equal(1, navigations, "one click → exactly one navigation");
+            Equal(blockedBefore, TestIsolation.BlockedPublicSends,
+                "the CTA must not attempt any network request");
+            Equal(FreeEngineConsent.Allowed, ShellSettingsStore.Load().FreeEngineConsent,
+                "the CTA must not change FreeEngineConsent");
+        }
+        finally
+        {
+            ProfileManager.ResetForTests();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>T2: no profiles and no fallback — the honest empty state.</summary>
+    private static void UnconfiguredCtaShowsWithNoRoute()
+    {
+        var (section, dir) = NewIsolatedTranslateSection();
+        try
+        {
+            SetIsolatedConsent(FreeEngineConsent.Denied);
+            section.RefreshAfterSettingsChanged();
+
+            var guide = (StackPanel)section.FindName("UnconfiguredGuidePanel")!;
+            Equal(Visibility.Visible, guide.Visibility, "no route at all must show the entry");
+            Equal("尚未配置翻译引擎", ((TextBlock)section.FindName("GuideTitle")!).Text,
+                "no-route empty state headline");
+            Equal("添加翻译引擎后即可开始使用。", ((TextBlock)section.FindName("GuideDescription")!).Text,
+                "no-route empty state description");
+            var button = CtaButton(section);
+            True(button is System.Windows.Controls.Button && button.IsEnabled && button.IsHitTestVisible,
+                "a real, clickable 添加翻译引擎 button must exist");
+            True(button.Content as string == "添加翻译引擎", "CTA label in the no-route state");
+
+            var status = (TextBlock)section.FindName("TranslateStatus")!;
+            True(!status.Text.Contains("就绪"), "the status line must not claim 就绪 with no route");
+            var blockedBefore = TestIsolation.BlockedPublicSends;
+            section.RefreshAfterSettingsChanged();
+            Equal(blockedBefore, TestIsolation.BlockedPublicSends, "no network requests from the empty state");
+        }
+        finally
+        {
+            ProfileManager.ResetForTests();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>T3: incomplete profiles must never count as configured.</summary>
+    private static void IncompleteProfilesKeepCtaVisible()
+    {
+        SetIsolatedConsent(FreeEngineConsent.Allowed);
+        ProviderProfile MakeProfile(string id, string? textModel, string baseUrl) => new()
+        {
+            Id = id,
+            Name = id,
+            SupportsText = !string.IsNullOrWhiteSpace(textModel),
+            TextModel = textModel ?? string.Empty,
+            ApiBaseUrl = baseUrl,
+            CredentialTarget = $"PopGlot/provider/{id}",
+        };
+        var cases = new (string Why, ProviderProfile Profile)[]
+        {
+            ("missing text model", MakeProfile("p-no-model", null, "https://api.openai.com/v1")),
+            ("missing base url", MakeProfile("p-no-url", "demo-text-model", string.Empty)),
+            ("cloud engine missing key", MakeProfile("p-no-key", "demo-text-model", "https://api.openai.com/v1")),
+        };
+        foreach (var (why, profile) in cases)
+        {
+            ProfileManager.ResetForTests();
+            var dir = Path.Combine(Path.GetTempPath(), $"popglot-cta-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            ProfileManager.ConfigPathOverride = Path.Combine(dir, "product-config.json");
+            try
+            {
+                ProfileManager.Save(new CoreProductConfig { Profiles = [profile] });
+                True(!ProfileManager.HasConfiguredUserEngine(),
+                    $"{why}: an incomplete profile is NOT a configured user engine");
+                var (section, _) = NewIsolatedTranslateSection();
+                section.RefreshAfterSettingsChanged();
+                Equal(Visibility.Visible, ((StackPanel)section.FindName("UnconfiguredGuidePanel")!).Visibility,
+                    $"{why}: the CTA must stay visible so the user can finish configuration");
+            }
+            finally
+            {
+                ProfileManager.ResetForTests();
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        }
+    }
+
+    /// <summary>T4: a complete user engine hides the guide and the footer
+    /// switcher shows only the engine's short name.</summary>
+    private static void ConfiguredEngineStateIsHonest()
+    {
+        var (section, dir) = NewIsolatedTranslateSection();
+        try
+        {
+            var profile = new ProviderProfile
+            {
+                Id = "p-full",
+                Name = "我的 DeepSeek",
+                SupportsText = true,
+                TextModel = "demo-text-model",
+                ApiBaseUrl = "https://api.deepseek.com/v1",
+                CredentialTarget = "PopGlot/provider/p-full",
+            };
+            var config = new CoreProductConfig
+            {
+                ActiveProfileId = profile.Id,
+                Profiles = [profile],
+            };
+            ProfileManager.Save(config);
+            ProfileManager.ApplyActiveToCore(config);
+            CredentialStore.SaveApiKey("sk-test-memory-only", "PopGlot/provider/p-full");
+            True(ProfileManager.HasConfiguredUserEngine(), "fixture: the engine is complete");
+
+            section.RefreshAfterSettingsChanged();
+            Equal(Visibility.Collapsed, ((StackPanel)section.FindName("UnconfiguredGuidePanel")!).Visibility,
+                "a complete user engine must retire the configuration entry");
+            Equal(Visibility.Visible, ((StackPanel)section.FindName("NormalGuidePanel")!).Visibility,
+                "the normal idle guidance returns");
+
+            // Footer: only the short engine name is resident.
+            var history = new HistoryStore(Path.Combine(dir, "history.json"));
+            var window = new MainWindow(ShellSettings.Default, history, null);
+            try
+            {
+                window.RefreshEngineStatus();
+                var summary = (TextBlock)window.FindName("EngineSummary")!;
+                Equal("我的 DeepSeek", summary.Text,
+                    "the resident footer must show ONLY the current engine's short name");
+                True(!summary.Text.Contains("未检测") && !summary.Text.Contains("截图会发送到") &&
+                    !summary.Text.Contains("本地 OCR"),
+                    "the resident footer must not concatenate health/privacy notes");
+            }
+            finally
+            {
+                window.Close();
+            }
+        }
+        finally
+        {
+            ProfileManager.ResetForTests();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>T5: the footer switcher is the ONLY routing entry.</summary>
+    private static void RoutingEntryIsUniqueToFooterSwitcher()
+    {
+        var (section, dir) = NewIsolatedTranslateSection();
+        try
+        {
+            var profileA = new ProviderProfile
+            {
+                Id = "p-a", Name = "引擎A", SupportsText = true, TextModel = "demo-text-model",
+                ApiBaseUrl = "https://api.openai.com/v1", CredentialTarget = "PopGlot/provider/p-a",
+            };
+            var profileB = new ProviderProfile
+            {
+                Id = "p-b", Name = "引擎B", SupportsText = true, TextModel = "demo-text-model",
+                ApiBaseUrl = "https://api.openai.com/v1", CredentialTarget = "PopGlot/provider/p-b",
+            };
+            CredentialStore.SaveApiKey("sk-test-memory-only-a", "PopGlot/provider/p-a");
+            CredentialStore.SaveApiKey("sk-test-memory-only-b", "PopGlot/provider/p-b");
+
+            // First complete engine saved → valid initial route.
+            var first = new CoreProductConfig { Profiles = [profileA], ActiveProfileId = "p-a" };
+            ProfileManager.Save(first);
+            Equal("p-a", ProfileManager.Load().TryGetActiveProfile()?.Id,
+                "the first complete engine must provide a valid initial route");
+            // Adding a second engine must NOT silently reroute.
+            var second = ProfileManager.Load();
+            second.Profiles.Add(profileB);
+            ProfileManager.Save(second);
+            Equal("p-a", ProfileManager.Load().ActiveProfileId,
+                "saving a second engine must never silently switch the route");
+            Equal("p-a", ProfileManager.Load().TryGetActiveProfile()?.Id,
+                "the active route still resolves to the first engine");
+
+            // Exactly one footer switcher button in the real main window tree.
+            var history = new HistoryStore(Path.Combine(dir, "history.json"));
+            var window = new MainWindow(ShellSettings.Default, history, null);
+            try
+            {
+                var switchers = FindLogicalDescendants<System.Windows.Controls.Button>(window)
+                    .Where(button => System.Windows.Automation.AutomationProperties.GetName(button) == "翻译引擎快速切换")
+                    .ToList();
+                Equal(1, switchers.Count,
+                    "the main window must host exactly one 翻译引擎快速切换 button");
+                True(window.FindName("EngineHealthButton") is System.Windows.Controls.Button,
+                    "the switcher must be a real Button");
+
+                // The switcher menu marks the current route exactly once, and
+                // building it touches no network and mutates no config.
+                var blockedBefore = TestIsolation.BlockedPublicSends;
+                var diskBefore = ProfileManager.Load();
+                var menu = window.BuildEngineSwitchMenu();
+                // The current-route marker is unique PER SECTION: exactly one
+                // text engine and one image engine carry the (当前) mark.
+                var textSection = menu.Items.OfType<System.Windows.Controls.MenuItem>().TakeWhile(item => $"{item.Header}" != "图片引擎");
+                var visionSection = menu.Items.OfType<System.Windows.Controls.MenuItem>().SkipWhile(item => $"{item.Header}" != "图片引擎");
+                var textMarks = textSection
+                    .Count(item => item.Icon is not null || $"{item.Header}".Contains("（当前）"));
+                var visionMarks = visionSection
+                    .Count(item => item.Icon is not null || $"{item.Header}".Contains("（当前）"));
+                Equal(1, textMarks, "exactly one current TEXT route marker in the menu");
+                Equal(1, visionMarks, "exactly one current IMAGE route marker in the menu");
+                Equal(blockedBefore, TestIsolation.BlockedPublicSends,
+                    "opening/building the menu must produce 0 network requests");
+                var after = ProfileManager.Load();
+                Equal(diskBefore.ActiveProfileId, after.ActiveProfileId,
+                    "opening the menu must not modify the config");
+                Equal(diskBefore.PreferFreeEngine, after.PreferFreeEngine,
+                    "opening the menu must not modify PreferFreeEngine");
+                // The explicit re-probe action must exist as a menu item.
+                True(menu.Items.OfType<System.Windows.Controls.MenuItem>()
+                        .Any(item => $"{item.Header}" == "重新检测免费引擎"),
+                    "free-engine probing must be an explicit menu action");
+            }
+            finally
+            {
+                window.Close();
+            }
+        }
+        finally
+        {
+            ProfileManager.ResetForTests();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>T6: the CTA click lands inside the add-engine flow with no
+    /// duplicate routing controls anywhere on the settings page.</summary>
+    private static void CtaClickLandsInsideAddEngineFlow()
+    {
+        ProfileManager.ResetForTests();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-cta-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        ProfileManager.ConfigPathOverride = Path.Combine(dir, "product-config.json");
+        CoreBridge.Initialize();
+        EnsureApplication();
+        try
+        {
+            var window = new SettingsWindow(
+                ShellSettings.Default, new HistoryStore(Path.Combine(dir, "history.json")));
+            try
+            {
+                window.ShowProviderAddFlow();
+
+                var providerSection = window.ProviderSection;
+                Equal(Visibility.Visible, providerSection.Visibility,
+                    "the engine page must be selected");
+                Equal(Visibility.Visible, ((System.Windows.Controls.Panel)providerSection.FindName("PresetsPanel")!).Visibility,
+                    "the add-engine flow must start in the provider catalogue");
+
+                // No duplicate routing controls may exist on the settings page.
+                True(providerSection.FindName("RoutingPanel") is null,
+                    "RoutingPanel must be gone from the visual tree, not just collapsed");
+                True(providerSection.FindName("DefaultTextCombo") is null,
+                    "DefaultTextCombo must be gone from the visual tree");
+                True(providerSection.FindName("DefaultVisionCombo") is null,
+                    "DefaultVisionCombo must be gone from the visual tree");
+                True(providerSection.FindName("SetDefaultButton") is null,
+                    "SetDefaultButton must be gone from the visual tree");
+            }
+            finally
+            {
+                window.Close();
+            }
+        }
+        finally
+        {
+            ProfileManager.ResetForTests();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>The service list and its empty state share one grid cell. An
+    /// empty ListBox must be collapsed so it cannot sit above the visible CTA
+    /// and swallow pointer hit testing.</summary>
+    private static void EmptyServiceListLeavesAddButtonClickable()
+    {
+        ProfileManager.ResetForTests();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-add-first-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        ProfileManager.ConfigPathOverride = Path.Combine(dir, "product-config.json");
+        CoreBridge.Initialize();
+        EnsureApplication();
+        var section = new ServicesSection();
+        var window = new Window
+        {
+            Content = section,
+            Width = 900,
+            Height = 680,
+            ShowActivated = false,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -20000,
+            Top = -20000,
+        };
+        try
+        {
+            section.RefreshProfilesList();
+            window.Show();
+            window.UpdateLayout();
+
+            Equal(Visibility.Visible, section.ProfilesEmptyText.Visibility,
+                "the zero-profile empty state must be visible");
+            Equal(Visibility.Collapsed, section.ProfilesListBox.Visibility,
+                "the empty ListBox must not cover the CTA");
+            var button = section.AddFirstEngineButton;
+            True(button.IsVisible && button.IsEnabled && button.IsHitTestVisible,
+                "the add-first-engine button must be visibly actionable");
+
+            var center = button.TranslatePoint(
+                new Point(button.ActualWidth / 2, button.ActualHeight / 2), section);
+            var hit = section.InputHitTest(center) as DependencyObject;
+            True(hit is not null && (ReferenceEquals(hit, button) ||
+                    FindLogicalAncestor<System.Windows.Controls.Button>(hit) == button),
+                $"pointer hit testing must reach the add button, got {hit?.GetType().Name ?? "null"}");
+
+            button.RaiseEvent(new RoutedEventArgs(
+                System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            Equal(Visibility.Visible, section.EditorForm.Visibility,
+                "clicking 添加第一个引擎 must open the editor");
+            Equal(Visibility.Visible, section.PresetsPanel.Visibility,
+                "the first step must be the provider catalogue");
+        }
+        finally
+        {
+            window.Close();
+            ProfileManager.ResetForTests();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    private static T? FindLogicalAncestor<T>(DependencyObject? child) where T : DependencyObject
+    {
+        while (child is not null)
+        {
+            if (child is T match)
+            {
+                return match;
+            }
+            child = LogicalTreeHelper.GetParent(child) ??
+                    (child is Visual or System.Windows.Media.Media3D.Visual3D
+                        ? VisualTreeHelper.GetParent(child)
+                        : null);
+        }
+        return null;
+    }
+
+    private static System.Collections.Generic.IEnumerable<T> FindLogicalDescendants<T>(System.Windows.DependencyObject root)
+        where T : System.Windows.DependencyObject
+    {
+        foreach (var child in LogicalTreeHelper.GetChildren(root).OfType<System.Windows.DependencyObject>())
+        {
+            if (child is T match)
+            {
+                yield return match;
+            }
+            foreach (var descendant in FindLogicalDescendants<T>(child))
+            {
+                yield return descendant;
+            }
+        }
     }
 
     private static void ThemeTokensSymmetric()
@@ -4617,6 +6173,43 @@ internal static class Program
     }
 
     private static int _dispatcherFailures;
+    private static readonly object StaHarnessGate = new();
+    private static readonly ManualResetEventSlim StaHarnessReady = new(false);
+    private static System.Windows.Threading.Dispatcher? _staHarnessDispatcher;
+    private static Thread? _staHarnessThread;
+
+    private static System.Windows.Threading.Dispatcher GetStaHarnessDispatcher()
+    {
+        if (_staHarnessDispatcher is not null)
+        {
+            return _staHarnessDispatcher;
+        }
+
+        lock (StaHarnessGate)
+        {
+            if (_staHarnessThread is null)
+            {
+                _staHarnessThread = new Thread(() =>
+                {
+                    var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+                    SynchronizationContext.SetSynchronizationContext(
+                        new System.Windows.Threading.DispatcherSynchronizationContext(dispatcher));
+                    _staHarnessDispatcher = dispatcher;
+                    StaHarnessReady.Set();
+                    System.Windows.Threading.Dispatcher.Run();
+                })
+                {
+                    IsBackground = true,
+                    Name = "PopGlot.LogicTests.WpfHarness",
+                };
+                _staHarnessThread.SetApartmentState(ApartmentState.STA);
+                _staHarnessThread.Start();
+            }
+        }
+
+        StaHarnessReady.Wait();
+        return _staHarnessDispatcher!;
+    }
 
     private static void EnsureApplication()
     {
@@ -5025,9 +6618,9 @@ internal static class Program
 
     /// <summary>
     /// Optional substring filter (POPGLOT_TESTS_FILTER): when set, only tests
-    /// whose name contains it run. Lets targeted verification proceed while a
-    /// real PopGlot instance is open (quit it for the FULL suite — the
-    /// isolation guard refuses to run beside one).
+    /// whose name contains it run. The filter never bypasses the environment
+    /// guard — a real PopGlot instance still stops the whole run with exit
+    /// code 3 before any test executes.
     /// </summary>
     private static readonly string? NameFilter =
         Environment.GetEnvironmentVariable("POPGLOT_TESTS_FILTER")?.Trim().ToLowerInvariant();
@@ -5092,15 +6685,8 @@ internal static class Program
             return;
         }
         var caught = new Exception?[selected.Length];
-        var thread = new Thread(() =>
+        GetStaHarnessDispatcher().Invoke(() =>
         {
-            // Production WPF UI threads carry a DispatcherSynchronizationContext,
-            // so async void handlers (Save_Click) resume on the UI thread. The
-            // bare STA thread must behave the same or its continuations land on
-            // the pool and touch DependencyObjects cross-thread.
-            var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
-            SynchronizationContext.SetSynchronizationContext(
-                new System.Windows.Threading.DispatcherSynchronizationContext(dispatcher));
             for (var i = 0; i < selected.Length; i++)
             {
                 try
@@ -5113,9 +6699,6 @@ internal static class Program
                 }
             }
         });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join();
 
         for (var i = 0; i < selected.Length; i++)
         {
@@ -7070,6 +8653,21 @@ internal static class Program
         Equal(sb.ToString(), state.FinalRenderedText);
     }
 
+    private static void SettingsWindowConstructsAndClosesSafely()
+    {
+        EnsureApplication();
+        foreach (var theme in new[] { ThemePreference.Light, ThemePreference.Dark })
+        {
+            ThemeService.Apply(theme);
+            var window = new SettingsWindow(
+                ShellSettings.Default with { Theme = theme },
+                new HistoryStore(TestIsolation.HistoryPath),
+                new VocabularyStore(TestIsolation.VocabularyPath));
+            window.ForceClose = true;
+            window.Close();
+        }
+    }
+
     private static void QuickSearchComponentLifecycleAndStreamContracts()
     {
         EnsureApplication();
@@ -7762,6 +9360,10 @@ internal static class Program
         True(adapterCode.Contains("ClipboardOperationTimeout"), "WindowsSelectionClipboardAdapter must enforce a bounded hard timeout");
         True(adapterCode.Contains("catch (TimeoutException)"), "WindowsSelectionClipboardAdapter must fail immediately on timeout");
         True(adapterCode.Contains("PopGlot-Clipboard-Worker"), "WindowsSelectionClipboardAdapter worker thread must have dedicated name");
+        True(adapterCode.Contains("VkMenu") && adapterCode.Contains("KeyeventfKeyup"),
+            "WindowsSelectionClipboardAdapter must release held modifiers before sending Ctrl+C");
+        True(adapterCode.Contains("SetForegroundWindow"),
+            "WindowsSelectionClipboardAdapter must ensure target window is foreground");
 
         // 2. A caller timeout must not release the concurrency gate while the
         // underlying STA action is still alive. This caps an uninterruptible

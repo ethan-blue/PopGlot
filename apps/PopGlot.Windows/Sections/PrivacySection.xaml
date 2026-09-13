@@ -18,14 +18,18 @@
                         <ColumnDefinition Width="14" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <Border Grid.Column="0" Background="{DynamicResource SurfaceMutedBrush}" CornerRadius="8" Padding="12,10">
+                    <Border Grid.Column="0" Background="{DynamicResource SurfaceBrush}"
+                            BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
+                            CornerRadius="6" Padding="12,10">
                         <StackPanel>
                             <TextBlock Text="需要联网时" FontWeight="SemiBold" FontSize="12.5" Foreground="{DynamicResource TextPrimaryBrush}" />
                             <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap" LineHeight="17"
-                                       Text="• 划词与文字翻译：仅发送您主动划选或输入的文本到已配置的服务商。&#x0a;• 截图翻译：默认仅在本机提取文字（图片不上云）；仅当启用视觉直译时，才会上传框选区域的截图。" />
+                                        Text="• 划词与文字翻译：仅发送您主动划选或输入的文本到已配置的服务商。&#x0a;• 截图翻译：默认仅在本机提取文字（图片不上云）；仅当启用视觉直译时，才会上传框选区域的截图。" />
                         </StackPanel>
                     </Border>
-                    <Border Grid.Column="2" Background="{DynamicResource SurfaceMutedBrush}" CornerRadius="8" Padding="12,10">
+                    <Border Grid.Column="2" Background="{DynamicResource SurfaceBrush}"
+                            BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
+                            CornerRadius="6" Padding="12,10">
                         <StackPanel>
                             <TextBlock Text="始终留在本机" FontWeight="SemiBold" FontSize="12.5" Foreground="{DynamicResource TextPrimaryBrush}" />
                             <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap" LineHeight="17"
@@ -197,7 +201,7 @@
                 <TextBlock Text="本机文字识别" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
                 <TextBlock x:Name="OcrStatusText" Margin="0,0,0,8" TextWrapping="Wrap"
                            Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" />
-                <Border Background="{DynamicResource InputBrush}" CornerRadius="{DynamicResource ControlRadius}"
+                <Border Background="{DynamicResource InputBrush}" CornerRadius="{StaticResource ControlRadius}"
                         BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
                         Padding="6" Margin="0,0,0,8">
                     <ListBox x:Name="OcrLanguagesListBox" MaxHeight="120"

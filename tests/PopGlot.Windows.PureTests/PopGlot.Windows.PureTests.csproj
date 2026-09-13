@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <SkipMarkupCompilation>true</SkipMarkupCompilation>
+    <AssemblyName>PopGlot.Windows.PureTests</AssemblyName>
+    <RootNamespace>PopGlot.Windows.PureTests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\apps\PopGlot.Windows\PopGlot.Windows.csproj" />
+  </ItemGroup>
+</Project>

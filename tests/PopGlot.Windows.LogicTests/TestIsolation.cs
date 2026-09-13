@@ -115,6 +115,17 @@ internal static class TestIsolation
     }
 
     /// <summary>
+    /// Returns the PID of a running real PopGlot instance, or 0 when none is
+    /// running. Called at the very top of Main — before the isolation
+    /// bootstrap, WPF, the native core, hotkeys or the clipboard are touched.
+    /// </summary>
+    public static int FindConflictingAppInstancePid()
+    {
+        var running = System.Diagnostics.Process.GetProcessesByName("PopGlot");
+        return running.FirstOrDefault()?.Id ?? 0;
+    }
+
+    /// <summary>
     /// A real running PopGlot instance owns the global hotkeys, reads the
     /// clipboard and answers the single-instance channel. A suite that runs
     /// beside it fails in confusing cascades (observed 2026-09-05: dispatcher
@@ -123,9 +134,9 @@ internal static class TestIsolation
     /// </summary>
     public static void AssertNoConflictingAppInstance()
     {
-        var running = System.Diagnostics.Process.GetProcessesByName("PopGlot");
-        True(running.Length == 0,
-            $"a real PopGlot instance is running (PID {running.FirstOrDefault()?.Id}); " +
+        var pid = FindConflictingAppInstancePid();
+        True(pid == 0,
+            $"a real PopGlot instance is running (PID {pid}); " +
             "it owns the global hotkeys/clipboard/single-instance channel and conflicts with this suite — " +
             "quit it from the tray before running the tests");
     }

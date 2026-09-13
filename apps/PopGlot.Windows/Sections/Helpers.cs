@@ -60,20 +60,20 @@ internal enum StatusTone
 /// </summary>
 internal sealed class ConfirmButton
 {
-    private static readonly TimeSpan ArmTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ArmTimeout = TimeSpan.FromSeconds(3);
 
     private readonly Button _button;
     private readonly string _normalContent;
-    private readonly string _armedContent;
+    private readonly Func<string> _armedContentProvider;
     private readonly Action _fire;
     private readonly DispatcherTimer _timer;
     private bool _armed;
 
-    private ConfirmButton(Button button, string armedContent, Action fire)
+    private ConfirmButton(Button button, Func<string> armedContentProvider, Action fire)
     {
         _button = button;
         _normalContent = (string)button.Content;
-        _armedContent = armedContent;
+        _armedContentProvider = armedContentProvider;
         _fire = fire;
         _timer = new DispatcherTimer { Interval = ArmTimeout };
         _timer.Tick += (_, _) => Disarm();
@@ -81,16 +81,19 @@ internal sealed class ConfirmButton
     }
 
     public static ConfirmButton Attach(Button button, string armedContent, Action fire) =>
-        new(button, armedContent, fire);
+        new(button, () => armedContent, fire);
+
+    public static ConfirmButton Attach(Button button, Func<string> armedContentProvider, Action fire) =>
+        new(button, armedContentProvider, fire);
 
     private void OnClick(object sender, RoutedEventArgs e)
     {
         if (!_armed)
         {
             _armed = true;
-            _button.Content = _armedContent;
-            _button.Background = (Brush)_button.FindResource("DangerSoftBrush");
-            _button.Foreground = (Brush)_button.FindResource("DangerBrush");
+            _button.Content = _armedContentProvider();
+            _button.SetResourceReference(System.Windows.Controls.Control.BackgroundProperty, "DangerSoftBrush");
+            _button.SetResourceReference(System.Windows.Controls.Control.ForegroundProperty, "DangerBrush");
             _timer.Start();
             return;
         }

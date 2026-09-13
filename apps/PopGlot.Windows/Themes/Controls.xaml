@@ -10,6 +10,7 @@
 -->
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib"
                     xmlns:local="clr-namespace:PopGlot.Windows">
 
     <FontFamily x:Key="UiFontFamily">Segoe UI Variable Text, Segoe UI, Microsoft YaHei UI</FontFamily>
@@ -19,6 +20,14 @@
     <CornerRadius x:Key="ControlRadius">6</CornerRadius>
     <CornerRadius x:Key="CardRadius">10</CornerRadius>
     <CornerRadius x:Key="PaneRadius">10</CornerRadius>
+
+    <!-- Spacing scale: 4 / 8 / 12 / 16 / 20 / 24 DIP -->
+    <sys:Double x:Key="Spacing4">4</sys:Double>
+    <sys:Double x:Key="Spacing8">8</sys:Double>
+    <sys:Double x:Key="Spacing12">12</sys:Double>
+    <sys:Double x:Key="Spacing16">16</sys:Double>
+    <sys:Double x:Key="Spacing20">20</sys:Double>
+    <sys:Double x:Key="Spacing24">24</sys:Double>
 
     <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
 
@@ -364,7 +373,7 @@
                             <Setter TargetName="Surface" Property="Background" Value="{DynamicResource SurfacePressedBrush}" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter TargetName="Surface" Property="Opacity" Value="0.45" />
+                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
                             <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
                             <Setter Property="Cursor" Value="Arrow" />
                         </Trigger>
@@ -454,7 +463,7 @@
                             <Setter Property="Foreground" Value="{DynamicResource DangerPressedTextBrush}" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter TargetName="Surface" Property="Opacity" Value="0.45" />
+                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
                             <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
                             <Setter Property="Cursor" Value="Arrow" />
                         </Trigger>
@@ -531,7 +540,6 @@
                             <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter TargetName="Surface" Property="Opacity" Value="0.45" />
                             <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
                             <Setter Property="Cursor" Value="Arrow" />
                         </Trigger>
@@ -576,7 +584,7 @@
                             <Setter Property="FontWeight" Value="SemiBold" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter TargetName="Surface" Property="Opacity" Value="0.45" />
+                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
                             <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
                             <Setter Property="Cursor" Value="Arrow" />
                         </Trigger>
@@ -620,6 +628,10 @@
                             <Setter TargetName="Surface" Property="Background" Value="{DynamicResource SurfaceHoverBrush}" />
                             <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
                         </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Surface" Property="Background" Value="{DynamicResource SurfacePressedBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                        </Trigger>
                         <Trigger Property="IsChecked" Value="True">
                             <!-- Selection is a neutral lift plus a short rail; no accent wash. -->
                             <Setter TargetName="Surface" Property="Background" Value="{DynamicResource SurfaceHoverBrush}" />
@@ -632,7 +644,7 @@
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
-                            <Setter Property="Opacity" Value="0.65" />
+                            <Setter TargetName="Rail" Property="Opacity" Value="0" />
                             <Setter Property="Cursor" Value="Arrow" />
                         </Trigger>
                     </ControlTemplate.Triggers>
@@ -688,7 +700,6 @@
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
-                            <Setter Property="Opacity" Value="0.65" />
                             <Setter Property="Cursor" Value="Arrow" />
                         </Trigger>
                     </ControlTemplate.Triggers>
@@ -711,14 +722,53 @@
         <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
         <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
         <Setter Property="RenderOptions.ClearTypeHint" Value="Enabled" />
-        <Style.Triggers>
-            <Trigger Property="IsRecording" Value="True">
-                <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}" />
-                <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-                <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-                <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
-            </Trigger>
-        </Style.Triggers>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type local:HotkeyRecorder}">
+                    <Border x:Name="Surface"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{Binding (local:Ui.CornerRadius), RelativeSource={RelativeSource TemplatedParent}}"
+                            Padding="{TemplateBinding Padding}"
+                            SnapsToDevicePixels="True">
+                        <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                          RecognizesAccessKey="True" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Surface" Property="Background" Value="{DynamicResource SurfaceHoverBrush}" />
+                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Surface" Property="Background" Value="{DynamicResource SurfacePressedBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsRecording" Value="True">
+                            <Setter TargetName="Surface" Property="Background" Value="{DynamicResource AccentSoftBrush}" />
+                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+                            <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
+                        </Trigger>
+                        <MultiTrigger>
+                            <MultiTrigger.Conditions>
+                                <Condition Property="IsRecording" Value="True" />
+                                <Condition Property="IsMouseOver" Value="True" />
+                            </MultiTrigger.Conditions>
+                            <Setter TargetName="Surface" Property="Background" Value="{DynamicResource AccentSoftBrush}" />
+                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource AccentHoverBrush}" />
+                            <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
+                        </MultiTrigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
+                            <Setter Property="Cursor" Value="Arrow" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
     <!-- ==================== Text inputs ==================== -->
@@ -774,13 +824,13 @@
                             <Setter TargetName="Placeholder" Property="Visibility" Value="Visible" />
                         </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
+                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource AccentBorderBrush}" />
                         </Trigger>
                         <Trigger Property="IsKeyboardFocusWithin" Value="True">
                             <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter TargetName="Surface" Property="Opacity" Value="0.5" />
+                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
                             <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
                         </Trigger>
                         <Trigger Property="IsReadOnly" Value="True">
@@ -852,7 +902,6 @@
                             <Setter TargetName="Placeholder" Property="Visibility" Value="Visible" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter TargetName="Surface" Property="Opacity" Value="0.5" />
                             <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
                         </Trigger>
                     </ControlTemplate.Triggers>
@@ -925,13 +974,13 @@
                             <Setter TargetName="Placeholder" Property="Visibility" Value="Visible" />
                         </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
+                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource AccentBorderBrush}" />
                         </Trigger>
                         <Trigger Property="IsKeyboardFocusWithin" Value="True">
                             <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter TargetName="Surface" Property="Opacity" Value="0.5" />
+                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
                             <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
                         </Trigger>
                     </ControlTemplate.Triggers>
@@ -969,7 +1018,6 @@
                             <Setter Property="FontWeight" Value="SemiBold" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter TargetName="Surface" Property="Opacity" Value="0.45" />
                             <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
                         </Trigger>
                     </ControlTemplate.Triggers>
@@ -989,6 +1037,9 @@
             </Trigger>
             <Trigger Property="IsChecked" Value="True">
                 <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
             </Trigger>
         </ControlTemplate.Triggers>
     </ControlTemplate>
@@ -1052,7 +1103,7 @@
                                         SnapsToDevicePixels="True">
                                     <Border.Effect>
                                         <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="0.28"
-                                                          Color="#000000" />
+                                                          Color="{DynamicResource ShadowColor}" />
                                     </Border.Effect>
                                     <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,5">
                                         <ItemsPresenter />
@@ -1076,7 +1127,7 @@
                             <Setter TargetName="Chevron" Property="Fill" Value="{DynamicResource AccentBrush}" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter TargetName="Root" Property="Opacity" Value="0.5" />
+                            <Setter TargetName="Chevron" Property="Fill" Value="{DynamicResource TextDisabledBrush}" />
                             <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
                             <Setter Property="Cursor" Value="Arrow" />
                         </Trigger>
@@ -1155,7 +1206,7 @@
                                         SnapsToDevicePixels="True">
                                     <Border.Effect>
                                         <DropShadowEffect BlurRadius="16" ShadowDepth="3" Opacity="0.22"
-                                                          Color="#000000" />
+                                                          Color="{DynamicResource ShadowColor}" />
                                     </Border.Effect>
                                     <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,4">
                                         <ItemsPresenter />
@@ -1172,7 +1223,7 @@
                             <Setter TargetName="Chevron" Property="Fill" Value="{DynamicResource TextSecondaryBrush}" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter TargetName="Root" Property="Opacity" Value="0.5" />
+                            <Setter TargetName="Chevron" Property="Fill" Value="{DynamicResource TextDisabledBrush}" />
                             <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
                             <Setter Property="Cursor" Value="Arrow" />
                         </Trigger>
@@ -1197,43 +1248,14 @@
                                 Background="{DynamicResource SurfacePressedBrush}"
                                 BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1" />
                         <Ellipse x:Name="Knob" Width="18" Height="18" HorizontalAlignment="Left"
-                                 Margin="3,0,0,0" Fill="{DynamicResource TextSecondaryBrush}">
-                            <Ellipse.RenderTransform>
-                                <TranslateTransform x:Name="KnobShift" X="0" />
-                            </Ellipse.RenderTransform>
-                        </Ellipse>
+                                 Margin="3,0,0,0" Fill="{DynamicResource TextSecondaryBrush}" />
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsChecked" Value="True">
                             <Setter TargetName="Track" Property="Background" Value="{DynamicResource AccentBrush}" />
                             <Setter TargetName="Track" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
                             <Setter TargetName="Knob" Property="Fill" Value="{DynamicResource AccentTextBrush}" />
-                            <Trigger.EnterActions>
-                                <BeginStoryboard>
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="KnobShift"
-                                                         Storyboard.TargetProperty="X"
-                                                         To="20" Duration="0:0:0.16">
-                                            <DoubleAnimation.EasingFunction>
-                                                <CubicEase EasingMode="EaseOut" />
-                                            </DoubleAnimation.EasingFunction>
-                                        </DoubleAnimation>
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.EnterActions>
-                            <Trigger.ExitActions>
-                                <BeginStoryboard>
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="KnobShift"
-                                                         Storyboard.TargetProperty="X"
-                                                         To="0" Duration="0:0:0.16">
-                                            <DoubleAnimation.EasingFunction>
-                                                <CubicEase EasingMode="EaseOut" />
-                                            </DoubleAnimation.EasingFunction>
-                                        </DoubleAnimation>
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.ExitActions>
+                            <Setter TargetName="Knob" Property="Margin" Value="23,0,0,0" />
                         </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Knob" Property="Opacity" Value="0.85" />
@@ -1266,11 +1288,7 @@
                                     Background="{DynamicResource SurfacePressedBrush}"
                                     BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1" />
                             <Ellipse x:Name="Knob" Width="18" Height="18" HorizontalAlignment="Left"
-                                     Margin="3,0,0,0" Fill="{DynamicResource TextSecondaryBrush}">
-                                <Ellipse.RenderTransform>
-                                    <TranslateTransform x:Name="KnobShift" X="0" />
-                                </Ellipse.RenderTransform>
-                            </Ellipse>
+                                     Margin="3,0,0,0" Fill="{DynamicResource TextSecondaryBrush}" />
                         </Grid>
                         <ContentPresenter Margin="10,0,0,0" VerticalAlignment="Center"
                                           RecognizesAccessKey="True" />
@@ -1280,32 +1298,7 @@
                             <Setter TargetName="Track" Property="Background" Value="{DynamicResource AccentBrush}" />
                             <Setter TargetName="Track" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
                             <Setter TargetName="Knob" Property="Fill" Value="{DynamicResource AccentTextBrush}" />
-                            <Trigger.EnterActions>
-                                <BeginStoryboard>
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="KnobShift"
-                                                         Storyboard.TargetProperty="X"
-                                                         To="20" Duration="0:0:0.16">
-                                            <DoubleAnimation.EasingFunction>
-                                                <CubicEase EasingMode="EaseOut" />
-                                            </DoubleAnimation.EasingFunction>
-                                        </DoubleAnimation>
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.EnterActions>
-                            <Trigger.ExitActions>
-                                <BeginStoryboard>
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="KnobShift"
-                                                         Storyboard.TargetProperty="X"
-                                                         To="0" Duration="0:0:0.16">
-                                            <DoubleAnimation.EasingFunction>
-                                                <CubicEase EasingMode="EaseOut" />
-                                            </DoubleAnimation.EasingFunction>
-                                        </DoubleAnimation>
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.ExitActions>
+                            <Setter TargetName="Knob" Property="Margin" Value="23,0,0,0" />
                         </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Knob" Property="Opacity" Value="0.85" />
@@ -1352,6 +1345,9 @@
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
                         </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Box" Property="Background" Value="{DynamicResource SurfacePressedBrush}" />
+                        </Trigger>
                         <Trigger Property="HasContent" Value="False">
                             <Setter TargetName="Label" Property="Margin" Value="0" />
                         </Trigger>
@@ -1394,6 +1390,9 @@
                         </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Outer" Property="BorderBrush" Value="{DynamicResource AccentBorderBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Outer" Property="Background" Value="{DynamicResource SurfacePressedBrush}" />
                         </Trigger>
                         <Trigger Property="HasContent" Value="False">
                             <Setter TargetName="Label" Property="Margin" Value="0" />
@@ -1441,7 +1440,7 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ListBoxItem">
-                    <Border x:Name="Surface" Background="Transparent" CornerRadius="9"
+                    <Border x:Name="Surface" Background="Transparent" CornerRadius="6"
                             Margin="0,1" Padding="{TemplateBinding Padding}"
                             BorderBrush="Transparent" BorderThickness="1">
                         <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" />
@@ -1493,6 +1492,10 @@
                                             <Trigger Property="IsMouseOver" Value="True">
                                                 <Setter TargetName="HeaderSurface" Property="Background"
                                                         Value="{DynamicResource SurfaceHoverBrush}" />
+                                            </Trigger>
+                                            <Trigger Property="IsPressed" Value="True">
+                                                <Setter TargetName="HeaderSurface" Property="Background"
+                                                        Value="{DynamicResource SurfacePressedBrush}" />
                                             </Trigger>
                                             <Trigger Property="IsChecked" Value="True">
                                                 <Setter TargetName="Arrow" Property="RenderTransform">
@@ -1568,7 +1571,7 @@
                 <ControlTemplate TargetType="ToolTip">
                     <Border Background="{DynamicResource SurfaceRaisedBrush}"
                             BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1"
-                            CornerRadius="7" Padding="10,6">
+                            CornerRadius="6" Padding="10,6">
                         <ContentPresenter />
                     </Border>
                 </ControlTemplate>
@@ -1599,10 +1602,10 @@
                     <Border Background="{DynamicResource SurfaceRaisedBrush}"
                             BorderBrush="{DynamicResource BorderStrongBrush}"
                             BorderThickness="1"
-                            CornerRadius="8"
+                            CornerRadius="10"
                             Padding="4,5">
                         <Border.Effect>
-                            <DropShadowEffect BlurRadius="16" ShadowDepth="4" Opacity="0.3" Color="#000000" />
+                            <DropShadowEffect BlurRadius="16" ShadowDepth="4" Opacity="0.3" Color="{DynamicResource ShadowColor}" />
                         </Border.Effect>
                         <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle" />
                     </Border>

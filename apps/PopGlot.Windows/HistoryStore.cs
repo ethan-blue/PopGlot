@@ -2,6 +2,7 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading.Channels;
 using PopGlot.Windows.Services;
 
 namespace PopGlot.Windows;
@@ -39,8 +40,14 @@ internal sealed partial class HistoryStore : IHistoryRepository
         PropertyNameCaseInsensitive = true,
     };
 
+    private sealed record HistoryPersistRequest(string? Json, bool IsClear, TaskCompletionSource<bool>? Completion);
+
     private readonly string _path;
     private readonly Lock _gate = new();
+    private List<TranslationHistoryEntry> _entries = [];
+    private readonly Channel<HistoryPersistRequest> _persistChannel = Channel.CreateUnbounded<HistoryPersistRequest>(
+        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+    private readonly Task _writerTask;
 
     /// <summary>
     /// Path of the most recent corrupt/oversized backup created by a load, if
@@ -52,13 +59,95 @@ internal sealed partial class HistoryStore : IHistoryRepository
     public HistoryStore(string? path = null)
     {
         _path = path ?? StoragePaths.History;
+        lock (_gate)
+        {
+            _entries = LoadUnlocked().ToList();
+        }
+        _writerTask = Task.Run(ProcessPersistenceQueueAsync);
+    }
+
+    private async Task ProcessPersistenceQueueAsync()
+    {
+        var reader = _persistChannel.Reader;
+        try
+        {
+            while (await reader.WaitToReadAsync().ConfigureAwait(false))
+            {
+                while (reader.TryRead(out var request))
+                {
+                    if (request.IsClear)
+                    {
+                        DeleteDiskFile();
+                    }
+                    else if (request.Json is not null)
+                    {
+                        WriteSnapshotToDisk(request.Json);
+                    }
+                    request.Completion?.TrySetResult(true);
+                }
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private void DeleteDiskFile()
+    {
+        try
+        {
+            if (File.Exists(_path))
+            {
+                File.Delete(_path);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private void WriteSnapshotToDisk(string json)
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(_path);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+            var temporaryPath = _path + ".tmp";
+            File.WriteAllText(temporaryPath, json);
+            File.Move(temporaryPath, _path, overwrite: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Blocks until all pending writes in the background persistence queue
+    /// are committed to disk. Safe for testing and application exit.
+    /// </summary>
+    public void Flush(int timeoutMs = 5000)
+    {
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (_persistChannel.Writer.TryWrite(new HistoryPersistRequest(null, false, tcs)))
+        {
+            tcs.Task.Wait(timeoutMs);
+        }
     }
 
     public IReadOnlyList<TranslationHistoryEntry> Load()
     {
         lock (_gate)
         {
-            return LoadUnlocked();
+            return _entries.ToList();
         }
     }
 
@@ -132,15 +221,25 @@ internal sealed partial class HistoryStore : IHistoryRepository
         {
             try
             {
-                var existing = LoadUnlocked()
-                    .Where(item => !(item.Source == entry.Source
-                        && item.TargetLanguage == entry.TargetLanguage))
+                var cutoff = DateTimeOffset.UtcNow - MaxAge;
+                var existing = _entries
+                    .Where(item => item.CreatedAt >= cutoff
+                        && !(item.Source == entry.Source && item.TargetLanguage == entry.TargetLanguage))
                     .Take(MaxEntries - 1);
-                Save([entry, .. existing]);
+                var next = new List<TranslationHistoryEntry> { entry };
+                next.AddRange(existing);
+
+                var json = JsonSerializer.Serialize(next, JsonOptions);
+                if (Encoding.UTF8.GetByteCount(json) > MaxFileBytes)
+                {
+                    return HistoryAddResult.Failed;
+                }
+
+                _entries = next;
+                _persistChannel.Writer.TryWrite(new HistoryPersistRequest(json, false, null));
                 return HistoryAddResult.Stored;
             }
-            catch (Exception exception) when (
-                exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+            catch
             {
                 return HistoryAddResult.Failed;
             }
@@ -153,12 +252,13 @@ internal sealed partial class HistoryStore : IHistoryRepository
         {
             try
             {
-                var remaining = LoadUnlocked().Where(entry => entry.Id != id).ToArray();
-                Save(remaining);
+                var remaining = _entries.Where(entry => entry.Id != id).ToList();
+                var json = JsonSerializer.Serialize(remaining, JsonOptions);
+                _entries = remaining;
+                _persistChannel.Writer.TryWrite(new HistoryPersistRequest(json, false, null));
                 return true;
             }
-            catch (Exception exception) when (
-                exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+            catch
             {
                 return false;
             }
@@ -169,19 +269,9 @@ internal sealed partial class HistoryStore : IHistoryRepository
     {
         lock (_gate)
         {
-            try
-            {
-                if (File.Exists(_path))
-                {
-                    File.Delete(_path);
-                }
-                return true;
-            }
-            catch (Exception exception) when (
-                exception is IOException or UnauthorizedAccessException)
-            {
-                return false;
-            }
+            _entries = [];
+            _persistChannel.Writer.TryWrite(new HistoryPersistRequest(null, true, null));
+            return true;
         }
     }
 
@@ -191,7 +281,7 @@ internal sealed partial class HistoryStore : IHistoryRepository
         sb.AppendLine("Id,CreatedAt,SourceKind,SourceLanguage,TargetLanguage,Source,Translation,Explanation");
         lock (_gate)
         {
-            foreach (var e in LoadUnlocked())
+            foreach (var e in _entries)
             {
                 sb.AppendLine($"{e.Id},{e.CreatedAt:O},{CsvEscape(e.SourceKind)},{CsvEscape(e.SourceLanguage)},{CsvEscape(e.TargetLanguage)},{CsvEscape(e.Source)},{CsvEscape(e.Translation)},{CsvEscape(e.Explanation)}");
             }
@@ -207,7 +297,7 @@ internal sealed partial class HistoryStore : IHistoryRepository
         sb.AppendLine("| :--- | :--- | :--- | :--- | :--- |");
         lock (_gate)
         {
-            foreach (var e in LoadUnlocked())
+            foreach (var e in _entries)
             {
                 var time = e.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
                 var pair = $"{e.SourceLanguage} → {e.TargetLanguage}";
@@ -251,21 +341,6 @@ internal sealed partial class HistoryStore : IHistoryRepository
             return false;
         }
         return !SensitiveContentRegex().IsMatch($"{entry.Source}\n{entry.Translation}");
-    }
-
-    private void Save(IReadOnlyList<TranslationHistoryEntry> entries)
-    {
-        var directory = Path.GetDirectoryName(_path)
-            ?? throw new InvalidOperationException("Unable to resolve the PopGlot history directory.");
-        Directory.CreateDirectory(directory);
-        var json = JsonSerializer.Serialize(entries, JsonOptions);
-        if (Encoding.UTF8.GetByteCount(json) > MaxFileBytes)
-        {
-            throw new InvalidOperationException("本地历史超过大小上限。");
-        }
-        var temporaryPath = _path + ".tmp";
-        File.WriteAllText(temporaryPath, json);
-        File.Move(temporaryPath, _path, overwrite: true);
     }
 
     [GeneratedRegex(

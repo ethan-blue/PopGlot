@@ -118,18 +118,39 @@ internal sealed class TranslationPanelStreamGate
     }
 
     /// <summary>
-    /// Copy, TTS, Star are allowed ONLY when the session reached clean completion
+    /// TTS and Star actions are allowed ONLY when the session reached clean completion
     /// with non-empty translation text. They are strictly prohibited during
     /// Preparing, Streaming, Finalizing, and on Cancelled/Failed (even with partial).
+    /// Explicit manual copy is permitted for partial text per G06/N04 via <see cref="CanCopy"/>
+    /// and <see cref="CanCopyPartial"/>.
     /// </summary>
     public bool CanPerformResultActions =>
         Stage == TranslationPanelStage.Completed && !string.IsNullOrWhiteSpace(StreamedText);
 
     /// <summary>
-    /// Automatic clipboard copy is strictly gated: only on final clean success.
+    /// G06 / V2 N04: Explicit manual copy is allowed for clean completions as
+    /// well as partial texts on Cancelled or Failed sessions.
+    /// Automatic copy, TTS, and starring remain strictly prohibited for partials.
+    /// </summary>
+    public bool CanCopyPartial => HasPartialText;
+
+    public bool CanCopy => CanPerformResultActions || CanCopyPartial;
+
+    /// <summary>
+    /// A05: automatic side effects require the window to be visible. The
+    /// panel keeps this in sync with its real visibility; a completion that
+    /// lands while hidden never auto-copies, and restoring the window later
+    /// does not replay the missed copy.
+    /// </summary>
+    public bool WindowVisible { get; set; } = true;
+
+    /// <summary>
+    /// Automatic clipboard copy is gated on: the user preference, a clean
+    /// final success, non-empty text, AND window visibility (A05).
     /// </summary>
     public bool ShouldTriggerAutoCopy(bool autoCopySettingEnabled) =>
-        autoCopySettingEnabled && Stage == TranslationPanelStage.Completed && !string.IsNullOrWhiteSpace(StreamedText);
+        autoCopySettingEnabled && WindowVisible &&
+        Stage == TranslationPanelStage.Completed && !string.IsNullOrWhiteSpace(StreamedText);
 
     public bool HasPartialText =>
         (Stage is TranslationPanelStage.CancelledWithPartial or TranslationPanelStage.FailedWithPartial) &&

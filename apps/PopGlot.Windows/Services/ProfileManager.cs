@@ -310,7 +310,9 @@ internal static class ProfileManager
 {
     private static readonly object Gate = new();
 
-    private static readonly string ConfigPath = StoragePaths.ProductConfig;
+    // Resolve lazily; caching this path can pin the process to the real user
+    // directory before a test/measurement root is installed.
+    private static string ConfigPath => StoragePaths.ProductConfig;
 
     /// <summary>Test seam: redirects the config file (also disables seeding).</summary>
     internal static string? ConfigPathOverride;
@@ -531,6 +533,10 @@ internal static class ProfileManager
         }
     }
 
+    public static Task SaveAsync(CoreProductConfig config) => Task.Run(() => Save(config));
+
+    public static Task SaveProfilesAsync(CoreProductConfig config) => SaveAsync(config);
+
     private static void SaveLocked(CoreProductConfig config)
     {
         var targetPath = EffectivePath;
@@ -643,6 +649,8 @@ internal static class ProfileManager
         CoreBridge.SaveSettings(settings);
     }
 
+    public static Task ApplyActiveToCoreAsync(CoreProductConfig config) => Task.Run(() => ApplyActiveToCore(config));
+
     /// <summary>
     /// One-click text engine switch for the footer quick switcher. Validates
     /// readiness (key for cloud services, model and base URL) before saving,
@@ -738,13 +746,62 @@ internal static class ProfileManager
             return false;
         }
         if (ProviderSettings.ClassifyEndpoint(profile.ApiBaseUrl) == EndpointClass.Internet &&
-            !CredentialStore.HasApiKey(profile.CredentialTarget))
+            !HasResolvableApiKey(profile))
         {
             notReady = "尚未配置密钥";
             return false;
         }
         notReady = string.Empty;
         return true;
+    }
+
+    /// <summary>
+    /// Credential presence resolved EXACTLY like execution resolves it:
+    /// the profile's own target first, then the legacy pre-profile target
+    /// for the active profile. Readiness and execution must never disagree
+    /// about whether a key exists.
+    /// </summary>
+    private static bool HasResolvableApiKey(ProviderProfile profile)
+    {
+        try
+        {
+            return CredentialStore.HasApiKey(ResolveCredentialTargetFor(profile));
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            // Vault unavailable: fall back to the direct target probe.
+            return !string.IsNullOrWhiteSpace(profile.CredentialTarget) &&
+                CredentialStore.HasApiKey(profile.CredentialTarget);
+        }
+    }
+
+    /// <summary>
+    /// The ONE readiness rule for "is this text engine complete and
+    /// executable" (model, base URL, credential for internet services).
+    /// Every surface — settings, quick switcher, the main-window empty state
+    /// — must ask here instead of re-deriving its own definition.
+    /// </summary>
+    public static bool IsTextEngineExecutable(ProviderProfile profile) =>
+        IsProfileExecutable(profile, out _);
+
+    /// <summary>
+    /// True only when at least one fully executable user text engine exists.
+    /// This is NOT the same as "translation is possible": the built-in free
+    /// engine is a fallback route, never a configured user engine, and an
+    /// incomplete profile (missing model, URL or key) does not count.
+    /// </summary>
+    public static bool HasConfiguredUserEngine()
+    {
+        try
+        {
+            return Load().Profiles.Any(profile =>
+                profile.SupportsText && IsProfileExecutable(profile, out _));
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     /// <summary>

@@ -330,11 +330,15 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         _isUnloaded = false;
+        TtsService.SpeakingStateChanged += OnTtsSpeakingStateChanged;
+        UpdateServiceAvailability();
+        RefreshStarState();
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
         _isUnloaded = true;
+        TtsService.SpeakingStateChanged -= OnTtsSpeakingStateChanged;
         _translateOperation?.Cancel();
         _translateOperation?.Dispose();
         _translateOperation = null;
@@ -356,6 +360,14 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     internal TextBox StreamResultBox => TranslateStreamResult;
     internal StackPanel EmptyStateGuide => TranslateEmptyState;
     internal Button FreeEngineEntryButton => EnableFreeEngineButton;
+    internal Action? OpenSettings { get; set; }
+
+    /// <summary>
+    /// Direct route for the 添加翻译引擎 call to action: opens settings,
+    /// selects the engine page and enters the add-engine flow. Set by the
+    /// shell (App); when unset the plain OpenSettings fallback applies.
+    /// </summary>
+    internal Action? OpenAddEngineFlow { get; set; }
     internal System.Windows.Controls.Grid PaneGrid => TranslatePaneGrid;
     internal Border StreamIndicator => TranslateStreamIndicator;
     internal TextBlock AutoDetectHint => TranslateAutoDetectHint;
@@ -387,6 +399,36 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     }
 
     private bool _stacked;
+    private bool _wide;
+
+    /// <summary>
+    /// V2 §10: >= 960 DIP wide desktop mode.
+    /// Dual panes stay side by side with the target reading pane receiving an enhanced
+    /// width ratio (1.25*) for comfortable long-text translation reading on wide monitors.
+    /// </summary>
+    internal void SetWide(bool wide)
+    {
+        if (_wide == wide)
+        {
+            return;
+        }
+        _wide = wide;
+        if (!_stacked)
+        {
+            ApplyColumnWidths();
+        }
+    }
+
+    private void ApplyColumnWidths()
+    {
+        if (_stacked || TranslatePaneGrid.ColumnDefinitions.Count < 3)
+        {
+            return;
+        }
+        TranslatePaneGrid.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
+        TranslatePaneGrid.ColumnDefinitions[1].Width = new GridLength(40);
+        TranslatePaneGrid.ColumnDefinitions[2].Width = new GridLength(_wide ? 1.25 : 1.0, GridUnitType.Star);
+    }
 
     /// <summary>
     /// Below 720 DIP of content width the panes stack vertically (AI-RULES
@@ -437,7 +479,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         TranslatePaneGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         TranslatePaneGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         TranslatePaneGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(40) });
-        TranslatePaneGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        TranslatePaneGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(_wide ? 1.25 : 1.0, GridUnitType.Star) });
 
         Place(SourceLangBarCell, 0, 0);
         Place(SourceEditorCell, 1, 0);
@@ -632,6 +674,11 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
         TranslateEngineBadge.Text = state.BadgeText;
         TranslateStatus.Text = state.StatusText;
+        if (!HasConfiguredUserEngine() && state.Phase == TranslateUiPhase.Idle && string.IsNullOrWhiteSpace(state.FinalText))
+        {
+            TranslateEngineBadge.Text = HasFallbackRoute() ? "内置公共翻译" : "未配置";
+            TranslateStatus.Text = HasFallbackRoute() ? "当前使用内置公共翻译" : "未配置引擎，请前往设置接入";
+        }
 
         TranslateResultSpeakButton.IsEnabled = state.AreResultActionsEnabled;
         TranslateResultCopyButton.IsEnabled = state.AreResultActionsEnabled;
@@ -645,6 +692,211 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             !state.IsStreamLayerVisible &&
             string.IsNullOrWhiteSpace(state.FinalText);
         TranslateEmptyState.Visibility = showEmptyState ? Visibility.Visible : Visibility.Collapsed;
+        if (showEmptyState)
+        {
+            UpdateServiceAvailability();
+        }
+
+        if (state.Phase == TranslateUiPhase.Completed || state.Phase == TranslateUiPhase.Idle)
+        {
+            RefreshStarState();
+        }
+        else if (!state.AreResultActionsEnabled)
+        {
+            UpdateStarVisualState(false);
+        }
+    }
+
+    private void OnTtsSpeakingStateChanged(object? sender, bool isSpeaking)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (isSpeaking)
+            {
+                var brush = (Brush)FindResource("AccentBrush");
+                TranslateSourceSpeakIcon?.SetValue(System.Windows.Shapes.Shape.FillProperty, brush);
+                TranslateResultSpeakIcon?.SetValue(System.Windows.Shapes.Shape.FillProperty, brush);
+            }
+            else
+            {
+                TranslateSourceSpeakIcon?.ClearValue(System.Windows.Shapes.Shape.FillProperty);
+                TranslateResultSpeakIcon?.ClearValue(System.Windows.Shapes.Shape.FillProperty);
+            }
+            if (TranslateSourceSpeakButton is not null)
+            {
+                TranslateSourceSpeakButton.ToolTip = isSpeaking ? "停止朗读" : "朗读原文";
+            }
+            if (TranslateResultSpeakButton is not null)
+            {
+                TranslateResultSpeakButton.ToolTip = isSpeaking ? "停止朗读" : "朗读译文";
+            }
+        });
+    }
+
+    private void UpdateStarVisualState(bool isStarred)
+    {
+        if (TranslateStarIcon is null || TranslateStarButton is null) return;
+        if (isStarred)
+        {
+            TranslateStarIcon.Fill = (Brush)FindResource("AccentBrush");
+            TranslateStarButton.ToolTip = "从生词本移除";
+        }
+        else
+        {
+            TranslateStarIcon.Fill = (Brush)FindResource("TextSecondaryBrush");
+            TranslateStarButton.ToolTip = "收藏到生词本";
+        }
+    }
+
+    private void RefreshStarState()
+    {
+        if (_vocabulary is null)
+        {
+            UpdateStarVisualState(false);
+            return;
+        }
+        var source = TranslateInput?.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            UpdateStarVisualState(false);
+            return;
+        }
+        var sourceLang = Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto);
+        var targetLang = Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN");
+        var starred = _vocabulary.IsStarred(source, sourceLang, targetLang);
+        UpdateStarVisualState(starred);
+    }
+
+    private void OpenSettings_Click(object sender, RoutedEventArgs e)
+    {
+        if (OpenSettings is not null)
+        {
+            OpenSettings.Invoke();
+            return;
+        }
+        var main = Window.GetWindow(this) as MainWindow ?? Application.Current?.MainWindow as MainWindow;
+        main?.OpenSettings?.Invoke();
+    }
+
+    /// <summary>
+    /// The 添加翻译引擎 call to action: navigates only. It must not probe
+    /// the network, mutate consent or open any dialog — the settings window
+    /// lands directly in the add-engine flow.
+    /// </summary>
+    private void OpenAddEngine_Click(object sender, RoutedEventArgs e)
+    {
+        if (OpenAddEngineFlow is not null)
+        {
+            OpenAddEngineFlow.Invoke();
+            return;
+        }
+        var main = Window.GetWindow(this) as MainWindow ?? Application.Current?.MainWindow as MainWindow;
+        if (main?.OpenAddEngineFlow is not null)
+        {
+            main.OpenAddEngineFlow.Invoke();
+            return;
+        }
+        OpenSettings_Click(sender, e);
+    }
+
+    /// <summary>
+    /// Two independent concepts, never one boolean:
+    /// <see cref="ProfileManager.HasConfiguredUserEngine"/> — a complete,
+    /// executable user engine exists; <paramref name="hasFallbackRoute"/> —
+    /// the built-in public translation is allowed. The CTA hides only when
+    /// the first is true; the fallback never hides it.
+    /// </summary>
+    private static bool HasConfiguredUserEngine() => ProfileManager.HasConfiguredUserEngine();
+
+    private static bool HasFallbackRoute()
+    {
+        try
+        {
+            return ShellSettingsStore.Load().FreeEngineConsent == FreeEngineConsent.Allowed;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Settings save/delete/re-activation lands here: the empty state must
+    /// repaint immediately, without a restart, a page switch or a translate.
+    /// </summary>
+    internal void RefreshAfterSettingsChanged()
+    {
+        if (!_currentState.IsProgressVisible &&
+            !_currentState.IsStreamLayerVisible &&
+            string.IsNullOrWhiteSpace(_currentState.FinalText))
+        {
+            UpdateServiceAvailability();
+        }
+    }
+
+    private void UpdateServiceAvailability()
+    {
+        var hasUserEngine = HasConfiguredUserEngine();
+        var hasFallbackRoute = HasFallbackRoute();
+        var consent = FreeEngineConsent.Unset;
+        try
+        {
+            consent = ShellSettingsStore.Load().FreeEngineConsent;
+        }
+        catch
+        {
+        }
+
+        if (UnconfiguredGuidePanel is not null)
+        {
+            UnconfiguredGuidePanel.Visibility = hasUserEngine ? Visibility.Collapsed : Visibility.Visible;
+        }
+        if (NormalGuidePanel is not null)
+        {
+            NormalGuidePanel.Visibility = hasUserEngine ? Visibility.Visible : Visibility.Collapsed;
+        }
+        if (!hasUserEngine)
+        {
+            // Two distinct empty states: fallback allowed vs no route at all.
+            if (GuideTitle is not null)
+            {
+                GuideTitle.Text = hasFallbackRoute ? "当前使用内置公共翻译" : "尚未配置翻译引擎";
+            }
+            if (GuideDescription is not null)
+            {
+                GuideDescription.Text = hasFallbackRoute
+                    ? "添加自己的翻译引擎，可使用指定模型和服务商。"
+                    : "添加翻译引擎后即可开始使用。";
+            }
+        }
+        if (EnableFreeEngineButton is not null)
+        {
+            EnableFreeEngineButton.Visibility = consent == FreeEngineConsent.Unset
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+
+        if (!hasUserEngine && _currentState.Phase == TranslateUiPhase.Idle && string.IsNullOrWhiteSpace(_currentState.FinalText))
+        {
+            TranslateEngineBadge.Text = hasFallbackRoute ? "内置公共翻译" : "未配置";
+            TranslateStatus.Text = hasFallbackRoute ? "当前使用内置公共翻译" : "未配置引擎，请前往设置接入";
+        }
+        else if (hasUserEngine && _currentState.Phase == TranslateUiPhase.Idle && string.IsNullOrWhiteSpace(_currentState.FinalText))
+        {
+            // Settings changed the engine while we were idle: the badge must
+            // name the engine that will actually run next, never a stale one.
+            try
+            {
+                var config = ProfileManager.Load();
+                var active = config.TryGetActiveProfile();
+                TranslateEngineBadge.Text = active?.Name ?? (config.PreferFreeEngine ? "内置公共翻译" : "未配置");
+            }
+            catch
+            {
+                TranslateEngineBadge.Text = "未配置";
+            }
+            TranslateStatus.Text = "就绪";
+        }
     }
 
     /// <summary>
@@ -671,7 +923,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             var shell = ShellSettingsStore.Load();
             var updated = shell with { FreeEngineConsent = FreeEngineConsent.Allowed };
             ShellSettingsStore.Save(updated);
-            EnableFreeEngineButton.Visibility = Visibility.Collapsed;
+            UpdateServiceAvailability();
             TranslateStatus.Text = "已允许内置公共翻译；首次翻译会连接 translate.googleapis.com。";
         }
         catch (Exception exception)
@@ -680,13 +932,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         }
     }
 
-    private void RefreshFreeEngineEntryVisibility()
-    {
-        var consent = ShellSettingsStore.Load().FreeEngineConsent;
-        EnableFreeEngineButton.Visibility = consent == FreeEngineConsent.Unset
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-    }
+    private void RefreshFreeEngineEntryVisibility() => UpdateServiceAvailability();
 
     private void TranslateInput_TextChanged(object sender, TextChangedEventArgs e) =>
         TranslateCounter.Text = $"{TranslateInput.Text.Length} 字符";
@@ -786,7 +1032,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
     private void TranslateResultCopy_Click(object sender, RoutedEventArgs e) => _ = CopyResultToClipboardAsync();
 
-    private void TranslateStar_Click(object sender, RoutedEventArgs e)
+    private async void TranslateStar_Click(object sender, RoutedEventArgs e)
     {
         if (_vocabulary is null)
         {
@@ -802,7 +1048,11 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         }
         var sourceLang = Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto);
         var targetLang = Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN");
-        var result = _vocabulary.ToggleStar(source, translation, string.Empty, string.Empty, sourceLang, targetLang);
+        var result = await _vocabulary.ToggleStarAsync(source, translation, string.Empty, string.Empty, sourceLang, targetLang);
+        if (result.Persisted)
+        {
+            UpdateStarVisualState(result.Starred);
+        }
         TranslateStatus.Text = result.Persisted
             ? (result.Starred ? "已加入生词本" : "已从生词本移除")
             : result.DescribeFailureZh();
@@ -847,6 +1097,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         _translateOperation = null;
         var epoch = Interlocked.Increment(ref _currentEpoch);
         ApplyState(TranslateUiState.Initial with { Epoch = epoch });
+        UpdateStarVisualState(false);
         TranslateInput.Clear();
         TranslateInput.Focus();
     }
@@ -893,5 +1144,6 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         }
         TranslateInput.Focus();
         TranslateInput.CaretIndex = TranslateInput.Text.Length;
+        RefreshStarState();
     }
 }

@@ -35,15 +35,26 @@ public partial class MainWindow : Window
         LibrarySection.StatusChanged += SetStatus;
 
         RefreshEngineStatus();
+        RefreshShellStatusForConfig();
         RefreshEngineStatusOnActivated();
 
         ThemeService.ApplyWindowChrome(this);
         ThemeService.ThemeChanged += (_, _) => ThemeService.ApplyWindowChrome(this);
         StateChanged += (_, _) => UpdateMaximizeButtonGlyph();
+        Loaded += (_, _) =>
+        {
+            ApplyResponsiveBreakpoints(RootGrid.ActualWidth > 0 ? RootGrid.ActualWidth : Width);
+        };
     }
 
     /// <summary>Entry point into SettingsWindow, wired by App.</summary>
     internal Action? OpenSettings { get; set; }
+
+    /// <summary>
+    /// Direct route from the 添加翻译引擎 call to action: opens settings
+    /// on the engine page inside the add-engine flow. Wired by App.
+    /// </summary>
+    internal Action? OpenAddEngineFlow { get; set; }
 
     /// <summary>Tray balloon used for the one-time close-to-tray hint.</summary>
     internal Action<string, string>? NotifyTray { get; set; }
@@ -51,6 +62,7 @@ public partial class MainWindow : Window
     internal bool AllowClose { get; set; }
 
     private bool _closeHintShown;
+    private bool _isSwitchingEngine = false;
 
     // ================= Window Caption Controls =================
 
@@ -85,9 +97,56 @@ public partial class MainWindow : Window
     // ================= Engine status footer =================
 
     private void RefreshEngineStatusOnActivated() =>
-        Activated += (_, _) => RefreshEngineStatus();
+        Activated += (_, _) =>
+        {
+            RefreshEngineStatus();
+            // Settings may have added/completed/removed an engine while we
+            // were in the background: repaint the empty state and the shell
+            // status line immediately, without a restart, a page switch or
+            // a translate.
+            TranslateSection.RefreshAfterSettingsChanged();
+            RefreshShellStatusForConfig();
+        };
 
-    /// <summary>Quiet picture of what actually runs right now, in the footer.</summary>
+    /// <summary>
+    /// The shell status line must never contradict the engine state: with no
+    /// configured user engine it says so instead of the default「就绪」, and
+    /// once an engine exists it returns to the neutral ready state.
+    /// </summary>
+    private void RefreshShellStatusForConfig()
+    {
+        try
+        {
+            if (!ProfileManager.HasConfiguredUserEngine())
+            {
+                if (ShellSettingsStore.Load().FreeEngineConsent == FreeEngineConsent.Allowed)
+                {
+                    SetStatus("当前使用内置公共翻译 — 可添加自己的翻译引擎", StatusTone.Info);
+                }
+                else
+                {
+                    SetStatus("尚未配置翻译引擎 — 点击「添加翻译引擎」开始", StatusTone.Warning);
+                }
+            }
+            else if (StatusTextBlock.Text.Contains("尚未配置") ||
+                     StatusTextBlock.Text.Contains("内置公共翻译"))
+            {
+                SetStatus("就绪", StatusTone.Success);
+            }
+        }
+        catch (Exception)
+        {
+            // Profile/shell stores unavailable: keep the current status text
+            // rather than crash on window activation.
+        }
+    }
+
+    /// <summary>
+    /// Quiet picture of what actually runs right now, in the footer. The
+    /// resident summary is exactly three things: the status dot, the short
+    /// name of the current text engine, and the expand chevron. Privacy and
+    /// health details live in tooltips and the expanded menu.
+    /// </summary>
     internal void RefreshEngineStatus()
     {
         try
@@ -99,18 +158,13 @@ public partial class MainWindow : Window
             var hasKey = activeProfile is not null &&
                 CredentialStore.HasApiKey(ProfileManager.ResolveCredentialTargetFor(activeProfile));
             var consent = ShellSettingsStore.Load().FreeEngineConsent;
-            var (summary, tone) = DescribeEngine(settings, hasKey, consent);
-            if (UsesFreeEngine(settings, hasKey, consent))
-            {
-                // 免费引擎是当前文字线路，但可达性只能由用户主动探测得出：
-                // 打开/激活窗口绝不发请求，这里只显示“未检测”。
-                EngineSummary.Text = "内置免费引擎 · 未检测";
-            }
-            else
-            {
-                EngineSummary.Text = summary + " · " + DescribeUploadNote(settings, hasKey);
-            }
-            EngineDot.Background = (Brush)FindResource(tone switch
+            var (_, tone) = DescribeEngine(settings, hasKey, consent);
+            EngineSummary.Text = UsesFreeEngine(settings, hasKey, consent)
+                ? "内置免费引擎"
+                : activeProfile is not null
+                    ? activeProfile.Name
+                    : DescribeEngine(settings, hasKey, consent).Summary;
+            EngineDot.SetResourceReference(Border.BackgroundProperty, tone switch
             {
                 StatusTone.Error => "DangerBrush",
                 StatusTone.Warning => "WarningBrush",
@@ -168,13 +222,13 @@ public partial class MainWindow : Window
             if (health.Ok)
             {
                 EngineSummary.Text = $"免费引擎可用 · {health.LatencyMs} ms";
-                EngineDot.Background = (Brush)FindResource("SuccessBrush");
+                EngineDot.SetResourceReference(Border.BackgroundProperty, "SuccessBrush");
                 EngineHealthButton.ToolTip = "免费引擎可用 · 点击重新检测";
             }
             else
             {
                 EngineSummary.Text = "免费引擎不可用";
-                EngineDot.Background = (Brush)FindResource("WarningBrush");
+                EngineDot.SetResourceReference(Border.BackgroundProperty, "WarningBrush");
                 EngineHealthButton.ToolTip =
                     $"免费引擎不可用：{health.Error} · 点击重新检测";
             }
@@ -193,7 +247,7 @@ public partial class MainWindow : Window
             return; // window may be gone; RefreshEngineStatus will repaint next time
         }
         EngineSummary.Text = "免费引擎未检测";
-        EngineDot.Background = (Brush)FindResource("TextSecondaryBrush");
+        EngineDot.SetResourceReference(Border.BackgroundProperty, "TextSecondaryBrush");
         EngineHealthButton.ToolTip = denial is null
             ? "免费引擎未检测 · 点击重新检测"
             : $"未检测：{denial.Message}";
@@ -216,27 +270,35 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void EngineHealthButton_Click(object sender, RoutedEventArgs e)
+    private void EngineHealthButton_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button button)
         {
             return;
         }
+        // Opening the menu is a LOCAL read of cached state only. It must
+        // never probe the network — reachability is refreshed exclusively
+        // by the explicit「重新检测免费引擎」menu item.
         ShowEngineSwitchMenu(button);
-        // 打开菜单的同时后台刷新一次免费引擎探测，让菜单里的状态尽量新鲜。
-        await UpdateFreeEngineHealthAsync(force: true);
     }
 
     /// <summary>
     /// 右下角快速切换器：点击即列出已配置的文字/图片引擎，选中立即生效，
     /// 不再需要绕进设置页。免费引擎是兜底线路，只展示状态不可选。
+    /// 构建与弹出分离：构建只读本地缓存状态，弹出负责放置与打开。
     /// </summary>
     private void ShowEngineSwitchMenu(Button anchor)
     {
-        CoreProductConfig config;
+        if (_isSwitchingEngine)
+        {
+            SetStatus("正在切换引擎，请稍候…", StatusTone.Info);
+            return;
+        }
+
+        ContextMenu menu;
         try
         {
-            config = ProfileManager.Load();
+            menu = BuildEngineSwitchMenu();
         }
         catch (Exception exception)
         {
@@ -244,6 +306,21 @@ public partial class MainWindow : Window
             return;
         }
 
+        menu.PlacementTarget = anchor;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        menu.PlacementRectangle = new Rect(0, 0, anchor.ActualWidth, anchor.ActualHeight);
+        menu.IsOpen = true;
+    }
+
+    /// <summary>
+    /// Builds the switcher menu purely from local cached state. It performs
+    /// NO network access — reachability strings come from the last cached
+    /// health probe, and probing happens only via the explicit menu item.
+    /// Internal so tests can assert the current-route marker is unique.
+    /// </summary>
+    internal ContextMenu BuildEngineSwitchMenu()
+    {
+        var config = ProfileManager.Load();
         var menu = new ContextMenu();
         var activeId = config.TryGetActiveProfile()?.Id;
         var currentVisionId = config.VisionProfileId;
@@ -319,26 +396,35 @@ public partial class MainWindow : Window
         reprobe.Click += async (_, _) => await UpdateFreeEngineHealthAsync(force: true);
         menu.Items.Add(reprobe);
 
-        menu.PlacementTarget = anchor;
-        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
-        menu.PlacementRectangle = new Rect(0, 0, anchor.ActualWidth, anchor.ActualHeight);
-        menu.IsOpen = true;
+        return menu;
     }
 
-    private static TextBlock MakeActiveCheck() => new()
+    private static TextBlock MakeActiveCheck()
     {
-        Text = "✓",
-        FontSize = 13,
-        FontWeight = FontWeights.Bold,
-        Foreground = (Brush)Application.Current.FindResource("AccentBrush"),
-    };
+        var check = new TextBlock
+        {
+            Text = "✓",
+            FontSize = 13,
+            FontWeight = FontWeights.Bold,
+        };
+        check.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
+        return check;
+    }
 
-    private static System.Windows.Controls.MenuItem MakeMenuHeader(string text) => new()
+    private static System.Windows.Controls.MenuItem MakeMenuHeader(string text)
     {
-        Header = text,
-        IsEnabled = false,
-        FontWeight = FontWeights.SemiBold,
-    };
+        var item = new System.Windows.Controls.MenuItem
+        {
+            Header = text,
+            IsEnabled = true,
+            Focusable = false,
+            IsHitTestVisible = false,
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 11.5,
+        };
+        item.SetResourceReference(System.Windows.Controls.Control.ForegroundProperty, "TextTertiaryBrush");
+        return item;
+    }
 
     private static System.Windows.Controls.MenuItem MakeDisabledItem(string text) => new()
     {
@@ -348,6 +434,8 @@ public partial class MainWindow : Window
 
     private async void SwitchTextEngine(string profileId)
     {
+        if (_isSwitchingEngine) return;
+        _isSwitchingEngine = true;
         try
         {
             SetStatus("正在切换文字引擎…", StatusTone.Info);
@@ -367,10 +455,16 @@ public partial class MainWindow : Window
             // dispatcher; the switcher must degrade to a status line.
             SetStatus($"切换文字引擎失败：{exception.Message}", StatusTone.Error);
         }
+        finally
+        {
+            _isSwitchingEngine = false;
+        }
     }
 
     private async void SwitchVisionEngine(string? profileId)
     {
+        if (_isSwitchingEngine) return;
+        _isSwitchingEngine = true;
         try
         {
             SetStatus("正在切换图片引擎…", StatusTone.Info);
@@ -390,10 +484,16 @@ public partial class MainWindow : Window
         {
             SetStatus($"切换图片引擎失败：{exception.Message}", StatusTone.Error);
         }
+        finally
+        {
+            _isSwitchingEngine = false;
+        }
     }
 
     private async Task SwitchToFreeEngineAsync()
     {
+        if (_isSwitchingEngine) return;
+        _isSwitchingEngine = true;
         try
         {
             SetStatus("正在切换到内置免费引擎…", StatusTone.Info);
@@ -412,6 +512,10 @@ public partial class MainWindow : Window
             // Invoked from an async-void menu lambda: must not throw upward.
             SetStatus($"切换到免费引擎失败：{exception.Message}", StatusTone.Error);
         }
+        finally
+        {
+            _isSwitchingEngine = false;
+        }
     }
 
     private static (string Summary, StatusTone Tone) DescribeEngine(
@@ -428,30 +532,12 @@ public partial class MainWindow : Window
         if (!hasKey && !settings.TargetsLocalRuntime)
         {
             return consent == FreeEngineConsent.Denied
-                ? ("免费引擎已关闭，且未配置模型服务", StatusTone.Warning)
+                ? ("免费引擎已关闭，且未配置翻译引擎", StatusTone.Warning)
                 : ("内置免费引擎", StatusTone.Info);
         }
         return (string.IsNullOrWhiteSpace(settings.TextModel)
             ? "未填写文本模型"
             : settings.TextModel, StatusTone.Success);
-    }
-
-    private static string DescribeUploadNote(ProviderSettings settings, bool hasKey)
-    {
-        try
-        {
-            // Use the same profile resolver as screenshot execution. The Rust
-            // legacy planner only sees mirrored settings and can describe a
-            // different vision route than the one the user selected.
-            var route = ProfileManager.ResolveRoute(settings, WindowsOcrService.IsSupported);
-            return route.ScreenshotPipeline is ScreenshotPipeline.VisionDirect or ScreenshotPipeline.VisionOcr
-                ? route.MayUploadImage ? "截图会发送到所选视觉服务" : "本地视觉服务，图片不离开本机"
-                : "截图不上传，使用本地 OCR";
-        }
-        catch (Exception)
-        {
-            return settings.TargetsLocalRuntime ? "本地模型" : "在线文本服务";
-        }
     }
 
 
@@ -484,16 +570,68 @@ public partial class MainWindow : Window
     // ================= Navigation =================
 
     /// <summary>
-    /// Responsive breakpoints driven by the CONTENT area, never the screen:
-    /// below 880 DIP the pages drop secondary affordances, below 720 DIP the
-    /// dual panes stack vertically with the input editor keeping ≥160 DIP
-    /// (AI-RULES 6.2) — the text is never shrunk to keep buttons inline.
+    /// Content area size changes maintain secondary text compactness.
+    /// Stacked/wide state is governed by the unified RootGrid client width.
     /// </summary>
     private void ContentGrid_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         var compact = e.NewSize.Width < 880;
         TranslateSection.SetCompact(compact);
-        TranslateSection.SetStacked(e.NewSize.Width < 720);
+    }
+
+    /// <summary>
+    /// WIN-12 & V2 §10 (G07): Breakpoint based on available client area width excluding outer window border:
+    /// - < 720 DIP: Fold sidebar to compact 48 DIP icon mode, vertically stack input and result panes.
+    /// - 720–959 DIP: Standard workstation mode with 168 DIP sidebar and equal 1:1 dual panes.
+    /// - >= 960 DIP: Enhanced wide dual-column workstation mode with expanded reading quota (1:1.25).
+    /// </summary>
+    private void RootGrid_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var clientWidth = e.NewSize.Width;
+        ApplyResponsiveBreakpoints(clientWidth);
+    }
+
+    private void ApplyResponsiveBreakpoints(double clientWidth)
+    {
+        var foldSidebar = clientWidth < 720;
+        SetSidebarCompact(foldSidebar);
+
+        TranslateSection.SetStacked(clientWidth < 720);
+        TranslateSection.SetCompact(clientWidth < 880);
+        TranslateSection.SetWide(clientWidth >= 960);
+    }
+
+    private void SetSidebarCompact(bool compact)
+    {
+        if (SidebarColumn is null) return;
+        SidebarColumn.Width = new GridLength(compact ? 48 : 168);
+        if (SidebarGrid is not null)
+        {
+            SidebarGrid.Margin = compact ? new Thickness(4, 0, 4, 12) : new Thickness(10, 0, 10, 12);
+        }
+        if (BrandText is not null)
+        {
+            BrandText.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        }
+        if (NavGroupHeader is not null)
+        {
+            NavGroupHeader.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        }
+        if (NavTranslate is not null)
+        {
+            NavTranslate.Content = compact ? null : "翻译";
+            NavTranslate.ToolTip = "翻译";
+        }
+        if (NavLibrary is not null)
+        {
+            NavLibrary.Content = compact ? null : "资料库";
+            NavLibrary.ToolTip = "资料库";
+        }
+        if (NavSettingsButton is not null)
+        {
+            NavSettingsButton.Content = compact ? null : "设置";
+            NavSettingsButton.ToolTip = "设置（引擎、快捷键、隐私）";
+        }
     }
 
     private void Nav_Checked(object sender, RoutedEventArgs e)
@@ -544,7 +682,7 @@ public partial class MainWindow : Window
     private void SetStatus(string message, StatusTone tone)
     {
         StatusTextBlock.Text = message;
-        StatusTextBlock.Foreground = (Brush)FindResource(tone switch
+        StatusTextBlock.SetResourceReference(TextBlock.ForegroundProperty, tone switch
         {
             StatusTone.Success => "SuccessBrush",
             StatusTone.Warning => "WarningBrush",
@@ -553,7 +691,7 @@ public partial class MainWindow : Window
         });
         // Info covers the idle/ready state and neutral confirmations; a gray
         // dot reads as "disabled" — the accent reads as "alive" instead.
-        StatusDot.Background = (Brush)FindResource(tone switch
+        StatusDot.SetResourceReference(Border.BackgroundProperty, tone switch
         {
             StatusTone.Success => "SuccessBrush",
             StatusTone.Warning => "WarningBrush",

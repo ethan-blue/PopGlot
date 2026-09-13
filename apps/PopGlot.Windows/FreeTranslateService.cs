@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -55,12 +56,18 @@ internal static class FreeTranslateService
     private static long _cacheBytes;
     private static long _rateLimitedUntilTicks;
 
-    private sealed record FreeEndpoint(
+    internal sealed record FreeEndpoint(
         string Host,
         Func<string, string, string, string> BuildUrl,
         Func<string, (string Translated, string Phonetic)> Parse);
 
-    private static readonly FreeEndpoint[] Endpoints =
+    /// <summary>A04 test seam: replaces the endpoint table so construction
+    /// failures (throwing BuildUrl) are injectable.</summary>
+    internal static FreeEndpoint[]? EndpointsOverride { get; set; }
+
+    private static FreeEndpoint[] Endpoints => EndpointsOverride ?? DefaultEndpoints;
+
+    private static readonly FreeEndpoint[] DefaultEndpoints =
     [
         new FreeEndpoint(
             "translate.googleapis.com",
@@ -135,6 +142,16 @@ internal static class FreeTranslateService
                 request.Headers.Add(
                     "User-Agent",
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36");
+                // A04 send boundary: the claim is the SUBMISSION step — after
+                // URL/header construction, immediately before the transport
+                // call. A construction failure never burns an AllowOnce
+                // permit; a submitted attempt that later fails stays
+                // consumed; each fallback endpoint must re-claim, so a
+                // revocation between endpoints stops the remaining sends.
+                if (!authorization.TryClaimSend(out var sendRefusal))
+                {
+                    throw new InvalidOperationException(sendRefusal);
+                }
                 using var response = HttpSenderOverride is { } sender
                     ? await sender(request, cancellationToken)
                     : await HttpClient.SendAsync(request, cancellationToken);
@@ -219,7 +236,13 @@ internal static class FreeTranslateService
         throw lastError ?? new InvalidOperationException("免费翻译服务不可用。");
     }
 
-    private static void EnsureOutboundAuthorized(FreeEngineAuthorization? authorization)
+    /// <summary>
+    /// Entry gate: nothing leaves the machine without an authorization issued
+    /// by OutboundPolicy — including for health probes. The live per-send
+    /// re-check lives in <see cref="Services.FreeEngineAuthorization.TryClaimSend"/>,
+    /// which every endpoint send must pass.
+    /// </summary>
+    private static void EnsureOutboundAuthorized([NotNull] FreeEngineAuthorization? authorization)
     {
         if (authorization is null)
         {

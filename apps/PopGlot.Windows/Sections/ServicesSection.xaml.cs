@@ -17,12 +17,6 @@ internal sealed record ProfilesRow(
     Brush StateTextBrush,
     System.Windows.Visibility IsDefaultBadge);
 
-/// <summary>An entry of the default text/vision service pickers.</summary>
-internal sealed record ProviderComboOption(string Id, string Label, bool IsCompatible = true)
-{
-    public override string ToString() => Label;
-}
-
 /// <summary>
 /// Service settings as a master–detail surface: profile list on the left,
 /// editor on the right. Key, connection test, and models are on the first
@@ -42,7 +36,6 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     private bool _loading;
     private bool _isAdding;
     private bool _suppressListEvents;
-    private bool _suppressComboEvents;
     private bool _editorDirty;
     private string _editorBaseline = string.Empty;
     private string? _editingProfileId;
@@ -73,8 +66,14 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     /// <summary>Raised when the editor draft becomes dirty or clean.</summary>
     internal event Action? EditorDirtyChanged;
 
+    /// <summary>Raised when the editor opens or closes.</summary>
+    internal event Action? EditorOpenStateChanged;
+
     /// <summary>True while the editor holds unsaved changes.</summary>
     internal bool IsEditorDirty => _editorDirty;
+
+    /// <summary>True while the service editor form is visible.</summary>
+    internal bool IsEditorOpen => EditorForm?.Visibility == Visibility.Visible;
 
     public ServicesSection()
     {
@@ -104,19 +103,23 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     /// settings window's narrowest supported width. No field is ever restored
     /// into the gutter column.
     /// </summary>
-    private void DetailGrid_SizeChanged(object sender, SizeChangedEventArgs e)
+    internal void SetCompact(bool compact)
     {
-        if (e.NewSize.Width <= 0)
-        {
-            return;
-        }
-        var compact = e.NewSize.Width < 680;
         if (_compactEditor.HasValue && compact == _compactEditor.Value)
         {
             return;
         }
         _compactEditor = compact;
         ApplyEditorLayout();
+    }
+
+    private void DetailGrid_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (e.NewSize.Width <= 0)
+        {
+            return;
+        }
+        SetCompact(e.NewSize.Width < 680);
     }
 
     private void ApplyEditorLayout()
@@ -208,6 +211,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
         WatchText(ServiceNameTextBox);
         WatchText(BaseUrlTextBox);
+        BaseUrlTextBox.TextChanged += (_, _) => UpdateCredentialGating();
         WatchText(TextEndpointTextBox);
         WatchText(VisionEndpointTextBox);
         WatchText(ExtraHeadersTextBox);
@@ -218,7 +222,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         WatchToggle(SupportsVisionCheckBox);
         WatchToggle(UseTextModelForVisionCheckBox);
         WatchToggle(AllowInsecureTlsCheckBox);
-        ApiKeyPasswordBox.PasswordChanged += (_, _) => MarkEditorDirty();
+        ApiKeyPasswordBox.PasswordChanged += (_, _) =>
+        {
+            MarkEditorDirty();
+            UpdateCredentialGating();
+        };
         ProviderTypeComboBox.SelectionChanged += (_, _) => MarkEditorDirty();
     }
 
@@ -335,17 +343,22 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         _pendingAfterDraft = proceed;
         DraftGuardText.Text = message;
         DraftGuardBar.Visibility = Visibility.Visible;
+        EditorActionBar.Visibility = Visibility.Collapsed;
     }
 
     private void HideDraftGuard()
     {
         DraftGuardBar.Visibility = Visibility.Collapsed;
+        if (EditorForm.Visibility == Visibility.Visible && ConfigFormPanel.Visibility == Visibility.Visible)
+        {
+            EditorActionBar.Visibility = Visibility.Visible;
+        }
         _pendingAfterDraft = null;
     }
 
-    private void DraftSave_Click(object sender, RoutedEventArgs e)
+    private async void DraftSave_Click(object sender, RoutedEventArgs e)
     {
-        if (TrySaveService())
+        if (await TrySaveServiceAsync())
         {
             var proceed = _pendingAfterDraft;
             HideDraftGuard();
@@ -493,6 +506,53 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             ApiKeyStateText.Text = $"无法读取密钥状态：{exception.Message}";
         }
+        UpdateCredentialGating();
+    }
+
+    private void UpdateCredentialGating()
+    {
+        if (FetchModelsButton is null || TestConnectionButton is null)
+        {
+            return;
+        }
+
+        var isLocal = ProviderSettings.IsLocalBaseUrl(BaseUrlTextBox?.Text);
+        var hasStoredKey = false;
+        try
+        {
+            if (!_isAdding && _editingProfileId is not null)
+            {
+                var profile = ProfileManager.Load().Profiles.FirstOrDefault(p => p.Id == _editingProfileId);
+                if (profile is not null)
+                {
+                    hasStoredKey = HasStoredKey(profile);
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        var hasTypedKey = !string.IsNullOrWhiteSpace(ApiKeyPasswordBox?.Password);
+        var hasKey = hasStoredKey || hasTypedKey;
+        var allowed = isLocal || hasKey;
+
+        FetchModelsButton.IsEnabled = allowed;
+        FetchModelsButton.ToolTip = allowed
+            ? "从服务商获取可用模型列表"
+            : "请先填写 API Key（本地服务除外）";
+
+        TestConnectionButton.IsEnabled = allowed;
+        TestConnectionButton.ToolTip = allowed
+            ? "发送短文本测试连接（不含截图）"
+            : "请先填写 API Key（本地服务除外）";
+
+        if (ClearKeyButton is not null)
+        {
+            var canClear = hasStoredKey || hasTypedKey;
+            ClearKeyButton.IsEnabled = canClear;
+            ClearKeyButton.ToolTip = canClear ? "清除当前引擎的 API Key" : "未配置密钥";
+        }
     }
 
     // ================= List & default routes =================
@@ -519,17 +579,30 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                     ? Visibility.Visible
                     : Visibility.Collapsed);
         }).ToList();
-        ProfilesEmptyText.Visibility = config.Profiles.Count == 0
+        var hasProfiles = config.Profiles.Count > 0;
+        ProfilesEmptyText.Visibility = hasProfiles
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        // The list occupies the same grid cell as the empty-state CTA. An
+        // empty but visible ListBox still wins WPF hit testing, making the
+        // button look enabled while swallowing every click. Collapse the list
+        // whenever the empty state is active; the Z-order in XAML is only a
+        // defensive fallback during a layout refresh.
+        ProfilesListBox.Visibility = hasProfiles
             ? Visibility.Visible
             : Visibility.Collapsed;
-        RefreshDefaultCombos(config);
 
-        if (config.Profiles.Count == 0)
+        if (!hasProfiles)
         {
             _editingProfileId = null;
             _isAdding = false;
+            var wasOpen = EditorForm.Visibility == Visibility.Visible;
             EditorForm.Visibility = Visibility.Collapsed;
             EditorEmpty.Visibility = Visibility.Visible;
+            if (wasOpen)
+            {
+                EditorOpenStateChanged?.Invoke();
+            }
         }
         else
         {
@@ -655,45 +728,6 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         return null;
     }
 
-    private void SetDefault_Click(object sender, RoutedEventArgs e)
-    {
-        if (_isAdding || _editingProfileId is null)
-        {
-            StatusChanged?.Invoke("请先保存服务，再设为默认。", StatusTone.Info);
-            return;
-        }
-        try
-        {
-            var config = ProfileManager.Load();
-            var profile = config.Profiles.FirstOrDefault(p => p.Id == _editingProfileId);
-            if (profile is null)
-            {
-                return;
-            }
-            var notReady = CheckReadiness(
-                ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl),
-                HasStoredKey(profile),
-                profile.TextModel,
-                profile.ApiBaseUrl);
-            if (notReady is not null)
-            {
-                StatusChanged?.Invoke($"无法设为默认：{notReady}。请补全后保存。", StatusTone.Warning);
-                return;
-            }
-            config.ActiveProfileId = profile.Id;
-            config.PreferFreeEngine = false;
-            ProfileManager.Save(config);
-            ApplyToCore(config);
-            RefreshProfilesList();
-            ProfileChanged?.Invoke();
-            StatusChanged?.Invoke($"已将「{profile.Name}」设为默认文字服务，即时生效。", StatusTone.Success);
-        }
-        catch (Exception exception)
-        {
-            StatusChanged?.Invoke($"设置默认服务失败：{exception.Message}", StatusTone.Error);
-        }
-    }
-
     private Brush ToneBrush(StatusTone tone) => (Brush)FindResource(tone switch
     {
         StatusTone.Success => "SuccessBrush",
@@ -709,121 +743,6 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         StatusTone.Error => "DangerBrush",
         _ => "TextTertiaryBrush",
     });
-
-    private void RefreshDefaultCombos(CoreProductConfig config)
-    {
-        _suppressComboEvents = true;
-        try
-        {
-            DefaultTextCombo.ItemsSource = config.Profiles
-                .Where(profile => profile.SupportsText)
-                .Select(profile =>
-                {
-                    // Unready profiles stay visible but disabled, with the
-                    // blocking reason inline.
-                    var notReady = CheckReadiness(
-                        ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl),
-                        HasStoredKey(profile),
-                        profile.TextModel,
-                        profile.ApiBaseUrl);
-                    return new ProviderComboOption(
-                        profile.Id,
-                        notReady is null ? profile.Name : $"{profile.Name}（{notReady}）",
-                        notReady is null);
-                })
-                .ToList();
-            DefaultTextCombo.SelectedItem = (DefaultTextCombo.ItemsSource as List<ProviderComboOption>)?
-                .FirstOrDefault(option => option.Id == config.ActiveProfileId);
-
-            // Vision options check FULL readiness (model + credential). Text
-            // and vision are independent complete routes, so protocols may
-            // differ without sharing endpoints, headers or credentials.
-            var textProfile = config.TryGetActiveProfile();
-            var visionOptions = new List<ProviderComboOption> { new("", "跟随默认文字服务") };
-            visionOptions.AddRange(config.Profiles
-                .Where(profile => profile.SupportsVision)
-                .Select(profile =>
-                {
-                    var local = ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl);
-                    var missingModel = string.IsNullOrWhiteSpace(profile.VisionModel);
-                    var missingKey = !local && !HasStoredKey(profile);
-                    var reason = missingModel
-                        ? "缺少视觉模型"
-                        : missingKey
-                            ? "缺少 API Key"
-                            : null;
-                    return new ProviderComboOption(
-                        profile.Id,
-                        reason is null ? profile.Name : $"{profile.Name}（{reason}）",
-                        reason is null);
-                }));
-            DefaultVisionCombo.ItemsSource = visionOptions;
-            var visionId = config.VisionProfileId ?? "";
-            DefaultVisionCombo.SelectedItem = visionOptions.FirstOrDefault(option => option.Id == visionId);
-
-            var incompatibleCount = visionOptions.Count(option => option.Id != "" && !option.IsCompatible);
-            var hasIncompatible = incompatibleCount > 0;
-            VisionIncompatHint.Text = hasIncompatible && textProfile is not null
-                ? $"{incompatibleCount} 个图片服务尚未配置完整模型或凭据。"
-                : string.Empty;
-            VisionIncompatHint.Visibility = hasIncompatible
-                ? Visibility.Visible
-                : Visibility.Collapsed;
-        }
-        finally
-        {
-            _suppressComboEvents = false;
-        }
-    }
-
-    private void DefaultTextCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_suppressComboEvents || _loading ||
-            DefaultTextCombo.SelectedItem is not ProviderComboOption option ||
-            string.IsNullOrEmpty(option.Id))
-        {
-            return;
-        }
-        try
-        {
-            var config = ProfileManager.Load();
-            config.ActiveProfileId = option.Id;
-            config.PreferFreeEngine = false;
-            ProfileManager.Save(config);
-            ApplyToCore(config);
-            RefreshProfilesList();
-            ProfileChanged?.Invoke();
-            StatusChanged?.Invoke($"默认文字服务已切换为「{option.Label}」，即时生效。", StatusTone.Success);
-        }
-        catch (Exception exception)
-        {
-            StatusChanged?.Invoke($"切换默认服务失败：{exception.Message}", StatusTone.Error);
-        }
-    }
-
-    private void DefaultVisionCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_suppressComboEvents || _loading ||
-            DefaultVisionCombo.SelectedItem is not ProviderComboOption option)
-        {
-            return;
-        }
-        try
-        {
-            var config = ProfileManager.Load();
-            config.VisionProfileId = string.IsNullOrEmpty(option.Id) ? null : option.Id;
-            ProfileManager.Save(config);
-            ApplyToCore(config);
-            ProfileChanged?.Invoke();
-            StatusChanged?.Invoke(string.IsNullOrEmpty(option.Id)
-                ? "默认视觉服务将跟随默认文字服务。"
-                : $"默认视觉服务已切换为「{option.Label}」，即时生效。", StatusTone.Info);
-        }
-        catch (Exception exception)
-        {
-            StatusChanged?.Invoke($"切换默认视觉服务失败：{exception.Message}", StatusTone.Error);
-        }
-    }
 
     /// <summary>
     /// Mirrors the active profile into the core via the shared implementation
@@ -845,12 +764,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     {
         EditorEmpty.Visibility = Visibility.Collapsed;
         EditorForm.Visibility = Visibility.Visible;
-        RoutingPanel.Visibility = Visibility.Collapsed;
         PresetsPanel.Visibility = addMode ? Visibility.Visible : Visibility.Collapsed;
         ConfigFormPanel.Visibility = addMode ? Visibility.Collapsed : Visibility.Visible;
         EditorActionBar.Visibility = addMode ? Visibility.Collapsed : Visibility.Visible;
         ChooseAnotherProviderButton.Visibility = Visibility.Collapsed;
-        SetDefaultButton.Visibility = addMode ? Visibility.Collapsed : Visibility.Visible;
         DeleteServiceButton.Visibility = addMode ? Visibility.Collapsed : Visibility.Visible;
         _isAdding = addMode;
         if (!_compactEditor.HasValue && DetailGrid.ActualWidth > 0)
@@ -860,6 +777,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         ApplyEditorLayout();
         UpdateSaveButtonLabel();
         UpdateDeleteTooltip();
+        EditorOpenStateChanged?.Invoke();
     }
 
     private void ShowOverview()
@@ -867,15 +785,15 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         HideDraftGuard();
         EditorForm.Visibility = Visibility.Collapsed;
         EditorEmpty.Visibility = Visibility.Visible;
-        RoutingPanel.Visibility = Visibility.Visible;
         _isAdding = false;
         ClearEditorDirty();
         RefreshProfilesList();
+        EditorOpenStateChanged?.Invoke();
     }
 
     /// <summary>
     /// Save never silently changes the live route: the first configured
-    /// service "保存并使用", later ones just "保存服务", edits say "保存修改".
+    /// engine "保存并使用", later ones just "保存引擎", edits say "保存修改".
     /// </summary>
     private void UpdateSaveButtonLabel()
     {
@@ -883,7 +801,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             SaveServiceButton.Content = ProfileManager.Load().Profiles.Count == 0
                 ? "保存并使用"
-                : "保存服务";
+                : "保存引擎";
         }
         else
         {
@@ -910,11 +828,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         var nextDefault = config.Profiles.FirstOrDefault(p => p.Id != profile.Id);
         DeleteServiceButton.ToolTip = isTextDefault
             ? (nextDefault is null
-                ? "它是当前默认文字服务；删除后没有其他可用服务，翻译将回退到已授权的内置免费引擎。"
-                : $"它是当前默认文字服务；删除后默认路由将切换为「{nextDefault.Name}」。")
+                ? "它是当前默认文字引擎；删除后没有其他可用引擎，翻译将回退到已授权的内置免费引擎。"
+                : $"它是当前默认文字引擎；删除后默认路由将切换为「{nextDefault.Name}」。")
             : isVisionDefault
-                ? "它是当前默认视觉服务；删除后视觉翻译将跟随默认文字服务。"
-                : "默认路由不受影响。该服务保存的 API Key 也会一并删除。";
+                ? "它是当前默认视觉引擎；删除后视觉翻译将跟随默认文字引擎。"
+                : "默认路由不受影响。该引擎保存的 API Key 也会一并删除。";
     }
 
     private ProviderProfile? SelectedProfile()
@@ -944,7 +862,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     private void UpdateEditorIdentity(
         string? name, ProviderType providerType, string? baseUrl, bool isLocal)
     {
-        var title = string.IsNullOrWhiteSpace(name) ? "新服务" : name.Trim();
+        var title = string.IsNullOrWhiteSpace(name) ? "新引擎" : name.Trim();
         EditorProviderTitle.Text = title;
         EditorProviderBadge.Text = title[..1].ToUpperInvariant();
         var protocol = providerType switch
@@ -988,7 +906,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             "ollama" => (ProviderType.OpenAiCompatible, "http://localhost:11434/v1",
                 "/chat/completions", "已应用本地 Ollama 预设，无需 API Key：可直接输入或拉取本地模型。"),
             _ => (ProviderType.OpenAiCompatible, string.Empty,
-                "/chat/completions", "自定义服务：请填写协议、Base URL，然后获取或输入模型。"),
+                "/chat/completions", "自定义引擎：请填写协议、Base URL，然后获取或输入模型。"),
         };
 
         _loading = true;
@@ -996,8 +914,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         try
         {
             if (string.IsNullOrWhiteSpace(ServiceNameTextBox.Text) ||
+                ServiceNameTextBox.Text.StartsWith("新引擎") ||
                 ServiceNameTextBox.Text.StartsWith("新服务") ||
-                ServiceNameTextBox.Text is "OpenAI" or "DeepSeek" or "Google Gemini" or "Anthropic Claude" or "智谱 GLM" or "Ollama（本地）" or "自定义服务")
+                ServiceNameTextBox.Text is "OpenAI" or "DeepSeek" or "Google Gemini" or "Anthropic Claude" or "智谱 GLM" or "Ollama（本地）" or "自定义引擎" or "自定义服务")
             {
                 ServiceNameTextBox.Text = preset switch
                 {
@@ -1007,7 +926,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                     "claude" => "Anthropic Claude",
                     "zhipu" => "智谱 GLM",
                     "ollama" => "Ollama（本地）",
-                    _ => "自定义服务",
+                    _ => "自定义引擎",
                 };
             }
 
@@ -1056,9 +975,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         ConfigFormPanel.Visibility = Visibility.Visible;
         EditorActionBar.Visibility = Visibility.Visible;
         ChooseAnotherProviderButton.Visibility = Visibility.Visible;
-        SetDefaultButton.Visibility = Visibility.Collapsed;
         DeleteServiceButton.Visibility = Visibility.Collapsed;
         UpdateEditorIdentity(ServiceNameTextBox.Text, type, baseUrl, preset == "ollama");
+        UpdateCredentialGating();
         RefreshRecommendations();
         if (_isAdding)
         {
@@ -1096,7 +1015,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     }
 
     private void BackToServices_Click(object sender, RoutedEventArgs e) =>
-        BeginDraftGuard("返回服务列表前请先处理当前修改。", ShowOverview);
+        BeginDraftGuard("返回引擎列表前请先处理当前修改。", ShowOverview);
 
     private void ProviderTypeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -1134,15 +1053,23 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private async void FetchModels_Click(object sender, RoutedEventArgs e)
     {
+        var draft = BuildDraftSettings();
+        var typedKey = string.IsNullOrWhiteSpace(ApiKeyPasswordBox.Password)
+            ? CredentialStore.LoadApiKey(CurrentCredentialTarget())
+            : ApiKeyPasswordBox.Password.Trim();
+        if (string.IsNullOrWhiteSpace(typedKey) && !draft.TargetsLocalRuntime)
+        {
+            ApiKeyPasswordBox.Focus();
+            SetModelCatalogStatus("请先填写 API Key 再获取模型（本地服务除外）。", StatusTone.Warning);
+            UpdateCredentialGating();
+            return;
+        }
+
         FetchModelsButton.IsEnabled = false;
         FetchModelsButton.Content = "获取中…";
         SetModelCatalogStatus("正在读取服务提供的模型列表…", StatusTone.Info);
         try
         {
-            var draft = BuildDraftSettings();
-            var typedKey = string.IsNullOrWhiteSpace(ApiKeyPasswordBox.Password)
-                ? CredentialStore.LoadApiKey(CurrentCredentialTarget())
-                : ApiKeyPasswordBox.Password.Trim();
             var result = await ModelCatalogService.FetchAsync(draft, typedKey ?? string.Empty);
 
             SetModelCatalogStatus(
@@ -1166,8 +1093,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
         finally
         {
-            FetchModelsButton.IsEnabled = true;
             FetchModelsButton.Content = "获取模型";
+            UpdateCredentialGating();
         }
     }
 
@@ -1264,6 +1191,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             TextRecommendationReasonText,
             TextEvidenceBadge,
             TextEvidenceBadgeText,
+            TextEvidenceDot,
             selectedTextEval);
 
         if (visionResult is null)
@@ -1292,6 +1220,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             VisionRecommendationReasonText,
             VisionEvidenceBadge,
             VisionEvidenceBadgeText,
+            VisionEvidenceDot,
             selectedVisionEval);
     }
 
@@ -1345,6 +1274,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         TextBlock? reasonText,
         Border? evidenceBadge,
         TextBlock? evidenceBadgeText,
+        System.Windows.Shapes.Ellipse? evidenceDot,
         ModelCandidateEvaluation? evaluation)
     {
         if (reasonRow is null || reasonText is null || evidenceBadge is null || evidenceBadgeText is null)
@@ -1360,16 +1290,28 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
         reasonRow.Visibility = Visibility.Visible;
         reasonText.Text = evaluation.PrimaryReason;
-        UpdateEvidenceBadge(evidenceBadge, evidenceBadgeText, evaluation.EvidenceSources);
+        UpdateEvidenceBadge(evidenceBadge, evidenceBadgeText, evidenceDot, evaluation.EvidenceSources);
     }
 
-    private void UpdateEvidenceBadge(Border badgeBorder, TextBlock badgeText, RecommendationEvidenceSource sources)
+    private void UpdateEvidenceBadge(
+        Border badgeBorder,
+        TextBlock badgeText,
+        System.Windows.Shapes.Ellipse? evidenceDot,
+        RecommendationEvidenceSource sources)
     {
         var (text, bgKey, fgKey, borderKey) = ResolveEvidenceBadgeVisualKeys(sources, hasBenchmarkMetric: false);
         badgeText.Text = text;
-        if (TryFindResource(fgKey) is Brush fg) badgeText.Foreground = fg;
-        if (TryFindResource(bgKey) is Brush bg) badgeBorder.Background = bg;
-        if (TryFindResource(borderKey) is Brush border) badgeBorder.BorderBrush = border;
+        badgeBorder.Background = Brushes.Transparent;
+        badgeBorder.BorderBrush = Brushes.Transparent;
+        badgeBorder.BorderThickness = new Thickness(0);
+        if (TryFindResource(fgKey) is Brush fg)
+        {
+            badgeText.Foreground = fg;
+            if (evidenceDot is not null)
+            {
+                evidenceDot.Fill = fg;
+            }
+        }
     }
 
     internal IReadOnlyList<ModelDescriptor> GetCandidateDescriptors()
@@ -1572,7 +1514,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 : ApiKeyPasswordBox.Password.Trim();
             if (string.IsNullOrWhiteSpace(typedKey) && !draft.TargetsLocalRuntime)
             {
-                throw new InvalidOperationException("请先填写 API Key（不会被保存），或改用本地模型地址。");
+                ApiKeyPasswordBox.Focus();
+                SetTestResult(StatusTone.Warning, "请先填写 API Key", "填写 API Key 后即可验证连接（本地服务无需密钥）。");
+                return;
             }
             var response = await CoreBridge.TestConnectionDraftAsync(
                 draft, string.IsNullOrWhiteSpace(typedKey) ? "local" : typedKey);
@@ -1600,7 +1544,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
         finally
         {
-            TestConnectionButton.IsEnabled = true;
+            UpdateCredentialGating();
         }
     }
 
@@ -1685,7 +1629,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             ApiKeyPasswordBox.Clear();
             SetTestResult(StatusTone.Info, string.Empty, null);
-            StatusChanged?.Invoke("已清空输入框。新增服务保存后密钥才会写入本机凭据管理器。", StatusTone.Info);
+            StatusChanged?.Invoke("已清空输入框。新增引擎保存后密钥才会写入本机凭据管理器。", StatusTone.Info);
         }
         // Edit mode: the ConfirmButton wrapper asks the second click inline;
         // running ClearKeyForCurrentProfile here too would wipe on the first.
@@ -1705,7 +1649,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             RefreshApiKeyState();
             RefreshProfilesList();
             ProfileChanged?.Invoke();
-            StatusChanged?.Invoke("该服务的 API Key 已清除；未配置密钥且未允许免费引擎时不会出网。", StatusTone.Info);
+            StatusChanged?.Invoke("该引擎的 API Key 已清除；未配置密钥且未允许免费引擎时不会出网。", StatusTone.Info);
         }
         catch (Exception exception)
         {
@@ -1715,11 +1659,17 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     // ================= Profile CRUD =================
 
+    /// <summary>
+    /// Direct entry from the main-window "添加翻译引擎" call to action:
+    /// opens the add-engine flow exactly as the 添加引擎 button does.
+    /// </summary>
+    internal void BeginAddEngineFlow() => AddProfile_Click(this, new RoutedEventArgs());
+
     private void AddProfile_Click(object sender, RoutedEventArgs e)
     {
-        // Starting a new service must not wipe an unsaved draft; the inline
+        // Starting a new engine must not wipe an unsaved draft; the inline
         // guard bar resolves it first and then re-runs this action.
-        BeginDraftGuard("新增服务前请先处理当前草稿。", StartAddMode);
+        BeginDraftGuard("新增引擎前请先处理当前草稿。", StartAddMode);
     }
 
     private void StartAddMode()
@@ -1777,7 +1727,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 _suppressListEvents = false;
             }
             BeginDraftGuard(
-                "切换服务前请先处理当前草稿。",
+                "切换引擎前请先处理当前草稿。",
                 () => OpenProfileInEditor(row.Id));
             return;
         }
@@ -1827,13 +1777,13 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         var profile = SelectedProfile();
         if (profile is null)
         {
-            StatusChanged?.Invoke("请先在列表中选择要删除的服务。", StatusTone.Info);
+            StatusChanged?.Invoke("请先在列表中选择要删除的引擎。", StatusTone.Info);
         }
         // A selected profile is deleted only through ConfirmButton's two-step
         // click; deleting here too would wipe on the first click.
     }
 
-    private void DeleteSelectedProfile()
+    private async void DeleteSelectedProfile()
     {
         var profile = SelectedProfile();
         if (profile is null)
@@ -1848,8 +1798,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 return;
             }
 
-            // 1. Persist config to disk first
-            ProfileManager.Save(config);
+            // 1. Persist config to disk first asynchronously
+            await ProfileManager.SaveAsync(config);
 
             // 2. Delete credential after config is persisted
             try
@@ -1864,7 +1814,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             // 3. Clear or update running core configuration when the default service changed or emptied
             if (isTextDefault)
             {
-                ApplyToCore(config);
+                await ProfileManager.ApplyActiveToCoreAsync(config);
             }
 
             _editingProfileId = null;
@@ -1874,32 +1824,38 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             UpdateEditorDirtyBadge();
             EditorForm.Visibility = Visibility.Collapsed;
             EditorEmpty.Visibility = Visibility.Visible;
+            EditorOpenStateChanged?.Invoke();
             RefreshProfilesList();
             ProfileChanged?.Invoke();
             if (config.Profiles.Count == 0)
             {
-                StatusChanged?.Invoke("服务已删除。未配置模型服务时，翻译将使用已授权的内置免费引擎。", StatusTone.Info);
+                StatusChanged?.Invoke("引擎已删除。未配置翻译引擎时，翻译将使用已授权的内置免费引擎。", StatusTone.Info);
             }
             else
             {
                 StatusChanged?.Invoke(
-                    $"服务已删除，默认服务切换为「{config.TryGetActiveProfile()?.Name ?? "（无）"}」。", StatusTone.Info);
+                    $"引擎已删除，默认引擎切换为「{config.TryGetActiveProfile()?.Name ?? "（无）"}」。", StatusTone.Info);
             }
         }
         catch (Exception exception)
         {
-            StatusChanged?.Invoke($"删除服务失败：{exception.Message}", StatusTone.Error);
+            StatusChanged?.Invoke($"删除引擎失败：{exception.Message}", StatusTone.Error);
         }
     }
 
-    private void SaveService_Click(object sender, RoutedEventArgs e) => TrySaveService();
+    private async void SaveService_Click(object sender, RoutedEventArgs e) => await TrySaveServiceAsync();
 
     /// <summary>
-    /// Validates and persists the editor draft. Returns false when nothing
+    /// Synchronous compatibility wrapper.
+    /// </summary>
+    internal bool TrySaveService() => TrySaveServiceAsync().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Validates and persists the editor draft asynchronously. Returns false when nothing
     /// was saved (validation failed or the credential write failed), leaving
     /// the draft and the saved state untouched.
     /// </summary>
-    internal bool TrySaveService()
+    internal async Task<bool> TrySaveServiceAsync()
     {
         try
         {
@@ -1959,10 +1915,12 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             _editingProfileId = profileId;
 
             // Saving never silently reroutes the app: only the very first
-            // configured service activates, and editing the currently active
-            // service keeps it active. Everything else needs an explicit
-            // "设为文字默认".
-            if (isFirstService || wasActive)
+            // configured service activates (provided it has a valid text model),
+            // and editing the currently active service keeps it active. Everything
+            // else needs an explicit "设为文字默认".
+            var canActivateForText = draft.SupportsText && !string.IsNullOrWhiteSpace(draft.TextModel);
+            var shouldActivate = wasActive || (isFirstService && canActivateForText);
+            if (shouldActivate)
             {
                 config.ActiveProfileId = draft.Id;
                 config.PreferFreeEngine = false;
@@ -1970,7 +1928,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
             try
             {
-                ProfileManager.Save(config);
+                await ProfileManager.SaveAsync(config);
             }
             catch
             {
@@ -1985,7 +1943,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
             try
             {
-                ApplyToCore(config);
+                await ProfileManager.ApplyActiveToCoreAsync(config);
             }
             catch (Exception applyException)
             {
@@ -2007,7 +1965,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 ClearEditorDirty();
                 ProfileChanged?.Invoke();
                 StatusChanged?.Invoke(
-                    $"服务「{draft.Name}」已保存到本机配置，但应用到运行中的引擎失败（{applyException.Message}）。重启 PopGlot 后生效。",
+                    $"引擎「{draft.Name}」已保存到本机配置，但应用到运行中的引擎失败（{applyException.Message}）。重启 PopGlot 后生效。",
                     StatusTone.Warning);
                 return true;
             }
@@ -2026,15 +1984,23 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             RefreshApiKeyState();
             ClearEditorDirty();
             ProfileChanged?.Invoke();
-            StatusChanged?.Invoke(config.ActiveProfileId == draft.Id
-                ? $"服务「{draft.Name}」已保存并作为默认文字服务生效。"
-                : $"服务「{draft.Name}」已保存。用「设为文字默认」启用它。",
-                StatusTone.Success);
+            if (config.ActiveProfileId == draft.Id)
+            {
+                StatusChanged?.Invoke($"引擎「{draft.Name}」已保存并作为默认文字引擎生效。", StatusTone.Success);
+            }
+            else if (isFirstService && !canActivateForText)
+            {
+                StatusChanged?.Invoke("已保存，未设为默认：请补全模型后再启用。", StatusTone.Warning);
+            }
+            else
+            {
+                StatusChanged?.Invoke($"引擎「{draft.Name}」已保存。用「设为文字默认」启用它。", StatusTone.Success);
+            }
             return true;
         }
         catch (Exception exception)
         {
-            StatusChanged?.Invoke($"保存服务失败：{exception.Message}", StatusTone.Error);
+            StatusChanged?.Invoke($"保存引擎失败：{exception.Message}", StatusTone.Error);
             return false;
         }
     }

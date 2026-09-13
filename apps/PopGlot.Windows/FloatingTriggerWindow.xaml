@@ -15,7 +15,7 @@
                 BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1.2"
                 Cursor="Hand" ToolTip="PopGlot 翻译 (点击翻译选中内容)">
             <Border.Effect>
-                <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.25" Color="#000000" />
+                <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.25" Color="{DynamicResource ShadowColor}" />
             </Border.Effect>
 
             <Grid>

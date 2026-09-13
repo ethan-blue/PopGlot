@@ -5,7 +5,7 @@
     <UserControl.Resources>
         <Style x:Key="ProviderPresetButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-            <Setter Property="Padding" Value="13,11" />
+            <Setter Property="Padding" Value="12,10" />
             <Setter Property="MinHeight" Value="62" />
             <Setter Property="Margin" Value="0,0,0,8" />
             <Setter Property="FontWeight" Value="Normal" />
@@ -18,6 +18,7 @@
             <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
+            <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ListBoxItem">
@@ -57,7 +58,7 @@
         <Style x:Key="EditorTextField" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
             <Setter Property="Height" Value="40" />
             <Setter Property="MinWidth" Value="0" />
-            <Setter Property="Padding" Value="11,0" />
+            <Setter Property="Padding" Value="12,0" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
         <Style x:Key="EditorComboField" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
@@ -67,7 +68,7 @@
         <Style x:Key="EditorPasswordField" TargetType="PasswordBox" BasedOn="{StaticResource {x:Type PasswordBox}}">
             <Setter Property="Height" Value="40" />
             <Setter Property="MinWidth" Value="0" />
-            <Setter Property="Padding" Value="11,0" />
+            <Setter Property="Padding" Value="12,0" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
         <Style x:Key="EditorSectionTitle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
@@ -110,17 +111,16 @@
             </Setter>
         </Style>
         <Style x:Key="EvidenceBadge" TargetType="Border">
-            <Setter Property="CornerRadius" Value="4" />
-            <Setter Property="Padding" Value="5,2" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
             <Setter Property="Margin" Value="0,0,6,0" />
-            <Setter Property="BorderThickness" Value="1" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
     </UserControl.Resources>
 
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
@@ -135,77 +135,38 @@
                     Style="{StaticResource PrimaryButton}" Padding="16,8" Click="AddProfile_Click" />
         </Grid>
 
-        <Border x:Name="RoutingPanel" Grid.Row="1" Margin="0,14,0,14" Padding="14,10" CornerRadius="{DynamicResource CardRadius}"
-                Background="{DynamicResource InputBrush}"
-                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" /><ColumnDefinition Width="18" />
-                    <ColumnDefinition Width="*" /><ColumnDefinition Width="14" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
-                <StackPanel Width="96" VerticalAlignment="Center">
-                    <TextBlock Text="默认路由" FontSize="12.5" FontWeight="SemiBold" />
-                    <TextBlock Text="即时生效" Style="{StaticResource Caption}" Margin="0,2,0,0" />
-                </StackPanel>
-                <StackPanel Grid.Column="2">
-                    <TextBlock Text="文字" Style="{StaticResource Metadata}" Margin="2,0,0,5" />
-                    <ComboBox x:Name="DefaultTextCombo"
-                              AutomationProperties.Name="默认文字服务"
-                              SelectionChanged="DefaultTextCombo_SelectionChanged">
-                        <ComboBox.ItemContainerStyle>
-                            <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
-                                <Setter Property="IsEnabled" Value="{Binding IsCompatible}" />
-                            </Style>
-                        </ComboBox.ItemContainerStyle>
-                    </ComboBox>
-                </StackPanel>
-                <StackPanel Grid.Column="4">
-                    <TextBlock Text="图片" Style="{StaticResource Metadata}" Margin="2,0,0,5" />
-                    <ComboBox x:Name="DefaultVisionCombo"
-                              AutomationProperties.Name="默认视觉服务"
-                              SelectionChanged="DefaultVisionCombo_SelectionChanged">
-                        <ComboBox.ItemContainerStyle>
-                            <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
-                                <Setter Property="IsEnabled" Value="{Binding IsCompatible}" />
-                            </Style>
-                        </ComboBox.ItemContainerStyle>
-                    </ComboBox>
-                    <TextBlock x:Name="VisionIncompatHint" Visibility="Collapsed" Margin="2,5,0,0"
-                               Style="{StaticResource Caption}" />
-                </StackPanel>
-            </Grid>
-        </Border>
-
-        <Grid x:Name="DetailGrid" Grid.Row="2" SizeChanged="DetailGrid_SizeChanged">
+        <!-- 路由唯一入口是主窗口底部的快速切换器；设置页不再提供默认路由控件。 -->
+        <Grid x:Name="DetailGrid" Grid.Row="1" SizeChanged="DetailGrid_SizeChanged">
             <!-- Service overview. Editing is explicit and replaces this list. -->
             <Border x:Name="EditorEmpty" Padding="0" Background="Transparent" BorderThickness="0">
                 <Grid>
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <StackPanel Margin="2,0,0,12">
                         <TextBlock Text="已配置引擎" Style="{StaticResource SectionTitle}" />
-                        <TextBlock Text="点击编辑修改连接；切换路由自动生效。"
+                        <TextBlock Text="点击编辑修改连接；切换引擎请在主窗口底部操作。"
                                    Style="{StaticResource Caption}" Margin="0,3,0,0" />
                     </StackPanel>
                     <Grid Grid.Row="1">
-                        <StackPanel x:Name="ProfilesEmptyText" Visibility="Collapsed"
+                        <StackPanel x:Name="ProfilesEmptyText" Visibility="Collapsed" Panel.ZIndex="1"
                                     HorizontalAlignment="Center" VerticalAlignment="Center" Margin="30">
                             <Border Width="44" Height="44" CornerRadius="13" Margin="0,0,0,12"
                                     Background="{DynamicResource AccentSoftBrush}">
                                 <Path Data="{StaticResource IconProvider}" Width="20" Height="20" Stretch="Uniform"
                                       Fill="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Border>
-                            <TextBlock Text="未配置翻译引擎" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                            <TextBlock Text="未配置翻译引擎" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center" />
                             <TextBlock Text="添加接口并设为默认即可开始翻译。" Style="{StaticResource Caption}"
                                        Margin="0,6,0,14" HorizontalAlignment="Center" />
-                            <Button Content="添加第一个引擎" Style="{StaticResource PrimaryButton}"
-                                    Padding="16,7" Click="AddProfile_Click" />
+                            <Button x:Name="AddFirstEngineButton" Content="添加第一个引擎"
+                                    Style="{StaticResource PrimaryButton}" Padding="16,7"
+                                    AutomationProperties.Name="添加第一个引擎"
+                                    Click="AddProfile_Click" />
                         </StackPanel>
                         <ListBox x:Name="ProfilesListBox" ItemContainerStyle="{StaticResource ServiceListItem}"
                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <Border Padding="13,11" CornerRadius="{DynamicResource CardRadius}" Background="{DynamicResource InputBrush}"
+                                    <Border Padding="12,10" CornerRadius="{DynamicResource CardRadius}" Background="{DynamicResource InputBrush}"
                                             BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
                                         <Grid>
                                             <Grid.ColumnDefinitions>
@@ -231,15 +192,15 @@
                                                     </Border>
                                                 </Grid>
                                                 <TextBlock Text="{Binding Summary}" Style="{StaticResource Caption}"
-                                                           Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
+                                                            Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
                                             </StackPanel>
                                             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                                                <Ellipse Width="7" Height="7" Fill="{Binding StateBrush}" />
+                                                <Ellipse Width="6" Height="6" Fill="{Binding StateBrush}" />
                                                 <TextBlock Text="{Binding StateText}" Margin="7,0,0,0"
                                                            Foreground="{Binding StateTextBrush}" FontSize="12" />
                                             </StackPanel>
-                                            <Button Grid.Column="3" Content="编辑" Padding="14,6" Tag="{Binding Id}"
-                                                    Style="{StaticResource GhostButton}" AutomationProperties.Name="编辑服务"
+                                            <Button Grid.Column="3" Content="编辑" Padding="12,6" Tag="{Binding Id}"
+                                                    Style="{StaticResource GhostButton}" AutomationProperties.Name="编辑引擎"
                                                     Click="EditProfile_Click" />
                                         </Grid>
                                     </Border>
@@ -263,8 +224,6 @@
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                             <Button x:Name="ChooseAnotherProviderButton" Content="更换服务商" Visibility="Collapsed"
                                     Style="{StaticResource GhostButton}" Padding="10,5" Click="ChooseAnotherProvider_Click" />
-                            <Button x:Name="SetDefaultButton" Content="设为文字默认" Margin="8,0,0,0"
-                                    Style="{StaticResource GhostButton}" Padding="11,5" Click="SetDefault_Click" />
                         </StackPanel>
                     </Grid>
 
@@ -286,11 +245,11 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel VerticalAlignment="Center">
                                             <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="自定义兼容服务" FontWeight="SemiBold" FontSize="14"
+                                                <TextBlock Text="自定义兼容引擎" FontWeight="SemiBold" FontSize="13"
                                                            Foreground="{DynamicResource TextPrimaryBrush}" />
                                                 <Border Style="{StaticResource StatusPill}" Background="{DynamicResource AccentBrush}"
                                                         Margin="8,0,0,0" Padding="6,1" VerticalAlignment="Center">
-                                                    <TextBlock Text="自建或第三方服务" FontSize="11" Foreground="{DynamicResource AccentTextBrush}" FontWeight="SemiBold" />
+                                                    <TextBlock Text="自建或第三方引擎" FontSize="11" Foreground="{DynamicResource AccentTextBrush}" FontWeight="SemiBold" />
                                                 </Border>
                                             </StackPanel>
                                             <TextBlock Text="适用于 OpenAI 兼容接口、自建服务和第三方平台"
@@ -301,7 +260,7 @@
                                     </Grid>
                                 </Button>
 
-                                <TextBlock Text="标准服务商预设" FontSize="12" FontWeight="SemiBold"
+                                <TextBlock Text="标准服务商预设" FontSize="13" FontWeight="SemiBold"
                                            Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,10" />
 
                                 <Grid>
@@ -365,13 +324,13 @@
                                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                             <PasswordBox x:Name="ApiKeyPasswordBox" Style="{StaticResource EditorPasswordField}" local:Ui.Placeholder="留空表示保持现有密钥" />
                                             <StackPanel x:Name="KeyActionsPanel" Grid.Column="2" Orientation="Horizontal">
-                                                <Button x:Name="ClearKeyButton" Content="清除" Style="{StaticResource GhostButton}" Height="40" Padding="12,7" Click="ClearApiKey_Click" />
-                                                <Button x:Name="TestConnectionButton" Content="验证连接" Margin="7,0,0,0" Style="{StaticResource PrimaryButton}" Height="40" Padding="16,7" Click="TestConnection_Click" />
+                                                <Button x:Name="ClearKeyButton" Content="清除" Style="{StaticResource GhostButton}" Height="40" Padding="12,6" Click="ClearApiKey_Click" />
+                                                <Button x:Name="TestConnectionButton" Content="验证连接" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Height="40" Padding="16,6" Click="TestConnection_Click" />
                                             </StackPanel>
                                         </Grid>
                                         <TextBlock x:Name="ApiKeyStateText" Style="{StaticResource Caption}" Margin="2,7,0,0" />
                                         <StackPanel x:Name="TestStatusPanel" Orientation="Horizontal" Margin="2,8,0,0" Visibility="Collapsed">
-                                            <Ellipse x:Name="TestStateDot" Width="7" Height="7" VerticalAlignment="Center" Fill="{DynamicResource TextTertiaryBrush}"/>
+                                            <Ellipse x:Name="TestStateDot" Width="6" Height="6" VerticalAlignment="Center" Fill="{DynamicResource TextTertiaryBrush}"/>
                                             <TextBlock x:Name="TestSummaryText" Margin="7,0,0,0" FontSize="12" TextTrimming="CharacterEllipsis"/>
                                         </StackPanel>
                                         <TextBlock x:Name="TestDetailText" Style="{StaticResource Caption}" Margin="16,3,0,0" TextWrapping="Wrap" Visibility="Collapsed" />
@@ -416,10 +375,13 @@
                                                 <!-- Text model recommendation chips -->
                                                 <WrapPanel x:Name="TextRecommendationChipsPanel" Margin="0,8,0,0" />
                                                 <!-- Text model recommendation reason & evidence -->
-                                                <Grid x:Name="TextRecommendationReasonRow" Margin="0,2,0,0" Visibility="Collapsed">
+                                                <Grid x:Name="TextRecommendationReasonRow" Margin="0,4,0,0" Visibility="Collapsed">
                                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                                         <Border x:Name="TextEvidenceBadge" Style="{StaticResource EvidenceBadge}">
-                                                            <TextBlock x:Name="TextEvidenceBadgeText" FontSize="11" FontWeight="SemiBold" />
+                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                                <Ellipse x:Name="TextEvidenceDot" Width="6" Height="6" VerticalAlignment="Center" Margin="0,0,5,0" />
+                                                                <TextBlock x:Name="TextEvidenceBadgeText" Style="{StaticResource Caption}" />
+                                                            </StackPanel>
                                                         </Border>
                                                         <TextBlock x:Name="TextRecommendationReasonText" Style="{StaticResource Caption}"
                                                                    VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
@@ -433,10 +395,13 @@
                                                 <!-- Vision model recommendation chips -->
                                                 <WrapPanel x:Name="VisionRecommendationChipsPanel" Margin="0,8,0,0" />
                                                 <!-- Vision model recommendation reason & evidence -->
-                                                <Grid x:Name="VisionRecommendationReasonRow" Margin="0,2,0,0" Visibility="Collapsed">
+                                                <Grid x:Name="VisionRecommendationReasonRow" Margin="0,4,0,0" Visibility="Collapsed">
                                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                                         <Border x:Name="VisionEvidenceBadge" Style="{StaticResource EvidenceBadge}">
-                                                            <TextBlock x:Name="VisionEvidenceBadgeText" FontSize="11" FontWeight="SemiBold" />
+                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                                <Ellipse x:Name="VisionEvidenceDot" Width="6" Height="6" VerticalAlignment="Center" Margin="0,0,5,0" />
+                                                                <TextBlock x:Name="VisionEvidenceBadgeText" Style="{StaticResource Caption}" />
+                                                            </StackPanel>
                                                         </Border>
                                                         <TextBlock x:Name="VisionRecommendationReasonText" Style="{StaticResource Caption}"
                                                                    VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
@@ -478,7 +443,7 @@
                                                 </StackPanel>
                                             </Grid>
 
-                                            <Border Height="1" Margin="0,17,0,16" Background="{DynamicResource BorderSubtleBrush}" />
+                                            <Border Height="1" Margin="0,16,0,16" Background="{DynamicResource BorderSubtleBrush}" />
                                             <TextBlock Text="请求定制" Style="{StaticResource EditorSectionTitle}" />
                                             <TextBlock Text="仅在服务商明确要求额外请求头时填写。"
                                                        Style="{StaticResource Caption}" Margin="0,4,0,12" />
@@ -494,7 +459,7 @@
                                                 <StackPanel x:Name="CapabilitiesPanel" Grid.Column="2">
                                                     <TextBlock Text="Anthropic API 版本" Style="{StaticResource FieldLabel}"/>
                                                     <TextBox x:Name="AnthropicVersionTextBox" Style="{StaticResource EditorTextField}" FontFamily="{StaticResource MonoFontFamily}"/>
-                                                    <TextBlock Text="服务用途" Style="{StaticResource FieldLabel}" Margin="0,15,0,8"/>
+                                                    <TextBlock Text="引擎用途" Style="{StaticResource FieldLabel}" Margin="0,15,0,8"/>
                                                     <TextBlock Text="由上方文字与图片模型自动决定。"
                                                                Style="{StaticResource Caption}" TextWrapping="Wrap"/>
                                                     <!-- Kept hidden for schema/editor compatibility; runtime roles are derived from model fields. -->
@@ -518,7 +483,7 @@
                              挤在同一行，窄面板上按钮直接压在省略号文字上。 -->
                         <StackPanel>
                             <TextBlock x:Name="DraftGuardText" FontWeight="SemiBold" TextWrapping="Wrap"
-                                       Foreground="{DynamicResource WarningBrush}" FontSize="12.5"/>
+                                       Foreground="{DynamicResource WarningBrush}" FontSize="12"/>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
                                 <Button x:Name="DraftCancelButton" Content="取消" Style="{StaticResource GhostButton}" Click="DraftCancel_Click"/>
                                 <Button x:Name="DraftDiscardButton" Content="放弃修改" Style="{StaticResource GhostButton}" Margin="8,0,0,0" Click="DraftDiscard_Click"/>
@@ -529,15 +494,15 @@
 
                     <Border x:Name="EditorActionBar" Grid.Row="3" Margin="0,10,0,0" Padding="0,10,0,0" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0">
                         <Grid>
-                            <Button x:Name="DeleteServiceButton" Content="删除引擎" HorizontalAlignment="Left" Style="{StaticResource DangerButton}" Padding="11,7" Click="DeleteProfile_Click"/>
+                            <Button x:Name="DeleteServiceButton" Content="删除引擎" HorizontalAlignment="Left" Style="{StaticResource DangerButton}" Padding="12,6" Click="DeleteProfile_Click"/>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                 <Border x:Name="EditorDirtyBadge" Visibility="Collapsed" Style="{StaticResource StatusPill}"
                                         Background="{DynamicResource WarningSoftBrush}" BorderBrush="{DynamicResource WarningBrush}"
                                         Padding="8,3" Margin="0,0,8,0" VerticalAlignment="Center">
                                     <TextBlock Text="未保存的修改" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource WarningBrush}"/>
                                 </Border>
-                                <Button x:Name="CancelEditButton" Content="取消" Style="{StaticResource GhostButton}" Padding="13,7" Click="CancelEdit_Click"/>
-                                <Button x:Name="SaveServiceButton" Content="保存" Margin="7,0,0,0" Style="{StaticResource PrimaryButton}" Padding="17,7" Click="SaveService_Click"/>
+                                <Button x:Name="CancelEditButton" Content="取消" Style="{StaticResource GhostButton}" Padding="12,6" Click="CancelEdit_Click"/>
+                                <Button x:Name="SaveServiceButton" Content="保存" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}" Padding="16,6" Click="SaveService_Click"/>
                             </StackPanel>
                         </Grid>
                     </Border>

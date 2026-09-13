@@ -122,10 +122,10 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         RouteBadgeText.Text = pipeline;
         RoutePreviewText.Text = $"截图将走「{pipeline}」。{route.ExplanationZh}";
         var warning = route.MayUploadImage || route.ScreenshotPipeline == ScreenshotPipeline.Unavailable;
-        RouteCard.Background = (Brush)FindResource(warning ? "WarningSoftBrush" : "SurfaceMutedBrush");
-        RouteBadge.Background = (Brush)FindResource(warning ? "WarningSoftBrush" : "AccentSoftBrush");
-        RouteBadge.BorderBrush = (Brush)FindResource(warning ? "WarningBrush" : "AccentBorderBrush");
-        RouteBadgeText.Foreground = (Brush)FindResource(warning ? "WarningBrush" : "AccentBrush");
+        RouteCard.SetResourceReference(Border.BackgroundProperty, warning ? "WarningSoftBrush" : "SurfaceMutedBrush");
+        RouteBadge.SetResourceReference(Border.BackgroundProperty, warning ? "WarningSoftBrush" : "AccentSoftBrush");
+        RouteBadge.SetResourceReference(Border.BorderBrushProperty, warning ? "WarningBrush" : "AccentBorderBrush");
+        RouteBadgeText.SetResourceReference(TextBlock.ForegroundProperty, warning ? "WarningBrush" : "AccentBrush");
     }
 
     // ================= Cloud speech consent =================

@@ -1,5 +1,8 @@
+using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using PopGlot.Windows.Services;
 
@@ -53,6 +56,8 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
     private LibraryMode _mode = LibraryMode.History;
     private IReadOnlyList<TranslationHistoryEntry> _allHistory = [];
     private IReadOnlyList<VocabularyWord> _allVocabulary = [];
+    private readonly ObservableCollection<LibraryRow> _allRows = [];
+    private readonly ICollectionView _rowsView;
 
     /// <summary>Raised when the user wants to load an entry into the workbench.</summary>
     internal event Action<string, string, string?, string?, string?, string?>? LoadToTranslate;
@@ -63,7 +68,25 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
     public LibrarySection()
     {
         InitializeComponent();
+        _rowsView = CollectionViewSource.GetDefaultView(_allRows);
+        _rowsView.Filter = FilterRow;
+        LibraryListBox.ItemsSource = _rowsView;
         _clearCurrentConfirm = ConfirmButton.Attach(ClearCurrentButton, "确认清空？", ClearCurrent);
+    }
+
+    private bool FilterRow(object item)
+    {
+        if (item is not LibraryRow row)
+        {
+            return false;
+        }
+        var query = LibrarySearchBox?.Text?.Trim();
+        if (string.IsNullOrEmpty(query))
+        {
+            return true;
+        }
+        return row.Source.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+               row.Translation.Contains(query, StringComparison.OrdinalIgnoreCase);
     }
 
     internal void Initialize(HistoryStore history, VocabularyStore? vocabulary)
@@ -75,6 +98,39 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
     // ================= Loading =================
 
     private bool _corruptHistoryReported;
+    private bool _vocabularyLoadReported;
+
+    /// <summary>V04: the real retry entry — visible whenever the vocabulary
+    /// file is in a non-Ok load state; retrying commits only a healthy read.</summary>
+    internal Button RetryVocabulary => RetryVocabularyButton;
+
+    internal void UpdateVocabularyRetryAffordance()
+    {
+        if (_vocabulary is null)
+        {
+            return;
+        }
+        RetryVocabularyButton.Visibility = _vocabulary.LoadState == Services.VocabularyLoadState.Ok
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+    }
+
+    private void RetryVocabularyButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vocabulary is null)
+        {
+            return;
+        }
+        var retried = _vocabulary.RetryLoad();
+        ReloadVocabulary();
+        ApplyFilter();
+        UpdateVocabularyRetryAffordance();
+        StatusChanged?.Invoke(
+            retried
+                ? "生词本已重新加载成功。"
+                : "生词本重试仍未成功；现有列表内容保持不变。",
+            retried ? StatusTone.Success : StatusTone.Warning);
+    }
 
     internal void ReloadHistory()
     {
@@ -83,6 +139,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             _allHistory = _history.Load();
             if (_mode == LibraryMode.History)
             {
+                SyncCurrentRows();
                 ApplyFilter();
             }
             // A quarantined history file is user data we refuse to destroy:
@@ -110,7 +167,26 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             _allVocabulary = _vocabulary.GetAll();
             if (_mode == LibraryMode.Vocabulary)
             {
+                SyncCurrentRows();
                 ApplyFilter();
+            }
+            // C02: an unreadable wordbook is protected, not silently emptied —
+            // say so once, with where the file lives, instead of a bare list.
+            UpdateVocabularyRetryAffordance();
+            if (!_vocabularyLoadReported && _vocabulary.LoadState is not Services.VocabularyLoadState.Ok)
+            {
+                _vocabularyLoadReported = true;
+                StatusChanged?.Invoke(_vocabulary.LoadState switch
+                {
+                    Services.VocabularyLoadState.TooLarge =>
+                        $"生词本文件超过 32MiB 上限，未加载，已进入只读保护；原文件保留在 {StoragePaths.CoreConfigDirectory}。",
+                    Services.VocabularyLoadState.Locked =>
+                        $"生词本文件被其他程序占用，未加载，已进入只读保护；原文件保留在 {StoragePaths.CoreConfigDirectory}。",
+                    Services.VocabularyLoadState.NoAccess =>
+                        $"生词本文件没有读取权限，未加载，已进入只读保护；原文件保留在 {StoragePaths.CoreConfigDirectory}。",
+                    _ =>
+                        $"生词本文件已损坏并隔离备份，当前从空白开始；原文件保留在 {StoragePaths.CoreConfigDirectory}。",
+                }, StatusTone.Warning);
             }
         }
         catch (Exception exception)
@@ -132,79 +208,109 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         {
             ReloadVocabulary();
         }
+        else
+        {
+            ReloadHistory();
+        }
+        SyncCurrentRows();
         ApplyFilter();
     }
 
+    private void SyncCurrentRows()
+    {
+        var targetRows = _mode == LibraryMode.History
+            ? _allHistory.Select(BuildHistoryRow).ToList()
+            : _allVocabulary.Select(BuildVocabularyRow).ToList();
+
+        if (_allRows.Count == targetRows.Count &&
+            _allRows.Zip(targetRows).All(p => p.First.Id == p.Second.Id && p.First.Timestamp == p.Second.Timestamp))
+        {
+            return;
+        }
+
+        _allRows.Clear();
+        foreach (var r in targetRows)
+        {
+            _allRows.Add(r);
+        }
+    }
+
+    private static LibraryRow BuildHistoryRow(TranslationHistoryEntry entry) => new(
+        entry.Id,
+        entry.Source,
+        entry.Translation,
+        entry.CreatedAt.ToLocalTime().ToString("MM-dd HH:mm", System.Globalization.CultureInfo.CurrentCulture),
+        entry.SourceKind,
+        $"{LanguageCatalog.DisplayName(entry.SourceLanguage)} → {LanguageCatalog.DisplayName(entry.TargetLanguage)}",
+        entry.Source,
+        entry.Translation,
+        entry.Explanation,
+        entry,
+        null);
+
+    private static LibraryRow BuildVocabularyRow(VocabularyWord word) => new(
+        word.Id,
+        word.Word,
+        word.Translation,
+        word.CreatedAt.ToLocalTime().ToString("MM-dd HH:mm", System.Globalization.CultureInfo.CurrentCulture),
+        "生词",
+        word.Phonetic is { Length: > 0 } phonetic
+            ? $"{phonetic} · {LanguageCatalog.DisplayName(word.SourceLanguage)} → {LanguageCatalog.DisplayName(word.TargetLanguage)}"
+            : $"{LanguageCatalog.DisplayName(word.SourceLanguage)} → {LanguageCatalog.DisplayName(word.TargetLanguage)}",
+        word.Word,
+        word.Translation,
+        word.Explanation,
+        null,
+        word);
+
     private void ApplyFilter()
     {
+        _rowsView.Refresh();
         var query = LibrarySearchBox?.Text?.Trim() ?? string.Empty;
-        var rows = _mode == LibraryMode.History
-            ? BuildHistoryRows(query)
-            : BuildVocabularyRows(query);
+        var visibleCount = _rowsView.Cast<LibraryRow>().Count();
+        var totalCount = _mode == LibraryMode.History ? _allHistory.Count : _allVocabulary.Count;
 
-        LibraryListBox.ItemsSource = rows;
-        LibraryListBox.SelectedIndex = -1;
-        LibraryEmptyText.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        LibraryEmptyText.Visibility = visibleCount == 0 ? Visibility.Visible : Visibility.Collapsed;
         LibraryCountText.Text = string.IsNullOrEmpty(query)
             ? (_mode == LibraryMode.History
                 ? $"{_allHistory.Count} 条记录"
                 : $"{_allVocabulary.Count} 个生词")
-            : $"匹配 {rows.Count} / {(_mode == LibraryMode.History ? _allHistory.Count : _allVocabulary.Count)}";
+            : $"匹配 {visibleCount} / {totalCount}";
 
-        if (_mode == LibraryMode.History)
+        if (!string.IsNullOrEmpty(query))
         {
+            InlineRetryVocabularyButton.Visibility = Visibility.Collapsed;
+            LibraryEmptyTitle.Text = "未找到匹配结果";
+            LibraryEmptyTitle.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+            LibraryEmptyHint.Text = "请尝试更换关键词";
+        }
+        else if (_mode == LibraryMode.History)
+        {
+            InlineRetryVocabularyButton.Visibility = Visibility.Collapsed;
             LibraryEmptyTitle.Text = "暂无历史记录";
+            LibraryEmptyTitle.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
             LibraryEmptyHint.Text = "使用划词/截图快捷键，或在翻译工作台输入，记录会自动保存在本机。";
+        }
+        else if (_vocabulary is not null && _vocabulary.LoadState != Services.VocabularyLoadState.Ok)
+        {
+            InlineRetryVocabularyButton.Visibility = Visibility.Visible;
+            LibraryEmptyTitle.Text = "生词本加载受阻";
+            LibraryEmptyTitle.SetResourceReference(TextBlock.ForegroundProperty, "WarningBrush");
+            LibraryEmptyHint.Text = _vocabulary.LoadState switch
+            {
+                Services.VocabularyLoadState.TooLarge => "生词本文件超过 32MiB 上限，已进入只读保护模式。",
+                Services.VocabularyLoadState.Locked => "生词本文件被其他程序占用，已进入只读保护模式。",
+                Services.VocabularyLoadState.NoAccess => "生词本文件没有读取权限，已进入只读保护模式。",
+                _ => "生词本文件损坏并已隔离备份，当前无法写入。",
+            };
         }
         else
         {
+            InlineRetryVocabularyButton.Visibility = Visibility.Collapsed;
             LibraryEmptyTitle.Text = "生词本还是空的";
+            LibraryEmptyTitle.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
             LibraryEmptyHint.Text = "在翻译浮窗或查词栏点击「收藏」，即可把单词/句子收进生词本。";
         }
-    }
-
-    private List<LibraryRow> BuildHistoryRows(string query)
-    {
-        var filtered = string.IsNullOrEmpty(query)
-            ? _allHistory
-            : _allHistory.Where(entry =>
-                entry.Source.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                entry.Translation.Contains(query, StringComparison.OrdinalIgnoreCase));
-        return filtered.Select(entry => new LibraryRow(
-            entry.Id,
-            entry.Source,
-            entry.Translation,
-            entry.CreatedAt.ToLocalTime().ToString("MM-dd HH:mm", System.Globalization.CultureInfo.CurrentCulture),
-            entry.SourceKind,
-            $"{LanguageCatalog.DisplayName(entry.SourceLanguage)} → {LanguageCatalog.DisplayName(entry.TargetLanguage)}",
-            entry.Source,
-            entry.Translation,
-            entry.Explanation,
-            entry,
-            null)).ToList();
-    }
-
-    private List<LibraryRow> BuildVocabularyRows(string query)
-    {
-        var filtered = string.IsNullOrEmpty(query)
-            ? _allVocabulary
-            : _allVocabulary.Where(entry =>
-                entry.Word.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                entry.Translation.Contains(query, StringComparison.OrdinalIgnoreCase));
-        return filtered.Select(word => new LibraryRow(
-            word.Id,
-            word.Word,
-            word.Translation,
-            word.CreatedAt.ToLocalTime().ToString("MM-dd HH:mm", System.Globalization.CultureInfo.CurrentCulture),
-            "生词",
-            word.Phonetic is { Length: > 0 } phonetic
-                ? $"{phonetic} · {LanguageCatalog.DisplayName(word.SourceLanguage)} → {LanguageCatalog.DisplayName(word.TargetLanguage)}"
-                : $"{LanguageCatalog.DisplayName(word.SourceLanguage)} → {LanguageCatalog.DisplayName(word.TargetLanguage)}",
-            word.Word,
-            word.Translation,
-            word.Explanation,
-            null,
-            word)).ToList();
     }
 
     private void LibrarySearch_TextChanged(object sender, TextChangedEventArgs e) => ApplyFilter();
@@ -305,10 +411,12 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
 
     private void DeleteRow(LibraryRow row)
     {
+        var currentIndex = LibraryListBox.SelectedIndex;
         if (_mode == LibraryMode.History)
         {
             var removed = _history.Remove(row.Id);
             ReloadHistory();
+            SelectAdjacentAfterDelete(currentIndex);
             StatusChanged?.Invoke(
                 removed ? "已删除该条记录。" : "未保存到本机，请重试。",
                 removed ? StatusTone.Info : StatusTone.Error);
@@ -317,10 +425,22 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         {
             var removed = _vocabulary.Remove(row.Id);
             ReloadVocabulary();
+            SelectAdjacentAfterDelete(currentIndex);
             StatusChanged?.Invoke(
                 removed ? "已从生词本移除该词条。" : "未保存到本机，请重试。",
                 removed ? StatusTone.Info : StatusTone.Error);
         }
+    }
+
+    private void SelectAdjacentAfterDelete(int previousIndex)
+    {
+        if (LibraryListBox.Items.Count == 0)
+        {
+            LibraryListBox.SelectedIndex = -1;
+            return;
+        }
+        var nextIndex = Math.Clamp(previousIndex, 0, LibraryListBox.Items.Count - 1);
+        LibraryListBox.SelectedIndex = nextIndex;
     }
 
     private void LoadRow(LibraryRow row) =>

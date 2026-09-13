@@ -17,6 +17,7 @@ internal static partial class ThemeService
 
     private static ThemePreference _preference = ThemePreference.System;
     private static bool _watchingSystem;
+    private static UserPreferenceChangedEventHandler? _systemPreferenceHandler;
 
     /// <summary>Raised after the effective (resolved) theme changes.</summary>
     public static event EventHandler? ThemeChanged;
@@ -24,15 +25,29 @@ internal static partial class ThemeService
     /// <summary>True when the resolved theme is the dark palette.</summary>
     public static bool IsDark { get; private set; } = true;
 
+    /// <summary>True when Windows high contrast mode is currently active.</summary>
+    public static bool IsHighContrast => SystemParameters.HighContrast;
+
     public static void Apply(ThemePreference preference)
     {
         _preference = preference;
+        if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+        {
+            dispatcher.BeginInvoke(new Action(() => Apply(preference)));
+            return;
+        }
         ApplyResolved();
         EnsureSystemWatcher();
     }
 
     private static void ApplyResolved()
     {
+        if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+        {
+            dispatcher.BeginInvoke(new Action(ApplyResolved));
+            return;
+        }
+        var isHighContrast = SystemParameters.HighContrast;
         var dark = _preference switch
         {
             ThemePreference.Light => false,
@@ -40,7 +55,7 @@ internal static partial class ThemeService
             _ => !SystemPrefersLight(),
         };
 
-        IsDark = dark;
+        IsDark = isHighContrast ? !SystemPrefersLight() : dark;
         var tokens = dark ? DarkTokens : LightTokens;
         var resources = Application.Current?.Resources;
         if (resources is null)
@@ -51,6 +66,11 @@ internal static partial class ThemeService
         foreach (var (key, value) in tokens)
         {
             var color = ParseColor(value);
+            if (key == "ShadowColor")
+            {
+                resources[key] = isHighContrast ? Colors.Transparent : color;
+                continue;
+            }
             if (resources[key] is SolidColorBrush existing && !existing.IsFrozen)
             {
                 existing.Color = color;
@@ -61,7 +81,58 @@ internal static partial class ThemeService
             resources[key] = brush;
         }
 
+        if (isHighContrast)
+        {
+            ApplyHighContrastOverrides(resources);
+        }
+
         ThemeChanged?.Invoke(null, EventArgs.Empty);
+    }
+
+    private static void ApplyHighContrastOverrides(ResourceDictionary resources)
+    {
+        var windowColor = System.Windows.SystemColors.WindowColor;
+        var windowTextColor = System.Windows.SystemColors.WindowTextColor;
+        var highlightColor = System.Windows.SystemColors.HighlightColor;
+        var highlightTextColor = System.Windows.SystemColors.HighlightTextColor;
+        var grayTextColor = System.Windows.SystemColors.GrayTextColor;
+
+        SetTokenBrush(resources, "CanvasBrush", windowColor);
+        SetTokenBrush(resources, "SidebarBrush", windowColor);
+        SetTokenBrush(resources, "SurfaceBrush", windowColor);
+        SetTokenBrush(resources, "SurfaceMutedBrush", windowColor);
+        SetTokenBrush(resources, "SurfaceRaisedBrush", windowColor);
+        SetTokenBrush(resources, "InputBrush", windowColor);
+        SetTokenBrush(resources, "ResultSurfaceBrush", windowColor);
+
+        SetTokenBrush(resources, "TextPrimaryBrush", windowTextColor);
+        SetTokenBrush(resources, "TextSecondaryBrush", windowTextColor);
+        SetTokenBrush(resources, "TextTertiaryBrush", grayTextColor);
+        SetTokenBrush(resources, "TextDisabledBrush", grayTextColor);
+
+        SetTokenBrush(resources, "AccentBrush", highlightColor);
+        SetTokenBrush(resources, "AccentTextBrush", highlightTextColor);
+        SetTokenBrush(resources, "AccentBorderBrush", highlightColor);
+        SetTokenBrush(resources, "FocusBrush", highlightColor);
+        SetTokenBrush(resources, "PrimaryBrush", highlightColor);
+        SetTokenBrush(resources, "PrimaryTextBrush", highlightTextColor);
+
+        SetTokenBrush(resources, "BorderSubtleBrush", windowTextColor);
+        SetTokenBrush(resources, "BorderStrongBrush", windowTextColor);
+
+        resources["ShadowColor"] = Colors.Transparent;
+    }
+
+    private static void SetTokenBrush(ResourceDictionary resources, string key, Color color)
+    {
+        if (resources[key] is SolidColorBrush existing && !existing.IsFrozen)
+        {
+            existing.Color = color;
+            return;
+        }
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        resources[key] = brush;
     }
 
     private static Color ParseColor(string value) =>
@@ -71,6 +142,11 @@ internal static partial class ThemeService
     public static void ApplyWindowChrome(Window window)
     {
         ArgumentNullException.ThrowIfNull(window);
+        if (window.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+        {
+            dispatcher.BeginInvoke(new Action(() => ApplyWindowChrome(window)));
+            return;
+        }
         var handle = new WindowInteropHelper(window).Handle;
         if (handle == 0)
         {
@@ -118,15 +194,26 @@ internal static partial class ThemeService
             return;
         }
         _watchingSystem = true;
-        SystemEvents.UserPreferenceChanged += (_, args) =>
+        _systemPreferenceHandler = (_, args) =>
         {
-            if (args.Category is not (UserPreferenceCategory.General or UserPreferenceCategory.Color)
-                || _preference != ThemePreference.System)
+            if (args.Category is not (UserPreferenceCategory.General or UserPreferenceCategory.Color or UserPreferenceCategory.Accessibility or UserPreferenceCategory.VisualStyle)
+                && _preference != ThemePreference.System && !SystemParameters.HighContrast)
             {
                 return;
             }
             Application.Current?.Dispatcher.BeginInvoke(ApplyResolved);
         };
+        SystemEvents.UserPreferenceChanged += _systemPreferenceHandler;
+    }
+
+    internal static void UnregisterSystemWatcher()
+    {
+        if (_watchingSystem && _systemPreferenceHandler is not null)
+        {
+            SystemEvents.UserPreferenceChanged -= _systemPreferenceHandler;
+            _watchingSystem = false;
+            _systemPreferenceHandler = null;
+        }
     }
 
     private static bool SystemPrefersLight()
@@ -206,6 +293,7 @@ internal static partial class ThemeService
         ("SuccessBrush", "#3DD68C"),
         ("SuccessSoftBrush", "#143826"),
         ("OverlayScrimBrush", "#C8101216"),
+        ("ShadowColor", "#000000"),
     ];
 
     internal static readonly (string Key, string Value)[] LightTokens =
@@ -247,6 +335,7 @@ internal static partial class ThemeService
         ("SuccessBrush", "#0B7350"),
         ("SuccessSoftBrush", "#E3F6EF"),
         ("OverlayScrimBrush", "#A615171C"),
+        ("ShadowColor", "#000000"),
     ];
 
     [StructLayout(LayoutKind.Sequential)]

@@ -30,6 +30,7 @@
             <SolidColorBrush x:Key="AccentTextBrush" Color="#071224" />
             <SolidColorBrush x:Key="AccentSoftBrush" Color="#20243A" />
             <SolidColorBrush x:Key="AccentBorderBrush" Color="#59649D" />
+            <SolidColorBrush x:Key="FocusBrush" Color="#7C89D9" />
             <SolidColorBrush x:Key="PrimaryBrush" Color="#5562B3" />
             <SolidColorBrush x:Key="PrimaryHoverBrush" Color="#5B69BE" />
             <SolidColorBrush x:Key="PrimaryPressedBrush" Color="#4B579F" />
@@ -40,11 +41,17 @@
             <SolidColorBrush x:Key="TextDisabledBrush" Color="#565F6E" />
             <SolidColorBrush x:Key="DangerBrush" Color="#FF6B7D" />
             <SolidColorBrush x:Key="DangerSoftBrush" Color="#401C25" />
+            <SolidColorBrush x:Key="DangerHoverBrush" Color="#52222E" />
+            <SolidColorBrush x:Key="DangerHoverTextBrush" Color="#FF6B7D" />
+            <SolidColorBrush x:Key="DangerPressedBrush" Color="#4E1E28" />
+            <SolidColorBrush x:Key="DangerPressedTextBrush" Color="#FF6B7D" />
             <SolidColorBrush x:Key="WarningBrush" Color="#F2B95C" />
             <SolidColorBrush x:Key="WarningSoftBrush" Color="#3D2D14" />
             <SolidColorBrush x:Key="SuccessBrush" Color="#3DD68C" />
             <SolidColorBrush x:Key="SuccessSoftBrush" Color="#143826" />
             <SolidColorBrush x:Key="OverlayScrimBrush" Color="#C8101216" />
+            <Color x:Key="ShadowColor">#000000</Color>
+            <SolidColorBrush x:Key="ShadowBrush" Color="#000000" />
 
             <!-- Global Window Defaults: Sub-pixel ClearType, crisp pixel snapping, layout rounding -->
             <Style TargetType="Window">

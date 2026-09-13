@@ -1,114 +1,133 @@
-# PopGlot startup budget measurement (T15).
+# PopGlot startup budget measurement — production entry (C09 contract).
 #
-# Launches the REAL Release executable N times in --smoke-startup mode against
-# fresh isolated data directories, records the tray-available milliseconds
-# from each marker, and reports P50/P95. No user configuration is touched.
+# This entry owns the MANDATORY instance pre-check (no switch bypasses it)
+# and the real child launcher; the orchestration lives in
+# scripts/measure/measure-core.psm1 with the child launcher as the injectable
+# process adapter at the test boundary.
 #
-# Usage:  powershell -ExecutionPolicy Bypass -File scripts/measure-startup.ps1 [-Runs 30] [-Exe <path>]
-# Output: artifacts/perf/startup.json (raw samples + P50/P95 + environment)
+# Every abort path (pre-check, package verification, warmup failure,
+# all-counted-failed) writes a structured failure report under artifacts/perf
+# and exits nonzero. The package must come from scripts/publish-package.ps1
+# (self-contained publish + FFI dll + build-manifest.json); the manifest is
+# re-verified against the current bytes at measurement time.
+#
+# Usage:
+#   powershell -ExecutionPolicy Bypass -File scripts/publish-package.ps1
+#   powershell -ExecutionPolicy Bypass -File scripts/measure-startup.ps1 [-Runs 30] [-MeasureMemory]
+# Output: artifacts/perf/startup.json (or startup-failure.json on abort)
 
 param(
     [int]$Runs = 30,
-    [string]$Exe = ""
+    [string]$Exe = "",
+    [switch]$MeasureMemory
 )
 
 $ErrorActionPreference = 'Stop'
-
 $repoRoot = Split-Path -Parent $PSScriptRoot
-if (-not $Exe) {
-    $Exe = Join-Path $repoRoot 'apps/PopGlot.Windows/bin/Release/net10.0-windows10.0.19041.0/PopGlot.exe'
-}
-if (-not (Test-Path $Exe)) {
-    # Fall back to the Debug build the developer already has.
-    $Exe = Join-Path $repoRoot 'apps/PopGlot.Windows/bin/Debug/net10.0-windows10.0.19041.0/PopGlot.exe'
-}
-if (-not (Test-Path $Exe)) {
-    throw "PopGlot.exe not found; build the app first."
-}
+Import-Module (Join-Path $PSScriptRoot 'measure/measure-core.psm1') -Force
 
 $outDir = Join-Path $repoRoot 'artifacts/perf'
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
-$samples = New-Object System.Collections.Generic.List[object]
-$smokeRoot = Join-Path $env:TEMP ("popglot-perf-" + [Guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Force -Path $smokeRoot | Out-Null
-
+# --- instance pre-check: MANDATORY, unconditionally first, no bypass ---
+$preCheckError = $null
 try {
-    for ($i = 0; $i -lt $Runs; $i++) {
-        $dataDir = Join-Path $smokeRoot ("run-" + $i)
-        $marker = Join-Path $smokeRoot ("marker-" + $i + ".json")
-        $kind = if ($i -eq 0) { 'cold' } else { 'warm-cache' }
+    Test-InstanceConflict
+}
+catch {
+    $preCheckError = $_.Exception.Message
+}
+if ($preCheckError) {
+    Write-MeasurementFailureReport -OutputDir $outDir -Phase 'pre-check' -ErrorText $preCheckError
+    throw $preCheckError
+}
 
-        $proc = Start-Process -FilePath $Exe `
-            -ArgumentList @('--smoke-startup', $marker, $dataDir) `
-            -PassThru -WindowStyle Hidden
-        $exited = $proc.WaitForExit(30000)
-        if (-not $exited) {
-            $proc.Kill()
-            $samples += [PSCustomObject]@{ run = $i; kind = $kind; error = 'timeout' }
-            continue
-        }
-        if (-not (Test-Path $marker)) {
-            $samples += [PSCustomObject]@{ run = $i; kind = $kind; error = 'no marker' }
-            continue
-        }
+if (-not $Exe) {
+    $Exe = Join-Path $repoRoot 'apps/PopGlot.Windows/bin/Release/net10.0-windows10.0.19041.0/win-x64/publish/PopGlot.exe'
+}
 
-        $payload = Get-Content $marker -Raw | ConvertFrom-Json
-        if ($payload.failure) {
-            $samples += [PSCustomObject]@{ run = $i; kind = $kind; error = $payload.failure }
-            continue
+# --- package verification: any failure is structured and fatal ---
+$identity = $null
+$packageError = $null
+try {
+    $identity = Test-ArtifactPackage -Exe $Exe
+}
+catch {
+    $packageError = $_.Exception.Message
+}
+if ($packageError) {
+    Write-MeasurementFailureReport -OutputDir $outDir -Phase 'package-verification' -ErrorText $packageError
+    throw $packageError
+}
+
+# --- the real child launcher: Start-Process of the published exe in
+#     --smoke-startup mode against a fresh isolated data directory ---
+# C09-a: the launcher STARTS the child and returns the live process —
+# readiness is observed by the measurement core WHILE the child runs, and
+# the exit is reaped and checked only after readiness is captured.
+$childLauncher = {
+    param([string]$exe, [string]$marker, [string]$dataDir)
+    Start-Process -FilePath $exe `
+        -ArgumentList @('--smoke-startup', $marker, $dataDir) `
+        -PassThru -WindowStyle Hidden
+}
+
+$result = Invoke-MeasurementRun -Exe $Exe -Runs $Runs -OutputDir $outDir -Identity @{
+    gitCommit = $identity.gitCommit
+    dirtyDiffHash = $identity.dirtyDiffHash
+    artifactSha256 = $identity.artifactSha256
+    artifactFileVersion = $identity.artifactFileVersion
+    packageFileCount = $identity.packageFileCount
+    rustFfiSha256 = $identity.rustFfiSha256
+    untrackedInputs = $identity.untrackedInputs
+} -ChildLauncher $childLauncher
+
+if ($result.Aborted) {
+    Write-Host "ABORT: measurement aborted in phase $($result.Phase)."
+    Write-Host "Structured failure report: $(Join-Path $outDir 'startup-failure.json')"
+    exit $result.ExitCode
+}
+
+$report = $result.Report
+
+# --- memory + idle CPU sampling (C09): module-driven with an injectable
+#     process factory; the result is persisted for PASS and FAIL alike ---
+if ($MeasureMemory) {
+    # C09-c: restore the caller's environment value, never delete blindly.
+    $previousDataRoot = [Environment]::GetEnvironmentVariable('POPGLOT_DATA_ROOT')
+    $memRoot = Join-Path $env:TEMP ("popglot-perf-mem-" + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $memRoot | Out-Null
+    $env:POPGLOT_DATA_ROOT = $memRoot
+    try {
+        $processFactory = {
+            Start-Process -FilePath $Exe -ArgumentList @('--background') `
+                -PassThru -WindowStyle Hidden
         }
-        $samples += [PSCustomObject]@{
-            run = $i; kind = $kind; trayAvailableMs = [long]$payload.trayAvailableMs
+        $memory = Invoke-MemorySampling -ProcessFactory $processFactory
+        $report | Add-Member -NotePropertyName memory -NotePropertyValue $memory
+        if ($memory.verdict -eq 'FAIL') {
+            $report.verdict = 'FAIL'
+            $report.verdictReason = "$($report.verdictReason); memory/CPU phase failed"
         }
+        # C09-c: the final report — with memory data, PASS or FAIL — is
+        # ALWAYS persisted before this phase ends.
+        $report | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $outDir 'startup.json') -Encoding UTF8
+    }
+    finally {
+        if ($null -ne $previousDataRoot) {
+            $env:POPGLOT_DATA_ROOT = $previousDataRoot
+        }
+        else {
+            Remove-Item Env:POPGLOT_DATA_ROOT -ErrorAction SilentlyContinue
+        }
+        try { Remove-Item $memRoot -Recurse -Force -ErrorAction SilentlyContinue } catch {}
     }
 }
-finally {
-    try { Remove-Item $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue } catch {}
-}
 
-$ok = @($samples | Where-Object { -not $_.error } | ForEach-Object { [long]$_.trayAvailableMs }) | Sort-Object
-if ($ok.Count -eq 0) {
-    throw "every smoke launch failed; nothing to report"
-}
-
-function Percentile([double[]]$sorted, [double]$p) {
-    if ($sorted.Count -eq 1) { return $sorted[0] }
-    $index = [Math]::Ceiling(($p / 100.0) * $sorted.Count) - 1
-    if ($index -lt 0) { $index = 0 }
-    return $sorted[[int]$index]
-}
-
-$p50 = Percentile ([double[]]$ok) 50
-$p95 = Percentile ([double[]]$ok) 95
-$budgetP50 = 600   # AI-RULES 9.1: P50 <= 600 ms
-$budgetP95 = 1200  # AI-RULES 9.1: P95 <= 1200 ms
-
-$report = [PSCustomObject]@{
-    metric = 'app_startup_to_tray_available'
-    exe = $Exe
-    runs = $Runs
-    succeeded = $ok.Count
-    p50Ms = [long]$p50
-    p95Ms = [long]$p95
-    minMs = [long]$ok[0]
-    maxMs = [long]$ok[-1]
-    budget = [PSCustomObject]@{ p50Ms = $budgetP50; p95Ms = $budgetP95 }
-    verdict = if ($p50 -le $budgetP50 -and $p95 -le $budgetP95) { 'PASS' } else { 'FAIL' }
-    machine = [PSCustomObject]@{
-        os = (Get-CimInstance Win32_OperatingSystem).Caption
-        cores = [Environment]::ProcessorCount
-        dotnet = [Environment]::Version.ToString()
-    }
-    startedUtc = [DateTimeOffset]::UtcNow.ToString('o')
-    samples = $samples
-}
-
-$outPath = Join-Path $outDir 'startup.json'
-$report | ConvertTo-Json -Depth 4 | Set-Content $outPath -Encoding UTF8
 Write-Host ""
-Write-Host "[Startup to tray available] runs=$($report.runs) ok=$($ok.Count) P50=$($report.p50Ms)ms P95=$($report.p95Ms)ms (budget P50<=${budgetP50}ms P95<=${budgetP95}ms) => $($report.verdict)"
-Write-Host "Raw samples + environment: $outPath"
+Write-Host "[Process start -> readiness marker] runs=$($report.runs) ok=$($report.succeeded) failed=$($report.failed) P50=$($report.p50Ms)ms P95=$($report.p95Ms)ms => $($report.verdict) ($($report.verdictReason))"
+Write-Host "Build identity: commit=$($report.buildIdentity.gitCommit) diff=$($report.buildIdentity.dirtyDiffHash) artifact=$($report.buildIdentity.artifactSha256) files=$($report.buildIdentity.packageFileCount)"
+Write-Host "Raw samples (incl. failure evidence + warmups + package manifest): $(Join-Path $outDir 'startup.json')"
 if ($report.verdict -eq 'FAIL') {
     exit 1
 }

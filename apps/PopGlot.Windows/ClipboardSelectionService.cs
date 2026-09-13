@@ -28,9 +28,13 @@ internal sealed class ClipboardSelectionService
         _clipboard = clipboard;
     }
 
-    public async Task<string> ReadSelectionAsync(CancellationToken cancellationToken)
+    public async Task<string> ReadSelectionAsync(CancellationToken cancellationToken, nint targetWindow = 0)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (_clipboard is WindowsSelectionClipboardAdapter winAdapter)
+        {
+            winAdapter.TargetWindow = targetWindow;
+        }
         using var snapshot = await _clipboard.CaptureAsync();
         var sequenceBeforeCopy = _clipboard.SequenceNumber;
         uint? copiedSequence = null;
@@ -59,7 +63,7 @@ internal sealed class ClipboardSelectionService
                 {
                     throw new OperationCanceledException(cancellationToken);
                 }
-                throw new InvalidOperationException("未检测到可复制的选中文本。请先选中文字，再按划词快捷键。");
+                throw new InvalidOperationException("未检测到可复制的选中文本。请先选中文字再按划词键；若当前应用（如终端或受限文档）不支持快捷键复制，可直接在浮窗中粘贴。");
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -140,26 +144,66 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
 
     public uint SequenceNumber => NativeMethods.GetClipboardSequenceNumber();
 
+    internal nint TargetWindow { get; set; }
+
     public Task<IClipboardSnapshot> CaptureAsync() => RetryClipboardAsync(() =>
         RunInStaAsync<IClipboardSnapshot>(ClipboardSnapshot.Capture, ClipboardOperationTimeout));
 
     public async Task SendCopyAsync()
     {
+        if (TargetWindow != 0)
+        {
+            var currentForeground = NativeMethods.GetForegroundWindow();
+            if (currentForeground != 0 && currentForeground != TargetWindow)
+            {
+                NativeMethods.SetForegroundWindow(TargetWindow);
+                await Task.Delay(15);
+            }
+        }
+
         await WaitForModifiersReleasedAsync();
-        var inputs = new[]
+
+        var inputs = new List<NativeInput>(8);
+
+        // Synthesize KeyUp for any modifier keys that are still physically held down
+        // (especially Alt from Ctrl+Alt+W, or Shift/Win), so the target application
+        // receives a pure Ctrl+C rather than Ctrl+Alt+C or Ctrl+Shift+C.
+        if ((NativeMethods.GetAsyncKeyState(VkMenu) & 0x8000) != 0)
         {
-            KeyboardInput(VkControl, 0),
-            KeyboardInput(VkC, 0),
-            KeyboardInput(VkC, KeyeventfKeyup),
-            KeyboardInput(VkControl, KeyeventfKeyup),
-        };
+            inputs.Add(KeyboardInput(VkMenu, KeyeventfKeyup));
+        }
+        if ((NativeMethods.GetAsyncKeyState(VkShift) & 0x8000) != 0)
+        {
+            inputs.Add(KeyboardInput(VkShift, KeyeventfKeyup));
+        }
+        if ((NativeMethods.GetAsyncKeyState(VkLWin) & 0x8000) != 0)
+        {
+            inputs.Add(KeyboardInput(VkLWin, KeyeventfKeyup));
+        }
+        if ((NativeMethods.GetAsyncKeyState(VkRWin) & 0x8000) != 0)
+        {
+            inputs.Add(KeyboardInput(VkRWin, KeyeventfKeyup));
+        }
+
+        inputs.Add(KeyboardInput(VkControl, 0));
+        inputs.Add(KeyboardInput(VkC, 0));
+        inputs.Add(KeyboardInput(VkC, KeyeventfKeyup));
+        inputs.Add(KeyboardInput(VkControl, KeyeventfKeyup));
+
+        var inputArray = inputs.ToArray();
         var sent = NativeMethods.SendInput(
-            (uint)inputs.Length,
-            inputs,
+            (uint)inputArray.Length,
+            inputArray,
             InputStructureSize);
-        if (sent != inputs.Length)
+
+        if (sent != inputArray.Length)
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "无法向当前应用发送复制快捷键。");
+            var error = Marshal.GetLastWin32Error();
+            if (error == 5) // ERROR_ACCESS_DENIED (UIPI isolation)
+            {
+                throw new InvalidOperationException("无法向当前应用发送复制指令：目标窗口以管理员权限运行（受 Windows UIPI 权限隔离保护）。请以管理员身份运行 PopGlot，或手动复制后在浮窗中粘贴。");
+            }
+            throw new Win32Exception(error, "无法向当前应用发送复制快捷键。");
         }
     }
 
@@ -172,7 +216,7 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
     /// </summary>
     private static async Task WaitForModifiersReleasedAsync()
     {
-        var deadline = Environment.TickCount64 + 400;
+        var deadline = Environment.TickCount64 + 500;
         while (Environment.TickCount64 < deadline)
         {
             var pressed =
@@ -395,6 +439,13 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
 
         [LibraryImport("user32.dll", SetLastError = true)]
         internal static partial uint SendInput(uint inputCount, NativeInput[] inputs, int inputSize);
+
+        [LibraryImport("user32.dll")]
+        internal static partial nint GetForegroundWindow();
+
+        [LibraryImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static partial bool SetForegroundWindow(nint hWnd);
     }
 }
 

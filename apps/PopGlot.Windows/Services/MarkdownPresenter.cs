@@ -70,6 +70,81 @@ internal static partial class MarkdownPresenter
     /// preserved byte-for-byte, and only natural-language segments get
     /// headings/bullets/emphasis unwrapped. Unparseable input is kept as-is.
     /// </summary>
+    /// <remarks>
+    /// C04 newline and fidelity contract: input CRLF/CR is normalized once and
+    /// the output is always LF. Code content between fences — indentation,
+    /// trailing spaces, blank lines, the block's final newline — is preserved
+    /// verbatim; only the fence lines themselves are removed. The output is
+    /// never Trim()-ed as a whole, so a code block at either edge keeps its
+    /// exact bytes.
+    /// </remarks>
+    /// <summary>A07: how one line relates to a fenced code block.</summary>
+    internal enum FenceLineKind
+    {
+        /// <summary>Not a fence line.</summary>
+        None,
+        /// <summary>Opens a block (run ≥3, info string optional).</summary>
+        Open,
+        /// <summary>Closes the matching block (same marker, run ≥ opener, no info).</summary>
+        Close,
+    }
+
+    /// <summary>One classified fence line: marker, run length and info string.</summary>
+    internal readonly record struct FenceMatch(
+        FenceLineKind Kind,
+        char Marker,
+        int RunLength,
+        string InfoString,
+        string TrimmedLine);
+
+    /// <summary>
+    /// A07: the single fence grammar for every markdown path. A fence line is
+    /// a run of ≥3 identical backticks or tildes (leading whitespace allowed).
+    /// A line with only the run closes the block whose opener used the SAME
+    /// marker with a run ≤ this one; anything after the run makes it an
+    /// opener (info string). Backtick info strings may not contain a
+    /// backtick (that line is plain text), tilde info strings may.
+    /// </summary>
+    internal static FenceMatch ClassifyFenceLine(string line)
+    {
+        var trimmed = line.TrimStart();
+        if (trimmed.Length < 3)
+        {
+            return new FenceMatch(FenceLineKind.None, default, 0, string.Empty, trimmed);
+        }
+        var marker = trimmed[0];
+        if (marker is not '`' and not '~')
+        {
+            return new FenceMatch(FenceLineKind.None, default, 0, string.Empty, trimmed);
+        }
+        var run = 0;
+        while (run < trimmed.Length && trimmed[run] == marker)
+        {
+            run++;
+        }
+        if (run < 3)
+        {
+            return new FenceMatch(FenceLineKind.None, default, 0, string.Empty, trimmed);
+        }
+        var rest = trimmed[run..].Trim();
+        if (rest.Length == 0)
+        {
+            return new FenceMatch(FenceLineKind.Close, marker, run, string.Empty, trimmed);
+        }
+        if (marker == '`' && rest.Contains('`'))
+        {
+            // A backtick inside the info string would break the fence.
+            return new FenceMatch(FenceLineKind.None, default, 0, string.Empty, trimmed);
+        }
+        return new FenceMatch(FenceLineKind.Open, marker, run, rest, trimmed);
+    }
+
+    /// <summary>True when <paramref name="close"/> terminates a block opened by <paramref name="open"/>.</summary>
+    private static bool ClosesBlock(FenceMatch open, FenceMatch close) =>
+        close.Kind == FenceLineKind.Close &&
+        close.Marker == open.Marker &&
+        close.RunLength >= open.RunLength;
+
     public static string ToPlainText(string? markdown)
     {
         if (string.IsNullOrWhiteSpace(markdown))
@@ -77,34 +152,56 @@ internal static partial class MarkdownPresenter
             return markdown ?? string.Empty;
         }
 
-        var lines = markdown.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
-        var sb = new StringBuilder(markdown.Length);
-        bool inCodeBlock = false;
+        var normalized = markdown.Replace("\r\n", "\n").Replace("\r", "\n");
+        var sb = new StringBuilder(normalized.Length);
+        var position = 0;
+        FenceMatch? openFence = null;
 
-        foreach (var rawLine in lines)
+        while (position < normalized.Length)
         {
-            var line = rawLine;
-            var trimmed = line.TrimStart();
+            var lineEnd = normalized.IndexOf('\n', position);
+            var hasNewline = lineEnd >= 0;
+            var line = hasNewline ? normalized[position..lineEnd] : normalized[position..];
+            position = hasNewline ? lineEnd + 1 : normalized.Length;
 
-            // Handle code block fences
-            if (trimmed.StartsWith("```", StringComparison.Ordinal))
+            if (openFence is { } open)
             {
-                inCodeBlock = !inCodeBlock;
+                // A07: only a matching closer of sufficient length ends the
+                // block; shorter runs of the same or another marker are code.
+                if (ClosesBlock(open, ClassifyFenceLine(line)))
+                {
+                    openFence = null;
+                    continue;
+                }
+                sb.Append(line);
+                if (hasNewline)
+                {
+                    sb.Append('\n');
+                }
                 continue;
             }
 
-            if (inCodeBlock)
+            var fence = ClassifyFenceLine(line);
+            // Outside a block, ANY fence line — bare or with an info string —
+            // opens one (A07: a bare run classifies as Close but has nothing
+            // to close).
+            if (fence.Kind != FenceLineKind.None)
             {
-                sb.AppendLine(line);
+                openFence = fence;
                 continue;
             }
 
             if (string.IsNullOrWhiteSpace(line))
             {
-                sb.AppendLine();
+                if (hasNewline)
+                {
+                    sb.Append('\n');
+                }
                 continue;
             }
 
+            var trimmed = line.TrimStart();
+            var prose = line;
             // Headings: # , ## , etc.
             if (trimmed.StartsWith('#'))
             {
@@ -112,7 +209,7 @@ internal static partial class MarkdownPresenter
                 while (hLevel < trimmed.Length && trimmed[hLevel] == '#') hLevel++;
                 if (hLevel >= 1 && hLevel <= 6 && hLevel < trimmed.Length && trimmed[hLevel] == ' ')
                 {
-                    line = trimmed[(hLevel + 1)..].Trim();
+                    prose = trimmed[(hLevel + 1)..].Trim();
                 }
             }
             // Bullet points: - , * , +
@@ -120,7 +217,7 @@ internal static partial class MarkdownPresenter
                      trimmed.StartsWith("* ", StringComparison.Ordinal) ||
                      trimmed.StartsWith("+ ", StringComparison.Ordinal))
             {
-                line = trimmed[2..].Trim();
+                prose = trimmed[2..].Trim();
             }
             // Ordered list: 1. , 2) , etc.
             else
@@ -128,14 +225,20 @@ internal static partial class MarkdownPresenter
                 var match = Regex.Match(trimmed, @"^\d+[\.\)]\s+(.*)$");
                 if (match.Success)
                 {
-                    line = match.Groups[1].Value.Trim();
+                    prose = match.Groups[1].Value.Trim();
                 }
             }
 
-            sb.AppendLine(TransformNaturalSegments(line, static segment => StripNaturalEmphasis(segment)).TrimEnd());
+            // Prose lines keep display hygiene (no trailing whitespace) but
+            // nothing beyond the line itself is ever trimmed away.
+            sb.Append(TransformNaturalSegments(prose, static segment => StripNaturalEmphasis(segment)).TrimEnd());
+            if (hasNewline)
+            {
+                sb.Append('\n');
+            }
         }
 
-        return sb.ToString().Trim();
+        return sb.ToString();
     }
 
     /// <summary>
@@ -178,47 +281,54 @@ internal static partial class MarkdownPresenter
             return;
         }
 
-        var lines = markdownText.Replace("\r\n", "\n").Split('\n');
-        var textPrimaryBrush = (Brush)(resources["TextPrimaryBrush"] ?? Brushes.White);
-        var textSecondaryBrush = (Brush)(resources["TextSecondaryBrush"] ?? Brushes.Gray);
-        var accentBrush = (Brush)(resources["AccentBrush"] ?? Brushes.Teal);
-        var inputBrush = (Brush)(resources["InputBrush"] ?? Brushes.DarkSlateGray);
-        var borderSubtleBrush = (Brush)(resources["BorderSubtleBrush"] ?? Brushes.DimGray);
+        // C04/F06: code interiors are captured by offset in the normalized
+        // text, so the copy button delivers the exact bytes between the
+        // fences — indentation, trailing spaces, blank lines and the block's
+        // final newline all survive; only the fence lines are removed.
+        var normalized = markdownText.Replace("\r\n", "\n").Replace("\r", "\n");
+        document.SetResourceReference(FlowDocument.ForegroundProperty, "TextPrimaryBrush");
         var monoFont = (FontFamily)(resources["MonoFontFamily"] ?? new FontFamily("Cascadia Mono, Consolas"));
         var uiFont = (FontFamily)(resources["UiFontFamily"] ?? new FontFamily("Segoe UI Variable Text, Segoe UI, Microsoft YaHei UI"));
 
-        bool inCodeBlock = false;
+        var position = 0;
+        FenceMatch? openFence = null;
         bool addParagraphSpacing = false;
-        var codeBlockBuilder = new StringBuilder();
+        var codeStart = 0;
         string? codeLanguage = null;
 
-        foreach (var rawLine in lines)
+        void FlushCodeBlock(string code)
         {
-            var line = rawLine;
+            var codeBlock = CreateCodeBlockElement(code, codeLanguage, monoFont, resultActionsEnabled);
+            document.Blocks.Add(new BlockUIContainer(codeBlock));
+        }
 
-            // Handle code block fences
-            if (line.TrimStart().StartsWith("```", StringComparison.Ordinal))
+        while (position < normalized.Length)
+        {
+            var lineStart = position;
+            var lineEnd = normalized.IndexOf('\n', position);
+            var hasNewline = lineEnd >= 0;
+            var line = hasNewline ? normalized[position..lineEnd] : normalized[position..];
+            position = hasNewline ? lineEnd + 1 : normalized.Length;
+
+            // A07: the shared fence grammar decides open/close/content.
+            if (openFence is { } open)
             {
-                if (!inCodeBlock)
+                if (ClosesBlock(open, ClassifyFenceLine(line)))
                 {
-                    inCodeBlock = true;
-                    codeLanguage = line.TrimStart()[3..].Trim();
-                    codeBlockBuilder.Clear();
+                    openFence = null;
+                    FlushCodeBlock(normalized[codeStart..lineStart]);
                     continue;
                 }
-                else
-                {
-                    inCodeBlock = false;
-                    var codeContent = codeBlockBuilder.ToString().TrimEnd();
-                    var codeBlock = CreateCodeBlockElement(codeContent, codeLanguage, monoFont, textPrimaryBrush, inputBrush, borderSubtleBrush, accentBrush, resultActionsEnabled);
-                    document.Blocks.Add(new BlockUIContainer(codeBlock));
-                    continue;
-                }
+                // Code content is captured by offsets; nothing per-line here.
+                continue;
             }
 
-            if (inCodeBlock)
+            var fence = ClassifyFenceLine(line);
+            if (fence.Kind != FenceLineKind.None)
             {
-                codeBlockBuilder.AppendLine(line);
+                openFence = fence;
+                codeLanguage = fence.InfoString.Length > 0 ? fence.InfoString : null;
+                codeStart = position;
                 continue;
             }
 
@@ -278,9 +388,9 @@ internal static partial class MarkdownPresenter
                 var bulletContent = trimmedLine[2..].Trim();
                 var bulletDot = new Run(" • ")
                 {
-                    Foreground = accentBrush,
                     FontWeight = FontWeights.Bold
                 };
+                bulletDot.SetResourceReference(TextElement.ForegroundProperty, "AccentBrush");
                 paragraph.Inlines.Add(bulletDot);
                 AppendFormattedSpans(paragraph.Inlines, bulletContent, resources);
             }
@@ -291,9 +401,9 @@ internal static partial class MarkdownPresenter
                 var numContent = numMatch.Groups[2].Value.Trim();
                 var numRun = new Run(numPrefix)
                 {
-                    Foreground = accentBrush,
                     FontWeight = FontWeights.SemiBold
                 };
+                numRun.SetResourceReference(TextElement.ForegroundProperty, "AccentBrush");
                 paragraph.Inlines.Add(numRun);
                 AppendFormattedSpans(paragraph.Inlines, numContent, resources);
             }
@@ -306,12 +416,11 @@ internal static partial class MarkdownPresenter
             addParagraphSpacing = false;
         }
 
-        // Handle unclosed code block if any
-        if (inCodeBlock && codeBlockBuilder.Length > 0)
+        // Handle unclosed code block if any: everything after the opening
+        // fence is the block, verbatim.
+        if (openFence is not null && codeStart < normalized.Length)
         {
-            var codeContent = codeBlockBuilder.ToString().TrimEnd();
-            var codeBlock = CreateCodeBlockElement(codeContent, codeLanguage, monoFont, textPrimaryBrush, inputBrush, borderSubtleBrush, accentBrush, resultActionsEnabled);
-            document.Blocks.Add(new BlockUIContainer(codeBlock));
+            FlushCodeBlock(normalized[codeStart..]);
         }
     }
 
@@ -320,9 +429,6 @@ internal static partial class MarkdownPresenter
         string text,
         ResourceDictionary resources)
     {
-        var textPrimaryBrush = (Brush)(resources["TextPrimaryBrush"] ?? Brushes.White);
-        var accentBrush = (Brush)(resources["AccentBrush"] ?? Brushes.Teal);
-        var accentSoftBrush = (Brush)(resources["AccentSoftBrush"] ?? Brushes.DarkSlateGray);
         var monoFont = (FontFamily)(resources["MonoFontFamily"] ?? new FontFamily("Cascadia Mono, Consolas"));
 
         // Structure first: split on code spans / bold / protected tokens, then
@@ -381,46 +487,52 @@ internal static partial class MarkdownPresenter
                 }
                 if (kind == PieceKind.Bold)
                 {
-                    inlines.Add(new Run(spaced)
+                    var run = new Run(spaced)
                     {
                         FontWeight = FontWeights.SemiBold,
-                        Foreground = textPrimaryBrush,
-                    });
+                    };
+                    run.SetResourceReference(TextElement.ForegroundProperty, "TextPrimaryBrush");
+                    inlines.Add(run);
                 }
                 else
                 {
-                    inlines.Add(new Run(spaced) { Foreground = textPrimaryBrush });
+                    var run = new Run(spaced);
+                    run.SetResourceReference(TextElement.ForegroundProperty, "TextPrimaryBrush");
+                    inlines.Add(run);
                 }
             }
             else if (kind == PieceKind.Code)
             {
+                var codeText = new TextBlock
+                {
+                    Text = pieceText,
+                    FontFamily = monoFont,
+                    FontSize = 12.5,
+                    FontWeight = FontWeights.Medium,
+                };
+                codeText.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
+
                 var codeBorder = new Border
                 {
-                    Background = accentSoftBrush,
                     CornerRadius = new CornerRadius(4),
                     Padding = new Thickness(4, 1, 4, 1),
                     Margin = new Thickness(2, 0, 2, 0),
                     VerticalAlignment = VerticalAlignment.Center,
-                    Child = new TextBlock
-                    {
-                        Text = pieceText,
-                        FontFamily = monoFont,
-                        FontSize = 12.5,
-                        Foreground = accentBrush,
-                        FontWeight = FontWeights.Medium,
-                    }
+                    Child = codeText
                 };
+                codeBorder.SetResourceReference(Border.BackgroundProperty, "AccentSoftBrush");
                 inlines.Add(new InlineUIContainer(codeBorder));
             }
             else
             {
                 // Protected token placeholder
-                inlines.Add(new Run(pieceText)
+                var tokenRun = new Run(pieceText)
                 {
                     FontFamily = monoFont,
-                    Foreground = accentBrush,
                     FontWeight = FontWeights.Bold,
-                });
+                };
+                tokenRun.SetResourceReference(TextElement.ForegroundProperty, "AccentBrush");
+                inlines.Add(tokenRun);
             }
         }
     }
@@ -461,21 +573,17 @@ internal static partial class MarkdownPresenter
         string code,
         string? lang,
         FontFamily monoFont,
-        Brush textPrimary,
-        Brush background,
-        Brush borderBrush,
-        Brush accentBrush,
         bool resultActionsEnabled = true)
     {
         var outerBorder = new Border
         {
-            Background = background,
-            BorderBrush = borderBrush,
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
             Margin = new Thickness(0, 6, 0, 8),
             Padding = new Thickness(10, 8, 10, 8)
         };
+        outerBorder.SetResourceReference(Border.BackgroundProperty, "InputBrush");
+        outerBorder.SetResourceReference(Border.BorderBrushProperty, "BorderSubtleBrush");
 
         var grid = new Grid();
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -490,9 +598,9 @@ internal static partial class MarkdownPresenter
                 Text = lang.ToUpperInvariant(),
                 FontSize = 10,
                 FontWeight = FontWeights.Bold,
-                Foreground = accentBrush,
                 VerticalAlignment = VerticalAlignment.Center
             };
+            langBadge.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
             header.Children.Add(langBadge);
         }
 
@@ -529,13 +637,13 @@ internal static partial class MarkdownPresenter
             Text = code,
             FontFamily = monoFont,
             FontSize = 12.5,
-            Foreground = textPrimary,
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
             IsReadOnly = true,
             TextWrapping = TextWrapping.Wrap,
             AcceptsReturn = true,
         };
+        codeBox.SetResourceReference(TextBox.ForegroundProperty, "TextPrimaryBrush");
         Grid.SetRow(codeBox, 1);
 
         grid.Children.Add(header);

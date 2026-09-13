@@ -219,7 +219,9 @@ internal sealed record ShellSettings(
     HotkeyBinding CloseHotkey,
     bool HistoryEnabled,
     ThemePreference Theme,
-    bool ClosePanelOnFocusLoss = true,
+    // C05/F08: default OFF — focus loss never destroys a panel session;
+    // users who want auto-hide opt in explicitly.
+    bool ClosePanelOnFocusLoss = false,
     bool CopyTranslationAutomatically = false,
     bool StartWithWindows = false,
     HotkeyBinding? ShowWindowHotkey = null,
@@ -236,7 +238,7 @@ internal sealed record ShellSettings(
         HotkeyBinding.CloseDefault,
         HistoryEnabled: true,
         ThemePreference.System,
-        ClosePanelOnFocusLoss: true,
+        ClosePanelOnFocusLoss: false,
         CopyTranslationAutomatically: false,
         StartWithWindows: false,
         ShowWindowHotkey: HotkeyBinding.ShowWindowDefault,
@@ -293,7 +295,9 @@ internal sealed record ShellSettings(
 
 internal static class ShellSettingsStore
 {
-    private static readonly string DefaultSettingsPath = StoragePaths.ShellSettings;
+    // Resolve lazily so an isolated/test data root installed before use cannot
+    // be bypassed by an eager beforefieldinit static initializer.
+    private static string DefaultSettingsPath => StoragePaths.ShellSettings;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

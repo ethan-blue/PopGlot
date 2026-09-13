@@ -3,8 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:PopGlot.Windows"
         xmlns:sections="clr-namespace:PopGlot.Windows.Sections"
-        Title="设置" Width="960" Height="700" MinWidth="820" MinHeight="600"
-        Icon="/PopGlot;component/Assets/PopGlot-v3.ico"
+        Title="设置" Width="960" Height="700" MinWidth="680" MinHeight="480"
+        Icon="/PopGlot;component/Assets/PopGlot-v5.ico"
         Background="{DynamicResource CanvasBrush}" Foreground="{DynamicResource TextPrimaryBrush}"
         WindowStartupLocation="CenterScreen">
 
@@ -32,9 +32,9 @@
                 <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="6,0,0,0">
                     <Image Width="20" Height="20" VerticalAlignment="Center"
                            RenderOptions.BitmapScalingMode="HighQuality"
-                           Source="/PopGlot;component/Assets/popglot-app-avatar-v3.png"
+                           Source="/PopGlot;component/Assets/popglot-app-avatar-v5.png"
                            AutomationProperties.Name="PopGlot 图标" />
-                    <TextBlock Text="设置" Style="{StaticResource PageTitle}" FontSize="15"
+                    <TextBlock Text="设置" Style="{StaticResource PageTitle}"
                                FontWeight="SemiBold" Margin="8,0,0,0" VerticalAlignment="Center" />
                 </StackPanel>
 

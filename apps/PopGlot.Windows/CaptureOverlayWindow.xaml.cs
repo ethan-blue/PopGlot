@@ -73,7 +73,6 @@ public partial class CaptureOverlayWindow : Window
         SetShadeVisibility(Visibility.Visible);
         SelectionBorder.Visibility = Visibility.Visible;
         SizeBadge.Visibility = Visibility.Visible;
-        SetHandleVisibility(Visibility.Visible);
         UpdateSelection(_dragStart.Value);
     }
 
@@ -200,11 +199,6 @@ public partial class CaptureOverlayWindow : Window
         Place(ShadeRight, rect.Right, rect.Top, Math.Max(0, ActualWidth - rect.Right), rect.Height);
         Place(ShadeBottom, 0, rect.Bottom, ActualWidth, Math.Max(0, ActualHeight - rect.Bottom));
 
-        PlaceHandle(HandleTopLeft, rect.Left, rect.Top);
-        PlaceHandle(HandleTopRight, rect.Right, rect.Top);
-        PlaceHandle(HandleBottomLeft, rect.Left, rect.Bottom);
-        PlaceHandle(HandleBottomRight, rect.Right, rect.Bottom);
-
         // Geometry follows every pointer event. Text/layout is capped to one
         // update per display frame; forcing UpdateLayout on every MouseMove was
         // the primary source of marquee lag.
@@ -255,26 +249,12 @@ public partial class CaptureOverlayWindow : Window
         element.Height = Math.Max(0, height);
     }
 
-    private static void PlaceHandle(FrameworkElement handle, double x, double y)
-    {
-        Canvas.SetLeft(handle, x - (handle.Width / 2));
-        Canvas.SetTop(handle, y - (handle.Height / 2));
-    }
-
     private void SetShadeVisibility(Visibility visibility)
     {
         ShadeTop.Visibility = visibility;
         ShadeLeft.Visibility = visibility;
         ShadeRight.Visibility = visibility;
         ShadeBottom.Visibility = visibility;
-    }
-
-    private void SetHandleVisibility(Visibility visibility)
-    {
-        HandleTopLeft.Visibility = visibility;
-        HandleTopRight.Visibility = visibility;
-        HandleBottomLeft.Visibility = visibility;
-        HandleBottomRight.Visibility = visibility;
     }
 
     internal static Rect Normalize(Point first, Point second) => new(

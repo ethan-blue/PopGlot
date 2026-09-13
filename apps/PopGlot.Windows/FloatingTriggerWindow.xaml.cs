@@ -18,6 +18,7 @@ public partial class FloatingTriggerWindow : Window
 
     private readonly Action _onTrigger;
     private readonly DispatcherTimer _autoHideTimer;
+    private readonly EventHandler _themeChangedHandler;
     private bool _isHovered;
     private bool _isClosing;
 
@@ -26,9 +27,43 @@ public partial class FloatingTriggerWindow : Window
         _onTrigger = onTrigger;
         InitializeComponent();
 
-        // Position slightly above and to the right of the cursor
-        Left = screenPos.X + CursorOffsetX;
-        Top = Math.Max(MinScreenMargin, screenPos.Y - CursorOffsetY);
+        _themeChangedHandler = (_, _) =>
+        {
+            if (Dispatcher.CheckAccess())
+            {
+                ThemeService.ApplyWindowChrome(this);
+            }
+            else
+            {
+                _ = Dispatcher.BeginInvoke(() => ThemeService.ApplyWindowChrome(this));
+            }
+        };
+        ThemeService.ApplyWindowChrome(this);
+        ThemeService.ThemeChanged += _themeChangedHandler;
+        Closed += (_, _) => ThemeService.ThemeChanged -= _themeChangedHandler;
+
+        // WIN-11: Convert physical pixel cursor coordinates to DIP and clamp to screen 4 edges
+        var workArea = ScreenGeometry.WorkAreaForPixel(screenPos);
+        var scale = ScreenGeometry.ScaleOf(this);
+        var scaleX = scale.X > 0 ? scale.X : 1.0;
+        var scaleY = scale.Y > 0 ? scale.Y : 1.0;
+
+        var workLeftDip = workArea.Left / scaleX;
+        var workTopDip = workArea.Top / scaleY;
+        var workRightDip = workArea.Right / scaleX;
+        var workBottomDip = workArea.Bottom / scaleY;
+
+        var cursorXDip = screenPos.X / scaleX;
+        var cursorYDip = screenPos.Y / scaleY;
+
+        var targetLeft = cursorXDip + CursorOffsetX;
+        var targetTop = cursorYDip - CursorOffsetY;
+
+        var widthDip = Width > 0 ? Width : 46;
+        var heightDip = Height > 0 ? Height : 46;
+
+        Left = Math.Clamp(targetLeft, workLeftDip + MinScreenMargin, Math.Max(workLeftDip + MinScreenMargin, workRightDip - widthDip - MinScreenMargin));
+        Top = Math.Clamp(targetTop, workTopDip + MinScreenMargin, Math.Max(workTopDip + MinScreenMargin, workBottomDip - heightDip - MinScreenMargin));
 
         _autoHideTimer = new DispatcherTimer
         {

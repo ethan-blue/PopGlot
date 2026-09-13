@@ -38,16 +38,6 @@
         <Border x:Name="SelectionBorder" Visibility="Collapsed" CornerRadius="2"
                 BorderBrush="{StaticResource CaptureMarqueeBrush}" BorderThickness="2" Background="Transparent" />
 
-        <!-- Corner handles make the live selection read as a real marquee. -->
-        <Rectangle x:Name="HandleTopLeft" Width="8" Height="8" Visibility="Collapsed"
-                   Fill="{StaticResource CaptureMarqueeBrush}" RadiusX="2" RadiusY="2" />
-        <Rectangle x:Name="HandleTopRight" Width="8" Height="8" Visibility="Collapsed"
-                   Fill="{StaticResource CaptureMarqueeBrush}" RadiusX="2" RadiusY="2" />
-        <Rectangle x:Name="HandleBottomLeft" Width="8" Height="8" Visibility="Collapsed"
-                   Fill="{StaticResource CaptureMarqueeBrush}" RadiusX="2" RadiusY="2" />
-        <Rectangle x:Name="HandleBottomRight" Width="8" Height="8" Visibility="Collapsed"
-                   Fill="{StaticResource CaptureMarqueeBrush}" RadiusX="2" RadiusY="2" />
-
         <Border x:Name="SizeBadge" Visibility="Collapsed" Padding="8,4" CornerRadius="6"
                 Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1">
             <TextBlock x:Name="SizeText" Foreground="{DynamicResource TextPrimaryBrush}"
@@ -58,7 +48,7 @@
         <Border x:Name="HintChip" Padding="14,9" CornerRadius="10"
                 Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
             <Border.Effect>
-                <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="0.35" Color="#000000" />
+                <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="0.35" Color="{DynamicResource ShadowColor}" />
             </Border.Effect>
             <StackPanel Orientation="Horizontal">
                 <Ellipse Width="7" Height="7" VerticalAlignment="Center"

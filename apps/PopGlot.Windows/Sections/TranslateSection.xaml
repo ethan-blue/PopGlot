@@ -13,7 +13,7 @@
         <!-- Top ToolBar: Workbench title left, primary actions right -->
         <Grid Grid.Row="0" Margin="0,0,0,8">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="翻译工作台" Style="{StaticResource PageTitle}" FontSize="15"
+                <TextBlock Text="翻译工作台" Style="{StaticResource PageTitle}"
                            FontWeight="SemiBold" VerticalAlignment="Center" />
             </StackPanel>
 
@@ -23,9 +23,9 @@
                            Foreground="{DynamicResource TextTertiaryBrush}"
                            VerticalAlignment="Center" Margin="0,0,12,0" />
                 <Button Style="{StaticResource GhostButton}" Content="清空"
-                        Padding="10,4" Click="TranslateClear_Click" />
+                        Padding="10,6" Click="TranslateClear_Click" />
                 <Button x:Name="TranslateButton" Style="{StaticResource PrimaryButton}"
-                        Margin="8,0,0,0" Padding="18,5" Content="翻译" Click="Translate_Click" />
+                        Margin="8,0,0,0" Padding="18,6" Content="翻译" Click="Translate_Click" />
             </StackPanel>
 
             <!-- Hairline loading progress bar -->
@@ -41,7 +41,7 @@
         -->
         <Border Grid.Row="1" Background="{DynamicResource SurfaceBrush}"
                 BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                CornerRadius="4">
+                CornerRadius="10">
             <Grid x:Name="TranslatePaneGrid">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -154,13 +154,13 @@
 
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
 
-                            <Button Style="{StaticResource IconButton}" Width="28" Height="28"
+                            <Button x:Name="TranslateSourceSpeakButton" Style="{StaticResource IconButton}" Width="32" Height="32"
 
                                     AutomationProperties.Name="朗读原文" ToolTip="朗读原文"
 
                                     Click="TranslateSourceSpeak_Click">
 
-                                <Path Width="12" Height="12" Stretch="Uniform"
+                                <Path x:Name="TranslateSourceSpeakIcon" Width="12" Height="12" Stretch="Uniform"
 
                                       Fill="{DynamicResource TextSecondaryBrush}"
 
@@ -168,7 +168,7 @@
 
                             </Button>
 
-                            <Button Style="{StaticResource IconButton}" Width="28" Height="28" Margin="4,0,0,0"
+                            <Button Style="{StaticResource IconButton}" Width="32" Height="32" Margin="4,0,0,0"
 
                                     AutomationProperties.Name="复制原文" ToolTip="复制原文"
 
@@ -182,7 +182,7 @@
 
                             </Button>
 
-                            <Button Style="{StaticResource IconButton}" Width="28" Height="28" Margin="4,0,0,0"
+                            <Button Style="{StaticResource IconButton}" Width="32" Height="32" Margin="4,0,0,0"
 
                                     AutomationProperties.Name="合并断行"
 
@@ -224,7 +224,7 @@
 
                         HorizontalAlignment="Center" VerticalAlignment="Center"
 
-                        Width="28" Height="28"
+                        Width="32" Height="32"
 
                         ToolTip="交换语言方向" AutomationProperties.Name="交换语言方向"
 
@@ -290,7 +290,7 @@
 
                             <Border x:Name="TranslateStreamIndicator" Visibility="Collapsed"
 
-                                    Margin="8,0,0,0" Padding="6,2" CornerRadius="4"
+                                    Margin="8,0,0,0" Padding="6,2" CornerRadius="6"
 
                                     Background="{DynamicResource AccentSoftBrush}">
 
@@ -362,28 +362,51 @@
 
                                          AutomationProperties.Name="流式翻译中" />
 
-                                <!-- First-use guidance: one example + the inline
-                                     free-engine consent entry (destinations named). -->
+                                <!-- First-use guidance: unconfigured service card or example guidance -->
 
                                 <StackPanel x:Name="TranslateEmptyState" VerticalAlignment="Center"
 
                                             HorizontalAlignment="Center">
 
-                                    <TextBlock x:Name="EmptyStateHint" Text="在左侧输入或粘贴文本，按 Enter 翻译"
+                                    <!-- Unconfigured service guidance card. Shown whenever no fully
+                                         configured user engine exists — the built-in free engine is a
+                                         fallback route and never hides this entry. -->
+                                    <StackPanel x:Name="UnconfiguredGuidePanel" Visibility="Collapsed" HorizontalAlignment="Center" Margin="0,0,0,10">
+                                        <Border Width="36" Height="36" CornerRadius="10" Margin="0,0,0,8"
+                                                Background="{DynamicResource AccentSoftBrush}" HorizontalAlignment="Center">
+                                            <Path Data="{StaticResource IconProvider}" Width="16" Height="16" Stretch="Uniform"
+                                                  Fill="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock x:Name="GuideTitle" Text="尚未配置翻译引擎" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center"
+                                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock x:Name="GuideDescription" Text="添加翻译引擎后即可开始使用。"
+                                                   Style="{StaticResource Caption}" HorizontalAlignment="Center"
+                                                   Foreground="{DynamicResource TextTertiaryBrush}" Margin="0,4,0,10" />
+                                        <Button x:Name="GoToSettingsButton" Content="添加翻译引擎" Style="{StaticResource PrimaryButton}"
+                                                Padding="16,6" HorizontalAlignment="Center" Cursor="Hand"
+                                                AutomationProperties.Name="添加翻译引擎"
+                                                ToolTip="打开设置并进入添加引擎流程"
+                                                Click="OpenAddEngine_Click" />
+                                    </StackPanel>
 
-                                               Style="{StaticResource Caption}" HorizontalAlignment="Center"
+                                    <!-- Normal idle guidance: example error -->
+                                    <StackPanel x:Name="NormalGuidePanel" HorizontalAlignment="Center">
+                                        <TextBlock x:Name="EmptyStateHint" Text="在左侧输入或粘贴文本，按 Enter 翻译"
+
+                                                   Style="{StaticResource Caption}" HorizontalAlignment="Center"
 
                                                Foreground="{DynamicResource TextTertiaryBrush}" />
 
-                                    <TextBlock Text="遇到看不懂的报错？试试示例：" Style="{StaticResource Caption}"
+                                        <TextBlock Text="遇到看不懂的报错？试试示例：" Style="{StaticResource Caption}"
 
                                                Margin="0,2,0,0" HorizontalAlignment="Center"
 
                                                Foreground="{DynamicResource TextTertiaryBrush}" />
+                                    </StackPanel>
 
                                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,10,0,0">
 
-                                        <Button Content="填入示例" Style="{StaticResource GhostButton}" Padding="10,5"
+                                        <Button Content="填入示例" Style="{StaticResource GhostButton}" Padding="10,6"
 
                                                 AutomationProperties.Name="填入示例报错文本"
 
@@ -391,7 +414,7 @@
 
                                         <Button x:Name="EnableFreeEngineButton" Content="使用内置公共翻译"
 
-                                                Style="{StaticResource PrimaryButton}" Padding="10,5" Margin="8,0,0,0"
+                                                Style="{StaticResource GhostButton}" Padding="10,6" Margin="8,0,0,0"
 
                                                 AutomationProperties.Name="允许内置公共翻译"
 
@@ -435,15 +458,15 @@
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                             <Button x:Name="TranslateResultSpeakButton" Style="{StaticResource IconButton}"
-                                    Width="28" Height="28"
+                                    Width="32" Height="32"
                                     AutomationProperties.Name="朗读译文" ToolTip="朗读译文"
                                     Click="TranslateResultSpeak_Click">
-                                <Path Width="12" Height="12" Stretch="Uniform"
+                                <Path x:Name="TranslateResultSpeakIcon" Width="12" Height="12" Stretch="Uniform"
                                       Fill="{DynamicResource TextSecondaryBrush}"
                                       Data="{StaticResource IconSpeaker}" />
                             </Button>
                             <Button x:Name="TranslateResultCopyButton" Style="{StaticResource IconButton}"
-                                    Width="28" Height="28" Margin="4,0,0,0"
+                                    Width="32" Height="32" Margin="4,0,0,0"
                                     AutomationProperties.Name="复制译文" ToolTip="复制译文"
                                     Click="TranslateResultCopy_Click">
                                 <Path Width="12" Height="12" Stretch="Uniform"
@@ -451,10 +474,10 @@
                                       Data="{StaticResource IconCopy}" />
                             </Button>
                             <Button x:Name="TranslateStarButton" Style="{StaticResource IconButton}"
-                                    Width="28" Height="28" Margin="4,0,0,0"
+                                    Width="32" Height="32" Margin="4,0,0,0"
                                     AutomationProperties.Name="收藏到生词本"
                                     ToolTip="收藏到生词本" Click="TranslateStar_Click">
-                                <Path Width="12" Height="12" Stretch="Uniform"
+                                <Path x:Name="TranslateStarIcon" Width="12" Height="12" Stretch="Uniform"
                                       Fill="{DynamicResource TextSecondaryBrush}"
                                       Data="{StaticResource IconStar}" />
                             </Button>

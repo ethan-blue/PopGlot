@@ -3,8 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:PopGlot.Windows"
         xmlns:sections="clr-namespace:PopGlot.Windows.Sections"
-        Title="PopGlot" Width="1120" Height="760" MinWidth="520" MinHeight="560"
-        Icon="/PopGlot;component/Assets/PopGlot-v3.ico"
+        Title="PopGlot" Width="1120" Height="760" MinWidth="560" MinHeight="560"
+        Icon="/PopGlot;component/Assets/PopGlot-v5.ico"
         Background="{DynamicResource CanvasBrush}" Foreground="{DynamicResource TextPrimaryBrush}"
         WindowStartupLocation="CenterScreen">
 
@@ -13,16 +13,16 @@
                       ResizeBorderThickness="6" UseAeroCaptionButtons="False" />
     </WindowChrome.WindowChrome>
 
-    <Grid Background="{DynamicResource CanvasBrush}">
+    <Grid x:Name="RootGrid" Background="{DynamicResource CanvasBrush}" SizeChanged="RootGrid_SizeChanged">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="168" />
+            <ColumnDefinition x:Name="SidebarColumn" Width="168" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
         <!-- ==================== Sidebar: compact workstation navigation ==================== -->
         <Border Background="{DynamicResource SidebarBrush}"
                 BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,0,1,0">
-            <Grid Margin="10,0,10,12">
+            <Grid x:Name="SidebarGrid" Margin="10,0,10,12">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="38" />
                     <RowDefinition Height="*" />
@@ -33,15 +33,15 @@
                 <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="6,0,0,0">
                     <Image Width="20" Height="20" VerticalAlignment="Center"
                            RenderOptions.BitmapScalingMode="HighQuality"
-                           Source="/PopGlot;component/Assets/popglot-app-avatar-v3.png"
+                           Source="/PopGlot;component/Assets/popglot-app-avatar-v5.png"
                            AutomationProperties.Name="PopGlot 图标" />
-                    <TextBlock Text="PopGlot" Style="{StaticResource PageTitle}" FontSize="15"
-                               FontWeight="SemiBold" Margin="8,0,0,0" VerticalAlignment="Center" />
+                    <TextBlock x:Name="BrandText" Text="PopGlot" Style="{StaticResource PageTitle}"
+                               Margin="8,0,0,0" VerticalAlignment="Center" />
                 </StackPanel>
 
                 <!-- Navigation section with structured group header -->
                 <StackPanel Grid.Row="1" Margin="0,10,0,0">
-                    <TextBlock Text="工作台" Style="{StaticResource Metadata}"
+                    <TextBlock x:Name="NavGroupHeader" Text="工作台" Style="{StaticResource Metadata}"
                                Foreground="{DynamicResource TextTertiaryBrush}"
                                FontSize="11" Margin="10,0,0,8" />
                     <RadioButton x:Name="NavTranslate" Style="{StaticResource NavButton}"

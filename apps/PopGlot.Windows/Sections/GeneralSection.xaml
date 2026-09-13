@@ -10,17 +10,21 @@
 
         <TextBlock Text="外观与启动" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
 
-        <Grid Style="{StaticResource SettingsRow}">
+        <Grid x:Name="ThemeRowGrid" Style="{StaticResource SettingsRow}">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="170" />
+                <ColumnDefinition x:Name="ThemeCol0" Width="*" />
+                <ColumnDefinition x:Name="ThemeCol1" Width="170" />
             </Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition x:Name="ThemeRow1" Height="Auto" />
+            </Grid.RowDefinitions>
+            <StackPanel x:Name="ThemeTextPanel" VerticalAlignment="Center">
                 <TextBlock Text="主题" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}"
                            Text="跟随系统外观或固定深浅色" />
             </StackPanel>
-            <ComboBox x:Name="ThemeComboBox" Grid.Column="1" VerticalAlignment="Center"
+            <ComboBox x:Name="ThemeComboBox" Grid.Column="1" Grid.Row="0" VerticalAlignment="Center"
                       AutomationProperties.Name="主题"
                       SelectionChanged="ThemeComboBox_SelectionChanged">
                 <ComboBoxItem Tag="System">跟随系统</ComboBoxItem>
@@ -31,20 +35,38 @@
 
         <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
 
-        <Grid Style="{StaticResource SettingsRow}">
+        <Grid x:Name="StartupRowGrid" Style="{StaticResource SettingsRow}">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition x:Name="StartupCol0" Width="*" />
+                <ColumnDefinition x:Name="StartupCol1" Width="Auto" />
             </Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition x:Name="StartupRow1" Height="Auto" />
+            </Grid.RowDefinitions>
+            <StackPanel x:Name="StartupTextPanel" VerticalAlignment="Center">
                 <TextBlock Text="开机自动启动" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}"
-                           Text="登录系统后自动在托盘常驻" />
+                <TextBlock x:Name="StartupStateHint"
+                           Style="{StaticResource RowHint}"
+                           Text="登录系统后自动在托盘常驻"
+                           AutomationProperties.LiveSetting="Polite" />
             </StackPanel>
-            <ToggleButton x:Name="StartWithWindowsToggle"
-                          AutomationProperties.Name="开机自动启动" Grid.Column="1"
-                          VerticalAlignment="Center"
-                          Style="{StaticResource ToggleSwitch}" />
+            <StackPanel x:Name="StartupControlsPanel" Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Orientation="Horizontal">
+                <Button x:Name="StartupRepairButton"
+                        Content="重新启用"
+                        Style="{StaticResource GhostButton}"
+                        Height="24" Padding="8,2"
+                        Cursor="Hand"
+                        VerticalAlignment="Center"
+                        AutomationProperties.Name="重新启用开机自动启动"
+                        ToolTip="Windows 已禁用此启动项；点击后由 PopGlot 重新启用"
+                        Visibility="Collapsed"
+                        Margin="0,0,10,0" />
+                <ToggleButton x:Name="StartWithWindowsToggle"
+                              AutomationProperties.Name="开机自动启动"
+                              VerticalAlignment="Center"
+                              Style="{StaticResource ToggleSwitch}" />
+            </StackPanel>
         </Grid>
 
         <Border Style="{StaticResource SettingsDivider}" Margin="0,6,0,14" />

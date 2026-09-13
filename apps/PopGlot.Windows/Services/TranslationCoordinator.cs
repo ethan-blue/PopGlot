@@ -204,6 +204,17 @@ internal sealed class TranslationCoordinator
         IProgress<TranslationStreamUpdate>? progress = null,
         long epoch = 0)
     {
+        // A10: a fused app refuses new work instead of half-starting it.
+        if (!RuntimeGate.NewWorkAllowed)
+        {
+            return new TranslationSession
+            {
+                InputSource = sourceKind,
+                SourceText = source ?? string.Empty,
+                Stage = TranslationSessionStage.Failed,
+                Error = new TranslationError(TranslationErrorKind.Unknown, RuntimeGate.RefusalZh, null),
+            };
+        }
         var session = new TranslationSession
         {
             InputSource = sourceKind,
@@ -406,6 +417,17 @@ internal sealed class TranslationCoordinator
         IProgress<TranslationStreamUpdate>? progress = null,
         long epoch = 0)
     {
+        // A10: a fused app refuses new work instead of half-starting it.
+        if (!RuntimeGate.NewWorkAllowed)
+        {
+            return new TranslationSession
+            {
+                InputSource = TranslationInputSource.Screenshot,
+                Stage = TranslationSessionStage.Failed,
+                Error = new TranslationError(TranslationErrorKind.Unknown, RuntimeGate.RefusalZh, null),
+            };
+        }
+
         var session = new TranslationSession
         {
             InputSource = TranslationInputSource.Screenshot,
