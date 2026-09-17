@@ -74,8 +74,12 @@ public partial class DataSection : System.Windows.Controls.UserControl
     {
         // The ConfirmButton wrapper already asked inline (two-step click).
         var cleared = _history.Clear();
+        if (cleared)
+        {
+            App.SharedSessionStore.Clear();
+        }
         StatusChanged?.Invoke(
-            cleared ? "历史记录已清空。" : "清空历史失败：文件正被占用。",
+            cleared ? "历史记录与暂存会话已清空。" : "清空历史失败：文件正被占用。",
             cleared ? StatusTone.Info : StatusTone.Error);
         DataCleared?.Invoke();
     }

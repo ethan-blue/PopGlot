@@ -21,6 +21,22 @@ internal interface ITranslationExecutor
         long epoch,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// 会话级显式锚点版本：同一会话的所有分段/重试必须传同一
+    /// <see cref="PromptAnchorSnapshot"/>。默认实现转发旧链路（null 锚点 →
+    /// Rust 在请求起点自行解析），既有执行器无需改动即可保持编译与行为。
+    /// </summary>
+    TranslationStreamSession StreamText(
+        string? apiKey,
+        string source,
+        string sourceLang,
+        string targetLang,
+        string sessionId,
+        long epoch,
+        CancellationToken cancellationToken,
+        PromptAnchorSnapshot? preferenceAnchor) =>
+        StreamText(apiKey, source, sourceLang, targetLang, sessionId, epoch, cancellationToken);
+
     TranslationStreamSession StreamTextDraft(
         ProviderSettings draftSettings,
         string apiKey,
@@ -30,6 +46,19 @@ internal interface ITranslationExecutor
         string sessionId,
         long epoch,
         CancellationToken cancellationToken);
+
+    /// <summary>See <see cref="StreamText(string?, string, string, string, string, long, CancellationToken, PromptAnchorSnapshot?)"/>.</summary>
+    TranslationStreamSession StreamTextDraft(
+        ProviderSettings draftSettings,
+        string apiKey,
+        string source,
+        string sourceLang,
+        string targetLang,
+        string sessionId,
+        long epoch,
+        CancellationToken cancellationToken,
+        PromptAnchorSnapshot? preferenceAnchor) =>
+        StreamTextDraft(draftSettings, apiKey, source, sourceLang, targetLang, sessionId, epoch, cancellationToken);
 
     TranslationStreamSession StreamVisionDraft(
         ProviderSettings draftSettings,
@@ -79,6 +108,19 @@ internal sealed class DefaultTranslationExecutor : ITranslationExecutor
         CoreBridge.TranslateTextStream(
             apiKey, source, sourceLang, targetLang, sessionId, sessionId, epoch, null, cancellationToken);
 
+    public TranslationStreamSession StreamText(
+        string? apiKey,
+        string source,
+        string sourceLang,
+        string targetLang,
+        string sessionId,
+        long epoch,
+        CancellationToken cancellationToken,
+        PromptAnchorSnapshot? preferenceAnchor) =>
+        CoreBridge.TranslateTextStream(
+            apiKey, source, sourceLang, targetLang, sessionId, sessionId, epoch, null, cancellationToken,
+            preferenceAnchor);
+
     public TranslationStreamSession StreamTextDraft(
         ProviderSettings draftSettings,
         string apiKey,
@@ -90,6 +132,20 @@ internal sealed class DefaultTranslationExecutor : ITranslationExecutor
         CancellationToken cancellationToken) =>
         CoreBridge.TranslateTextDraftStream(
             draftSettings, apiKey, source, sourceLang, targetLang, sessionId, sessionId, epoch, null, cancellationToken);
+
+    public TranslationStreamSession StreamTextDraft(
+        ProviderSettings draftSettings,
+        string apiKey,
+        string source,
+        string sourceLang,
+        string targetLang,
+        string sessionId,
+        long epoch,
+        CancellationToken cancellationToken,
+        PromptAnchorSnapshot? preferenceAnchor) =>
+        CoreBridge.TranslateTextDraftStream(
+            draftSettings, apiKey, source, sourceLang, targetLang, sessionId, sessionId, epoch, null, cancellationToken,
+            preferenceAnchor);
 
     public TranslationStreamSession StreamVisionDraft(
         ProviderSettings draftSettings,
@@ -138,6 +194,99 @@ internal sealed class TranslationCoordinator
     }
 
     public static TranslationCoordinator Instance { get; } = new(new HistoryStore(), new VocabularyStore());
+
+    /// <summary>
+    /// 文字线路判定的唯一事实来源：coordinator 的真实路由与 UI 的
+    /// <c>TranslationStyleMenu.ProbeNextTextRoute</c> 共用同一个谓词，两者
+    /// 不可能漂移。遗留的全局 <see cref="ProviderSettings.TargetsLocalRuntime"/>
+    /// 必须保留：旧版单服务安装没有引擎档案、但全局设置指向本机运行时
+    /// （Ollama/LM Studio），请求仍会走本地模型——若把这条线路误判为
+    /// 内置免费引擎，风格选择器就会被错误禁用。
+    /// </summary>
+    internal static (bool HasConfiguredProvider, bool IsLocal) ResolveTextProviderCapability(
+        ProviderSettings? textRuntimeSettings,
+        string? textApiKey,
+        ProviderSettings legacySettings)
+    {
+        var isLocal = textRuntimeSettings?.TargetsLocalRuntime ?? legacySettings.TargetsLocalRuntime;
+        var hasConfiguredProvider = (textRuntimeSettings is not null &&
+            (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))
+            || !string.IsNullOrWhiteSpace(textApiKey)
+            || isLocal;
+        return (hasConfiguredProvider, isLocal);
+    }
+
+    /// <summary>
+    /// 一个顶层翻译会话的 prompt 快照：身份（进入历史标注）+ 编译锚点（进入
+    /// 本会话每一个 provider 请求）。Anchor 为 null 表示沿用旧默认 —— faithful
+    /// 或编译失败时由 Rust 在请求起点自行解析，请求字节与旧链路完全一致。
+    /// </summary>
+    private sealed record PromptSessionSnapshot(
+        string Id,
+        string Name,
+        ulong Revision,
+        PromptAnchorSnapshot? Anchor);
+
+    /// <summary>
+    /// One identity+anchor snapshot of the active prompt template (local config
+    /// read + local pure compile — zero network). Called exactly once per
+    /// session at start, so an in-flight session keeps the style it began with
+    /// even if the user switches templates afterwards. Returns null when no
+    /// usable identity exists; labeling must never fail a translation.
+    /// </summary>
+    private static PromptSessionSnapshot? BuildPromptSessionSnapshot(
+        string? sourceLang,
+        string? targetLang)
+    {
+        try
+        {
+            var template = CoreBridge.GetActivePromptTemplate();
+            if (template is null || string.IsNullOrWhiteSpace(template.Id))
+            {
+                return null;
+            }
+            // 会话起点一次性本地编译（Rust CompilePrompt 纯函数）：偏好正文由
+            // Rust 生成，C# 绝不代传编辑器正文。faithful 不编译，锚点保持
+            // null 与旧默认字节级等价。
+            var anchor = CoreBridge.CompilePromptAnchor(template, sourceLang, targetLang);
+            return new PromptSessionSnapshot(template.Id, template.Name, template.Revision, anchor);
+        }
+        catch (Exception)
+        {
+            // Bridge unavailable or core not initialized (e.g. tests):
+            // provenance is best-effort metadata only.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Freezes the request-start template snapshot onto the session at most
+    /// once and returns it: every provider segment and retry of this session
+    /// must carry the SAME anchor, so a mid-flight template switch can never
+    /// relabel or restyle the in-flight work. The free engine (no prompt of
+    /// its own, source text never augmented) never reaches this method and
+    /// stays metadata-free.
+    /// </summary>
+    private static PromptSessionSnapshot? AttachPromptTemplateSnapshot(
+        TranslationSession session,
+        string? sourceLang,
+        string? targetLang)
+    {
+        if (session.PromptTemplateId is not null)
+        {
+            // already snapshotted for this session — switching mid-flight must not re-label it
+            return null;
+        }
+        var snapshot = BuildPromptSessionSnapshot(sourceLang, targetLang);
+        if (snapshot is null)
+        {
+            return null;
+        }
+        session.PromptTemplateId = snapshot.Id;
+        session.PromptTemplateName = snapshot.Name;
+        session.PromptTemplateRevision = snapshot.Revision;
+        return snapshot;
+    }
 
     /// <summary>
     /// The free engine runs the SAME protect → translate → restore contract as
@@ -254,11 +403,10 @@ internal sealed class TranslationCoordinator
                 ? null
                 : _executor.LoadApiKey(textRoute.CredentialTarget);
             var textRuntimeSettings = textRoute?.Profile.ToProviderSettings(settings);
-            var isLocal = textRuntimeSettings?.TargetsLocalRuntime ?? settings.TargetsLocalRuntime;
-            var hasConfiguredProvider = (textRuntimeSettings is not null &&
-                (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))
-                || !string.IsNullOrWhiteSpace(textApiKey)
-                || isLocal;
+            // 与 UI 侧 ProbeNextTextRoute 共用同一判定（含遗留
+            // TargetsLocalRuntime 回退），两边永远一致。
+            var (hasConfiguredProvider, isLocal) =
+                ResolveTextProviderCapability(textRuntimeSettings, textApiKey, settings);
 
             if (settings.SafeDevMode || !settings.NetworkEnabled)
             {
@@ -283,8 +431,28 @@ internal sealed class TranslationCoordinator
 
             if (hasConfiguredProvider)
             {
+                // Request start: freeze the active template identity AND its
+                // compiled anchor once, so every segment/retry of this session
+                // and the final history entry carry the style this session
+                // actually began with — a mid-flight template switch can
+                // neither re-label nor restyle the in-flight work. The
+                // free-engine branch below deliberately keeps the metadata
+                // null and never compiles an anchor.
+                var promptSnapshot = AttachPromptTemplateSnapshot(session, sourceLang, targetLang);
+
                 session.OutboundOccurred = !isLocal;
-                session.PipelineLabel = isLocal ? "本地模型" : DescribeProvider(textRuntimeSettings?.ProviderType ?? settings.ProviderType);
+                session.PipelineKind = isLocal
+                    ? TranslationPipelineKind.LocalModel
+                    : TranslationPipelineKind.UserProvider;
+                session.TextExecutor = isLocal
+                    ? TranslationTextExecutor.LocalModel
+                    : TranslationTextExecutor.UserProvider;
+                // snapshot 非 null 即已冻结身份并编译锚点；null 且首次快照失败
+                // 视为 Unknown，诚实不承诺。
+                session.PromptSupport = promptSnapshot is not null || session.PromptTemplateId is not null
+                    ? TranslationPromptSupport.Applied
+                    : TranslationPromptSupport.Unknown;
+                session.PipelineLabel = isLocal ? EngineWording.LocalModelName : DescribeProvider(textRuntimeSettings?.ProviderType ?? settings.ProviderType);
 
                 response = await TranslateProviderTextAsync(
                     trimmed,
@@ -295,6 +463,7 @@ internal sealed class TranslationCoordinator
                     session,
                     epoch,
                     startTimestampTicks,
+                    promptSnapshot,
                     progress,
                     onStageChanged,
                     cancellationToken);
@@ -316,7 +485,12 @@ internal sealed class TranslationCoordinator
                 }
 
                 session.OutboundOccurred = true;
-                session.PipelineLabel = "内置免费引擎";
+                session.PipelineKind = TranslationPipelineKind.FreeEngine;
+                session.TextExecutor = TranslationTextExecutor.FreeEngine;
+                // 免费引擎没有 prompt 通道，外壳也绝不拼接风格文本：如实记录
+                // 自定义风格未应用（OCR+免费文字同一事实，见下）。
+                session.PromptSupport = TranslationPromptSupport.NotSupported;
+                session.PipelineLabel = EngineWording.FreeEngineName;
                 response = await TranslateFreeWithTokenProtectionAsync(
                     settings, trimmed, sourceLang, targetLang, freeAuth!, cancellationToken);
 
@@ -503,7 +677,7 @@ internal sealed class TranslationCoordinator
             var imageSentToProvider = false;
             var imageLeftDevice = false;
             TranslationResponse response;
-            var pipelineLabel = "本地 OCR";
+            var pipelineLabel = EngineWording.LocalOcrStepName;
             var routingReason = route.ExplanationZh;
 
             if (route.ScreenshotPipeline is ScreenshotPipeline.VisionDirect or ScreenshotPipeline.VisionOcr &&
@@ -550,6 +724,12 @@ internal sealed class TranslationCoordinator
                     pipelineLabel = visionRuntimeSettings.TargetsLocalRuntime
                         ? "本地视觉模型"
                         : "视觉模型 · 独立服务";
+
+                    // 视觉直译：图片连指令一起交给视觉模型，文本阶段不存在，
+                    // 自定义 prompt 无从参与（VisionOcr 两段式在下方改写）。
+                    session.PipelineKind = TranslationPipelineKind.VisionDirect;
+                    session.TextExecutor = TranslationTextExecutor.None;
+                    session.PromptSupport = TranslationPromptSupport.NotApplicable;
 
                     // 两段式：视觉模型只取它的 transcription（识别原文），
                     // 译文交给文本模型流式生成。视觉调用自己的译文被丢弃。
@@ -630,7 +810,7 @@ internal sealed class TranslationCoordinator
 
                     session.SourceText = recognized;
                     session.Transcription = recognized;
-                    pipelineLabel = "本地 OCR";
+                    pipelineLabel = EngineWording.LocalOcrStepName;
                     routingReason = $"视觉模型失败（{visionError.Message}），已回退到本地 OCR。";
 
                     session.Stage = TranslationSessionStage.Translating;
@@ -643,6 +823,12 @@ internal sealed class TranslationCoordinator
                             (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))
                         || !string.IsNullOrWhiteSpace(textApiKey))
                     {
+                        // Text-phase request start: freeze identity + compiled
+                        // anchor once, shared by every segment/retry below.
+                        var promptSnapshot = AttachPromptTemplateSnapshot(session, sourceLang, targetLang);
+
+                        MarkUserTextStage(session, textRuntimeSettings?.TargetsLocalRuntime ?? false, promptSnapshot);
+
                         response = await TranslateProviderTextAsync(
                             recognized,
                             sourceLang,
@@ -652,6 +838,7 @@ internal sealed class TranslationCoordinator
                             session,
                             epoch,
                             fallbackStartTicks,
+                            promptSnapshot,
                             progress,
                             onStageChanged,
                             cancellationToken);
@@ -663,6 +850,9 @@ internal sealed class TranslationCoordinator
                             throw new InvalidOperationException(
                                 freeDenial is null ? "未允许出网翻译。" : $"{freeDenial.Message} {freeDenial.ActionableSuggestion}".Trim());
                         }
+
+                        // 视觉失败回退 → 本地 OCR → 免费引擎：文本阶段风格未应用。
+                        MarkFreeTextStage(session);
 
                         response = await TranslateFreeWithTokenProtectionAsync(
                             settings, recognized, sourceLang, targetLang, freeAuth!, cancellationToken);
@@ -830,6 +1020,14 @@ internal sealed class TranslationCoordinator
                 (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))
             || !string.IsNullOrWhiteSpace(textApiKey) || (textRuntimeSettings?.TargetsLocalRuntime ?? false))
         {
+            // Request start of the text phase: one identity + anchor snapshot
+            // for this session, carried by every segment/retry below; the
+            // free-engine fallback below stays metadata-free and never
+            // compiles an anchor.
+            var promptSnapshot = AttachPromptTemplateSnapshot(session, sourceLang, targetLang);
+
+            MarkUserTextStage(session, textRuntimeSettings?.TargetsLocalRuntime ?? false, promptSnapshot);
+
             return await TranslateProviderTextAsync(
                 recognized,
                 sourceLang,
@@ -839,6 +1037,7 @@ internal sealed class TranslationCoordinator
                 session,
                 epoch,
                 startTicks,
+                promptSnapshot,
                 progress,
                 onStageChanged,
                 cancellationToken);
@@ -849,6 +1048,9 @@ internal sealed class TranslationCoordinator
             throw new InvalidOperationException(
                 freeDenial is null ? "未允许出网翻译。" : $"{freeDenial.Message} {freeDenial.ActionableSuggestion}".Trim());
         }
+
+        // OCR（本地或视觉识别）+ 免费文字：诚实记录 —— 文本阶段未应用自定义风格。
+        MarkFreeTextStage(session);
 
         var response = await TranslateFreeWithTokenProtectionAsync(
             settings, recognized, sourceLang, targetLang, freeAuth!, cancellationToken);
@@ -872,6 +1074,32 @@ internal sealed class TranslationCoordinator
     }
 
     /// <summary>
+    /// Typed 路由标记（识别文字 → 用户文本通道，含本地运行时）：
+    /// UI 据此分支，不再匹配 PipelineLabel 中文字符串。
+    /// </summary>
+    private static void MarkUserTextStage(
+        TranslationSession session,
+        bool textIsLocal,
+        PromptSessionSnapshot? promptSnapshot)
+    {
+        session.PipelineKind = TranslationPipelineKind.OcrUserText;
+        session.TextExecutor = textIsLocal
+            ? TranslationTextExecutor.LocalModel
+            : TranslationTextExecutor.UserProvider;
+        session.PromptSupport = promptSnapshot is not null || session.PromptTemplateId is not null
+            ? TranslationPromptSupport.Applied
+            : TranslationPromptSupport.Unknown;
+    }
+
+    /// <summary>Typed 路由标记（识别文字 → 免费引擎）：风格未应用必须如实记录。</summary>
+    private static void MarkFreeTextStage(TranslationSession session)
+    {
+        session.PipelineKind = TranslationPipelineKind.OcrFreeText;
+        session.TextExecutor = TranslationTextExecutor.FreeEngine;
+        session.PromptSupport = TranslationPromptSupport.NotSupported;
+    }
+
+    /// <summary>
     /// Total wall-clock budget for ONE translation session across all of its
     /// segments. Each request keeps its own internal timeout; this deadline
     /// only prevents 8 sequential requests from extending the session
@@ -886,6 +1114,11 @@ internal sealed class TranslationCoordinator
     /// with fragments visible if any segment fails. A rejected plan fails the
     /// session BEFORE anything is sent.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="promptSnapshot"/> 是会话起点冻结的 prompt 快照：其锚点
+    /// 显式传给本会话每一个分段请求（含 Rust 侧自动重试），多段/重试在途不变；
+    /// null（faithful/编译失败/未快照）保持旧默认逐请求解析。
+    /// </remarks>
     private async Task<TranslationResponse> TranslateProviderTextAsync(
         string source,
         string sourceLang,
@@ -895,6 +1128,7 @@ internal sealed class TranslationCoordinator
         TranslationSession session,
         long epoch,
         long startTimestampTicks,
+        PromptSessionSnapshot? promptSnapshot,
         IProgress<TranslationStreamUpdate>? progress,
         Action<TranslationSessionStage>? onStageChanged,
         CancellationToken cancellationToken)
@@ -911,13 +1145,15 @@ internal sealed class TranslationCoordinator
         var segments = plan.Mode == "segments"
             ? plan.Segments ?? [source]
             : new[] { source };
+        // 同一会话所有分段共用同一锚点实例 —— 在途不变性由构造保证。
+        var preferenceAnchor = promptSnapshot?.Anchor;
 
         // One request behaves exactly as before.
         if (segments.Count == 1)
         {
             var single = CreateTextStream(
                 segments[0], sourceLang, targetLang, textRuntimeSettings, textApiKey,
-                session.SessionId, epoch, cancellationToken);
+                session.SessionId, epoch, preferenceAnchor, cancellationToken);
             return await PumpStreamAsync(
                 single, session, epoch, startTimestampTicks, progress, onStageChanged,
                 textPrefix: string.Empty, cancellationToken);
@@ -938,7 +1174,7 @@ internal sealed class TranslationCoordinator
             var segmentTicks = Stopwatch.GetTimestamp();
             var streamSession = CreateTextStream(
                 segments[index], sourceLang, targetLang, textRuntimeSettings, textApiKey,
-                session.SessionId, epoch, sessionCts.Token);
+                session.SessionId, epoch, preferenceAnchor, sessionCts.Token);
 
             TranslationResponse segmentResponse;
             try
@@ -1008,6 +1244,7 @@ internal sealed class TranslationCoordinator
         string? textApiKey,
         string sessionId,
         long epoch,
+        PromptAnchorSnapshot? preferenceAnchor,
         CancellationToken cancellationToken)
     {
         if (textRuntimeSettings is not null &&
@@ -1021,7 +1258,8 @@ internal sealed class TranslationCoordinator
                 targetLang,
                 sessionId,
                 epoch,
-                cancellationToken);
+                cancellationToken,
+                preferenceAnchor);
         }
         return _executor.StreamText(
             textApiKey,
@@ -1030,7 +1268,8 @@ internal sealed class TranslationCoordinator
             targetLang,
             sessionId,
             epoch,
-            cancellationToken);
+            cancellationToken,
+            preferenceAnchor);
     }
 
     private static TranslationResponse BuildSegmentResponse(
@@ -1243,7 +1482,10 @@ internal sealed class TranslationCoordinator
             session.Explanation,
             session.ProtectedTerms,
             session.SourceLanguage,
-            session.TargetLanguage);
+            session.TargetLanguage,
+            session.PromptTemplateId,
+            session.PromptTemplateName,
+            session.PromptTemplateRevision);
         var addResult = _history.TryAdd(entry, shellSettings.HistoryEnabled);
         // "Committed" means the store actually accepted the entry — a failed
         // write must not let the session claim a save that never happened.

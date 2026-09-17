@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Windows.Input;
@@ -227,7 +228,11 @@ internal sealed record ShellSettings(
     HotkeyBinding? ShowWindowHotkey = null,
     FreeEngineConsent FreeEngineConsent = FreeEngineConsent.Unset,
     bool CloseHintShown = false,
-    bool CloudSpeechEnabled = false)
+    bool CloudSpeechEnabled = false,
+    bool CloseMainWindowToTray = true,
+    // 首次引导闸门：只有全新安装（从未有过设置文件）才是 false。升级与
+    // 一键同意一样活在表单之外，任何设置保存都不得把老用户拉回引导。
+    bool HasCompletedOnboarding = false)
 {
     public const int CurrentSchemaVersion = 3;
 
@@ -244,7 +249,9 @@ internal sealed record ShellSettings(
         ShowWindowHotkey: HotkeyBinding.ShowWindowDefault,
         FreeEngineConsent: FreeEngineConsent.Unset,
         CloseHintShown: false,
-        CloudSpeechEnabled: false);
+        CloudSpeechEnabled: false,
+        CloseMainWindowToTray: true,
+        HasCompletedOnboarding: false);
 
     public IReadOnlyDictionary<HotkeyAction, HotkeyBinding> Hotkeys
     {
@@ -299,12 +306,53 @@ internal static class ShellSettingsStore
     // be bypassed by an eager beforefieldinit static initializer.
     private static string DefaultSettingsPath => StoragePaths.ShellSettings;
 
+    private static readonly object CacheLock = new();
+    private static ShellSettings? _cachedSettings;
+    private static string? _cachedSettingsPath;
+    private static DateTime _cachedLastWriteUtc;
+
+    /// <summary>Test seam: clears cached settings snapshot.</summary>
+    internal static void InvalidateCache()
+    {
+        lock (CacheLock)
+        {
+            _cachedSettings = null;
+            _cachedSettingsPath = null;
+            _cachedLastWriteUtc = default;
+        }
+    }
+
+    /// <summary>
+    /// Test seam: reports the cached snapshot for one path without touching
+    /// disk, so tests can verify that failure paths never poison the cache.
+    /// </summary>
+    internal static bool TryPeekCacheForTest(string path, out ShellSettings? settings, out DateTime lastWriteUtc)
+    {
+        lock (CacheLock)
+        {
+            if (_cachedSettings is not null &&
+                string.Equals(_cachedSettingsPath, path, StringComparison.OrdinalIgnoreCase))
+            {
+                settings = _cachedSettings;
+                lastWriteUtc = _cachedLastWriteUtc;
+                return true;
+            }
+        }
+        settings = null;
+        lastWriteUtc = default;
+        return false;
+    }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
         PropertyNameCaseInsensitive = true,
         Converters = { new JsonStringEnumConverter() },
     };
+
+    // Settings bytes are plain UTF-8 with no BOM; combined with the
+    // flush-to-disk + atomic move below, every persisted file is complete.
+    private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     public static ShellSettings Load(string? settingsPath = null)
     {
@@ -313,18 +361,43 @@ internal static class ShellSettingsStore
         {
             if (!File.Exists(path))
             {
-                return ShellSettings.Default;
+                var def = ShellSettings.Default;
+                lock (CacheLock)
+                {
+                    _cachedSettings = def;
+                    _cachedSettingsPath = path;
+                    _cachedLastWriteUtc = default;
+                }
+                return def;
+            }
+
+            var lastWrite = File.GetLastWriteTimeUtc(path);
+            lock (CacheLock)
+            {
+                if (_cachedSettings is not null &&
+                    string.Equals(_cachedSettingsPath, path, StringComparison.OrdinalIgnoreCase) &&
+                    _cachedLastWriteUtc == lastWrite)
+                {
+                    return _cachedSettings;
+                }
             }
 
             var persisted = JsonSerializer.Deserialize<PersistedShellSettings>(
                 File.ReadAllText(path), JsonOptions);
             if (persisted is null)
             {
-                return ShellSettings.Default;
+                var def = ShellSettings.Default;
+                lock (CacheLock)
+                {
+                    _cachedSettings = def;
+                    _cachedSettingsPath = path;
+                    _cachedLastWriteUtc = lastWrite;
+                }
+                return def;
             }
 
             var defaults = ShellSettings.Default;
-            return new ShellSettings(
+            var result = new ShellSettings(
                 ShellSettings.CurrentSchemaVersion,
                 // v1 had a single `ShortcutId`; v2 split it into three ids;
                 // v3 stores readable combinations. All three parse here.
@@ -353,10 +426,33 @@ internal static class ShellSettingsStore
                 persisted.CloseHintShown ?? false,
                 // Cloud speech (Microsoft voice service) is an independent
                 // consent that upgrades never grant implicitly.
-                persisted.CloudSpeechEnabled ?? false);
+                persisted.CloudSpeechEnabled ?? false,
+                persisted.CloseMainWindowToTray ?? defaults.CloseMainWindowToTray,
+                // 旧配置兼容：该字段出现之前的既有配置文件一律视为已完成引导，
+                // 升级路径永远不会给老用户弹首次引导；只有 Default（无文件）
+                // 才是 false，全新安装才进入引导。
+                persisted.HasCompletedOnboarding ?? true);
+
+            lock (CacheLock)
+            {
+                _cachedSettings = result;
+                _cachedSettingsPath = path;
+                _cachedLastWriteUtc = lastWrite;
+            }
+            return result;
         }
         catch (Exception exception) when (exception is IOException or JsonException or UnauthorizedAccessException)
         {
+            // A transient failure (file locked, JSON mid-write, momentary
+            // access denial) is a fallback, not a snapshot of the file.
+            // Caching Default here used to make the failure sticky: the
+            // poisoned entry evicted the last-known-good settings, later
+            // Loads answered from it without re-reading, and a Save built on
+            // those defaults overwrote the user's real settings. Return the
+            // defaults but keep the previous cache entry untouched — the
+            // timestamp guard makes every subsequent Load retry the file.
+            // (Only the missing-file branch above may cache Default: there
+            // the file provably does not exist yet.)
             return ShellSettings.Default;
         }
     }
@@ -392,13 +488,30 @@ internal static class ShellSettingsStore
             settings.ShowWindowHotkey?.Serialize(),
             settings.FreeEngineConsent.ToString(),
             settings.CloseHintShown,
-            settings.CloudSpeechEnabled);
+            settings.CloudSpeechEnabled,
+            settings.CloseMainWindowToTray,
+            settings.HasCompletedOnboarding);
 
         // Write through a temporary file so a crash mid-write cannot leave the
-        // user without settings on the next launch.
+        // user without settings on the next launch: exclusive-access write,
+        // flush all the way to disk, then an atomic swap into place.
         var temporaryPath = path + ".tmp";
-        File.WriteAllText(temporaryPath, JsonSerializer.Serialize(persisted, JsonOptions));
+        var payload = Utf8NoBom.GetBytes(JsonSerializer.Serialize(persisted, JsonOptions));
+        using (var stream = new FileStream(
+            temporaryPath, FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            stream.Write(payload, 0, payload.Length);
+            stream.Flush(flushToDisk: true);
+        }
         File.Move(temporaryPath, path, overwrite: true);
+
+        var lastWrite = File.GetLastWriteTimeUtc(path);
+        lock (CacheLock)
+        {
+            _cachedSettings = settings;
+            _cachedSettingsPath = path;
+            _cachedLastWriteUtc = lastWrite;
+        }
     }
 
     private sealed record PersistedShellSettings(
@@ -418,5 +531,7 @@ internal static class ShellSettingsStore
         string? ShowWindowHotkey = null,
         string? FreeEngineConsent = null,
         bool? CloseHintShown = null,
-        bool? CloudSpeechEnabled = null);
+        bool? CloudSpeechEnabled = null,
+        bool? CloseMainWindowToTray = null,
+        bool? HasCompletedOnboarding = null);
 }

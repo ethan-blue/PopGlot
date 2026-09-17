@@ -1,7 +1,9 @@
 using System.Diagnostics;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 
 namespace PopGlot.Windows.Services;
@@ -64,8 +66,14 @@ internal static class ModelCatalogService
             })
             : new HttpClient(testHandler);
         httpClient.Timeout = TimeSpan.FromSeconds(15);
-        using var response = await httpClient.SendAsync(request, cancellationToken);
-        stopwatch.Stop();
+        // ResponseHeadersRead: the body (possibly gzip/brotli decompressed by
+        // the handler) must never be buffered wholesale by HttpClient — the
+        // 1 MiB cap is enforced below on the decoded stream itself, with or
+        // without a Content-Length header.
+        using var response = await httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
 
         if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
@@ -81,16 +89,17 @@ internal static class ModelCatalogService
         }
         response.EnsureSuccessStatusCode();
 
+        // Header-level fast rejection; a lying or absent Content-Length is
+        // still bounded by the streamed read below.
         var contentLength = response.Content.Headers.ContentLength;
         if (contentLength is > MaxResponseBytes)
         {
             throw new InvalidOperationException("模型列表响应超过 1 MiB 上限，已拒绝处理。");
         }
-        var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        if (json.Length > MaxResponseBytes)
-        {
-            throw new InvalidOperationException("模型列表响应超过 1 MiB 上限，已拒绝处理。");
-        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var json = await ReadCappedAsync(stream, MaxResponseBytes, cancellationToken);
+        stopwatch.Stop();
 
         var models = adapter.Parse(json);
         return new ModelCatalogResult(
@@ -98,6 +107,32 @@ internal static class ModelCatalogService
             uri,
             stopwatch.ElapsedMilliseconds,
             adapter.Kind);
+    }
+
+    /// <summary>
+    /// Reads at most <paramref name="maxBytes"/> decompressed bytes from the
+    /// stream; a single byte more is rejected, so a server cannot expand a
+    /// small (or chunked / length-less) response past the 1 MiB budget.
+    /// </summary>
+    private static async Task<string> ReadCappedAsync(
+        Stream stream,
+        long maxBytes,
+        CancellationToken cancellationToken)
+    {
+        var buffer = new byte[81920];
+        using var payload = new MemoryStream();
+        long total = 0;
+        int read;
+        while ((read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)) > 0)
+        {
+            total += read;
+            if (total > maxBytes)
+            {
+                throw new InvalidOperationException("模型列表响应超过 1 MiB 上限，已拒绝处理。");
+            }
+            payload.Write(buffer, 0, read);
+        }
+        return Encoding.UTF8.GetString(payload.GetBuffer(), 0, (int)payload.Length);
     }
 
     internal static Uri BuildModelsUri(string baseUrl, ProviderType providerType)

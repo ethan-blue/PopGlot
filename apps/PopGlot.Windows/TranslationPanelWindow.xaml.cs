@@ -47,7 +47,9 @@ public partial class TranslationPanelWindow : Window
     private readonly VocabularyStore? _vocabulary;
     private readonly Func<ShellSettings> _shellSettings;
     private readonly Action? _openSettings;
-    private readonly Action<string, string?, string?, string?>? _openInMain;
+    // The fifth argument is the session's REAL state: expanding must never
+    // upgrade an unfinished panel result to a Completed one in the workbench.
+    private readonly Action<string, string?, string?, string?, TranslationSessionState>? _openInMain;
     private readonly TranslationCoordinator _coordinator;
     private readonly TranslationPanelStreamGate _gate = new();
     private readonly EventHandler _themeChangedHandler;
@@ -62,16 +64,21 @@ public partial class TranslationPanelWindow : Window
     private bool _languageChangeSuspended = true;
     private bool _readyForKeyboard;
     private bool _closing;
+    private string _sessionId = Guid.NewGuid().ToString("N");
     private int _openDropDowns;
     private long _inputAcquisitionMs;
     private long _lastStreamRenderTicks;
+    // 风格预提示（免费引擎或截图视觉直译）：随本次操作传入或于截图操作
+    // 起点就地设置，准备态状态文本不得瞬间覆盖它；真实流式文本或终态
+    // 一旦落地即让位。
+    private string? _pendingStyleNotice;
 
     internal TranslationPanelWindow(
         Rect anchorPixels,
         HistoryStore history,
         Func<ShellSettings> shellSettings,
         Action? openSettings = null,
-        Action<string, string?, string?, string?>? openInMain = null,
+        Action<string, string?, string?, string?, TranslationSessionState>? openInMain = null,
         VocabularyStore? vocabulary = null)
     {
         _anchorPixels = anchorPixels;
@@ -82,6 +89,7 @@ public partial class TranslationPanelWindow : Window
         _coordinator = new TranslationCoordinator(history, vocabulary);
 
         InitializeComponent();
+        Ui.AttachCompositionTracker(SourceInputBox);
 
         SourceLangCombo.ItemsSource = LanguageCatalog.Sources;
         TargetLangCombo.ItemsSource = LanguageCatalog.Targets;
@@ -124,6 +132,7 @@ public partial class TranslationPanelWindow : Window
         };
 
         RenderIdle();
+        RefreshStyleSelector();
     }
 
 
@@ -134,12 +143,17 @@ public partial class TranslationPanelWindow : Window
             return;
         }
 
+        // Every tier sits at or above the window MinHeight (380): the old
+        // 320/360 tiers were below the fixed chrome (header, source area,
+        // engine bar, footer) plus the result floor, so the bottom status
+        // bar was clipped exactly on short sources. The top tier keeps a
+        // full 80 DIP explanation row plus the result floor visible.
         var length = source?.Trim().Length ?? 0;
         Height = length switch
         {
-            <= 80 => 320,
-            <= 420 => 360,
-            _ => 420,
+            <= 80 => 380,
+            <= 420 => 420,
+            _ => 460,
         };
     }
 
@@ -255,7 +269,7 @@ public partial class TranslationPanelWindow : Window
         EngineBadge.Text = "离线 OCR 取字";
         SetBadgeTone(failed: false);
         StatusText.Text = "已提取画面文字并自动复制到剪贴板";
-        RouteText.Text = $"{recognized.Length} 字符";
+        SetRouteText($"{recognized.Length} 字符");
     }
 
     internal async Task StartTextAsync(string text)
@@ -290,10 +304,21 @@ public partial class TranslationPanelWindow : Window
 
     // ================= Operation plumbing =================
 
-    private async Task RunOperationAsync(Func<CancellationToken, long, Task> operation)
+    private async Task RunOperationAsync(Func<CancellationToken, long, Task> operation, string? styleNotice = null)
     {
+        // Every operation owns its notice: the text-entry path passes a
+        // free-engine pre-flight notice, and the screenshot path states the
+        // vision-direct style fact for itself (set inside
+        // TranslateScreenshotAsync so start, retry and language-change reruns
+        // all carry it). Entry points with nothing at stake start clean.
+        _pendingStyleNotice = styleNotice;
         CancelOperation();
         var (epoch, _) = _gate.BeginNewOperation();
+        // A new operation starts from a clean slate: the previous attempt's
+        // text — including a previously rendered failure message — must never
+        // resurface as this attempt's "partial" content when this attempt
+        // also fails or is cancelled before anything streams.
+        _translation = string.Empty;
         var cancellation = new CancellationTokenSource();
         _operation = cancellation;
         try
@@ -302,18 +327,21 @@ public partial class TranslationPanelWindow : Window
         }
         catch (OperationCanceledException)
         {
-            if (!_closing && IsVisible)
+            if (epoch == _gate.CurrentEpoch)
             {
                 _gate.OnCancelled(_translation);
-                if (_gate.HasPartialText)
+                if (!_closing && IsVisible)
                 {
-                    RenderCancelledWithPartial(_translation);
+                    if (_gate.HasPartialText)
+                    {
+                        RenderCancelledWithPartial(_translation);
+                    }
+                    else
+                    {
+                        RenderCancelledWithoutPartial();
+                    }
+                    Progress.Visibility = Visibility.Collapsed;
                 }
-                else
-                {
-                    RenderCancelledWithoutPartial();
-                }
-                Progress.Visibility = Visibility.Collapsed;
             }
         }
         catch (Exception exception)
@@ -387,6 +415,13 @@ public partial class TranslationPanelWindow : Window
 
     private async Task TranslateScreenshotAsync(byte[] image, CancellationToken cancellation, long epoch)
     {
+        // Honesty before the request goes out: when the resolved screenshot
+        // route is vision-direct, the active TEXT style will not take part
+        // (0.1.6 has no vision prompt support). Stated up front, rides above
+        // the preparing statuses, and never blocks, reroutes or re-sends
+        // anything. OCR/VisionOcr pipelines translate through the text
+        // provider and honour the style, so they stay silent here.
+        _pendingStyleNotice = TranslationStyleMenu.PreScreenshotNotice();
         RenderPreparingState("正在识别画面文字");
         SourceInputBox.Clear();
         SourceInputBox.SetValue(Ui.PlaceholderProperty, $"正在识别截图画面…（{image.Length / 1024.0:0.#} KiB）");
@@ -492,32 +527,40 @@ public partial class TranslationPanelWindow : Window
                 TranslationTextBox.ScrollToEnd();
             }
             SetResultActionsEnabled(false);
+            // 真实文本已到达：预提示完成使命，恢复常规生成状态。
+            _pendingStyleNotice = null;
             StatusText.Text = "正在生成…";
         }
     }
 
     private void OnStageChanged(TranslationSessionStage stage)
     {
+        // 预提示待决期间，准备态文本（选择模型/翻译/生成…）不覆盖它。
         switch (stage)
         {
             case TranslationSessionStage.OcrRunning:
+                // OcrRunning 之下若还挂着视觉直译预提示，只可能是视觉线路
+                // 已回退到本地 OCR：此后由文本模型翻译，风格必然生效，
+                // 「本次不会应用所选风格」就成了假话。立即撤下提示并回到
+                // 诚实的处理中状态，终态文本也不得再被它顶替。
+                _pendingStyleNotice = null;
                 StatusText.Text = "正在识别画面文字";
                 StreamIndicator.Visibility = Visibility.Collapsed;
                 break;
             case TranslationSessionStage.Routing:
-                StatusText.Text = "正在选择最佳模型";
+                StatusText.Text = _pendingStyleNotice ?? "正在选择最佳模型";
                 StreamIndicator.Visibility = Visibility.Collapsed;
                 break;
             case TranslationSessionStage.Translating:
-                StatusText.Text = "正在翻译";
+                StatusText.Text = _pendingStyleNotice ?? "正在翻译";
                 StreamIndicator.Visibility = Visibility.Collapsed;
                 break;
             case TranslationSessionStage.Streaming:
-                StatusText.Text = "正在生成…";
+                StatusText.Text = _pendingStyleNotice ?? "正在生成…";
                 StreamIndicator.Visibility = Visibility.Visible;
                 break;
             case TranslationSessionStage.Finalizing:
-                StatusText.Text = "正在整理译文…";
+                StatusText.Text = _pendingStyleNotice ?? "正在整理译文…";
                 StreamIndicator.Visibility = Visibility.Collapsed;
                 break;
         }
@@ -573,7 +616,8 @@ public partial class TranslationPanelWindow : Window
     private void RenderPreparingState(string status)
     {
         _lastStreamRenderTicks = 0;
-        StatusText.Text = status;
+        // 预提示待决时压过「正在翻译/正在识别画面文字」等准备态。
+        StatusText.Text = _pendingStyleNotice ?? status;
         Progress.Visibility = Visibility.Visible;
         ResultSkeleton.Visibility = Visibility.Visible;
         TranslationTextBox.Foreground = (Brush)FindResource("TextPrimaryBrush");
@@ -588,6 +632,8 @@ public partial class TranslationPanelWindow : Window
         SetBadgeTone(failed: false);
         StatusDot.Background = (Brush)FindResource("AccentBrush");
         SetResultActionsEnabled(false);
+        // 准备态开始：空闲快捷键提示立即让位给真实状态。
+        SetRouteText(string.Empty);
     }
 
     private void RenderCancelledWithPartial(string partialText)
@@ -609,7 +655,7 @@ public partial class TranslationPanelWindow : Window
         EngineBadge.Foreground = (Brush)FindResource("WarningBrush");
         StatusDot.Background = (Brush)FindResource("WarningBrush");
         StatusText.Text = "翻译已取消 · 内容不完整";
-        RouteText.Text = "已中断";
+        SetRouteText("已中断");
         ExplanationBox.Visibility = Visibility.Collapsed;
         TermsList.Visibility = Visibility.Collapsed;
         PhoneticText.Visibility = Visibility.Collapsed;
@@ -621,8 +667,9 @@ public partial class TranslationPanelWindow : Window
         Progress.Visibility = Visibility.Collapsed;
         ResultSkeleton.Visibility = Visibility.Collapsed;
         TranslationRichBox.Visibility = Visibility.Collapsed;
-        TranslationTextBox.Visibility = Visibility.Visible;
-        TranslationTextBox.Foreground = (Brush)FindResource("TextPrimaryBrush");
+        // 无 partial 的取消收起空结果区：空框与“译文将显示在这里”占位符是
+        // 对一次没有发生的翻译的空承诺；终态只保留在徽标与状态行上。
+        TranslationTextBox.Visibility = Visibility.Collapsed;
         TranslationTextBox.Text = string.Empty;
         StreamIndicator.Visibility = Visibility.Collapsed;
         SetResultActionsEnabled(false);
@@ -632,7 +679,7 @@ public partial class TranslationPanelWindow : Window
         EngineBadge.Foreground = (Brush)FindResource("TextTertiaryBrush");
         StatusDot.Background = (Brush)FindResource("TextTertiaryBrush");
         StatusText.Text = "翻译已取消";
-        RouteText.Text = string.Empty;
+        SetRouteText(string.Empty);
         ExplanationBox.Visibility = Visibility.Collapsed;
         TermsList.Visibility = Visibility.Collapsed;
         PhoneticText.Visibility = Visibility.Collapsed;
@@ -662,7 +709,7 @@ public partial class TranslationPanelWindow : Window
         EngineBadge.Foreground = (Brush)FindResource("DangerBrush");
         StatusDot.Background = (Brush)FindResource("DangerBrush");
         StatusText.Text = "生成中断 · 内容不完整";
-        RouteText.Text = "可检查网络或设置后重试";
+        SetRouteText("可检查网络或设置后重试");
         TermsList.Visibility = Visibility.Collapsed;
         PhoneticText.Visibility = Visibility.Collapsed;
     }
@@ -671,7 +718,8 @@ public partial class TranslationPanelWindow : Window
     {
         StatusText.Text = "输入后按 Enter 翻译";
         Progress.Visibility = Visibility.Collapsed;
-        RouteText.Text = string.Empty;
+        // 空闲态的低对比一次性快捷键提示：进入准备/流式后立即让位给真实状态。
+        SetRouteText("Enter 翻译 · Shift+Enter 换行 · Ctrl+R 重试 · Esc 关闭", idleHint: true);
         StatusDot.Background = (Brush)FindResource("TextTertiaryBrush");
         ResultSkeleton.Visibility = Visibility.Collapsed;
         TranslationRichBox.Visibility = Visibility.Collapsed;
@@ -702,6 +750,8 @@ public partial class TranslationPanelWindow : Window
             TranslationTextBox.Visibility = Visibility.Collapsed;
             TranslationRichBox.Visibility = Visibility.Collapsed;
             StreamIndicator.Visibility = Visibility.Collapsed;
+            // 流式/准备期间空闲快捷键提示必须让位（清空右槽）。
+            SetRouteText(string.Empty);
         }
 
         StatusDot.Background = state switch
@@ -807,7 +857,7 @@ public partial class TranslationPanelWindow : Window
         timingParts.Add($"路由 {session.Timing.RoutingElapsedMs} ms");
         timingParts.Add($"网络/模型 {session.Timing.NetworkElapsedMs} ms");
         timingParts.Add($"总计 {totalMs} ms");
-        RouteText.Text = string.Join(" · ", timingParts);
+        SetRouteText(string.Join(" · ", timingParts));
         StatusText.Text = string.IsNullOrWhiteSpace(pipelineNote)
             ? TranslationSessionStateText.Describe(TranslationSessionState.Completed)
             : pipelineNote;
@@ -830,6 +880,37 @@ public partial class TranslationPanelWindow : Window
             {
                 StatusText.Text = "翻译完成 · 已自动复制译文";
             }
+        }
+
+        // Honest provenance: when the free engine actually ran the text stage
+        // (plain text or OCR + free text), the selected style did not apply —
+        // decided by the TYPED executor, never by matching the Chinese
+        // PipelineLabel.
+        if (session.TextExecutor == TranslationTextExecutor.FreeEngine &&
+            TranslationStyleMenu.TryGetActiveTemplate() is { } activeStyle &&
+            activeStyle.Id != TranslationStyleMenu.FaithfulTemplateId)
+        {
+            var copied = StatusText.Text.Contains("已自动复制", StringComparison.Ordinal);
+            StatusText.Text =
+                $"已由{EngineWording.FreeEngineName}完成：{TranslationStyleMenu.FreeEngineToolTip}，所选文字翻译风格未应用" +
+                (copied ? " · 已自动复制译文" : "。");
+        }
+
+        // Honest provenance for the vision-direct screenshot route: the image
+        // went straight to the vision model, so the active TEXT style was never
+        // part of that request (0.1.6 has no vision prompt support). Decided
+        // by the TYPED pipeline kind — OCR-based pipelines translate through
+        // the text provider, applied the style and never land here. A vision
+        // failure that fell back to local OCR is likewise excluded — no false
+        // "style not applied" claim for a request the style did shape.
+        if (session.PipelineKind == TranslationPipelineKind.VisionDirect &&
+            TranslationStyleMenu.TryGetActiveTemplate() is { } visionStyle &&
+            visionStyle.Id != TranslationStyleMenu.FaithfulTemplateId)
+        {
+            var visionCopied = StatusText.Text.Contains("已自动复制", StringComparison.Ordinal);
+            StatusText.Text =
+                $"{TranslationStyleMenu.VisionDirectCompletedNotice}" +
+                (visionCopied ? " · 已自动复制译文" : "。");
         }
     }
 
@@ -870,7 +951,7 @@ public partial class TranslationPanelWindow : Window
         WarningBox.Visibility = Visibility.Collapsed;
         EngineBadge.Text = "未完成";
         SetBadgeTone(failed: true);
-        RouteText.Text = "可检查网络或设置后重试";
+        SetRouteText("可检查网络或设置后重试");
         SetResultActionsEnabled(false);
     }
 
@@ -938,9 +1019,31 @@ public partial class TranslationPanelWindow : Window
         {
             return "没有读到选中的文字";
         }
-        if (message.Contains("超时", StringComparison.Ordinal))
+        if (message.Contains("超时", StringComparison.Ordinal) ||
+            message.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("timeout", StringComparison.OrdinalIgnoreCase))
         {
             return "模型响应超时";
+        }
+        if (message.Contains("500", StringComparison.Ordinal) ||
+            message.Contains("502", StringComparison.Ordinal) ||
+            message.Contains("503", StringComparison.Ordinal) ||
+            message.Contains("504", StringComparison.Ordinal) ||
+            message.Contains("Internal Server", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("Bad Gateway", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("Service Unavailable", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("服务不可用", StringComparison.Ordinal) ||
+            message.Contains("服务器错误", StringComparison.Ordinal))
+        {
+            return "翻译引擎服务端错误，请稍后重试";
+        }
+        if (message.Contains("坏响应", StringComparison.Ordinal) ||
+            message.Contains("格式错误", StringComparison.Ordinal) ||
+            message.Contains("解析失败", StringComparison.Ordinal) ||
+            message.Contains("反序列化", StringComparison.Ordinal) ||
+            message.Contains("invalid response", StringComparison.OrdinalIgnoreCase))
+        {
+            return "翻译引擎返回了无法解析的响应";
         }
         return "这次没有翻译成功";
     }
@@ -1022,15 +1125,38 @@ public partial class TranslationPanelWindow : Window
         }
     }
 
+    /// <summary>
+    /// The gate is the authority on what this panel's result actually is.
+    /// Its stage is passed through verbatim so the workbench can never
+    /// upgrade a cancelled/failed (partial) result to a Completed one —
+    /// unsafe expansions are refused downstream by keeping the result
+    /// actions gated there.
+    /// </summary>
+    internal TranslationSessionState CurrentSessionState => _gate.Stage switch
+    {
+        TranslationPanelStage.Completed => TranslationSessionState.Completed,
+        TranslationPanelStage.FailedWithPartial or
+        TranslationPanelStage.FailedWithoutPartial => TranslationSessionState.Failed,
+        _ => TranslationSessionState.Cancelled,
+    };
+
     private void ExpandButton_Click(object sender, RoutedEventArgs e)
     {
         var text = SourceInputBox.Text;
         var sourceLang = SourceLanguage;
         var targetLang = TargetLanguage;
         var translation = _translation;
-        // The main window receives the current session before the panel
-        // disappears: nothing is re-translated and the result never flickers.
-        _openInMain?.Invoke(text, targetLang, sourceLang, translation);
+        // Nothing to hand over (fresh, cleared panel): expanding would only
+        // wipe the workbench with an empty non-Completed state, so refuse.
+        if (string.IsNullOrWhiteSpace(text) && string.IsNullOrWhiteSpace(translation))
+        {
+            return;
+        }
+        var state = CurrentSessionState;
+        // The main window receives the current session — with its real
+        // state — before the panel disappears: nothing is re-translated and
+        // the result never flickers.
+        _openInMain?.Invoke(text, targetLang, sourceLang, translation, state);
         Close();
     }
 
@@ -1050,6 +1176,7 @@ public partial class TranslationPanelWindow : Window
         EngineBadge.Text = "译文";
         SetBadgeTone(failed: false);
         SetResultActionsEnabled(false);
+        ResetRetryButtonLabel();
         RenderIdle();
         SourceInputBox.Focus();
     }
@@ -1195,6 +1322,84 @@ public partial class TranslationPanelWindow : Window
         _openSettings?.Invoke();
     }
 
+    // ================= Global translation-style selector =================
+
+    /// <summary>
+    /// Repaints the shared style selector from local state. The built-in free
+    /// engine disables the selector with the honest wording; an unreadable
+    /// local state keeps it visible with an honest caveat instead.
+    /// </summary>
+    private void RefreshStyleSelector()
+    {
+        try
+        {
+            TranslationStyleMenu.ApplyTo(StyleSelectorButton, TranslationStyleMenu.SupportedToolTip);
+            StyleSelectorLabel.Text = TranslationStyleMenu.ActiveLabel();
+        }
+        catch (Exception)
+        {
+            // The selector is additive UI; never break the panel over it.
+        }
+    }
+
+    private void StyleSelector_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button)
+        {
+            return;
+        }
+        // Re-probe at open time so the menu never claims support the next
+        // request would not have.
+        RefreshStyleSelector();
+        if (TranslationStyleMenu.ProbeNextTextRoute() == TranslationStyleSupport.FreeEngine)
+        {
+            StatusText.Text = $"内置免费引擎{TranslationStyleMenu.FreeEngineToolTip}。";
+            return;
+        }
+        var menu = TranslationStyleMenu.Build(
+            styleChosen: template => _ = ChooseStyleAsync(template),
+            reportStatus: message => StatusText.Text = message,
+            // 管理提示词 reuses the panel's existing open-settings callback.
+            managePrompts: () => SettingsButton_Click(this, new RoutedEventArgs()));
+        if (menu is null)
+        {
+            return;
+        }
+        TranslationStyleMenu.Show(button, menu);
+    }
+
+    private async Task ChooseStyleAsync(PromptTemplateDto template)
+    {
+        // Optimistic label; repainted from the authoritative state if the
+        // persist fails. Nothing is re-translated and nothing in flight is
+        // cancelled — the switch lands with the next request only.
+        StyleSelectorLabel.Text = TranslationStyleMenu.ShortLabel(template);
+        var applied = await TranslationStyleMenu.SwitchActiveTemplateAsync(
+            template.Id,
+            message => StatusText.Text = message);
+        if (!applied)
+        {
+            RefreshStyleSelector();
+        }
+    }
+
+    /// <summary>
+    /// Honest pre-flight notice when the route cannot be proven to honour the
+    /// active style. Stated before the request goes out; the request itself
+    /// is never blocked. Returns the notice so the operation keeps it above
+    /// the preparing statuses instead of being instantly overwritten.
+    /// </summary>
+    private string? NotifyStyleBeforeTranslate()
+    {
+        if (TranslationStyleMenu.PreTranslateNotice() is { } styleNotice)
+        {
+            StatusText.Text = styleNotice;
+            RefreshStyleSelector();
+            return styleNotice;
+        }
+        return null;
+    }
+
     private async void SourceInputBox_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter)
@@ -1207,7 +1412,7 @@ public partial class TranslationPanelWindow : Window
             return;
         }
         // IME composition confirm: the composition owns this Enter.
-        if (System.Windows.Input.InputMethod.GetIsInputMethodEnabled(SourceInputBox))
+        if (Ui.IsImeComposing(SourceInputBox, e))
         {
             return;
         }
@@ -1220,7 +1425,8 @@ public partial class TranslationPanelWindow : Window
         _sourceKind = _sourceKind == "截图" ? "截图" : "输入";
         _screenshot = null;
         _retry = (token, ep) => TranslateTextAsync(text, token, ep);
-        await RunOperationAsync((cancellation, ep) => TranslateTextAsync(text, cancellation, ep));
+        var styleNotice = NotifyStyleBeforeTranslate();
+        await RunOperationAsync((cancellation, ep) => TranslateTextAsync(text, cancellation, ep), styleNotice);
     }
 
     private async void Language_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1313,6 +1519,17 @@ public partial class TranslationPanelWindow : Window
     private static Task<bool> TrySetClipboardAsync(string text)
         => Helpers.CopyToClipboardAsync(text);
 
+    /// <summary>
+    /// Single writer for the footer's right slot: route/timing facts when a
+    /// result exists, and a low-contrast one-shot shortcut hint while idle.
+    /// Preparing/streaming paths clear the slot so real status always wins.
+    /// </summary>
+    private void SetRouteText(string text, bool idleHint = false)
+    {
+        RouteText.Text = text;
+        RouteText.Opacity = idleHint ? 0.55 : 1.0;
+    }
+
     // ================= Window behaviour =================
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -1327,6 +1544,12 @@ public partial class TranslationPanelWindow : Window
     private void OnIsVisibleChanged(object? sender, DependencyPropertyChangedEventArgs e)
     {
         _gate.WindowVisible = e.NewValue is true;
+        if (e.NewValue is true)
+        {
+            // The panel lives across shows: the engine (and therefore style
+            // support) may have changed since it was last on screen.
+            RefreshStyleSelector();
+        }
     }
 
     /// <summary>
@@ -1356,10 +1579,25 @@ public partial class TranslationPanelWindow : Window
         {
             // A06: transient surfaces own Escape first — an open context menu
             // or a language drop-down closes itself instead of the panel
-            // reacting. IME composition behaviour is NOT covered by any test
-            // here and stays an explicit E3 verification TODO.
+            // reacting. This stays ahead of the IME check below: while a
+            // menu is open, the Escape is aimed at the menu.
             if (_openDropDowns > 0 || IsContextMenuOpen())
             {
+                return;
+            }
+            // E3: a live IME composition owns this Escape — hiding or
+            // cancelling the panel out from under the composition would
+            // strand its residue in the input box. Clear the residual
+            // IsComposing flag safely (the box-level tracker repeats the
+            // same reset when the tunnelling event reaches it, and the
+            // IME's own composition-end events converge to false) and
+            // leave the key unhandled so the IME can cancel its own
+            // composition. The isolation suite drives the WPF-level
+            // events only; real Microsoft Pinyin / Sogou behaviour stays
+            // an explicit E3 manual verification TODO.
+            if (Ui.GetIsComposing(SourceInputBox))
+            {
+                Ui.SetIsComposing(SourceInputBox, false);
                 return;
             }
             e.Handled = true;
@@ -1535,7 +1773,9 @@ public partial class TranslationPanelWindow : Window
         }
         var scale = ScreenGeometry.ScaleOf(this);
         var widthDip = ActualWidth > 0 ? ActualWidth : (Width > 0 ? Width : 540);
-        var heightDip = ActualHeight > 0 ? ActualHeight : (Height > 0 ? Height : 360);
+        // Fallback matches the XAML Height/MinHeight (380): the old 360
+        // fallback disagreed with the real minimum and clipped the footer.
+        var heightDip = ActualHeight > 0 ? ActualHeight : (Height > 0 ? Height : 380);
         var sizePixels = new Size(widthDip * scale.X, heightDip * scale.Y);
         var workArea = ScreenGeometry.WorkAreaForAnchor(_anchorPixels);
 
@@ -1586,12 +1826,174 @@ public partial class TranslationPanelWindow : Window
     internal void CloseAsUserIntent()
     {
         CancelOperation();
+        var session = CreateSessionSnapshot();
+        if (session is not null && !App.SharedSessionStore.TryStore(session, out var rejection))
+        {
+            // The panel is on its way out — no surface remains to show the
+            // rejection, so the structured diagnostics entry is the record.
+            App.LogSessionStoreRejection(rejection);
+        }
         Hide();
+    }
+
+    /// <summary>
+    /// N01: Captures an immutable snapshot of this window's current session for the session store.
+    /// Strictly excludes image bytes per V2 & G05 rules.
+    /// </summary>
+    internal StoredSession? CreateSessionSnapshot()
+    {
+        var source = SourceInputBox?.Text?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(source))
+        {
+            return null;
+        }
+
+        var origin = _sourceKind switch
+        {
+            "截图" => SessionOrigin.ScreenshotVision,
+            "取字" => SessionOrigin.ScreenshotOcr,
+            _ => SessionOrigin.TranslationPanel
+        };
+
+        var resultText = _translation ?? string.Empty;
+        var hasResult = !string.IsNullOrWhiteSpace(resultText);
+        var state = CurrentSessionState;
+        var isPartial = state != TranslationSessionState.Completed && hasResult;
+
+        return StoredSession.Create(
+            sessionId: _sessionId,
+            origin: origin,
+            sourceText: source,
+            sourceLang: SourceLanguage,
+            targetLang: TargetLanguage,
+            engineProfileId: null,
+            engineName: EngineBadge?.Text,
+            state: state,
+            resultText: resultText,
+            explanationText: ExplanationText?.Visibility == Visibility.Visible ? ExplanationText.Text : null,
+            isPartial: isPartial
+        );
+    }
+
+    /// <summary>
+    /// N01: Restores a session from the session store into this window.
+    /// ZERO-RESEND CONTRACT: restores the existing text and actions; NEVER triggers a new request.
+    /// </summary>
+    internal void RestoreSession(StoredSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        _sessionId = session.SessionId;
+
+        SourceInputBox.Text = session.SourceText;
+        _translation = session.ResultText ?? string.Empty;
+
+        _languageChangeSuspended = true;
+        try
+        {
+            if (!string.IsNullOrEmpty(session.SourceLanguage))
+            {
+                SourceLangCombo.SelectedItem = LanguageCatalog.ResolveSource(session.SourceLanguage);
+            }
+            if (!string.IsNullOrEmpty(session.TargetLanguage))
+            {
+                TargetLangCombo.SelectedItem = LanguageCatalog.ResolveTarget(session.TargetLanguage);
+            }
+        }
+        finally
+        {
+            _languageChangeSuspended = false;
+        }
+
+        Progress.Visibility = Visibility.Collapsed;
+        ResultSkeleton.Visibility = Visibility.Collapsed;
+        StreamIndicator.Visibility = Visibility.Collapsed;
+
+        if (!string.IsNullOrEmpty(session.ResultText))
+        {
+            SetTranslationContent(session.ResultText, isMarkdown: true);
+        }
+        else
+        {
+            SetTranslationContent(string.Empty, isMarkdown: false);
+        }
+
+        if (!string.IsNullOrEmpty(session.ExplanationText))
+        {
+            ExplanationText.Text = session.ExplanationText;
+            ExplanationBox.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            ExplanationBox.Visibility = Visibility.Collapsed;
+        }
+
+        // Actions are decided by the session's real state, never by "there is
+        // text": Completed restores the full action set, while Cancelled and
+        // Failed keep only manual copy alive (and only while partial text
+        // exists) — speak/star/auto-copy stay gated per G06/N04.
+        if (session.State == TranslationSessionState.Completed && !session.IsPartial)
+        {
+            _gate.OnCompleted(_translation);
+            EngineBadge.Text = string.IsNullOrEmpty(session.EngineName) ? "译文" : session.EngineName;
+            SetResultTone(failed: false, partial: false);
+            StatusText.Text = "已恢复最近翻译（未重发）";
+            SetResultActionsEnabled(!string.IsNullOrWhiteSpace(_translation));
+        }
+        else if (session.State == TranslationSessionState.Failed)
+        {
+            // A failed session must never be relabelled「已取消」: its badge,
+            // tone and wording keep saying the run did not finish.
+            _gate.OnFailed(session.ExplanationText ?? "失败", _translation);
+            EngineBadge.Text = "未完成";
+            SetBadgeTone(failed: true);
+            StatusText.Text = "已恢复失败会话（未重发）";
+            SetResultActionsEnabled(false);
+            ResultCopyBtn.IsEnabled = _gate.CanCopy;
+        }
+        else
+        {
+            _gate.OnCancelled(_translation);
+            EngineBadge.Text = "已取消";
+            SetResultTone(failed: false, partial: true);
+            StatusText.Text = "已恢复未完成内容（未重发）";
+            SetResultActionsEnabled(false);
+            ResultCopyBtn.IsEnabled = _gate.CanCopy;
+        }
+
+        _retry = (token, ep) => TranslateTextAsync(session.SourceText, token, ep);
+        // 截图会话恢复后图片字节并不在会话存档里（隐私契约 V2/G05：快照
+        // 严格不含图片）。重试因此只能是普通文字翻译：把这个事实直接写在
+        // 重试按钮与状态槽上，绝不暗示会重发截图。
+        if (session.Origin is SessionOrigin.ScreenshotVision or SessionOrigin.ScreenshotOcr)
+        {
+            RetryButton.ToolTip = "以文本方式重译 (Ctrl+R)";
+            System.Windows.Automation.AutomationProperties.SetName(RetryButton, "以文本方式重译");
+            SetRouteText("截图未保存 · 重试将以文本方式重译");
+        }
+        else
+        {
+            ResetRetryButtonLabel();
+        }
+        AllowKeyboardInteraction();
+    }
+
+    /// <summary>Restores the retry button's default wording for in-session
+    /// (image-carrying or plain text) retries.</summary>
+    private void ResetRetryButtonLabel()
+    {
+        RetryButton.ToolTip = "重试 (Ctrl+R)";
+        System.Windows.Automation.AutomationProperties.SetName(RetryButton, "重试翻译");
     }
 
     protected override void OnClosed(EventArgs e)
     {
         _closing = true;
+        var session = CreateSessionSnapshot();
+        if (session is not null && !App.SharedSessionStore.TryStore(session, out var rejection))
+        {
+            // The window is gone; the rejection can only be recorded.
+            App.LogSessionStoreRejection(rejection);
+        }
         ThemeService.ThemeChanged -= _themeChangedHandler;
         TtsService.Stop();
         CancelOperation();

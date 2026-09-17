@@ -16,7 +16,13 @@ internal sealed record TranslationHistoryEntry(
     string Explanation,
     IReadOnlyList<string> ProtectedTerms,
     string SourceLanguage = "auto",
-    string TargetLanguage = "zh-CN");
+    string TargetLanguage = "zh-CN",
+    // Identity-only prompt template provenance (id/name/revision, never the
+    // instruction body). Optional with defaults so existing constructors and
+    // snapshots written before these fields existed keep round-tripping.
+    string? PromptTemplateId = null,
+    string? PromptTemplateName = null,
+    ulong? PromptTemplateRevision = null);
 
 internal enum HistoryAddResult
 {
@@ -41,6 +47,10 @@ internal sealed partial class HistoryStore : IHistoryRepository
     };
 
     private sealed record HistoryPersistRequest(string? Json, bool IsClear, TaskCompletionSource<bool>? Completion);
+
+    // Snapshot bytes are plain UTF-8 with no BOM so the file is byte-stable
+    // across writers and parsers never see a stray EF BB BF prefix.
+    private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     private readonly string _path;
     private readonly Lock _gate = new();
@@ -119,7 +129,16 @@ internal sealed partial class HistoryStore : IHistoryRepository
                 Directory.CreateDirectory(directory);
             }
             var temporaryPath = _path + ".tmp";
-            File.WriteAllText(temporaryPath, json);
+            // Write to the temporary file with exclusive access, flush it all
+            // the way to disk, then swap it in atomically — a crash mid-write
+            // leaves the previous snapshot intact instead of a torn file.
+            var payload = Utf8NoBom.GetBytes(json);
+            using (var stream = new FileStream(
+                temporaryPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                stream.Write(payload, 0, payload.Length);
+                stream.Flush(flushToDisk: true);
+            }
             File.Move(temporaryPath, _path, overwrite: true);
         }
         catch (IOException)

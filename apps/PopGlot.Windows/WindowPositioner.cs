@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
@@ -48,6 +49,89 @@ internal static class WindowPositioner
 
     private static double ClampToRange(double value, double low, double high) =>
         high < low ? low : Math.Clamp(value, low, high);
+
+    /// <summary>
+    /// Pure work-area clamp for a top-level window rect (all values in the
+    /// SAME unit space — DIP with <see cref="SystemParameters.WorkArea"/>,
+    /// physical pixels with <see cref="ScreenGeometry.WorkAreaForPixel"/>).
+    /// Visibility wins over the declared minimum: the window never exceeds
+    /// the work area, and the requested minimum only holds when the work area
+    /// can actually show it. A too-large window anchors to the work area's
+    /// top-left so the caption bar stays on screen.
+    /// </summary>
+    public static Rect ClampToWorkArea(Rect desired, Rect workArea, Size minSize)
+    {
+        if (!IsFinite(desired) || !IsFinite(workArea) || !IsFinite(minSize))
+        {
+            throw new ArgumentException("ClampToWorkArea requires finite rects and sizes.");
+        }
+        if (workArea.Width <= 0 || workArea.Height <= 0)
+        {
+            return desired;
+        }
+
+        // Size: cap to the work area; honour the minimum only while it fits.
+        var width = Math.Max(Math.Min(desired.Width, workArea.Width), Math.Min(minSize.Width, workArea.Width));
+        var height = Math.Max(Math.Min(desired.Height, workArea.Height), Math.Min(minSize.Height, workArea.Height));
+
+        // Position: keep the window inside the work area; a window that fills
+        // an axis pins to that axis's leading edge (never hides its caption).
+        var left = width >= workArea.Width
+            ? workArea.Left
+            : ClampToRange(desired.Left, workArea.Left, workArea.Right - width);
+        var top = height >= workArea.Height
+            ? workArea.Top
+            : ClampToRange(desired.Top, workArea.Top, workArea.Bottom - height);
+        return new Rect(left, top, width, height);
+    }
+
+    private static bool IsFinite(Rect rect) =>
+        IsFinite(rect.Left) && IsFinite(rect.Top) && IsFinite(rect.Width) && IsFinite(rect.Height);
+
+    private static bool IsFinite(Size size) =>
+        IsFinite(size.Width) && IsFinite(size.Height);
+
+    private static bool IsFinite(double value) => double.IsFinite(value);
+
+    /// <summary>
+    /// One-shot first-show convergence for CenterScreen windows (main,
+    /// settings): clamps the not-yet-shown window into the current work area
+    /// so a small monitor never hides the footer or caption behind the
+    /// taskbar. Runs BEFORE the first <c>Show()</c> only — a window that is
+    /// already loaded, or any later resize/maximize by the user, is never
+    /// touched. Position is centred first because CenterScreen leaves
+    /// Left/Top unset until the window source is created.
+    /// </summary>
+    public static void ConvergeFirstShow(Window window)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+        if (window.IsLoaded || ConvergedWindows.TryGetValue(window, out _))
+        {
+            return;
+        }
+        ConvergedWindows.Add(window, true);
+
+        var work = SystemParameters.WorkArea;
+        var width = double.IsFinite(window.Width) ? window.Width : work.Width;
+        var height = double.IsFinite(window.Height) ? window.Height : work.Height;
+        var left = double.IsFinite(window.Left)
+            ? window.Left
+            : work.Left + Math.Max(0, (work.Width - width) / 2);
+        var top = double.IsFinite(window.Top)
+            ? window.Top
+            : work.Top + Math.Max(0, (work.Height - height) / 2);
+
+        var converged = ClampToWorkArea(
+            new Rect(left, top, width, height),
+            work,
+            new Size(window.MinWidth, window.MinHeight));
+        window.Left = converged.Left;
+        window.Top = converged.Top;
+        window.Width = converged.Width;
+        window.Height = converged.Height;
+    }
+
+    private static readonly ConditionalWeakTable<Window, object> ConvergedWindows = new();
 }
 
 /// <summary>

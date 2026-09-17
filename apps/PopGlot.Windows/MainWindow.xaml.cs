@@ -1,3 +1,5 @@
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -34,9 +36,25 @@ public partial class MainWindow : Window
         LibrarySection.LoadToTranslate += OnLoadToTranslate;
         LibrarySection.StatusChanged += SetStatus;
 
+        // 状态行的瞬时回落定时器（见 SetStatus / SetResidentStatus）。
+        _transientRevertTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = RevertDelay(StatusTone.Info),
+        };
+        _transientRevertTimer.Tick += (_, _) =>
+        {
+            _transientRevertTimer.Stop();
+            _transientStatus = null;
+            PaintResidentStatus();
+        };
+
         RefreshEngineStatus();
         RefreshShellStatusForConfig();
         RefreshEngineStatusOnActivated();
+        // The close button's name/tooltip depend on the persisted
+        // close-to-tray preference; paint the authoritative value once up
+        // front (and again on every settings save via App.TryApplyShellSettings).
+        RefreshCloseButtonForTraySetting();
 
         ThemeService.ApplyWindowChrome(this);
         ThemeService.ThemeChanged += (_, _) => ThemeService.ApplyWindowChrome(this);
@@ -44,6 +62,8 @@ public partial class MainWindow : Window
         Loaded += (_, _) =>
         {
             ApplyResponsiveBreakpoints(RootGrid.ActualWidth > 0 ? RootGrid.ActualWidth : Width);
+            TranslateSection.CompleteOnboarding = CompleteOnboarding;
+            TryBeginFirstRunOnboarding();
         };
     }
 
@@ -58,6 +78,9 @@ public partial class MainWindow : Window
 
     /// <summary>Tray balloon used for the one-time close-to-tray hint.</summary>
     internal Action<string, string>? NotifyTray { get; set; }
+
+    /// <summary>Invoked when the window is closed and user chose not to minimize to tray.</summary>
+    internal Action? RequestExit { get; set; }
 
     internal bool AllowClose { get; set; }
 
@@ -88,30 +111,210 @@ public partial class MainWindow : Window
     private void UpdateMaximizeButtonGlyph()
     {
         if (MaximizeBtn is null) return;
+        var maximized = WindowState == WindowState.Maximized;
+        var label = maximized ? "向下还原" : "最大化";
         Ui.SetIcon(
             MaximizeBtn,
-            (Geometry)FindResource(WindowState == WindowState.Maximized ? "IconCaptionRestore" : "IconCaptionMax"));
-        MaximizeBtn.ToolTip = WindowState == WindowState.Maximized ? "向下还原" : "最大化";
+            (Geometry)FindResource(maximized ? "IconCaptionRestore" : "IconCaptionMax"));
+        // Glyph, tooltip AND accessibility name must agree in all three channels.
+        MaximizeBtn.ToolTip = label;
+        System.Windows.Automation.AutomationProperties.SetName(MaximizeBtn, label);
+    }
+
+    /// <summary>
+    /// Close-button truth follows the persisted CloseMainWindowToTray setting:
+    /// with tray residency the button means「关闭到托盘」; without it the same
+    /// button exits the app, so it must say「退出 PopGlot」. Called at
+    /// construction and from App.TryApplyShellSettings after every settings
+    /// save, so a flip in 设置 → 通用 repaints without reopening the window.
+    /// </summary>
+    internal void RefreshCloseButtonForTraySetting()
+    {
+        if (CloseBtn is null)
+        {
+            return;
+        }
+        bool closeToTray;
+        try
+        {
+            closeToTray = ShellSettingsStore.Load().CloseMainWindowToTray;
+        }
+        catch (Exception)
+        {
+            return; // unreadable settings: keep the last known-good label
+        }
+        var label = closeToTray ? EngineWording.CloseToTrayAction : EngineWording.ExitAppAction;
+        System.Windows.Automation.AutomationProperties.SetName(CloseBtn, label);
+        CloseBtn.ToolTip = label;
     }
 
     // ================= Engine status footer =================
 
+    private int _refreshStatusGate;
+
     private void RefreshEngineStatusOnActivated() =>
-        Activated += (_, _) =>
+        Activated += async (_, _) =>
         {
-            RefreshEngineStatus();
-            // Settings may have added/completed/removed an engine while we
-            // were in the background: repaint the empty state and the shell
-            // status line immediately, without a restart, a page switch or
-            // a translate.
-            TranslateSection.RefreshAfterSettingsChanged();
-            RefreshShellStatusForConfig();
+            if (Interlocked.CompareExchange(ref _refreshStatusGate, 1, 0) != 0)
+            {
+                return;
+            }
+            try
+            {
+                await RefreshEngineStatusAsync();
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _refreshStatusGate, 0);
+            }
         };
 
+    internal async Task RefreshEngineStatusAsync()
+    {
+        try
+        {
+            // Execute credential (CredRead) and store reads off the UI thread (C11 zero-disk activation).
+            var statusData = await Task.Run(() =>
+            {
+                var settings = CoreBridge.GetSettings();
+                var activeProfile = ProfileManager.Load().TryGetActiveProfile();
+                var hasKey = activeProfile is not null &&
+                    CredentialStore.HasApiKey(ProfileManager.ResolveCredentialTargetFor(activeProfile));
+                var consent = ShellSettingsStore.Load().FreeEngineConsent;
+                var hasUserEngine = ProfileManager.HasConfiguredUserEngine();
+                return (settings, activeProfile, hasKey, consent, hasUserEngine);
+            });
+
+            var (settings, activeProfile, hasKey, consent, hasUserEngine) = statusData;
+            var (_, tone) = DescribeEngine(settings, hasKey, consent);
+            EngineSummary.Text = UsesFreeEngine(settings, hasKey, consent)
+                ? EngineWording.FreeEngineName
+                : activeProfile is not null
+                    ? activeProfile.Name
+                    : DescribeEngine(settings, hasKey, consent).Summary;
+            EngineDot.SetResourceReference(Border.BackgroundProperty, tone switch
+            {
+                StatusTone.Error => "DangerBrush",
+                StatusTone.Warning => "WarningBrush",
+                StatusTone.Info => "TextSecondaryBrush",
+                _ => "SuccessBrush",
+            });
+
+            TranslateSection.RefreshAfterSettingsChanged();
+
+            // 配置/隐私事实走类型化常驻通道：不再用 Text.Contains 猜测当前
+            // 状态，也不在每次窗口激活时把瞬时消息砸成「就绪」。
+            RefreshShellStatusForConfig();
+        }
+        catch (Exception)
+        {
+            // Profile/shell stores unavailable: keep the current status text
+            // rather than crash on window activation.
+        }
+    }
+
+    // ================= Typed status footer =================
+
     /// <summary>
-    /// The shell status line must never contradict the engine state: with no
-    /// configured user engine it says so instead of the default「就绪」, and
-    /// once an engine exists it returns to the neutral ready state.
+    /// 状态行的常驻通道（类型化来源 + 优先级）。EngineConfig 承载配置与
+    /// 隐私事实（未配置引擎 / 当前使用内置公共翻译），优先级高于 Ready。
+    /// 瞬时消息（复制成功、已载入记录、切换完成等）有自己的展示窗口，
+    /// 到期后回到这里——因此永远不会永久覆盖配置/隐私警告。
+    /// </summary>
+    private enum StatusChannel
+    {
+        Ready = 0,
+        EngineConfig = 1,
+    }
+
+    private sealed record StatusEntry(string Message, StatusTone Tone);
+
+    private readonly Dictionary<StatusChannel, StatusEntry> _residentStatuses = new();
+    private StatusEntry? _transientStatus;
+    private readonly System.Windows.Threading.DispatcherTimer _transientRevertTimer;
+
+    /// <summary>Transient messages hold the floor by tone: errors linger
+    /// longer, confirmations clear quickly.</summary>
+    private static TimeSpan RevertDelay(StatusTone tone) => tone switch
+    {
+        StatusTone.Error => TimeSpan.FromSeconds(10),
+        StatusTone.Warning => TimeSpan.FromSeconds(6),
+        _ => TimeSpan.FromSeconds(4),
+    };
+
+    /// <summary>
+    /// 工作台/引擎操作的瞬时消息：立即展示，按语气定时回落到常驻状态。
+    /// 常驻的配置/隐私警告不会被替换或丢失。
+    /// </summary>
+    private void SetStatus(string message, StatusTone tone)
+    {
+        _transientStatus = new StatusEntry(message, tone);
+        _transientRevertTimer.Stop();
+        _transientRevertTimer.Interval = RevertDelay(tone);
+        _transientRevertTimer.Start();
+        PaintStatus(message, tone);
+    }
+
+    /// <summary>
+    /// Writes a persistent channel. By default it repaints immediately —
+    /// a config fact outranks any momentary toast; pass
+    /// <paramref name="deferToTransient"/> for downgrades (e.g. back to
+    /// 就绪) so an in-flight message can finish its window first.
+    /// </summary>
+    private void SetResidentStatus(StatusChannel channel, string message, StatusTone tone, bool deferToTransient = false)
+    {
+        _residentStatuses[channel] = new StatusEntry(message, tone);
+        if (deferToTransient && _transientStatus is not null && _transientRevertTimer.IsEnabled)
+        {
+            return; // 瞬时消息保持展示权，回落时自然显示新的常驻底座。
+        }
+        _transientStatus = null;
+        _transientRevertTimer.Stop();
+        PaintResidentStatus();
+    }
+
+    /// <summary>Paints the highest-priority resident channel (EngineConfig
+    /// over Ready), falling back to the neutral ready state.</summary>
+    private void PaintResidentStatus()
+    {
+        if (_residentStatuses.TryGetValue(StatusChannel.EngineConfig, out var config))
+        {
+            PaintStatus(config.Message, config.Tone);
+            return;
+        }
+        var ready = _residentStatuses.TryGetValue(StatusChannel.Ready, out var r)
+            ? r
+            : new StatusEntry("就绪", StatusTone.Success);
+        PaintStatus(ready.Message, ready.Tone);
+    }
+
+    private void PaintStatus(string message, StatusTone tone)
+    {
+        StatusTextBlock.Text = message;
+        StatusTextBlock.SetResourceReference(TextBlock.ForegroundProperty, tone switch
+        {
+            StatusTone.Success => "SuccessBrush",
+            StatusTone.Warning => "WarningBrush",
+            StatusTone.Error => "DangerBrush",
+            _ => "TextSecondaryBrush",
+        });
+        // Info covers the idle/ready state and neutral confirmations; a gray
+        // dot reads as "disabled" — the accent reads as "alive" instead.
+        StatusDot.SetResourceReference(Border.BackgroundProperty, tone switch
+        {
+            StatusTone.Success => "SuccessBrush",
+            StatusTone.Warning => "WarningBrush",
+            StatusTone.Error => "DangerBrush",
+            _ => "AccentBrush",
+        });
+    }
+
+    /// <summary>
+    /// The resident config/privacy channel must always describe the live
+    /// engine configuration: with no configured user engine it says so (or
+    /// names the allowed free fallback); once an engine exists it downgrades
+    /// to the neutral ready state. Typed channels replace the former
+    /// Text.Contains sniffing.
     /// </summary>
     private void RefreshShellStatusForConfig()
     {
@@ -121,17 +324,22 @@ public partial class MainWindow : Window
             {
                 if (ShellSettingsStore.Load().FreeEngineConsent == FreeEngineConsent.Allowed)
                 {
-                    SetStatus("当前使用内置公共翻译 — 可添加自己的翻译引擎", StatusTone.Info);
+                    SetResidentStatus(
+                        StatusChannel.EngineConfig,
+                        $"当前使用{EngineWording.FreePublicTranslationName} — 可添加自己的翻译引擎",
+                        StatusTone.Info);
                 }
                 else
                 {
-                    SetStatus("尚未配置翻译引擎 — 点击「添加翻译引擎」开始", StatusTone.Warning);
+                    SetResidentStatus(
+                        StatusChannel.EngineConfig,
+                        "尚未配置翻译引擎 — 点击「添加翻译引擎」开始",
+                        StatusTone.Warning);
                 }
             }
-            else if (StatusTextBlock.Text.Contains("尚未配置") ||
-                     StatusTextBlock.Text.Contains("内置公共翻译"))
+            else
             {
-                SetStatus("就绪", StatusTone.Success);
+                SetResidentStatus(StatusChannel.EngineConfig, "就绪", StatusTone.Success, deferToTransient: true);
             }
         }
         catch (Exception)
@@ -160,7 +368,7 @@ public partial class MainWindow : Window
             var consent = ShellSettingsStore.Load().FreeEngineConsent;
             var (_, tone) = DescribeEngine(settings, hasKey, consent);
             EngineSummary.Text = UsesFreeEngine(settings, hasKey, consent)
-                ? "内置免费引擎"
+                ? EngineWording.FreeEngineName
                 : activeProfile is not null
                     ? activeProfile.Name
                     : DescribeEngine(settings, hasKey, consent).Summary;
@@ -179,6 +387,10 @@ public partial class MainWindow : Window
             // every alt-tab instead of crashing the window.
             EngineSummary.Text = "配置不可用";
         }
+        // The style selector's capability (supported vs free-engine vs
+        // unknown) follows the same engine picture as the footer; repaint it
+        // on every engine-state refresh so it never claims the wrong route.
+        TranslateSection.RefreshStyleSelector();
     }
 
     private static bool UsesFreeEngine(ProviderSettings settings, bool hasKey, FreeEngineConsent consent) =>
@@ -208,7 +420,7 @@ public partial class MainWindow : Window
             var paintsFooter = IsActiveRouteFreeEngine();
             if (force && paintsFooter)
             {
-                EngineSummary.Text = "内置免费引擎 · 检测中…";
+                EngineSummary.Text = $"{EngineWording.FreeEngineName} · 检测中…";
             }
             var health = await FreeTranslateService.GetHealthAsync(force, authorization);
             if (!System.Windows.Application.Current.Dispatcher.CheckAccess())
@@ -221,16 +433,16 @@ public partial class MainWindow : Window
             }
             if (health.Ok)
             {
-                EngineSummary.Text = $"免费引擎可用 · {health.LatencyMs} ms";
+                EngineSummary.Text = $"{EngineWording.FreeEngineName}可用 · {health.LatencyMs} ms";
                 EngineDot.SetResourceReference(Border.BackgroundProperty, "SuccessBrush");
-                EngineHealthButton.ToolTip = "免费引擎可用 · 点击重新检测";
+                EngineHealthButton.ToolTip = $"{EngineWording.FreeEngineName}可用 · 点击重新检测";
             }
             else
             {
-                EngineSummary.Text = "免费引擎不可用";
+                EngineSummary.Text = $"{EngineWording.FreeEngineName}不可用";
                 EngineDot.SetResourceReference(Border.BackgroundProperty, "WarningBrush");
                 EngineHealthButton.ToolTip =
-                    $"免费引擎不可用：{health.Error} · 点击重新检测";
+                    $"{EngineWording.FreeEngineName}不可用：{health.Error} · 点击重新检测";
             }
         }
         catch (Exception)
@@ -246,10 +458,10 @@ public partial class MainWindow : Window
         {
             return; // window may be gone; RefreshEngineStatus will repaint next time
         }
-        EngineSummary.Text = "免费引擎未检测";
+        EngineSummary.Text = $"{EngineWording.FreeEngineName}未检测";
         EngineDot.SetResourceReference(Border.BackgroundProperty, "TextSecondaryBrush");
         EngineHealthButton.ToolTip = denial is null
-            ? "免费引擎未检测 · 点击重新检测"
+            ? $"{EngineWording.FreeEngineName}未检测 · 点击重新检测"
             : $"未检测：{denial.Message}";
     }
 
@@ -355,7 +567,7 @@ public partial class MainWindow : Window
                 : "当前不可用";
         var freeItem = new MenuItem
         {
-            Header = $"内置免费引擎 · {freeState} · 仅文字" + (freeActive ? "（当前）" : string.Empty),
+            Header = $"{EngineWording.FreeEngineName} · {freeState} · 仅文字" + (freeActive ? "（当前）" : string.Empty),
             FontWeight = freeActive ? FontWeights.SemiBold : FontWeights.Normal,
             Icon = freeActive ? MakeActiveCheck() : null,
         };
@@ -392,7 +604,7 @@ public partial class MainWindow : Window
         var manage = new MenuItem { Header = "管理引擎…" };
         manage.Click += (_, _) => OpenSettings?.Invoke();
         menu.Items.Add(manage);
-        var reprobe = new MenuItem { Header = "重新检测免费引擎" };
+        var reprobe = new MenuItem { Header = $"重新检测{EngineWording.FreeEngineName}" };
         reprobe.Click += async (_, _) => await UpdateFreeEngineHealthAsync(force: true);
         menu.Items.Add(reprobe);
 
@@ -496,14 +708,14 @@ public partial class MainWindow : Window
         _isSwitchingEngine = true;
         try
         {
-            SetStatus("正在切换到内置免费引擎…", StatusTone.Info);
+            SetStatus($"正在切换到{EngineWording.FreeEngineName}…", StatusTone.Info);
             var (ok, error) = await Task.Run(() =>
             {
                 var success = ProfileManager.TrySwitchToFreeEngine(out var message);
                 return (success, message);
             });
             SetStatus(
-                ok ? "已切换到内置免费引擎（仅文字翻译）。" : error,
+                ok ? $"已切换到{EngineWording.FreeEngineName}（仅文字翻译）。" : error,
                 ok ? StatusTone.Success : StatusTone.Error);
             RefreshEngineStatus();
         }
@@ -523,7 +735,7 @@ public partial class MainWindow : Window
     {
         if (settings.SafeDevMode)
         {
-            return ("安全离线模式", StatusTone.Warning);
+            return (EngineWording.SafeOfflineModeName, StatusTone.Warning);
         }
         if (!settings.NetworkEnabled)
         {
@@ -532,8 +744,8 @@ public partial class MainWindow : Window
         if (!hasKey && !settings.TargetsLocalRuntime)
         {
             return consent == FreeEngineConsent.Denied
-                ? ("免费引擎已关闭，且未配置翻译引擎", StatusTone.Warning)
-                : ("内置免费引擎", StatusTone.Info);
+                ? ($"{EngineWording.FreeEngineName}已关闭，且未配置翻译引擎", StatusTone.Warning)
+                : (EngineWording.FreeEngineName, StatusTone.Info);
         }
         return (string.IsNullOrWhiteSpace(settings.TextModel)
             ? "未填写文本模型"
@@ -543,47 +755,41 @@ public partial class MainWindow : Window
 
     // ================= Cross-section event handlers =================
 
+    /// <summary>
+    /// Library → workbench hand-off. History/vocabulary entries are finished
+    /// translations, so the session state is always Completed: Markdown,
+    /// empty state and result actions are decided by
+    /// <see cref="TranslateSection.ApplyState"/>, never by direct control
+    /// writes here (which also bypassed the language-change suspension and
+    /// persisted the entry's pair as the global default).
+    /// </summary>
     private void OnLoadToTranslate(
         string source, string translation, string? explanation,
         string? sourceLang, string? targetLang, string? badge)
     {
-        TranslateSection.InputBox.Text = source;
-        TranslateSection.ResultBox.Text = translation;
-        TranslateSection.ExplanationText.Text = explanation ?? string.Empty;
-        TranslateSection.ExplanationBox.Visibility = string.IsNullOrWhiteSpace(explanation)
-            ? Visibility.Collapsed
-            : Visibility.Visible;
-        if (sourceLang is not null)
-        {
-            TranslateSection.SourceLangCombo.SelectedItem = LanguageCatalog.ResolveSource(sourceLang);
-        }
-        if (targetLang is not null)
-        {
-            TranslateSection.TargetLangCombo.SelectedItem = LanguageCatalog.ResolveTarget(targetLang);
-        }
-        TranslateSection.EngineBadge.Text = badge ?? "已载入";
-        TranslateSection.StatusBlock.Text = "已载入记录。";
         NavTranslate.IsChecked = true;
         ShowSection("Translate");
+        TranslateSection.FocusTranslate(
+            initialText: source,
+            targetLang: targetLang,
+            sourceLang: sourceLang,
+            existingTranslation: translation,
+            storedState: TranslationSessionState.Completed,
+            explanation: explanation,
+            badge: badge ?? "已载入");
+        SetStatus("已载入记录。", StatusTone.Info);
     }
 
     // ================= Navigation =================
 
     /// <summary>
-    /// Content area size changes maintain secondary text compactness.
-    /// Stacked/wide state is governed by the unified RootGrid client width.
-    /// </summary>
-    private void ContentGrid_SizeChanged(object sender, SizeChangedEventArgs e)
-    {
-        var compact = e.NewSize.Width < 880;
-        TranslateSection.SetCompact(compact);
-    }
-
-    /// <summary>
-    /// WIN-12 & V2 §10 (G07): Breakpoint based on available client area width excluding outer window border:
+    /// WIN-12 & V2 §10 (G07): RootGrid's client width is the ONE authoritative
+    /// responsive source. Breakpoints:
     /// - < 720 DIP: Fold sidebar to compact 48 DIP icon mode, vertically stack input and result panes.
     /// - 720–959 DIP: Standard workstation mode with 168 DIP sidebar and equal 1:1 dual panes.
     /// - >= 960 DIP: Enhanced wide dual-column workstation mode with expanded reading quota (1:1.25).
+    /// The former ContentGrid second driver is gone: two reporters racing on
+    /// the same state produced conflicting compact flags at window edges.
     /// </summary>
     private void RootGrid_SizeChanged(object sender, SizeChangedEventArgs e)
     {
@@ -653,6 +859,8 @@ public partial class MainWindow : Window
             LibrarySection.ReloadHistory();
             LibrarySection.ReloadVocabulary();
             LibrarySection.Visibility = Visibility.Visible;
+            // 进入资料页且有数据时自动选中最新一条，详情栏立即有内容。
+            LibrarySection.SelectLatestRowOrNothing();
         }
         else
         {
@@ -667,11 +875,16 @@ public partial class MainWindow : Window
         string? initialText = null,
         string? targetLang = null,
         string? sourceLang = null,
-        string? existingTranslation = null)
+        string? existingTranslation = null,
+        TranslationSessionState? storedState = null,
+        string? explanation = null,
+        string? badge = null)
     {
         NavTranslate.IsChecked = true;
         ShowSection("Translate");
-        TranslateSection.FocusTranslate(initialText, targetLang, sourceLang, existingTranslation);
+        TranslateSection.FocusTranslate(
+            initialText, targetLang, sourceLang, existingTranslation,
+            storedState, explanation, badge);
     }
 
     internal void ReloadHistory() => LibrarySection.ReloadHistory();
@@ -679,31 +892,83 @@ public partial class MainWindow : Window
     internal void ShowShortcutConflict(string conflict) =>
         SetStatus($"快捷键注册失败 — {conflict}。请换一个组合后重试。", StatusTone.Error);
 
-    private void SetStatus(string message, StatusTone tone)
+    // ================= First-run onboarding =================
+    //
+    // 非阻断最小闭环：主窗口首次加载时（且从未完成引导、尚未配置任何
+    // 引擎）在工作台内展开三步引导条；跳过/完成即持久化
+    // HasCompletedOnboarding。「设置 → 通用 → 重新显示引导」通过
+    // RestartOnboarding 复位并重新展开。绝不使用模态弹窗。
+
+    private void TryBeginFirstRunOnboarding()
     {
-        StatusTextBlock.Text = message;
-        StatusTextBlock.SetResourceReference(TextBlock.ForegroundProperty, tone switch
+        try
         {
-            StatusTone.Success => "SuccessBrush",
-            StatusTone.Warning => "WarningBrush",
-            StatusTone.Error => "DangerBrush",
-            _ => "TextSecondaryBrush",
-        });
-        // Info covers the idle/ready state and neutral confirmations; a gray
-        // dot reads as "disabled" — the accent reads as "alive" instead.
-        StatusDot.SetResourceReference(Border.BackgroundProperty, tone switch
+            var settings = ShellSettingsStore.Load();
+            if (settings.HasCompletedOnboarding)
+            {
+                return;
+            }
+            if (ProfileManager.HasConfiguredUserEngine())
+            {
+                // 引擎已在位说明上手早已完成：顺带把丢失/回退的闸门补成
+                // true，而不是给一个能用的安装再弹引导。
+                PersistOnboardingComplete(settings);
+                return;
+            }
+            TranslateSection.BeginOnboarding();
+        }
+        catch (Exception)
         {
-            StatusTone.Success => "SuccessBrush",
-            StatusTone.Warning => "WarningBrush",
-            StatusTone.Error => "DangerBrush",
-            _ => "AccentBrush",
-        });
+            // 引导是增值体验；任何读取失败都不能影响窗口加载。
+        }
+    }
+
+    private void CompleteOnboarding()
+    {
+        TranslateSection.EndOnboarding();
+        try
+        {
+            PersistOnboardingComplete(ShellSettingsStore.Load());
+        }
+        catch (Exception)
+        {
+            // Best-effort persistence; the guide simply may reappear once.
+        }
+    }
+
+    private static void PersistOnboardingComplete(ShellSettings settings)
+    {
+        try
+        {
+            ShellSettingsStore.Save(settings with { HasCompletedOnboarding = true });
+        }
+        catch (Exception)
+        {
+            // 引导状态保存失败不打断任何主流程。
+        }
+    }
+
+    /// <summary>设置 → 通用 的「重新显示引导」入口：复位闸门并回到工作台
+    /// 重新展开引导条（本会话立即生效，重新持久化为未完成）。</summary>
+    internal void RestartOnboarding()
+    {
+        NavTranslate.IsChecked = true;
+        ShowSection("Translate");
+        TranslateSection.BeginOnboarding();
+        SetStatus("已重新显示新手引导；完成或点「跳过引导」即可关闭。", StatusTone.Info);
     }
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
         if (!AllowClose)
         {
+            var closeToTray = ShellSettingsStore.Load().CloseMainWindowToTray;
+            if (!closeToTray)
+            {
+                RequestExit?.Invoke();
+                return;
+            }
+
             e.Cancel = true;
             Hide();
             // 主窗口驻留托盘后释放工作集：隐藏状态下不需要保住渲染页，
@@ -729,5 +994,403 @@ public partial class MainWindow : Window
             }
         }
         base.OnClosing(e);
+    }
+}
+
+/// <summary>
+/// What the NEXT text translation's route means for prompt personalization.
+/// </summary>
+internal enum TranslationStyleSupport
+{
+    /// <summary>A configured provider or local model runs next; the active prompt template applies.</summary>
+    Supported,
+
+    /// <summary>
+    /// The built-in free engine runs next. It has no personalization of its
+    /// own and the source text is never augmented client-side — the selector
+    /// must be disabled with an honest explanation instead.
+    /// </summary>
+    FreeEngine,
+
+    /// <summary>Local state could not be read; keep the selector visible but stay honest.</summary>
+    Unknown,
+}
+
+/// <summary>
+/// The shared global 文字翻译风格 (TEXT-translation style) selector (prompt
+/// templates) behind the main workbench, the floating panel and quick search.
+/// Lists the built-in 忠实/自然/正式 styles plus the custom list straight from
+/// the core's prompt store, switches the active template via CoreBridge, and
+/// offers the shared 管理提示词 entry (routed through each surface's existing
+/// open-settings callback). By contract a switch only persists: the NEXT
+/// request picks it up (the coordinator snapshots the template once per
+/// request), nothing in flight is cancelled and nothing is re-translated.
+/// Source text is never spliced with style instructions anywhere in this shell.
+/// Scope honesty: the template applies to TEXT requests only. 0.1.6 has no
+/// vision-prompt support, so a vision-direct screenshot translation never
+/// receives it — those sessions say so before and after the run instead of
+/// silently claiming support. Screenshot pipelines that OCR first and
+/// translate through the text provider honour the template as usual.
+/// </summary>
+internal static class TranslationStyleMenu
+{
+    internal const string FaithfulTemplateId = "faithful";
+    internal const string NaturalTemplateId = "natural";
+    internal const string FormalTemplateId = "formal";
+
+    /// <summary>
+    /// Selector wording while the NEXT text translation is proven to honour
+    /// the active style: names the feature 文字翻译风格 and states the one
+    /// exception (vision-direct screenshots) so it never over-claims.
+    /// </summary>
+    internal const string SupportedToolTip = "文字翻译风格（仅影响下一次文字翻译；截图视觉直译不应用）";
+
+    /// <summary>The exact wording required when the free engine cannot personalize.</summary>
+    internal const string FreeEngineToolTip = "此引擎不支持文字翻译风格个性化";
+
+    internal const string UnknownToolTip =
+        "暂时无法确认当前引擎是否支持文字翻译风格；若由内置免费引擎完成，所选风格不会应用";
+
+    /// <summary>
+    /// Honest wording for the vision-direct screenshot route: the image and
+    /// its instruction go straight to the vision model, so the active TEXT
+    /// style is never part of that request (0.1.6 has no vision prompt
+    /// support, and the shell never splices style text client-side).
+    /// </summary>
+    internal const string VisionDirectStyleNotApplied = "截图由视觉模型直接翻译，所选文字翻译风格不参与";
+
+    /// <summary>
+    /// Stated BEFORE a vision-direct screenshot translation goes out. Never
+    /// blocks or reroutes the request; silence means the resolved route was
+    /// not vision-direct (or the faithful default is active, nothing at stake).
+    /// </summary>
+    internal const string VisionDirectPreNotice =
+        $"当前截图线路为视觉模型直译：{VisionDirectStyleNotApplied}，本次不会应用所选风格。";
+
+    /// <summary>
+    /// Stated AFTER a vision-direct screenshot translation completed. The
+    /// caller may append " · 已自动复制译文" exactly like the free-engine notice.
+    /// </summary>
+    internal const string VisionDirectCompletedNotice = "截图已由视觉模型直接翻译：所选文字翻译风格未应用";
+
+    /// <summary>
+    /// Compact label for the selector and menu items: short names for the
+    /// three built-ins, the template's own name for the custom list.
+    /// </summary>
+    internal static string ShortLabel(PromptTemplateDto template) => template.Id switch
+    {
+        FaithfulTemplateId => "忠实",
+        NaturalTemplateId => "自然",
+        FormalTemplateId => "正式",
+        _ => string.IsNullOrWhiteSpace(template.Name) ? template.Id : template.Name,
+    };
+
+    /// <summary>The active template as the core resolves it (falls back to faithful); null when unreadable.</summary>
+    internal static PromptTemplateDto? TryGetActiveTemplate()
+    {
+        try
+        {
+            return CoreBridge.GetActivePromptTemplate();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Read-only local probe of the route the next text translation takes,
+    /// sharing the coordinator's own provider decision (including the legacy
+    /// global TargetsLocalRuntime fallback) via
+    /// <see cref="TranslationCoordinator.ResolveTextProviderCapability"/> so
+    /// the two can never drift: a legacy local runtime must keep the selector
+    /// enabled instead of being mistaken for the free engine. Zero network;
+    /// Unknown means local state could not be read this instant.
+    /// </summary>
+    internal static TranslationStyleSupport ProbeNextTextRoute()
+    {
+        try
+        {
+            // 与 coordinator 真实请求完全相同的解析链：ProfileManager.ResolveRoutes
+            // → 按 route 的凭据目标读 key → 共享谓词判定。
+            var settings = CoreBridge.GetSettings();
+            var (textRoute, _) = ProfileManager.ResolveRoutes();
+            var textApiKey = textRoute is null
+                ? null
+                : CredentialStore.LoadApiKey(textRoute.CredentialTarget);
+            var textRuntimeSettings = textRoute?.Profile.ToProviderSettings(settings);
+            return TranslationCoordinator.ResolveTextProviderCapability(textRuntimeSettings, textApiKey, settings)
+                .HasConfiguredProvider
+                ? TranslationStyleSupport.Supported
+                : TranslationStyleSupport.FreeEngine;
+        }
+        catch (Exception)
+        {
+            return TranslationStyleSupport.Unknown;
+        }
+    }
+
+    /// <summary>
+    /// Read-only local probe of the route the NEXT screenshot translation
+    /// resolves to, through the very same decision the coordinator executes
+    /// (<see cref="ProfileManager.ResolveRoute"/> → Rust SelectRoute): zero
+    /// network, no request is started. Unavailable (route unreadable or no
+    /// pipeline) means the caller stays silent rather than over-claiming.
+    /// </summary>
+    internal static ScreenshotPipeline ProbeNextScreenshotPipeline()
+    {
+        try
+        {
+            var settings = CoreBridge.GetSettings();
+            return ProfileManager.ResolveRoute(settings, WindowsOcrService.IsSupported).ScreenshotPipeline;
+        }
+        catch (Exception)
+        {
+            return ScreenshotPipeline.Unavailable;
+        }
+    }
+
+    /// <summary>
+    /// Honest pre-flight notice for the vision-direct screenshot route, where
+    /// the active TEXT style cannot take part. Null — and therefore no claim
+    /// at all — when the resolved pipeline is not vision-direct (OCR-based
+    /// pipelines translate through the text provider and honour the style),
+    /// or when the faithful default is active so nothing is at stake. The
+    /// notice never blocks, reroutes or re-sends anything.
+    /// </summary>
+    internal static string? PreScreenshotNotice()
+    {
+        if (ProbeNextScreenshotPipeline() != ScreenshotPipeline.VisionDirect)
+        {
+            return null;
+        }
+        if (TryGetActiveTemplate() is not { } template ||
+            template.Id == FaithfulTemplateId)
+        {
+            return null;
+        }
+        return VisionDirectPreNotice;
+    }
+
+    /// <summary>
+    /// True when the session's pipeline label says the vision model itself
+    /// produced the translation (vision-direct). The labels must stay in sync
+    /// with TranslationCoordinator's screenshot pipeline; every other label
+    /// (本地 OCR, 视觉识别 + 文本模型 …) went through the text provider, where
+    /// the style applies normally.
+    /// </summary>
+    internal static bool IsVisionDirectPipeline(string? pipelineLabel) =>
+        pipelineLabel is "本地视觉模型" or "视觉模型 · 独立服务";
+
+    /// <summary>
+    /// Builds the shared menu purely from local prompt-store state — no
+    /// network, no translation request. Built-in styles first, the custom
+    /// list after, then the manage entry. Returns null (status already
+    /// reported) when the store is unreadable.
+    /// </summary>
+    internal static ContextMenu? Build(
+        Action<PromptTemplateDto> styleChosen,
+        Action<string> reportStatus,
+        Action managePrompts)
+    {
+        IReadOnlyList<PromptTemplateDto> templates;
+        string activeId;
+        try
+        {
+            templates = CoreBridge.ListPromptTemplates();
+            activeId = CoreBridge.GetActivePromptTemplate().Id;
+        }
+        catch (Exception exception)
+        {
+            reportStatus($"无法读取翻译风格列表：{exception.Message}");
+            return null;
+        }
+
+        var menu = new ContextMenu();
+        menu.Items.Add(MakeHeader("文字翻译风格"));
+        var builtInCount = 0;
+        foreach (var template in templates.Where(t => t.Enabled && t.IsBuiltIn))
+        {
+            menu.Items.Add(MakeStyleItem(template, activeId, styleChosen));
+            builtInCount++;
+        }
+
+        var custom = templates.Where(t => t.Enabled && !t.IsBuiltIn).ToList();
+        if (custom.Count > 0)
+        {
+            menu.Items.Add(new Separator());
+            menu.Items.Add(MakeHeader("自定义"));
+            foreach (var template in custom)
+            {
+                menu.Items.Add(MakeStyleItem(template, activeId, styleChosen));
+            }
+        }
+
+        if (builtInCount == 0 && custom.Count == 0)
+        {
+            menu.Items.Add(MakeDisabledItem("暂无可用风格"));
+        }
+
+        menu.Items.Add(new Separator());
+        var manage = new MenuItem { Header = "管理提示词…" };
+        manage.Click += (_, _) => managePrompts();
+        menu.Items.Add(manage);
+        return menu;
+    }
+
+    /// <summary>Anchors the shared menu to a surface's selector button and opens it.</summary>
+    internal static void Show(Button anchor, ContextMenu menu)
+    {
+        menu.PlacementTarget = anchor;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        menu.PlacementRectangle = new Rect(0, 0, anchor.ActualWidth, anchor.ActualHeight);
+        menu.IsOpen = true;
+    }
+
+    /// <summary>
+    /// Persists a style switch off the UI thread and reports the outcome.
+    /// Returns false on failure so the caller can repaint the authoritative
+    /// state. Only the next request is affected, by contract.
+    /// </summary>
+    internal static async Task<bool> SwitchActiveTemplateAsync(
+        string? templateId,
+        Action<string> reportStatus)
+    {
+        try
+        {
+            await CoreBridge.SetActivePromptTemplateAsync(templateId);
+            ReportOnUi(reportStatus, "已切换文字翻译风格，下一次文字翻译时生效。");
+            return true;
+        }
+        catch (Exception exception)
+        {
+            ReportOnUi(reportStatus, $"切换文字翻译风格失败：{exception.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Honest notice for the moment a translation is triggered. Null when the
+    /// route is proven to honour the active template, or when the default
+    /// faithful style is active so nothing is at stake. FreeEngine states the
+    /// fact plainly; Unknown says exactly what cannot be promised. The notice
+    /// never blocks the translation and never cancels anything.
+    /// </summary>
+    internal static string? PreTranslateNotice()
+    {
+        var probe = ProbeNextTextRoute();
+        if (probe == TranslationStyleSupport.Supported)
+        {
+            return null;
+        }
+        if (TryGetActiveTemplate() is not { } template ||
+            template.Id == FaithfulTemplateId)
+        {
+            return null;
+        }
+        return probe == TranslationStyleSupport.FreeEngine
+            ? $"当前线路为{EngineWording.FreeEngineName}：{FreeEngineToolTip}，本次文字翻译未应用所选风格。"
+            : $"{UnknownToolTip}。";
+    }
+
+    /// <summary>
+    /// Applies the probed capability to a surface's selector button: grayed
+    /// with the exact honest wording on the free engine, visible with an
+    /// honest caveat when unreadable, normal otherwise. The tooltip is also
+    /// mirrored into automation HelpText so screen readers get the same
+    /// truth; buttons set ToolTipService.ShowOnDisabled so the grayed state
+    /// still explains itself. Returns the probe.
+    /// </summary>
+    internal static TranslationStyleSupport ApplyTo(Button selectorButton, string supportedToolTip)
+    {
+        var probe = ProbeNextTextRoute();
+        var message = probe switch
+        {
+            TranslationStyleSupport.FreeEngine => FreeEngineToolTip,
+            TranslationStyleSupport.Unknown => UnknownToolTip,
+            _ => supportedToolTip,
+        };
+        selectorButton.IsEnabled = probe != TranslationStyleSupport.FreeEngine;
+        selectorButton.ToolTip = message;
+        System.Windows.Automation.AutomationProperties.SetHelpText(selectorButton, message);
+        return probe;
+    }
+
+    /// <summary>Active-style short label for a selector, with a neutral fallback.</summary>
+    internal static string ActiveLabel()
+    {
+        var active = TryGetActiveTemplate();
+        return active is null ? "风格" : ShortLabel(active);
+    }
+
+    private static MenuItem MakeStyleItem(
+        PromptTemplateDto template,
+        string activeId,
+        Action<PromptTemplateDto> styleChosen)
+    {
+        var id = template.Id;
+        var isActive = string.Equals(id, activeId, StringComparison.Ordinal);
+        var item = new MenuItem
+        {
+            Header = $"{ShortLabel(template)}{(isActive ? "（当前）" : string.Empty)}",
+            ToolTip = string.IsNullOrWhiteSpace(template.Description) ? null : template.Description,
+            FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
+            Icon = isActive ? MakeActiveCheck() : null,
+        };
+        item.Click += (_, _) =>
+        {
+            if (!isActive)
+            {
+                styleChosen(template);
+            }
+        };
+        return item;
+    }
+
+    private static TextBlock MakeActiveCheck()
+    {
+        var check = new TextBlock
+        {
+            Text = "✓",
+            FontSize = 13,
+            FontWeight = FontWeights.Bold,
+        };
+        check.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
+        return check;
+    }
+
+    private static MenuItem MakeHeader(string text)
+    {
+        var item = new MenuItem
+        {
+            Header = text,
+            IsEnabled = true,
+            Focusable = false,
+            IsHitTestVisible = false,
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 11.5,
+        };
+        item.SetResourceReference(Control.ForegroundProperty, "TextTertiaryBrush");
+        return item;
+    }
+
+    private static MenuItem MakeDisabledItem(string text) => new()
+    {
+        Header = text,
+        IsEnabled = false,
+    };
+
+    /// <summary>Status reports land on the caller's UI thread from any context.</summary>
+    private static void ReportOnUi(Action<string> reportStatus, string message)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess())
+        {
+            _ = dispatcher.BeginInvoke(() => reportStatus(message));
+        }
+        else
+        {
+            reportStatus(message);
+        }
     }
 }

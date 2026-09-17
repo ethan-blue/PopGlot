@@ -59,6 +59,14 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
     private readonly ObservableCollection<LibraryRow> _allRows = [];
     private readonly ICollectionView _rowsView;
 
+    // 两步删除的武装态：条目按钮与 Delete 键共享同一把锁。任何一次单击/
+    // 单次按键都永远无法直接删除一条记录；超时、切换选中、切换模式或列表
+    // 刷新都会解除武装。
+    private const int DeleteArmSeconds = 3;
+    private LibraryRow? _deleteArmRow;
+    private DateTime _deleteArmUntilUtc;
+    private readonly System.Windows.Threading.DispatcherTimer _deleteArmTimer;
+
     /// <summary>Raised when the user wants to load an entry into the workbench.</summary>
     internal event Action<string, string, string?, string?, string?, string?>? LoadToTranslate;
 
@@ -72,6 +80,11 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         _rowsView.Filter = FilterRow;
         LibraryListBox.ItemsSource = _rowsView;
         _clearCurrentConfirm = ConfirmButton.Attach(ClearCurrentButton, "确认清空？", ClearCurrent);
+        _deleteArmTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(DeleteArmSeconds),
+        };
+        _deleteArmTimer.Tick += (_, _) => DisarmDelete();
     }
 
     private bool FilterRow(object item)
@@ -203,6 +216,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         {
             return;
         }
+        DisarmDelete();
         _mode = ModeVocabulary.IsChecked == true ? LibraryMode.Vocabulary : LibraryMode.History;
         if (_mode == LibraryMode.Vocabulary)
         {
@@ -214,6 +228,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         }
         SyncCurrentRows();
         ApplyFilter();
+        SelectLatestRowOrNothing();
     }
 
     private void SyncCurrentRows()
@@ -321,6 +336,9 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
 
     private void LibraryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        // 选中变化立即解除删除武装：先点 A 的「删除」再选 B，第二次点击
+        // 绝不能变成删除 B 的一击路径。
+        DisarmDelete();
         if (SelectedRow() is { } row)
         {
             ShowDetail(row);
@@ -363,7 +381,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             e.Handled = true;
             if (SelectedRow() is { } row)
             {
-                DeleteRow(row);
+                RequestDeleteRow(row);
             }
         }
     }
@@ -405,12 +423,56 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
     {
         if (SelectedRow() is { } row)
         {
-            DeleteRow(row);
+            RequestDeleteRow(row);
         }
+    }
+
+    /// <summary>
+    /// 两步删除入口（条目按钮与 Delete 键共用）：第一次请求只武装
+    /// （3 秒内可确认），再次请求同一行才真正删除。超时、换行、切模式
+    /// 都解除武装 — 删除永远不可能被一次点击/一次按键完成。
+    /// </summary>
+    private void RequestDeleteRow(LibraryRow row)
+    {
+        if (_deleteArmRow is { } armed &&
+            armed.Id == row.Id &&
+            DateTime.UtcNow <= _deleteArmUntilUtc)
+        {
+            DisarmDelete();
+            DeleteRow(row);
+            return;
+        }
+        ArmDelete(row);
+    }
+
+    private void ArmDelete(LibraryRow row)
+    {
+        _deleteArmRow = row;
+        _deleteArmUntilUtc = DateTime.UtcNow.AddSeconds(DeleteArmSeconds);
+        _deleteArmTimer.Stop();
+        _deleteArmTimer.Start();
+        CardDeleteButton.Content = "确认删除？";
+        CardDeleteButton.SetResourceReference(System.Windows.Controls.Control.BackgroundProperty, "DangerSoftBrush");
+        CardDeleteButton.SetResourceReference(System.Windows.Controls.Control.ForegroundProperty, "DangerBrush");
+        StatusChanged?.Invoke($"再点一次「删除」或再按 Delete 确认删除该条（{DeleteArmSeconds} 秒后自动取消）。", StatusTone.Info);
+    }
+
+    private void DisarmDelete()
+    {
+        _deleteArmTimer.Stop();
+        _deleteArmRow = null;
+        if (CardDeleteButton is null)
+        {
+            return;
+        }
+        CardDeleteButton.Content = "删除";
+        CardDeleteButton.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
+        CardDeleteButton.ClearValue(System.Windows.Controls.Control.ForegroundProperty);
     }
 
     private void DeleteRow(LibraryRow row)
     {
+        DisarmDelete();
         var currentIndex = LibraryListBox.SelectedIndex;
         if (_mode == LibraryMode.History)
         {
@@ -441,6 +503,22 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         }
         var nextIndex = Math.Clamp(previousIndex, 0, LibraryListBox.Items.Count - 1);
         LibraryListBox.SelectedIndex = nextIndex;
+    }
+
+    /// <summary>
+    /// 进入资料库（或切换历史/生词）且有数据时自动选中最新一条 — 两个
+    /// 数据源都按时间倒序，索引 0 即最新。空仓或已有选中时不动，占位
+    /// 提示与用户当前的浏览位置都不会被打扰。
+    /// </summary>
+    internal void SelectLatestRowOrNothing()
+    {
+        DisarmDelete();
+        if (LibraryListBox.Items.Count == 0 || LibraryListBox.SelectedIndex >= 0)
+        {
+            return;
+        }
+        LibraryListBox.SelectedIndex = 0;
+        LibraryListBox.ScrollIntoView(LibraryListBox.SelectedItem);
     }
 
     private void LoadRow(LibraryRow row) =>

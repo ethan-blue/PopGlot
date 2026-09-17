@@ -6,7 +6,7 @@
 
 | 档位 | 宿主 | 允许的资源 | 典型测试组 |
 |---|---|---|---|
-| pure | PureTests exe（无实例守卫，可与运行中 PopGlot 共存） | 临时目录、内存凭据桩、拒绝一切发送的 guard、seam 注入 | OutboundPolicy 令牌/策略、MarkdownPresenter.ToPlainText、DiagnosticsLog 结构与轮转、VocabularyStore 全行为、StartupRegistration 状态机（seam）、ShellSettings 序列化、FreeTranslateService URL/解析/缓存（假 sender）、TranslationPanelStreamGate/TranslationStreamBuffer/QuickSearchState 纯状态机 |
+| pure | PureTests exe（无实例守卫，可与运行中 PopGlot 共存） | 临时目录、内存凭据桩、拒绝一切发送的 guard、seam 注入 | OutboundPolicy 令牌/策略、MarkdownPresenter.ToPlainText、DiagnosticsLog 结构与轮转、VocabularyStore 全行为、StartupRegistration 状态机（seam）、ShellSettings 序列化、FreeTranslateService URL/解析/缓存（假 sender）、TranslationPanelStreamGate/TranslationStreamBuffer/QuickSearchState 纯状态机、Prompt 存储/纯编译器 envelope 契约、SessionStore 容量/LRU/TTL |
 | isolated-WPF | LogicTests exe（完整守卫：无真实实例、隔离存储、内存凭据、守护 sender） | 单个 STA Application/Dispatcher、离屏渲染、WPF 控件树 | RenderToFlowDocument 视觉、面板/查词窗口生命周期、设置窗口草稿机、主题/字幕按钮、RunStaBatch 全组 |
 | native-loopback | LogicTests exe + CoreBridge.Initialize(隔离配置目录) + popglot_ffi.dll | 原生 Rust core（隔离数据目录）、回环 mock HTTP | CoreBridge 路由决策表、endpoint 分类跨语言一致性、ModelCatalogService、ProfileManager、Provider 回环协议 |
 | E3 | 真机/真实实例/临时账户 | 真实焦点/IME/注册表/登录/多显示器 | 失焦矩阵（IME/菜单/Alt+Tab/通知）、登录自启 20 次、跨应用复制粘贴、Release 性能采样、打包主旅程 |
@@ -19,15 +19,18 @@
 - C23 协议回环、CoreBridge 契约：**native-loopback**。
 - 一切"真实焦点/真实登录/真实付费"场景：**E3**，必须逐项获得授权与环境，不得以 fixture 冒充。
 
-## 未验证共享包（按实际覆盖，2026-09-12 复核更正；不是 0）
+## 验证状态（2026-09-15 实跑刷新；开口项照实列出，不是 0）
 
-1. **全量 WPF 套件（LogicTests）未执行**：授权边界、词库读取/保护、日志 allowlist、围栏语法、面板/查词状态机、异常屏障、自启决策等共享行为改动，目前只有针对性测试与编译证据，没有全量回归。
-2. **新增 WPF 行为测试未执行**：HiddenPanelCompletionNeverCopies、QuickSearchFocusLossKeepsSession、TranslationPanelCloseKeepsPartialAndHides、CoordinatorRefusesWorkWhenFused、A06EscapeRecencyAndExitWiring。
-3. **E3 矩阵全部未验证**：IME/菜单失焦、登录自启 20 次、跨应用复制粘贴、异常熔断演练、重启握手。
-4. **A08 隔离副本创建失败分支**无确定性测试（防御性代码，代码审阅覆盖）。
-5. **cargo 180 只覆盖 Rust 契约**，不覆盖本轮 C# 共享合同。
-6. **C09 测量运行未执行**：30 次启动 P50/P95 与内存/空闲 CPU 采样需退出真实实例并完成 self-contained publish 后运行 scripts/measure-startup.ps1；当前只有脚本、冲突预检与 POPGLOT_DATA_ROOT 夹具的实现证据。
-6. pure 宿主 11 组仅覆盖纯逻辑切片；不得外推为 WPF/native-loopback/E3 通过。
+> 口径：测试数字随新增用例持续变化，本文不维护固定值，以 `scripts/verify.ps1`（现含
+> PureTests + LogicTests）与 `cargo test --workspace` 实跑为准。截至 2026-09-15 直接实跑：
+> LogicTests 203/203、PureTests 23/23、Rust workspace 208/208 全绿。
+
+1. **全量套件已执行**：LogicTests 与 PureTests 自 2026-09-13 起多轮全量实跑全绿（180 → 185 → 192 → 195 → 197 → 203，Pure 11 → 23；含 `real user config unchanged by the run` 与 `no unsanctioned public network send was attempted` PASS）。
+2. **E3 矩阵全部未验证**：IME/菜单失焦、登录自启 20 次、跨应用复制粘贴、异常熔断演练、重启握手。
+3. **A08 隔离副本创建失败分支**无确定性测试（防御性代码，代码审阅覆盖）。
+4. **Rust 套件只覆盖 Rust 契约**（当前 208 项：core 78、domain 55、ffi 14、prompt_contract 14、provider_http 30、benchmark_safety 12、smoke 5），不替代 C# 共享合同的 Pure/Logic 覆盖；反之亦然。
+5. **C09 真实测量**：首次 30 次启动测量已于 2026-09-14 完成（P50=373ms / P95=383ms、内存/空闲 CPU 门禁 PASS），但发布包取自 2026-09-14 时点树、非最终代码树，且报告缺 CPU 型号——最终树复测仍开口。
+6. pure 宿主仅覆盖纯逻辑切片；不得外推为 WPF/native-loopback/E3 通过。
 
 ## 宿主身份
 

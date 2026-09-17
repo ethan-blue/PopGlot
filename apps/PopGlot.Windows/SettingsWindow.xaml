@@ -46,6 +46,10 @@
                                  GroupName="SettingsNav" IsChecked="True" Content="翻译引擎"
                                  local:Ui.Icon="{StaticResource IconProvider}"
                                  Checked="SubNav_Checked" Tag="Provider" />
+                    <RadioButton x:Name="NavPrompt" Style="{StaticResource NavButton}"
+                                 GroupName="SettingsNav" Content="翻译与提示词"
+                                 local:Ui.Icon="{StaticResource IconTranslate}"
+                                 Checked="SubNav_Checked" Tag="Prompt" />
                     <RadioButton x:Name="NavGeneral" Style="{StaticResource NavButton}"
                                  GroupName="SettingsNav" Content="通用"
                                  local:Ui.Icon="{StaticResource IconSettings}"
@@ -70,7 +74,8 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <!-- Caption controls -->
+            <!-- Caption controls (static first-paint labels; this window has
+                 no tray-resident close semantics) -->
             <Grid Grid.Row="0" Background="Transparent">
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
                             WindowChrome.IsHitTestVisibleInChrome="True">
@@ -83,9 +88,9 @@
                             AutomationProperties.Name="最大化"
                             ToolTip="最大化" Click="MaximizeButton_Click" />
                     <Button x:Name="CloseBtn" Style="{StaticResource CaptionCloseButton}"
-                            AutomationProperties.Name="关闭窗口"
+                            AutomationProperties.Name="关闭设置"
                             local:Ui.Icon="{StaticResource IconCaptionClose}"
-                            ToolTip="关闭" Click="CloseButton_Click" />
+                            ToolTip="关闭设置" Click="CloseButton_Click" />
                 </StackPanel>
             </Grid>
 
@@ -106,6 +111,8 @@
                 </ScrollViewer>
                 <sections:ServicesSection x:Name="ProviderSection"
                                           Margin="28,14,32,16" />
+                <sections:PromptSection x:Name="PromptSectionHost"
+                                        Margin="28,14,32,16" Visibility="Collapsed" />
             </Grid>
 
             <!-- Fixed action bar: status dot on the left, save/revert actions on the right -->
@@ -138,8 +145,9 @@
                             <TextBlock Text="未保存的修改" Style="{StaticResource Metadata}" FontWeight="SemiBold"
                                        Foreground="{DynamicResource WarningBrush}" />
                         </Border>
-                        <Button Content="放弃修改" Margin="8,0,0,0" Style="{StaticResource GhostButton}"
-                                Padding="12,6" Click="Revert_Click" />
+                        <Button x:Name="RevertButton" Content="放弃修改" Margin="8,0,0,0" Style="{StaticResource GhostButton}"
+                                Padding="12,6" Click="Revert_Click"
+                                AutomationProperties.Name="放弃修改" ToolTip="放弃未保存的修改，恢复到已保存的值" />
                         <Button x:Name="SaveButton" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}"
                                 Padding="18,6" Content="保存" Click="Save_Click"
                                 ToolTip="保存当前偏好设置（进行中请求沿用旧配置）" />

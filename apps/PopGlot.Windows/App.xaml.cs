@@ -51,6 +51,20 @@ public partial class App : Application
 
     private QuickSearchWindow? _activeQuickSearch;
 
+    internal static SessionStore SharedSessionStore { get; } = new();
+
+    /// <summary>
+    /// N01: a session-store rejection that no visible surface can report
+    /// (the window is already closing or hidden) is recorded in the bounded
+    /// diagnostics log. C03 keeps entries structured — the reason travels
+    /// only as the exception message/context, never as free-form log text.
+    /// </summary>
+    internal static void LogSessionStoreRejection(string? rejectionReason) =>
+        DiagnosticsLog.Log(
+            new InvalidOperationException(
+                $"SessionStore.TryStore rejected snapshot: {rejectionReason ?? "unspecified"}"),
+            DiagnosticsLog.DiagnosticsStage.Translation);
+
     private ShellSettings _shellSettings = ShellSettings.Default;
 
     private static (string markerPath, string dataDir)? ReadSmokeMarkerPath(string[] args)
@@ -714,6 +728,7 @@ public partial class App : Application
             OpenSettings = () => ShowSettings(),
             OpenAddEngineFlow = () => ShowSettings(startAddEngineFlow: true),
             NotifyTray = (title, message) => Notify(title, message, Forms.ToolTipIcon.Info),
+            RequestExit = () => ExitApplication(),
         };
         return _mainWindow;
     }
@@ -758,6 +773,8 @@ public partial class App : Application
         {
             window.Owner = _mainWindow;
         }
+        // Same one-shot first-show convergence as the main window.
+        WindowPositioner.ConvergeFirstShow(window);
         window.Show();
         if (window.WindowState == WindowState.Minimized)
         {
@@ -1012,15 +1029,19 @@ public partial class App : Application
 
     /// <summary>
     /// "Expand in main window" carries the finished session instead of
-    /// re-translating: source, language pair, and the existing translation.
+    /// re-translating: source, language pair, the existing translation and
+    /// the session's REAL state — an unfinished result must never be
+    /// upgraded to Completed by the expansion.
     /// </summary>
-    private void OpenInMainWindow(string source, string? targetLang, string? sourceLang, string? translation)
+    private void OpenInMainWindow(
+        string source, string? targetLang, string? sourceLang, string? translation,
+        TranslationSessionState sessionState)
 
     {
 
         ShowMainWindow();
 
-        _mainWindow?.FocusTranslate(source, targetLang, sourceLang, translation);
+        _mainWindow?.FocusTranslate(source, targetLang, sourceLang, translation, sessionState);
 
     }
 
@@ -1043,6 +1064,7 @@ public partial class App : Application
                 _activeQuickSearch.Show();
 
                 _activeQuickSearch.Activate();
+                _quickSearchLastUsedUtc = DateTime.UtcNow;
 
                 return;
 
@@ -1063,11 +1085,16 @@ public partial class App : Application
 
     private void CloseActivePanel()
     {
-        // C05: hiding is a visibility change only — the session (partial,
-        // scroll, selection) survives and can be restored from the tray, and
-        // a running request continues to its deadline. Real destruction
-        // happens on session replacement (DestroyActivePanel) or exit.
-        _activePanel?.Hide();
+        if (_activePanel is { } panel)
+        {
+            var session = panel.CreateSessionSnapshot();
+            if (session is not null && !SharedSessionStore.TryStore(session, out var rejection))
+            {
+                // The panel hides right after; nothing can show the reason.
+                LogSessionStoreRejection(rejection);
+            }
+            panel.Hide();
+        }
         // 面板隐藏后把截图/渲染留下的临时页换出，避免常驻内存随使用次数
         // 只增不减。真实分配不受影响，需要时系统会自动调页回来。
         TrimWorkingSet();
@@ -1076,11 +1103,19 @@ public partial class App : Application
     /// <summary>
     /// C05: real destruction for session replacement — a new translation
     /// supersedes the old one, so its surface finally closes.
+    /// N01: captures a snapshot into the session store before closing.
     /// </summary>
     private void DestroyActivePanel()
     {
         if (_activePanel is { } panel)
         {
+            var session = panel.CreateSessionSnapshot();
+            if (session is not null && !SharedSessionStore.TryStore(session, out var rejection))
+            {
+                // The panel is force-closed right after; the rejection can
+                // only be recorded.
+                LogSessionStoreRejection(rejection);
+            }
             panel.ForceClose = true;
             panel.Close();
         }
@@ -1091,36 +1126,54 @@ public partial class App : Application
     private DateTime _quickSearchLastUsedUtc = DateTime.MinValue;
 
     /// <summary>
-    /// C05/A06: bring back the most recently USED hidden surface without
-    /// resending anything — the window instance kept its session. Recency is
-    /// explicit metadata, never a fixed type preference.
+    /// C05/A06/N01: bring back the most recently USED hidden surface without
+    /// resending anything — the window instance kept its session, or the in-memory
+    /// session store restores the snapshot. ZERO RESEND GUARANTEE.
     /// </summary>
     private void RestoreRecentSurface()
     {
         var panelUsable = _activePanel is { IsLoaded: true };
         var quickUsable = _activeQuickSearch is { IsLoaded: true };
-        if (!panelUsable && !quickUsable)
+        if (panelUsable || quickUsable)
         {
-            Notify(
-                "暂无可恢复的翻译",
-                "最近的浮窗会话已结束或被新会话替换；按划词/截图快捷键即可开始新翻译。",
-                Forms.ToolTipIcon.Info);
+            var restorePanel = panelUsable &&
+                (!quickUsable || _panelLastUsedUtc >= _quickSearchLastUsedUtc);
+            if (restorePanel)
+            {
+                _activePanel!.Show();
+                _activePanel.Activate();
+                _panelLastUsedUtc = DateTime.UtcNow;
+            }
+            else
+            {
+                _activeQuickSearch!.Show();
+                _activeQuickSearch.Activate();
+                _quickSearchLastUsedUtc = DateTime.UtcNow;
+            }
             return;
         }
-        var restorePanel = panelUsable &&
-            (!quickUsable || _panelLastUsedUtc >= _quickSearchLastUsedUtc);
-        if (restorePanel)
+
+        // N01: neither window is active in memory -> restore from session store
+        var stored = SharedSessionStore.PopRecent();
+        if (stored is not null)
         {
-            _activePanel!.Show();
-            _activePanel.Activate();
-            _panelLastUsedUtc = DateTime.UtcNow;
+            RestoreStoredSession(stored);
+            return;
         }
-        else
-        {
-            _activeQuickSearch!.Show();
-            _activeQuickSearch.Activate();
-            _quickSearchLastUsedUtc = DateTime.UtcNow;
-        }
+
+        Notify(
+            "暂无可恢复的翻译",
+            "最近的浮窗会话已结束或被新会话替换；按划词/截图快捷键即可开始新翻译。",
+            Forms.ToolTipIcon.Info);
+    }
+
+    private void RestoreStoredSession(StoredSession session)
+    {
+        var panel = CreatePanel(CursorAnchorPixels());
+        panel.RestoreSession(session);
+        panel.Show();
+        panel.Activate();
+        _panelLastUsedUtc = DateTime.UtcNow;
     }
 
     private void CloseActiveOverlay()
@@ -1189,6 +1242,9 @@ public partial class App : Application
         UpdateTrayTooltip();
         // The workbench footer always shows what actually runs right now.
         _mainWindow?.RefreshEngineStatus();
+        // Settings saved → the main window's close button must re-decide
+        // between 关闭到托盘 / 退出 PopGlot from the persisted preference.
+        _mainWindow?.RefreshCloseButtonForTraySetting();
         return true;
     }
 
@@ -1213,6 +1269,9 @@ public partial class App : Application
         _trayMenu.Items.Add("极速查词", null, (_, _) => ShowQuickSearch());
 
         _trayMenu.Items.Add("恢复最近翻译", null, (_, _) => RestoreRecentSurface());
+
+        var sessionsSubMenu = new Forms.ToolStripMenuItem("暂存会话仓 (最多5条)");
+        _trayMenu.Items.Add(sessionsSubMenu);
 
         _trayMenu.Items.Add(new Forms.ToolStripSeparator());
 
@@ -1240,6 +1299,33 @@ public partial class App : Application
 
             ocrItem.Text = $"截图提取文本 (OCR)\tShift + 截图";
 
+            sessionsSubMenu.DropDownItems.Clear();
+            var sessions = SharedSessionStore.GetAll();
+            if (sessions.Count == 0)
+            {
+                var emptyItem = new Forms.ToolStripMenuItem("(暂无暂存会话)") { Enabled = false };
+                sessionsSubMenu.DropDownItems.Add(emptyItem);
+            }
+            else
+            {
+                foreach (var s in sessions)
+                {
+                    var item = new Forms.ToolStripMenuItem(s.Summary())
+                    {
+                        Tag = s
+                    };
+                    item.Click += (_, _) => RestoreStoredSession(s);
+                    sessionsSubMenu.DropDownItems.Add(item);
+                }
+                sessionsSubMenu.DropDownItems.Add(new Forms.ToolStripSeparator());
+                var clearItem = new Forms.ToolStripMenuItem("清空会话仓");
+                clearItem.Click += (_, _) =>
+                {
+                    SharedSessionStore.Clear();
+                    Notify("会话仓已清空", "所有内存暂存会话已清除。", Forms.ToolTipIcon.Info);
+                };
+                sessionsSubMenu.DropDownItems.Add(clearItem);
+            }
         };
 
 
@@ -1318,6 +1404,9 @@ public partial class App : Application
     private void ShowMainWindow()
     {
         var mainWindow = EnsureMainWindow();
+        // One-shot first-show convergence: a small work area must not push the
+        // caption/footer off screen. Later resizes/maximizes are never touched.
+        WindowPositioner.ConvergeFirstShow(mainWindow);
         mainWindow.ReloadHistory();
         mainWindow.Show();
         if (mainWindow.WindowState == WindowState.Minimized)
@@ -1371,6 +1460,7 @@ public partial class App : Application
         {
             _trayIcon.Visible = false;
         }
+        SharedSessionStore.Clear();
 
         try
         {
@@ -1407,6 +1497,7 @@ public partial class App : Application
         _showSignal?.Dispose();
         _hotkeys?.Dispose();
         TtsService.Stop();
+        SharedSessionStore.Clear();
         if (_trayIcon is not null)
         {
             // Hide first: a disposed NotifyIcon can otherwise leave a ghost icon

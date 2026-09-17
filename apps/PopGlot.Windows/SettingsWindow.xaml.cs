@@ -58,6 +58,15 @@ public partial class SettingsWindow : Window
     private bool _componentInitialized;
     private bool _themeSubscribed;
 
+    /// <summary>
+    /// Fail-closed latch: the last policy read (network/safe-mode/route/rules)
+    /// failed, so the policy controls hold XAML DEFAULTS, not the user's real
+    /// settings. While set, those values are never trusted as a baseline, the
+    /// controls stay disabled and a save refuses to run until an actual
+    /// re-read succeeds.
+    /// </summary>
+    private bool _policyReadFailed;
+
     /// <summary>True while the form differs from the saved baseline.</summary>
     internal bool IsDirty => _state == SettingsEditState.Dirty;
 
@@ -86,6 +95,8 @@ public partial class SettingsWindow : Window
             SetStatus("翻译引擎已更新，即时生效。", StatusTone.Info);
         };
         ProviderSection.EditorOpenStateChanged += UpdateSaveBar;
+        PromptSectionHost.StatusChanged += SetStatus;
+        PromptSectionHost.EditorOpenStateChanged += UpdateSaveBar;
         CaptureSection.StatusChanged += SetStatus;
         CaptureSection.ProviderDirty += EvaluateDraftState;
         CaptureSection.SidebarChanged += () => _shellSettings = CaptureSection.CurrentShellSettings;
@@ -132,6 +143,7 @@ public partial class SettingsWindow : Window
         Watch(GeneralSection.CloseOnFocusLoss);
         Watch(GeneralSection.AutoCopy);
         Watch(GeneralSection.StartWithWindows);
+        Watch(GeneralSection.CloseToTray);
         Watch(GeneralSection.IncludeExplanation);
         Watch(GeneralSection.ProtectTokens);
         // Theme applies immediately and is persisted on save; changing it is
@@ -285,7 +297,8 @@ public partial class SettingsWindow : Window
             GeneralSection.IncludeExplanation.IsChecked == true,
             GeneralSection.ProtectTokens.IsChecked == true,
             Helpers.SelectedEnum(GeneralSection.ThemeCombo, ThemePreference.System).ToString(),
-            CaptureRouteDraftSnapshot());
+            CaptureRouteDraftSnapshot(),
+            GeneralSection.CloseToTray.IsChecked == true);
 
     private RouteDraftSnapshot CaptureRouteDraftSnapshot() =>
         RouteDraftSnapshot.Create(
@@ -303,13 +316,17 @@ public partial class SettingsWindow : Window
     /// </summary>
     private void UpdateSaveBar()
     {
-        var isEditorOpen = ProviderSection.Visibility == Visibility.Visible && ProviderSection.IsEditorOpen;
+        var isEditorOpen = (ProviderSection.Visibility == Visibility.Visible && ProviderSection.IsEditorOpen)
+            || (PromptSectionHost.Visibility == Visibility.Visible && PromptSectionHost.IsEditorOpen);
         var showActions = (_state is SettingsEditState.Dirty or SettingsEditState.Saving) && !isEditorOpen;
         SaveActionsPanel.Visibility = showActions ? Visibility.Visible : Visibility.Collapsed;
         UnsavedBadge.Visibility = (_state == SettingsEditState.Dirty) && !isEditorOpen
             ? Visibility.Visible
             : Visibility.Collapsed;
+        // Saving 会同时锁死两个动作：保存不可重入，放弃也不允许在写入进行中
+        // 把半提交的表单回滚成混乱状态（控件此刻可能正被程序化改写）。
         SaveButton.IsEnabled = _state == SettingsEditState.Dirty;
+        RevertButton.IsEnabled = _state == SettingsEditState.Dirty;
         SaveButton.Content = _state == SettingsEditState.Saving ? "正在保存…" : "保存";
     }
 
@@ -338,8 +355,19 @@ public partial class SettingsWindow : Window
         // assignment (theme included) can never register as a draft.
         _settingsBaseline = CaptureSettingsDraft();
         _routeBaseline = CaptureRouteDraft();
+        if (_policyReadFailed)
+        {
+            // Fail closed: the policy controls currently hold XAML defaults,
+            // never the user's real settings. They must not become a trusted
+            // baseline — the empty sentinel keeps the form Dirty so the save
+            // bar is up, and Save_Click refuses to commit until a re-read
+            // actually succeeds.
+            _settingsBaseline = string.Empty;
+        }
         _routePendingShown = false;
-        _state = SettingsEditState.Clean;
+        _state = _policyReadFailed ? SettingsEditState.Dirty : SettingsEditState.Clean;
+        ThemeService.Apply(_shellSettings.Theme);
+        ThemeService.ApplyWindowChrome(this);
         UpdateSaveBar();
         CaptureSection.SetRouteDraftPending(false);
     }
@@ -356,6 +384,7 @@ public partial class SettingsWindow : Window
         // C07: the toggle is the DESIRE, never "desire OR reality". The
         // real registry state paints beside it (hint text + re-enable).
         GeneralSection.StartWithWindows.IsChecked = settings.StartWithWindows;
+        GeneralSection.CloseToTray.IsChecked = settings.CloseMainWindowToTray;
         RefreshStartupState();
         Helpers.SelectComboByTag(GeneralSection.ThemeCombo, settings.Theme.ToString());
         CaptureSection.SetShellSettings(settings);
@@ -377,10 +406,23 @@ public partial class SettingsWindow : Window
             GeneralSection.IncludeExplanation.IsChecked = settings.IncludeExplanation;
             GeneralSection.ProtectTokens.IsChecked = settings.ProtectCodeTokens;
             Helpers.SelectComboByTag(CaptureSection.ModeCombo, settings.Mode.ToString());
+            // 读取成功：解除 fail-closed，控件重新可编辑。
+            _policyReadFailed = false;
+            SetPolicyControlsEnabled(enabled: true);
+            CaptureSection.UpdateSafeModeGating();
         }
         catch (Exception exception)
         {
-            SetStatus($"读取设置失败：{exception.Message}", StatusTone.Error);
+            // Fail closed: the controls keep their XAML defaults, which are
+            // NOT the user's settings. Disable them so no phantom draft can
+            // be built on top, and block saving until a real re-read wins —
+            // silently saving defaults here would overwrite the user's real
+            // network/safety choices.
+            _policyReadFailed = true;
+            SetPolicyControlsEnabled(enabled: false);
+            SetStatus(
+                $"读取设置失败：{exception.Message}。在成功重新读取之前，相关开关已停用且保存会被拒绝，避免用默认值覆盖真实设置。",
+                StatusTone.Error);
         }
         finally
         {
@@ -388,6 +430,17 @@ public partial class SettingsWindow : Window
             ProviderSection.IsLoading = false;
             CaptureSection.IsLoading = false;
         }
+    }
+
+    /// <summary>The policy-bound controls a failed read must lock away.</summary>
+    private void SetPolicyControlsEnabled(bool enabled)
+    {
+        CaptureSection.NetworkEnabled.IsEnabled = enabled;
+        CaptureSection.SafeMode.IsEnabled = enabled;
+        CaptureSection.AllowImageUpload.IsEnabled = enabled;
+        CaptureSection.ModeCombo.IsEnabled = enabled;
+        GeneralSection.IncludeExplanation.IsEnabled = enabled;
+        GeneralSection.ProtectTokens.IsEnabled = enabled;
     }
 
     // ================= Navigation =================
@@ -430,17 +483,32 @@ public partial class SettingsWindow : Window
             return;
         }
 
+        // Same inline guard for the prompt editor: navigation waits until the
+        // template draft is saved or discarded, and the window stays put.
+        if (tag != "Prompt" &&
+            PromptSectionHost.Visibility == Visibility.Visible &&
+            PromptSectionHost.IsEditorDirty)
+        {
+            NavPrompt.IsChecked = true;
+            PromptSectionHost.BeginDraftGuard(
+                "切换设置页前，请先保存或放弃这个提示词模板的未保存修改。",
+                () => Dispatcher.BeginInvoke(() => ShowPage(tag)));
+            return;
+        }
+
         var page = tag switch
         {
             "General" => "General",
             "Shortcuts" => "Shortcuts",
             "Privacy" => "Privacy",
+            "Prompt" => "Prompt",
             _ => "Provider",
         };
 
         GeneralSection.Visibility = Visibility.Collapsed;
         ShortcutsSection.Visibility = Visibility.Collapsed;
         ProviderSection.Visibility = Visibility.Collapsed;
+        PromptSectionHost.Visibility = Visibility.Collapsed;
         PrivacyPageHost.Visibility = Visibility.Collapsed;
 
         switch (page)
@@ -450,6 +518,11 @@ public partial class SettingsWindow : Window
                 ProviderSection.RefreshApiKeyState();
                 ProviderSection.RefreshProfilesList();
                 ProviderSection.Visibility = Visibility.Visible;
+                break;
+            case "Prompt":
+                SettingsScroll.Visibility = Visibility.Collapsed;
+                PromptSectionHost.NotifyShown();
+                PromptSectionHost.Visibility = Visibility.Visible;
                 break;
             case "Shortcuts":
                 SettingsScroll.Visibility = Visibility.Visible;
@@ -476,13 +549,18 @@ public partial class SettingsWindow : Window
     /// <summary>
     /// Unified breakpoint (< 700 DIP client area): stacks form fields vertically
     /// so API Key inputs and test buttons on 680 DIP minimum width never crowd or clip.
+    /// The provider editor is NOT driven here: its compact state follows the
+    /// DetailGrid content width inside <see cref="ServicesSection"/> alone — the
+    /// window only supplies a one-shot fallback hint for the never-laid-out
+    /// case, so the two criteria can no longer overwrite each other.
     /// </summary>
     private void UpdateResponsiveLayout(double windowWidth)
     {
         if (windowWidth <= 0) return;
         var compact = windowWidth < 700;
         GeneralSection?.SetCompact(compact);
-        ProviderSection?.SetCompact(compact);
+        ProviderSection?.SetWindowWidthHint(windowWidth);
+        PromptSectionHost?.SetCompact(compact);
     }
 
     // ================= Save / revert =================
@@ -492,6 +570,22 @@ public partial class SettingsWindow : Window
         if (_state != SettingsEditState.Dirty)
         {
             return; // Nothing to commit; also refuses re-entry while Saving.
+        }
+        if (_policyReadFailed)
+        {
+            // Fail closed: saving policy values read as defaults is the one
+            // mistake this guard exists for. Retry the read first; only an
+            // actual successful read unlocks the commit.
+            LoadPolicySettings();
+            if (_policyReadFailed)
+            {
+                SetStatus(
+                    "策略设置仍未读取成功，本次未保存任何修改：为避免用界面默认值覆盖真实设置，保存已被拒绝。请检查核心服务后重试。",
+                    StatusTone.Error);
+                return;
+            }
+            // 重读成功：控件已回到真实值并解锁，继续正常提交；此时表单相对
+            // 哨兵基线仍是 Dirty，本次保存会把真实值写回并重建基线。
         }
         _state = SettingsEditState.Saving;
         UpdateSaveBar();
@@ -513,7 +607,8 @@ public partial class SettingsWindow : Window
                 // Consents and one-time hints live outside this form; saving it
                 // must never silently reset them to the defaults.
                 CloseHintShown: _shellSettings.CloseHintShown,
-                CloudSpeechEnabled: _shellSettings.CloudSpeechEnabled);
+                CloudSpeechEnabled: _shellSettings.CloudSpeechEnabled,
+                CloseMainWindowToTray: GeneralSection.CloseToTray.IsChecked == true);
 
             var validationError = shellSettings.ValidateHotkeys();
             if (validationError is not null)
@@ -538,9 +633,12 @@ public partial class SettingsWindow : Window
             }
             catch (Exception commitException)
             {
-                _ = ApplyShellSettings?.Invoke(_shellSettings);
+                // 逐层诚实上报：快捷键恢复本身也可能失败，绝不谎报"已恢复"。
+                var hotkeysRestored = ApplyShellSettings is null || ApplyShellSettings(_shellSettings);
                 throw new InvalidOperationException(
-                    $"策略设置未能写入（{commitException.Message}）。已恢复原快捷键，其他设置未改动。");
+                    hotkeysRestored
+                        ? $"策略设置未能写入（{commitException.Message}）。已恢复原快捷键，其他设置未改动。"
+                        : $"策略设置未能写入（{commitException.Message}）；且快捷键恢复失败，当前生效的快捷键可能与界面不一致，请检查快捷键设置后重试。");
             }
 
             try
@@ -549,11 +647,25 @@ public partial class SettingsWindow : Window
             }
             catch (Exception commitException)
             {
-                // Roll back everything the commit already touched.
-                await CoreBridge.SaveSettingsAsync(previousCoreSettings);
-                _ = ApplyShellSettings?.Invoke(_shellSettings);
+                // Roll back everything the commit already touched — and report
+                // each rollback honestly: a failed rollback must never claim
+                // "everything was restored".
+                string rollbackReport;
+                try
+                {
+                    await CoreBridge.SaveSettingsAsync(previousCoreSettings);
+                    var hotkeysRestored = ApplyShellSettings is null || ApplyShellSettings(_shellSettings);
+                    rollbackReport = hotkeysRestored
+                        ? "已回滚本次全部修改。"
+                        : "已回滚写盘设置，但快捷键恢复失败：当前生效的快捷键可能与界面不一致，请检查快捷键设置。";
+                }
+                catch (Exception rollbackException)
+                {
+                    rollbackReport =
+                        $"回滚未完成（{rollbackException.Message}）：本次部分修改可能仍然生效，请检查各项设置后重试保存或再次放弃修改。";
+                }
                 throw new InvalidOperationException(
-                    $"设置未能写入磁盘（{commitException.Message}）。已回滚本次全部修改。");
+                    $"设置未能写入磁盘（{commitException.Message}）。{rollbackReport}");
             }
 
             // A01: a plain save only does what the desired state actually
@@ -655,9 +767,25 @@ public partial class SettingsWindow : Window
 
     private void Revert_Click(object sender, RoutedEventArgs e)
     {
-        ProviderSection.ReloadEditorFromSaved();
+        // 按钮在 Saving 时已禁用；这里再守卫一次，防键盘或自动化路径在
+        // 非 Dirty 状态下触发回滚（那会把无关状态搅乱）。
+        if (_state != SettingsEditState.Dirty)
+        {
+            return;
+        }
+        // LoadAll 用磁盘真实值重载整个表单，并顺带收起引擎编辑器（丢弃其
+        // 草稿）——不再像旧实现那样无条件把用户切进引擎编辑器视图。
         LoadAll();
-        SetStatus("已放弃未保存的修改。", StatusTone.Info);
+        ThemeService.Apply(_shellSettings.Theme);
+        ThemeService.ApplyWindowChrome(this);
+        // 提示词模板编辑器有自己的保存/草稿守卫，独立于主表单保存条：
+        // Revert 不动它，因此文案必须如实区分——不能声称丢弃了仍然存在的
+        // 模板草稿。
+        SetStatus(
+            PromptSectionHost.IsEditorOpen && PromptSectionHost.IsEditorDirty
+                ? "已放弃设置页的未保存修改；提示词模板的草稿仍在编辑器中保留。"
+                : "已放弃未保存的修改。",
+            StatusTone.Info);
     }
 
     private ProviderSettings BuildPolicySettingsFromForm()
@@ -758,12 +886,34 @@ public partial class SettingsWindow : Window
             e.Cancel = true;
             return;
         }
+        // A CLEAN editor is simply folded away first: the main form's unsaved
+        // changes (if any) then face the user with a VISIBLE save bar. Without
+        // this, a clean editor open would keep the save bar hidden while the
+        // Dirty branch below tells the user to press a button they cannot see.
+        // A DIRTY editor is left alone and still goes through its draft guard.
+        if (ProviderSection.IsEditorOpen && !ProviderSection.IsEditorDirty)
+        {
+            ProviderSection.ShowOverview();
+        }
+        if (PromptSectionHost.IsEditorOpen && !PromptSectionHost.IsEditorDirty)
+        {
+            PromptSectionHost.CloseCleanEditor();
+        }
         if (ProviderSection.IsEditorDirty)
         {
             e.Cancel = true;
             ShowPage("Provider");
             ProviderSection.BeginDraftGuard(
                 "关闭设置前，请先保存或放弃这个翻译引擎的未保存修改。",
+                () => Dispatcher.BeginInvoke(Close));
+            return;
+        }
+        if (PromptSectionHost.IsEditorDirty)
+        {
+            e.Cancel = true;
+            ShowPage("Prompt");
+            PromptSectionHost.BeginDraftGuard(
+                "关闭设置前，请先保存或放弃这个提示词模板的未保存修改。",
                 () => Dispatcher.BeginInvoke(Close));
             return;
         }
@@ -784,6 +934,11 @@ public partial class SettingsWindow : Window
         {
             ThemeService.ThemeChanged -= _themeChangedHandler;
             _themeSubscribed = false;
+        }
+        if (_state != SettingsEditState.Clean && _shellSettings is not null)
+        {
+            ThemeService.Apply(_shellSettings.Theme);
+            ThemeService.ApplyWindowChrome(this);
         }
         base.OnClosed(e);
     }

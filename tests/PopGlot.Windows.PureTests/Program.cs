@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using PopGlot.Windows;
 using PopGlot.Windows.Services;
 
@@ -63,6 +64,10 @@ internal static class Program
             True(OutboundPolicy.LiveSettingsLoader is null, "no live core settings in the pure host");
         });
 
+        Run("session store enforces max 5 sessions and LRU eviction", SessionStoreCapacityAndLru);
+        Run("session store enforces 2MiB byte budget", SessionStoreByteBudget);
+        Run("session store evicts sessions after 30 minute TTL", SessionStoreTtlEviction);
+        Run("session store model strictly contains zero image references", SessionStoreZeroImageReferences);
         Run("markdown plain text keeps fenced code byte-exact", MarkdownPlainFidelity);
         Run("diagnostics entries are structured and secret-free", DiagnosticsStayStructured);
         Run("PERF-IO-05 diagnostics background write flushes to disk", () => DiagnosticsBackgroundWriteAndFlush(root));
@@ -79,7 +84,10 @@ internal static class Program
         await RunAsync("V03 double save failure keeps disk truth and retries", V03DoubleFailureKeepsDiskTruth);
         await RunAsync("V05 restart handover is observable bounded and guarded", V05RestartHandover);
         await RunAsync("V05 late spawn task is terminated and confirmed", V05LateSpawnIsManaged);
-        await RunAsync("V05 late spawn task is terminated and confirmed", V05LateSpawnIsManaged);
+        // C09 prompt regressions (pure, zero FFI): the camelCase envelope split
+        // and the PastRevisions null-folding serialization contract.
+        Run("prompt envelope unwraps rust camelCase multi-word fields", PromptEnvelopeBindsCamelCaseMultiWordFields);
+        Run("prompt save serialization folds null past revisions into an absent field", PromptSerializationFoldsNullPastRevisions);
 
         Console.WriteLine($"\nPopGlot pure tests: {_passed} passed, {_failed} failed, " +
                           $"{Interlocked.Read(ref refusedSends)} send attempts refused.");
@@ -90,6 +98,127 @@ internal static class Program
     // These mirror the C02/C03/C04/C07 acceptance cores so the pure host can
     // verify rework while a real instance runs. The authoritative, full
     // versions live in the LogicTests host and keep running there too.
+
+    private static void SessionStoreCapacityAndLru()
+    {
+        var store = new SessionStore();
+        for (var i = 1; i <= 6; i++)
+        {
+            var session = StoredSession.Create(
+                sessionId: $"s{i}",
+                origin: SessionOrigin.TranslationPanel,
+                sourceText: $"source text {i}",
+                sourceLang: "en",
+                targetLang: "zh-CN",
+                engineProfileId: null,
+                engineName: null,
+                state: TranslationSessionState.Completed,
+                resultText: $"result text {i}",
+                explanationText: null
+            );
+            True(store.TryStore(session, out var reason), $"store must accept s{i}: {reason}");
+        }
+
+        // Hard cap 5: count must be exactly 5
+        Equal(5, store.GetUsageMetrics().Count, "store must never exceed MaxSessionCount = 5");
+
+        // Oldest (s1) must have been evicted
+        True(store.Get("s1") is null, "s1 must be evicted as oldest session");
+        True(store.Get("s2") is not null, "s2 must be present");
+        True(store.Get("s6") is not null, "s6 must be present");
+
+        // Accessing s2 promotes it to most recently used.
+        // Storing s7 should now evict s3 (the new oldest).
+        var s7 = StoredSession.Create(
+            sessionId: "s7",
+            origin: SessionOrigin.QuickSearch,
+            sourceText: "source 7",
+            sourceLang: "auto",
+            targetLang: "zh-CN",
+            engineProfileId: null,
+            engineName: null,
+            state: TranslationSessionState.Completed,
+            resultText: "result 7",
+            explanationText: null
+        );
+        True(store.TryStore(s7, out _), "s7 must be accepted");
+        Equal(5, store.GetUsageMetrics().Count, "capacity must stay 5");
+        True(store.Get("s3") is null, "s3 must be evicted since s2 was recently accessed");
+        True(store.Get("s2") is not null, "s2 must still be present due to LRU promotion");
+    }
+
+    private static void SessionStoreByteBudget()
+    {
+        var store = new SessionStore();
+
+        // 1. Single session exceeding 2MiB must be rejected
+        var hugeText = new string('A', 2 * 1024 * 1024 + 100);
+        var huge = StoredSession.Create(
+            sessionId: "huge",
+            origin: SessionOrigin.TranslationPanel,
+            sourceText: hugeText,
+            sourceLang: "en",
+            targetLang: "zh-CN",
+            engineProfileId: null,
+            engineName: null,
+            state: TranslationSessionState.Completed,
+            resultText: "huge result",
+            explanationText: null
+        );
+        True(!store.TryStore(huge, out var rejection), "huge session must be rejected");
+        True(rejection is not null && rejection.Contains("2 MiB"), "rejection reason must state 2 MiB limit");
+
+        // 2. Multiple sessions totaling > 2MiB must evict older ones to stay under budget
+        var bigText1 = new string('B', 1_200_000);
+        var bigText2 = new string('C', 1_200_000);
+        var b1 = StoredSession.Create("b1", SessionOrigin.TranslationPanel, bigText1, "en", "zh-CN", null, null, TranslationSessionState.Completed, null, null);
+        var b2 = StoredSession.Create("b2", SessionOrigin.TranslationPanel, bigText2, "en", "zh-CN", null, null, TranslationSessionState.Completed, null, null);
+
+        True(store.TryStore(b1, out _), "first 1.2MB session stored");
+        Equal(1, store.GetUsageMetrics().Count);
+
+        True(store.TryStore(b2, out _), "second 1.2MB session stored");
+        // Because b1 + b2 > 2MiB, b1 must be evicted to stay within total byte limit
+        Equal(1, store.GetUsageMetrics().Count, "total bytes must stay under 2MiB by evicting b1");
+        True(store.Get("b1") is null, "b1 evicted to fit byte budget");
+        True(store.Get("b2") is not null, "b2 retained");
+    }
+
+    private static void SessionStoreTtlEviction()
+    {
+        var store = new SessionStore();
+        var baseTime = new DateTime(2026, 9, 14, 12, 0, 0, DateTimeKind.Utc);
+        store.UtcNow = () => baseTime;
+
+        var s1 = StoredSession.Create("ttl1", SessionOrigin.TranslationPanel, "hello", "en", "zh-CN", null, null, TranslationSessionState.Completed, "你好", null);
+        True(store.TryStore(s1, out _), "s1 stored");
+        Equal(1, store.GetUsageMetrics().Count);
+
+        // Advance clock by 29 minutes: still valid
+        store.UtcNow = () => baseTime.AddMinutes(29);
+        True(store.PeekRecent() is not null, "session must remain accessible before 30 minutes");
+
+        // Advance clock by 31 minutes: expired and pruned
+        store.UtcNow = () => baseTime.AddMinutes(31);
+        True(store.PeekRecent() is null, "session must be evicted after 30 minutes TTL");
+        Equal(0, store.GetUsageMetrics().Count, "metrics must report 0 items after TTL eviction");
+    }
+
+    private static void SessionStoreZeroImageReferences()
+    {
+        // G05 / V2 hard rule: StoredSession must NEVER store bitmap or image byte references
+        var type = typeof(StoredSession);
+        foreach (var prop in type.GetProperties())
+        {
+            var propType = prop.PropertyType;
+            True(propType != typeof(byte[]), $"StoredSession must not have byte[] property {prop.Name}");
+            True(propType != typeof(System.IO.Stream), $"StoredSession must not have Stream property {prop.Name}");
+            True(!propType.Name.Contains("Bitmap", StringComparison.OrdinalIgnoreCase),
+                $"StoredSession must not contain Bitmap property {prop.Name}");
+            True(!propType.Name.Contains("Image", StringComparison.OrdinalIgnoreCase),
+                $"StoredSession must not contain Image property {prop.Name}");
+        }
+    }
 
     private static void MarkdownPlainFidelity()
     {
@@ -929,6 +1058,118 @@ internal static class Program
         throw new InvalidOperationException(message);
     }
 
+    // ================= C09 prompt regressions (pure, zero FFI) =================
+
+    /// <summary>
+    /// 旧 bug 回归：prompt 数据体曾被 snake_case 的 <see cref="CoreBridge.EnsureSuccess{T}"/>
+    /// 解开，多词字段（schemaVersion / isBuiltIn / pastRevisions / templateId /
+    /// compiledText）静默绑定失败回落默认值，单词字段恰好小写一致形成半残数据。
+    /// 最终形状：prompt envelope 必须经 <see cref="CoreBridge.EnsurePromptSuccess{T}"/>
+    /// （camelCase）解开，五个多词字段逐个验证绑定；snake_case 路径必须仍解析
+    /// 不出它们 —— 防止有人改回时无告警回归。
+    /// </summary>
+    private static void PromptEnvelopeBindsCamelCaseMultiWordFields()
+    {
+        // 与 crates/popglot-ffi success() 的 envelope 同形，数据体与 Rust 域
+        // #[serde(rename_all = "camelCase")] 的 PromptTemplate / CompiledPrompt 同形。
+        const string promptEnvelopeJson =
+            "{\"ok\":true,\"data\":{\"id\":\"tech\",\"schemaVersion\":2,\"name\":\"技术文档\"," +
+            "\"instruction\":\"译成 {{target_language}}\",\"enabled\":true,\"isBuiltIn\":false," +
+            "\"revision\":7,\"createdAt\":1,\"updatedAt\":2," +
+            "\"pastRevisions\":[{\"revision\":6,\"instruction\":\"旧稿\",\"domain\":\"IT\",\"audience\":\"dev\",\"updatedAt\":9}]," +
+            "\"compiledText\":\"锚点正文\",\"templateId\":\"tech\"}}";
+
+        var compiled = CoreBridge.EnsurePromptSuccess<CompiledPromptDto>(promptEnvelopeJson);
+        Equal("tech", compiled.TemplateId, "CompiledPrompt.templateId must bind camelCase");
+        Equal("锚点正文", compiled.CompiledText, "CompiledPrompt.compiledText must bind camelCase");
+        Equal(7UL, compiled.Revision, "single-word fields keep binding under the prompt options");
+
+        var template = CoreBridge.EnsurePromptSuccess<PromptTemplateDto>(promptEnvelopeJson);
+        Equal("tech", template.Id, "Template.id must stay bound");
+        Equal(2U, template.SchemaVersion, "Template.schemaVersion must bind camelCase");
+        True(!template.IsBuiltIn, "Template.isBuiltIn must bind camelCase (false polarity)");
+        True(template.PastRevisions is { Count: 1 }, "Template.pastRevisions must bind camelCase as a list");
+        Equal(6UL, template.PastRevisions![0].Revision, "the past revision entry must bind");
+        Equal("旧稿", template.PastRevisions[0].Instruction, "the past revision body must bind");
+
+        // isBuiltIn 的 true 极性同样必须绑定（bool 多词字段两个方向都不能默落 false）。
+        const string builtInEnvelope =
+            "{\"ok\":true,\"data\":{\"id\":\"faithful\",\"schemaVersion\":1,\"name\":\"忠实\"," +
+            "\"instruction\":\"\",\"enabled\":true,\"isBuiltIn\":true,\"revision\":1}}";
+        True(CoreBridge.EnsurePromptSuccess<PromptTemplateDto>(builtInEnvelope).IsBuiltIn,
+            "isBuiltIn=true must survive the camelCase unwrap");
+
+        // 反向护栏：snake_case 的 EnsureSuccess 依旧解不开多词字段 —— 半残
+        // 数据（单词字段有值、多词字段全默认）正是旧 bug 的危险所在。
+        var stale = CoreBridge.EnsureSuccess<CompiledPromptDto>(promptEnvelopeJson);
+        True(string.IsNullOrEmpty(stale.TemplateId) && string.IsNullOrEmpty(stale.CompiledText),
+            "the snake_case path must NOT bind camelCase multi-word fields (guards the split)");
+    }
+
+    /// <summary>
+    /// 旧 bug 回归：默认 <see cref="PromptTemplateDto"/> 的 PastRevisions 为 null，
+    /// 若序列化把 null 写成显式 <c>"pastRevisions":null</c>，Rust 侧
+    /// <c>Vec&lt;PastRevision&gt;</c>（#[serde(default)] 接受缺席、拒绝显式 null）
+    /// 会直接拒绝保存/编译请求。最终形状：PromptJsonOptions 的
+    /// WhenWritingNull 把 null 折叠成「字段缺席」。同时钉住 snake_case 的设置
+    /// 序列化选项与 prompt 选项互不污染。
+    /// </summary>
+    private static void PromptSerializationFoldsNullPastRevisions()
+    {
+        var promptOptions = typeof(CoreBridge).GetField("PromptJsonOptions",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        True(promptOptions is not null, "CoreBridge.PromptJsonOptions must exist (reflection pin)");
+        var settingsOptions = typeof(CoreBridge).GetField("JsonOptions",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        True(settingsOptions is not null, "CoreBridge.JsonOptions must exist (reflection pin)");
+
+        // 默认模板：PastRevisions 缺省保持 null —— 默认保存不携带任何修订。
+        var defaultTemplate = new PromptTemplateDto("regress-null-fold");
+        True(defaultTemplate.PastRevisions is null, "the default PastRevisions must stay null");
+
+        // null → 字段整体缺席；绝不出现 "pastRevisions":null。
+        var nullJson = JsonSerializer.Serialize(
+            defaultTemplate, (JsonSerializerOptions)promptOptions!.GetValue(null)!);
+        True(!nullJson.Contains("pastRevisions", StringComparison.Ordinal),
+            $"null PastRevisions must be folded into an absent field, got: {nullJson}");
+        True(nullJson.Contains("\"schemaVersion\":", StringComparison.Ordinal) &&
+             nullJson.Contains("\"isBuiltIn\":", StringComparison.Ordinal),
+            $"the camelCase multi-word keys Rust requires must be emitted, got: {nullJson}");
+
+        // 空集合 → 序列化为 []（与 Rust 语义一致），不是缺席也不是 null。
+        var emptyJson = JsonSerializer.Serialize(
+            defaultTemplate with { PastRevisions = [] },
+            (JsonSerializerOptions)promptOptions.GetValue(null)!);
+        True(emptyJson.Contains("\"pastRevisions\":[]", StringComparison.Ordinal),
+            $"an empty PastRevisions list must serialize as [], got: {emptyJson}");
+
+        // 往返：带修订的模板经真实 prompt 选项序列化后，再经 EnsurePromptSuccess
+        // 解开，修订逐字段保真 —— 即 Save→List 往返的 C# 侧半程。
+        var withRevision = defaultTemplate with
+        {
+            Name = "往返模板",
+            Instruction = "把{{source_language}}译成{{target_language}}。",
+            Revision = 3,
+            PastRevisions = [new PastRevisionDto(2, "旧正文", "IT", "dev", 9)],
+        };
+        var roundTrip = CoreBridge.EnsurePromptSuccess<PromptTemplateDto>(
+            "{\"ok\":true,\"data\":" +
+            JsonSerializer.Serialize(withRevision, (JsonSerializerOptions)promptOptions.GetValue(null)!) + "}");
+        Equal(3UL, roundTrip.Revision, "the revision survives the prompt round trip");
+        True(roundTrip.PastRevisions is { Count: 1 } && roundTrip.PastRevisions[0].Revision == 2UL &&
+             roundTrip.PastRevisions[0].Instruction == "旧正文" &&
+             roundTrip.PastRevisions[0].Domain == "IT" && roundTrip.PastRevisions[0].Audience == "dev" &&
+             roundTrip.PastRevisions[0].UpdatedAt == 9UL,
+            "every past-revision field must survive the prompt round trip");
+
+        // 反向护栏：snake_case 设置选项没有 WhenWritingNull，会写出显式 null ——
+        // 这正是两个文档格式永不互用的原因（Rust 设置文档/模板文档各走一套）。
+        var staleJson = JsonSerializer.Serialize(
+            defaultTemplate, (JsonSerializerOptions)settingsOptions!.GetValue(null)!);
+        True(staleJson.Contains("\"past_revisions\": null", StringComparison.Ordinal),
+            "the snake_case settings options must keep writing explicit null (guards the split)");
+    }
+
 
     internal static ProviderSettings DemoSettings() => new(
         SchemaVersion: 6,
@@ -960,10 +1201,33 @@ internal static class Program
 
     // ================= Harness =================
 
+    /// <summary>
+    /// Registry of already-claimed test names. Names must be unique
+    /// case-insensitively (OrdinalIgnoreCase) so logs and CI can never
+    /// conflate two different tests. A duplicate claim counts as a failure and
+    /// the test body is NOT executed.
+    /// </summary>
+    private static readonly HashSet<string> RegisteredTestNames = new(StringComparer.OrdinalIgnoreCase);
+
+    private static bool ClaimTestName(string name)
+    {
+        if (RegisteredTestNames.Add(name))
+        {
+            return true;
+        }
+        _failed++;
+        Console.WriteLine($"FAIL {name}: duplicate test name (case-insensitive); the test was not executed.");
+        return false;
+    }
+
     internal static readonly PureCredentialVault CredentialVault = new();
 
     private static async Task RunAsync(string name, Func<Task> test)
     {
+        if (!ClaimTestName(name))
+        {
+            return;
+        }
         try
         {
             await test();
@@ -980,6 +1244,10 @@ internal static class Program
 
     private static void Run(string name, Action test)
     {
+        if (!ClaimTestName(name))
+        {
+            return;
+        }
         try
         {
             test();

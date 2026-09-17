@@ -101,7 +101,7 @@ internal static class FreeTranslateService
         if (trimmed.Length > MaxSourceCharacters)
         {
             throw new InvalidOperationException(
-                $"内置免费引擎单次最多翻译 {MaxSourceCharacters} 个字符。请缩短选区，或在设置中配置自己的模型服务。");
+                $"{EngineWording.FreeEngineName}单次最多翻译 {MaxSourceCharacters} 个字符。请缩短选区，或在设置中配置自己的模型服务。");
         }
 
         var sl = LanguageCatalog.Normalize(sourceLang);
@@ -247,7 +247,7 @@ internal static class FreeTranslateService
         if (authorization is null)
         {
             throw new InvalidOperationException(
-                "内置免费引擎未获出网授权；未发送任何请求。可在「设置 → 隐私与数据」中允许，或配置自己的模型服务。");
+                $"{EngineWording.FreeEngineName}未获出网授权；未发送任何请求。可在「设置 → 隐私与数据」中允许，或配置自己的模型服务。");
         }
         var settings = authorization.Settings;
         if (settings.SafeDevMode || !settings.NetworkEnabled)

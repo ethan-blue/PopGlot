@@ -1,11 +1,12 @@
 <UserControl x:Class="PopGlot.Windows.Sections.PrivacySection"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:PopGlot.Windows">
+             xmlns:local="clr-namespace:PopGlot.Windows"
+             xmlns:services="clr-namespace:PopGlot.Windows.Services">
 
     <!-- Compact desktop property list -->
     <StackPanel>
-        <TextBlock Text="联网与隐私" Style="{StaticResource PageTitle}" />
+        <TextBlock Text="隐私与数据" Style="{StaticResource PageTitle}" />
         <TextBlock Text="清楚决定哪些内容可以联网处理，哪些只留在本机。" Style="{StaticResource PageSubtitle}" Margin="0,5,0,16" />
 
         <!-- Plain language privacy commitment card -->
@@ -24,7 +25,7 @@
                         <StackPanel>
                             <TextBlock Text="需要联网时" FontWeight="SemiBold" FontSize="12.5" Foreground="{DynamicResource TextPrimaryBrush}" />
                             <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap" LineHeight="17"
-                                        Text="• 划词与文字翻译：仅发送您主动划选或输入的文本到已配置的服务商。&#x0a;• 截图翻译：默认仅在本机提取文字（图片不上云）；仅当启用视觉直译时，才会上传框选区域的截图。" />
+                                        Text="• 划词与文字翻译：仅发送您主动划选或输入的文本到已配置的服务商。&#x0a;• 内置免费引擎：联网的公共翻译服务，只发送待翻译文字。&#x0a;• 截图翻译：默认仅在本机提取文字（图片不上云）；仅当启用视觉直译时，才会上传框选区域的截图。" />
                         </StackPanel>
                     </Border>
                     <Border Grid.Column="2" Background="{DynamicResource SurfaceBrush}"
@@ -49,12 +50,12 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="纯离线模式" Style="{StaticResource RowTitle}" />
+                <TextBlock Text="{x:Static services:EngineWording.SafeOfflineModeName}" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}"
                            Text="开启后只使用本机识别和本地模型，不连接互联网" />
             </StackPanel>
             <ToggleButton x:Name="SafeModeToggle"
-                          AutomationProperties.Name="纯离线模式" Grid.Column="1"
+                          AutomationProperties.Name="{x:Static services:EngineWording.SafeOfflineModeName}" Grid.Column="1"
                           VerticalAlignment="Center"
                           Style="{StaticResource ToggleSwitch}"
                           Checked="ProviderGate_Changed" Unchecked="ProviderGate_Changed" />
@@ -64,7 +65,7 @@
         <TextBlock x:Name="SafeModeGateNote" Style="{StaticResource Caption}"
                    Foreground="{DynamicResource WarningBrush}"
                    Margin="0,0,0,12" Visibility="Collapsed"
-                   Text="纯离线模式已开启，云端翻译和图片上传均已暂停。" />
+                   Text="安全离线模式已开启，云端翻译和图片上传均已暂停。" />
 
         <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
 
@@ -156,9 +157,9 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="内置公共翻译" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="{x:Static services:EngineWording.FreePublicTranslationName}" Style="{StaticResource RowTitle}" />
                         <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap"
-                                   Text="没有配置模型时提供基础文字翻译。只发送待翻译文字，不发送截图、历史记录或 API Key。" />
+                                   Text="{x:Static services:EngineWording.FreeEngineOnlineServiceNote}" />
                         <TextBlock x:Name="FreeEngineConsentState" Style="{StaticResource Caption}"
                                    Margin="0,4,0,0" />
                     </StackPanel>

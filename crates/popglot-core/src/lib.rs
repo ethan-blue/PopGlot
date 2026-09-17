@@ -5,6 +5,7 @@
 //! network request implicitly.
 
 pub mod benchmark;
+pub mod prompt_store;
 pub mod provider;
 pub mod sse;
 pub mod streaming;
@@ -16,6 +17,7 @@ pub use benchmark::{
     load_benchmark_fixtures, resolve_benchmark_api_key, resolve_benchmark_api_key_with_lookup,
     run_live_benchmark, sanitize_error_string,
 };
+pub use prompt_store::{PromptConfig, PromptStore, PromptStoreError};
 pub use provider::{STREAM_PROMPT_VERSION, StreamPrompt, StreamPromptBuilder, StreamPromptError};
 pub use streaming::{
     StreamingTokenRestorer, TextFirstAssembler, TextFirstResult, TranslationMetadata,
@@ -44,6 +46,7 @@ static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 pub struct AppCore {
     settings_path: PathBuf,
     settings: ProviderSettings,
+    prompt_store: PromptStore,
     provider_client: ProviderClient,
     startup_notice: Option<String>,
 }
@@ -62,32 +65,40 @@ impl AppCore {
         let settings_path = directory.join(SETTINGS_FILE);
         let mut startup_notice = None;
         let settings = if settings_path.exists() {
-            let json = fs::read_to_string(&settings_path)?;
-            match serde_json::from_str::<ProviderSettings>(&json) {
-                Ok(loaded) => loaded,
-                Err(err) => {
-                    let timestamp = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |d| d.as_secs());
-                    let corrupt_name = format!("provider-settings.corrupt-{timestamp}.json");
-                    let corrupt_path = directory.join(&corrupt_name);
-                    let _ = fs::rename(&settings_path, &corrupt_path);
-                    tracing::warn!(error = %err, "Corrupted provider settings backed up to {:?}", corrupt_path);
-                    // The shell surfaces this so a silent-looking reset is never
-                    // mistaken for the user's own configuration.
-                    startup_notice = Some(format!(
-                        "provider-settings.json 无法解析，已重置为默认设置；原文件保留为 {corrupt_name}，可从中恢复你的配置。"
-                    ));
-                    ProviderSettings::default()
-                }
+            let bytes = fs::read(&settings_path)?;
+            let loaded = String::from_utf8(bytes)
+                .ok()
+                .and_then(|json| serde_json::from_str::<ProviderSettings>(&json).ok());
+            if let Some(loaded) = loaded {
+                loaded
+            } else {
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                let corrupt_name = format!("provider-settings.corrupt-{timestamp}.json");
+                let corrupt_path = directory.join(&corrupt_name);
+                let _ = fs::rename(&settings_path, &corrupt_path);
+                tracing::warn!(
+                    "Corrupted provider settings backed up to {:?}",
+                    corrupt_path
+                );
+                // The shell surfaces this so a silent-looking reset is never
+                // mistaken for the user's own configuration.
+                startup_notice = Some(format!(
+                    "provider-settings.json 无法解析，已重置为默认设置；原文件保留为 {corrupt_name}，可从中恢复你的配置。"
+                ));
+                ProviderSettings::default()
             }
         } else {
             ProviderSettings::default()
         };
         let provider_client = ProviderClient::new(Self::limits_for(&settings))?;
+        let prompt_store =
+            PromptStore::open(directory).map_err(|e| std::io::Error::other(e.to_string()))?;
         Ok(Self {
             settings_path,
             settings,
+            prompt_store,
             provider_client,
             startup_notice,
         })
@@ -114,7 +125,23 @@ impl AppCore {
     /// Returns and clears the one-shot startup notice (e.g. corrupted settings
     /// were backed up), so the shell can tell the user what happened.
     pub fn take_startup_notice(&mut self) -> Option<String> {
-        self.startup_notice.take()
+        let notices = [
+            self.startup_notice.take(),
+            self.prompt_store.take_startup_notice(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        (!notices.is_empty()).then(|| notices.join("\n"))
+    }
+
+    #[must_use]
+    pub fn prompt_store(&self) -> &PromptStore {
+        &self.prompt_store
+    }
+
+    pub fn prompt_store_mut(&mut self) -> &mut PromptStore {
+        &mut self.prompt_store
     }
 
     /// Validates and atomically persists non-secret provider settings.
@@ -129,6 +156,15 @@ impl AppCore {
         validate_settings(&settings)?;
         validate_provider_settings(&settings)?;
         let json = serde_json::to_string_pretty(&settings)?;
+        // Rebuild the client only when its transport limits change; it is
+        // constructed before any disk write so a failure leaves settings
+        // untouched on both memory and disk.
+        let next_provider_client =
+            if settings.allow_insecure_tls == self.settings.allow_insecure_tls {
+                None
+            } else {
+                Some(ProviderClient::new(Self::limits_for(&settings))?)
+            };
 
         let temp_path = self.settings_path.with_extension("tmp");
         let bak_path = self.settings_path.with_extension("bak");
@@ -145,8 +181,8 @@ impl AppCore {
         }
         fs::rename(&temp_path, &self.settings_path)?;
 
-        if settings.allow_insecure_tls != self.settings.allow_insecure_tls {
-            self.provider_client = ProviderClient::new(Self::limits_for(&settings))?;
+        if let Some(provider_client) = next_provider_client {
+            self.provider_client = provider_client;
         }
         self.settings = settings;
         Ok(())
@@ -316,24 +352,23 @@ impl AppCore {
         .await
     }
 
-    /// Executes a text-first stream through an immutable settings snapshot.
-    ///
-    /// `on_delta` is called synchronously by the provider stream task. It must
-    /// return promptly; callers that bridge it to a UI must copy data and queue
-    /// it rather than block this network task.
+    /// Executes a text-first stream with template/preference snapshot data.
     ///
     /// # Errors
     ///
     /// Returns a classified error for invalid source text, provider failures,
     /// cancellation, or text-first stream protocol failures.
     #[allow(clippy::too_many_arguments)]
-    pub async fn execute_translate_text_stream_snapshot<F>(
+    pub async fn execute_translate_text_stream_snapshot_with_preference<F>(
         settings: &ProviderSettings,
         client: &ProviderClient,
         api_key: &str,
         source: &str,
         languages: &LanguagePair,
         request_id: &str,
+        preference: Option<&str>,
+        template_id: Option<&str>,
+        template_revision: Option<u64>,
         cancellation: &CancellationToken,
         mut on_delta: F,
     ) -> Result<TranslationResponse, ProviderError>
@@ -352,8 +387,14 @@ impl AppCore {
         }
         let provider = provider_for(settings.provider_type);
         if !settings.protect_code_tokens {
-            let request = TranslationRequest::text(source, languages.clone())
+            let mut request = TranslationRequest::text(source, languages.clone())
                 .with_explanation(settings.include_explanation);
+            if let Some(pref) = preference {
+                request = request.with_preference(pref);
+            }
+            if let (Some(t_id), Some(rev)) = (template_id, template_revision) {
+                request = request.with_template_snapshot(t_id, rev);
+            }
             return client
                 .execute_stream(
                     provider.as_ref(),
@@ -368,8 +409,14 @@ impl AppCore {
                 .await;
         }
         let protected = protect_tokens(source);
-        let request = TranslationRequest::text(protected.sanitized_text, languages.clone())
+        let mut request = TranslationRequest::text(protected.sanitized_text, languages.clone())
             .with_explanation(settings.include_explanation);
+        if let Some(pref) = preference {
+            request = request.with_preference(pref);
+        }
+        if let (Some(t_id), Some(rev)) = (template_id, template_revision) {
+            request = request.with_template_snapshot(t_id, rev);
+        }
         let mut restorer = StreamingTokenRestorer::new(&protected.tokens);
         let stream_result = client
             .execute_stream(
@@ -406,6 +453,46 @@ impl AppCore {
         Ok(response)
     }
 
+    /// Executes a text-first stream through an immutable settings snapshot.
+    ///
+    /// `on_delta` is called synchronously by the provider stream task. It must
+    /// return promptly; callers that bridge it to a UI must copy data and queue
+    /// it rather than block this network task.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified error for invalid source text, provider failures,
+    /// cancellation, or text-first stream protocol failures.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_translate_text_stream_snapshot<F>(
+        settings: &ProviderSettings,
+        client: &ProviderClient,
+        api_key: &str,
+        source: &str,
+        languages: &LanguagePair,
+        request_id: &str,
+        cancellation: &CancellationToken,
+        on_delta: F,
+    ) -> Result<TranslationResponse, ProviderError>
+    where
+        F: FnMut(&str),
+    {
+        Self::execute_translate_text_stream_snapshot_with_preference(
+            settings,
+            client,
+            api_key,
+            source,
+            languages,
+            request_id,
+            None,
+            None,
+            None,
+            cancellation,
+            on_delta,
+        )
+        .await
+    }
+
     /// Applies exactly-once restoration to a finished translation: the restored
     /// text and protected terms always land; dropped, duplicated or unknown
     /// placeholders mark the result partial with an explanatory warning each.
@@ -440,19 +527,23 @@ impl AppCore {
         }
     }
 
-    /// Pure lock-free text translation snapshot execution.
+    /// Executes a lock-free text translation with template/preference snapshot data.
     ///
     /// # Errors
     ///
-    /// Returns [`ProviderError`] for transport or parsing failures.
+    /// Returns a classified error for invalid source text, provider failures,
+    /// cancellation, or invalid model output.
     #[allow(clippy::too_many_arguments)]
-    pub async fn execute_translate_text_snapshot(
+    pub async fn execute_translate_text_snapshot_with_preference(
         settings: &ProviderSettings,
         client: &ProviderClient,
         api_key: &str,
         source: &str,
         languages: &LanguagePair,
         request_id: &str,
+        preference: Option<&str>,
+        template_id: Option<&str>,
+        template_revision: Option<u64>,
         cancellation: &CancellationToken,
     ) -> Result<TranslationResponse, ProviderError> {
         let source = source.trim();
@@ -468,8 +559,14 @@ impl AppCore {
 
         if !settings.protect_code_tokens {
             let provider = provider_for(settings.provider_type);
-            let request = TranslationRequest::text(source, languages.clone())
+            let mut request = TranslationRequest::text(source, languages.clone())
                 .with_explanation(settings.include_explanation);
+            if let Some(pref) = preference {
+                request = request.with_preference(pref);
+            }
+            if let (Some(t_id), Some(rev)) = (template_id, template_revision) {
+                request = request.with_template_snapshot(t_id, rev);
+            }
             return client
                 .execute(
                     provider.as_ref(),
@@ -484,8 +581,14 @@ impl AppCore {
 
         let protected = protect_tokens(source);
         let provider = provider_for(settings.provider_type);
-        let request = TranslationRequest::text(protected.sanitized_text, languages.clone())
+        let mut request = TranslationRequest::text(protected.sanitized_text, languages.clone())
             .with_explanation(settings.include_explanation);
+        if let Some(pref) = preference {
+            request = request.with_preference(pref);
+        }
+        if let (Some(t_id), Some(rev)) = (template_id, template_revision) {
+            request = request.with_template_snapshot(t_id, rev);
+        }
         let mut response = client
             .execute(
                 provider.as_ref(),
@@ -502,6 +605,36 @@ impl AppCore {
             Self::apply_restoration(&mut response, &protected.tokens, restored);
         }
         Ok(response)
+    }
+
+    /// Pure lock-free text translation snapshot execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderError`] for transport or parsing failures.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_translate_text_snapshot(
+        settings: &ProviderSettings,
+        client: &ProviderClient,
+        api_key: &str,
+        source: &str,
+        languages: &LanguagePair,
+        request_id: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<TranslationResponse, ProviderError> {
+        Self::execute_translate_text_snapshot_with_preference(
+            settings,
+            client,
+            api_key,
+            source,
+            languages,
+            request_id,
+            None,
+            None,
+            None,
+            cancellation,
+        )
+        .await
     }
 
     /// Translates one captured screenshot through the configured vision Provider.
@@ -554,6 +687,44 @@ impl AppCore {
         request_id: &str,
         cancellation: &CancellationToken,
     ) -> Result<TranslationResponse, ProviderError> {
+        Self::execute_translate_vision_snapshot_with_preference(
+            settings,
+            client,
+            api_key,
+            vision_api_key,
+            media_type,
+            image,
+            languages,
+            request_id,
+            None,
+            None,
+            None,
+            cancellation,
+        )
+        .await
+    }
+
+    /// Executes a vision translation with template/preference snapshot data.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified error for prohibited image uploads, invalid image
+    /// input, provider failures, or cancellation.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_translate_vision_snapshot_with_preference(
+        settings: &ProviderSettings,
+        client: &ProviderClient,
+        api_key: &str,
+        vision_api_key: &str,
+        media_type: &str,
+        image: Vec<u8>,
+        languages: &LanguagePair,
+        request_id: &str,
+        preference: Option<&str>,
+        template_id: Option<&str>,
+        template_revision: Option<u64>,
+        cancellation: &CancellationToken,
+    ) -> Result<TranslationResponse, ProviderError> {
         if settings.mode == TranslationMode::LocalOcr {
             return Err(ProviderError::new(
                 ProviderErrorKind::UnsupportedInput,
@@ -577,7 +748,7 @@ impl AppCore {
             resolve_vision_runtime(settings, api_key, vision_api_key);
 
         let provider = provider_for(effective_settings.provider_type);
-        let request = TranslationRequest::vision(
+        let mut request = TranslationRequest::vision(
             ImageInput::Bytes {
                 media_type: media_type.to_owned(),
                 data: image,
@@ -585,6 +756,12 @@ impl AppCore {
             languages.clone(),
         )
         .with_explanation(effective_settings.include_explanation);
+        if let Some(pref) = preference {
+            request = request.with_preference(pref);
+        }
+        if let (Some(t_id), Some(rev)) = (template_id, template_revision) {
+            request = request.with_template_snapshot(t_id, rev);
+        }
         client
             .execute(
                 provider.as_ref(),
@@ -593,6 +770,74 @@ impl AppCore {
                 request_id,
                 &request,
                 cancellation,
+            )
+            .await
+    }
+
+    /// Executes a vision text-first stream with template/preference snapshot data.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified error for prohibited image uploads, invalid image
+    /// input, provider failures, cancellation, or stream protocol failures.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_translate_vision_stream_snapshot_with_preference<F>(
+        settings: &ProviderSettings,
+        client: &ProviderClient,
+        api_key: &str,
+        vision_api_key: &str,
+        media_type: &str,
+        image: Vec<u8>,
+        languages: &LanguagePair,
+        request_id: &str,
+        preference: Option<&str>,
+        template_id: Option<&str>,
+        template_revision: Option<u64>,
+        cancellation: &CancellationToken,
+        on_delta: F,
+    ) -> Result<TranslationResponse, ProviderError>
+    where
+        F: FnMut(&str),
+    {
+        if settings.mode == TranslationMode::LocalOcr {
+            return Err(ProviderError::new(
+                ProviderErrorKind::UnsupportedInput,
+                "当前模式为本地 OCR，截图不应上传；请由外壳使用本地 OCR 后翻译文字。",
+            ));
+        }
+        if !settings.allow_image_upload_in_auto && !settings.targets_local_runtime() {
+            return Err(ProviderError::new(
+                ProviderErrorKind::NetworkDisabled,
+                "隐私设置未授权上传截图；未发送图片。可在设置中勾选“允许截图上传”，或使用本地 OCR 模式。",
+            ));
+        }
+        let (effective_settings, effective_key) =
+            resolve_vision_runtime(settings, api_key, vision_api_key);
+        let provider = provider_for(effective_settings.provider_type);
+        let mut request = TranslationRequest::vision(
+            ImageInput::Bytes {
+                media_type: media_type.to_owned(),
+                data: image,
+            },
+            languages.clone(),
+        )
+        .with_explanation(effective_settings.include_explanation);
+        if let Some(pref) = preference {
+            request = request.with_preference(pref);
+        }
+        if let (Some(t_id), Some(rev)) = (template_id, template_revision) {
+            request = request.with_template_snapshot(t_id, rev);
+        }
+        client
+            .execute_stream(
+                provider.as_ref(),
+                &effective_settings,
+                &effective_key,
+                request_id,
+                &request,
+                None,
+                cancellation,
+                on_delta,
             )
             .await
     }
@@ -621,41 +866,22 @@ impl AppCore {
     where
         F: FnMut(&str),
     {
-        if settings.mode == TranslationMode::LocalOcr {
-            return Err(ProviderError::new(
-                ProviderErrorKind::UnsupportedInput,
-                "当前模式为本地 OCR，截图不应上传；请由外壳使用本地 OCR 后翻译文字。",
-            ));
-        }
-        if !settings.allow_image_upload_in_auto && !settings.targets_local_runtime() {
-            return Err(ProviderError::new(
-                ProviderErrorKind::NetworkDisabled,
-                "隐私设置未授权上传截图；未发送图片。可在设置中勾选“允许截图上传”，或使用本地 OCR 模式。",
-            ));
-        }
-        let (effective_settings, effective_key) =
-            resolve_vision_runtime(settings, api_key, vision_api_key);
-        let provider = provider_for(effective_settings.provider_type);
-        let request = TranslationRequest::vision(
-            ImageInput::Bytes {
-                media_type: media_type.to_owned(),
-                data: image,
-            },
-            languages.clone(),
+        Self::execute_translate_vision_stream_snapshot_with_preference(
+            settings,
+            client,
+            api_key,
+            vision_api_key,
+            media_type,
+            image,
+            languages,
+            request_id,
+            None,
+            None,
+            None,
+            cancellation,
+            on_delta,
         )
-        .with_explanation(effective_settings.include_explanation);
-        client
-            .execute_stream(
-                provider.as_ref(),
-                &effective_settings,
-                &effective_key,
-                request_id,
-                &request,
-                None,
-                cancellation,
-                on_delta,
-            )
-            .await
+        .await
     }
 }
 
@@ -802,6 +1028,63 @@ mod tests {
         let directory = scratch_directory("notice-test");
         let mut core = AppCore::open(&directory).expect("open core");
         assert!(core.take_startup_notice().is_none());
+        fs::remove_dir_all(directory).expect("remove isolated test directory");
+    }
+
+    #[test]
+    fn non_utf8_settings_recover_with_defaults_and_backup() {
+        let directory = scratch_directory("settings-non-utf8");
+        fs::create_dir_all(&directory).expect("create directory");
+        // 0xFF 在 UTF-8 中永远非法：设置文件损坏为非 UTF-8 字节时必须回退
+        // 默认并保留原始字节，而不是让 open 失败或静默丢数据。
+        fs::write(directory.join(SETTINGS_FILE), [0xFF_u8, 0xFE, 0x7B, 0x7D])
+            .expect("write non-utf8 settings");
+        let mut core = AppCore::open(&directory).expect("core must still open");
+        assert_eq!(core.settings(), &ProviderSettings::default());
+
+        let notice = core.take_startup_notice().expect("startup notice");
+        assert!(notice.contains("provider-settings.corrupt-"), "{notice}");
+        assert!(core.take_startup_notice().is_none(), "notice is one-shot");
+
+        let has_backup = fs::read_dir(&directory)
+            .expect("read dir")
+            .filter_map(std::result::Result::ok)
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("provider-settings.corrupt-")
+            });
+        assert!(has_backup, "non-utf8 bytes must be preserved in a backup");
+
+        fs::remove_dir_all(directory).expect("remove isolated test directory");
+    }
+
+    #[test]
+    fn startup_notice_joins_settings_and_prompt_notices() {
+        let directory = scratch_directory("dual-notice");
+        fs::create_dir_all(&directory).expect("create directory");
+        fs::write(directory.join(SETTINGS_FILE), "{ not json").expect("write corrupt settings");
+        // prompt 文件用非法 UTF-8 字节：同时覆盖提示词的非 UTF-8 恢复路径。
+        fs::write(
+            directory.join("prompt-templates.json"),
+            [0xFF_u8, 0xFE, 0x7B],
+        )
+        .expect("write non-utf8 prompts");
+
+        let mut core = AppCore::open(&directory).expect("open core");
+        let notice = core.take_startup_notice().expect("joined startup notice");
+        assert!(
+            notice.contains("provider-settings.corrupt-")
+                && notice.contains("prompt-templates.corrupt-"),
+            "both notices must be joined: {notice}"
+        );
+        assert!(
+            notice.lines().count() >= 2,
+            "notices join on lines: {notice}"
+        );
+        assert!(core.take_startup_notice().is_none(), "notice is one-shot");
+
         fs::remove_dir_all(directory).expect("remove isolated test directory");
     }
 

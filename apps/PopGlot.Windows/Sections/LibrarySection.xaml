@@ -39,7 +39,7 @@
                         Content="导出" Padding="10,4" Margin="8,0,0,0"
                         Click="ExportMenuButton_Click" />
                 <Button x:Name="ClearCurrentButton" Style="{StaticResource GhostButton}"
-                        Margin="4,0,0,0" Content="清理" Padding="10,4"
+                        Margin="8,0,0,0" Content="清空" Padding="10,4"
                         ToolTip="清空当前数据源的全部记录（点击两次确认）" />
             </StackPanel>
         </Grid>
@@ -243,8 +243,9 @@
                                         Content="复制译文" Padding="12,4" Click="CardCopy_Click" />
                                 <Button Style="{StaticResource GhostButton}" Margin="6,0,0,0"
                                         Content="载入工作台" Padding="12,4" Click="CardLoad_Click" />
-                                <Button Style="{StaticResource DangerButton}" Margin="8,0,0,0"
-                                        Content="删除" Padding="12,4" Click="CardDelete_Click" />
+                                <Button x:Name="CardDeleteButton" Style="{StaticResource DangerButton}" Margin="6,0,0,0"
+                                        Content="删除" Padding="12,4" Click="CardDelete_Click"
+                                        ToolTip="两步确认：第一次点进入确认态，3 秒内再点才删除" />
                             </StackPanel>
                         </Border>
                     </Grid>

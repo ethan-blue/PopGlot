@@ -10,7 +10,10 @@
 use base64::Engine as _;
 use popglot_core::AppCore;
 use popglot_core::provider::ProviderClient;
-use popglot_domain::{LanguagePair, ProviderSettings};
+use popglot_domain::{
+    BUILTIN_FAITHFUL_ID, LanguagePair, PromptTemplate, PromptVariables, ProviderSettings,
+    compile_prompt,
+};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -189,6 +192,126 @@ pub unsafe extern "C" fn popglot_save_settings(json: *const c_char) -> *mut c_ch
     })
 }
 
+fn resolve_active_preference(
+    core: &AppCore,
+    source_lang: Option<&str>,
+    target_lang: Option<&str>,
+) -> Option<popglot_domain::CompiledPrompt> {
+    let active = core.prompt_store().active_template();
+    if active.id == BUILTIN_FAITHFUL_ID {
+        return None;
+    }
+
+    let languages = resolve_languages(core.settings(), source_lang, target_lang);
+    let vars = PromptVariables {
+        source_language: languages.source,
+        target_language: languages.target,
+        domain: None,
+        audience: None,
+    };
+    compile_prompt(&active, &vars).ok()
+}
+
+/// Lists all prompt templates (built-ins followed by custom templates).
+#[unsafe(no_mangle)]
+pub extern "C" fn popglot_list_prompt_templates() -> *mut c_char {
+    ffi_guard(|| {
+        let templates = {
+            let core = core_read()?;
+            core.prompt_store().list_templates()
+        };
+        Ok(success(templates))
+    })
+}
+
+/// Returns the active prompt template (defaults to faithful).
+#[unsafe(no_mangle)]
+pub extern "C" fn popglot_get_active_prompt_template() -> *mut c_char {
+    ffi_guard(|| {
+        let active = {
+            let core = core_read()?;
+            core.prompt_store().active_template()
+        };
+        Ok(success(active))
+    })
+}
+
+/// Sets the active prompt template by ID (or null/empty to reset to faithful).
+///
+/// # Safety
+///
+/// `id` must be null or a valid null-terminated UTF-8 string pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_set_active_prompt_template(id: *const c_char) -> *mut c_char {
+    ffi_guard(|| {
+        let id = unsafe { read_optional_utf8(id) }?;
+        let mut core = core_write()?;
+        core.prompt_store_mut()
+            .set_active_template_id(id)
+            .map_err(|error| error.to_string())?;
+        Ok(success("active template updated"))
+    })
+}
+
+/// Persists or updates a custom prompt template.
+///
+/// # Safety
+///
+/// `template_json` must be a valid null-terminated UTF-8 string pointer containing a serialized `PromptTemplate`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_save_prompt_template(template_json: *const c_char) -> *mut c_char {
+    ffi_guard(|| {
+        let json = unsafe { read_utf8(template_json) }?;
+        let template: PromptTemplate =
+            serde_json::from_str(json).map_err(|error| error.to_string())?;
+        let mut core = core_write()?;
+        let saved = core
+            .prompt_store_mut()
+            .save_custom_template(template)
+            .map_err(|error| error.to_string())?;
+        Ok(success(saved))
+    })
+}
+
+/// Deletes a custom prompt template by ID.
+///
+/// # Safety
+///
+/// `id` must be a valid null-terminated UTF-8 string pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_delete_prompt_template(id: *const c_char) -> *mut c_char {
+    ffi_guard(|| {
+        let id = unsafe { read_utf8(id) }?;
+        let mut core = core_write()?;
+        core.prompt_store_mut()
+            .delete_custom_template(id)
+            .map_err(|error| error.to_string())?;
+        Ok(success("deleted"))
+    })
+}
+
+/// Compiles a prompt template with provided variables (pure function).
+///
+/// # Safety
+///
+/// Both pointers must be valid null-terminated UTF-8 string pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_compile_prompt(
+    template_json: *const c_char,
+    variables_json: *const c_char,
+) -> *mut c_char {
+    ffi_guard(|| {
+        let t_json = unsafe { read_utf8(template_json) }?;
+        let v_json = unsafe { read_utf8(variables_json) }?;
+        let template: PromptTemplate =
+            serde_json::from_str(t_json).map_err(|error| error.to_string())?;
+        let vars: PromptVariables =
+            serde_json::from_str(v_json).map_err(|error| error.to_string())?;
+        let compiled = compile_prompt(&template, &vars).map_err(|error| error.to_string())?;
+        Ok(success(compiled))
+    })
+}
+
 /// Reports which screenshot pipeline the current settings would choose.
 #[unsafe(no_mangle)]
 pub extern "C" fn popglot_plan_screenshot_route(
@@ -325,28 +448,85 @@ pub unsafe extern "C" fn popglot_translate_text_v2(
     target_lang: *const c_char,
     request_id: *const c_char,
 ) -> *mut c_char {
+    unsafe {
+        popglot_translate_text_v3(
+            api_key,
+            source,
+            source_lang,
+            target_lang,
+            request_id,
+            ptr::null(),
+            ptr::null(),
+            0,
+        )
+    }
+}
+
+/// Translates selected UTF-8 text with explicit preference and template snapshot anchors.
+///
+/// # Safety
+///
+/// Pointers must be valid null-terminated UTF-8 strings or null where optional.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_translate_text_v3(
+    api_key: *const c_char,
+    source: *const c_char,
+    source_lang: *const c_char,
+    target_lang: *const c_char,
+    request_id: *const c_char,
+    preference: *const c_char,
+    template_id: *const c_char,
+    template_revision: u64,
+) -> *mut c_char {
     ffi_guard(|| {
         let api_key = unsafe { read_utf8(api_key) }?;
         let source = unsafe { read_utf8(source) }?;
         let source_lang = unsafe { read_optional_utf8(source_lang) }?;
         let target_lang = unsafe { read_optional_utf8(target_lang) }?;
         let custom_id = unsafe { read_optional_utf8(request_id) }?;
+        let explicit_pref = unsafe { read_optional_utf8(preference) }?;
+        let explicit_tid = unsafe { read_optional_utf8(template_id) }?;
 
-        let (settings, client) = {
+        let (settings, client, resolved_pref) = {
             let core = core_read()?;
-            (core.settings().clone(), core.provider_client().clone())
+            let pref = if explicit_pref.is_none() {
+                resolve_active_preference(&core, source_lang, target_lang)
+            } else {
+                None
+            };
+            (
+                core.settings().clone(),
+                core.provider_client().clone(),
+                pref,
+            )
         };
+
+        let (pref_str, tid_str, rev_val) = if let Some(pref) = explicit_pref {
+            (Some(pref), explicit_tid, Some(template_revision))
+        } else if let Some(cp) = &resolved_pref {
+            (
+                Some(cp.compiled_text.as_str()),
+                Some(cp.template_id.as_str()),
+                Some(cp.revision),
+            )
+        } else {
+            (None, None, None)
+        };
+
         let languages = resolve_languages(&settings, source_lang, target_lang);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
         let response = runtime
-            .block_on(AppCore::execute_translate_text_snapshot(
+            .block_on(AppCore::execute_translate_text_snapshot_with_preference(
                 &settings,
                 &client,
                 api_key,
                 source,
                 &languages,
                 &ticket.id,
+                pref_str,
+                tid_str,
+                rev_val,
                 &ticket.token,
             ))
             .map_err(|error| error.to_string());
@@ -563,30 +743,96 @@ pub unsafe extern "C" fn popglot_translate_text_stream_v1(
     callback: Option<PopglotStreamCallbackV1>,
     user_data: *mut c_void,
 ) -> *mut c_char {
+    unsafe {
+        popglot_translate_text_stream_v2(
+            api_key,
+            source,
+            source_lang,
+            target_lang,
+            request_id,
+            ptr::null(),
+            ptr::null(),
+            0,
+            callback,
+            user_data,
+        )
+    }
+}
+
+/// Streams active settings text translation with explicit preference and template snapshot anchors.
+///
+/// # Safety
+///
+/// All non-null string pointers must reference valid null-terminated UTF-8 for
+/// the duration of this call. If supplied, `callback` must be valid and must
+/// not retain the borrowed payload pointer or unwind across the FFI boundary.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_translate_text_stream_v2(
+    api_key: *const c_char,
+    source: *const c_char,
+    source_lang: *const c_char,
+    target_lang: *const c_char,
+    request_id: *const c_char,
+    preference: *const c_char,
+    template_id: *const c_char,
+    template_revision: u64,
+    callback: Option<PopglotStreamCallbackV1>,
+    user_data: *mut c_void,
+) -> *mut c_char {
     ffi_guard(|| {
         let api_key = unsafe { read_utf8(api_key) }?;
         let source = unsafe { read_utf8(source) }?;
         let source_lang = unsafe { read_optional_utf8(source_lang) }?;
         let target_lang = unsafe { read_optional_utf8(target_lang) }?;
         let custom_id = unsafe { read_optional_utf8(request_id) }?;
-        let (settings, client) = {
+        let explicit_pref = unsafe { read_optional_utf8(preference) }?;
+        let explicit_tid = unsafe { read_optional_utf8(template_id) }?;
+
+        let (settings, client, resolved_pref) = {
             let core = core_read()?;
-            (core.settings().clone(), core.provider_client().clone())
+            let pref = if explicit_pref.is_none() {
+                resolve_active_preference(&core, source_lang, target_lang)
+            } else {
+                None
+            };
+            (
+                core.settings().clone(),
+                core.provider_client().clone(),
+                pref,
+            )
         };
+
+        let (pref_str, tid_str, rev_val) = if let Some(pref) = explicit_pref {
+            (Some(pref), explicit_tid, Some(template_revision))
+        } else if let Some(cp) = &resolved_pref {
+            (
+                Some(cp.compiled_text.as_str()),
+                Some(cp.template_id.as_str()),
+                Some(cp.revision),
+            )
+        } else {
+            (None, None, None)
+        };
+
         let languages = resolve_languages(&settings, source_lang, target_lang);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
         let response = runtime
-            .block_on(AppCore::execute_translate_text_stream_snapshot(
-                &settings,
-                &client,
-                api_key,
-                source,
-                &languages,
-                &ticket.id,
-                &ticket.token,
-                |delta| emit_text_delta(callback, user_data, delta, &ticket.token),
-            ))
+            .block_on(
+                AppCore::execute_translate_text_stream_snapshot_with_preference(
+                    &settings,
+                    &client,
+                    api_key,
+                    source,
+                    &languages,
+                    &ticket.id,
+                    pref_str,
+                    tid_str,
+                    rev_val,
+                    &ticket.token,
+                    |delta| emit_text_delta(callback, user_data, delta, &ticket.token),
+                ),
+            )
             .map_err(|error| error.to_string());
         Ok(response.map_or_else(failure, success))
     })
@@ -610,6 +856,44 @@ pub unsafe extern "C" fn popglot_translate_text_draft_stream_v1(
     callback: Option<PopglotStreamCallbackV1>,
     user_data: *mut c_void,
 ) -> *mut c_char {
+    unsafe {
+        popglot_translate_text_draft_stream_v2(
+            settings_json,
+            api_key,
+            source,
+            source_lang,
+            target_lang,
+            request_id,
+            ptr::null(),
+            ptr::null(),
+            0,
+            callback,
+            user_data,
+        )
+    }
+}
+
+/// Streams text translation through an unpersisted settings draft with explicit preference.
+///
+/// # Safety
+///
+/// All non-null string pointers must reference valid null-terminated UTF-8 for
+/// the duration of this call. If supplied, `callback` must be valid and must
+/// not retain the borrowed payload pointer or unwind across the FFI boundary.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_translate_text_draft_stream_v2(
+    settings_json: *const c_char,
+    api_key: *const c_char,
+    source: *const c_char,
+    source_lang: *const c_char,
+    target_lang: *const c_char,
+    request_id: *const c_char,
+    preference: *const c_char,
+    template_id: *const c_char,
+    template_revision: u64,
+    callback: Option<PopglotStreamCallbackV1>,
+    user_data: *mut c_void,
+) -> *mut c_char {
     ffi_guard(|| {
         let settings_json = unsafe { read_utf8(settings_json) }?;
         let api_key = unsafe { read_utf8(api_key) }?;
@@ -617,24 +901,53 @@ pub unsafe extern "C" fn popglot_translate_text_draft_stream_v1(
         let source_lang = unsafe { read_optional_utf8(source_lang) }?;
         let target_lang = unsafe { read_optional_utf8(target_lang) }?;
         let custom_id = unsafe { read_optional_utf8(request_id) }?;
+        let explicit_pref = unsafe { read_optional_utf8(preference) }?;
+        let explicit_tid = unsafe { read_optional_utf8(template_id) }?;
+
         let settings: ProviderSettings = serde_json::from_str(settings_json)
             .map_err(|error| format!("文字草稿设置无效：{error}"))?;
         let client = ProviderClient::new(AppCore::limits_for(&settings))
             .map_err(|error| error.to_string())?;
+
+        let resolved_pref = if explicit_pref.is_none() {
+            core_read()
+                .ok()
+                .and_then(|core| resolve_active_preference(&core, source_lang, target_lang))
+        } else {
+            None
+        };
+
+        let (pref_str, tid_str, rev_val) = if let Some(pref) = explicit_pref {
+            (Some(pref), explicit_tid, Some(template_revision))
+        } else if let Some(cp) = &resolved_pref {
+            (
+                Some(cp.compiled_text.as_str()),
+                Some(cp.template_id.as_str()),
+                Some(cp.revision),
+            )
+        } else {
+            (None, None, None)
+        };
+
         let languages = resolve_languages(&settings, source_lang, target_lang);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
         let response = runtime
-            .block_on(AppCore::execute_translate_text_stream_snapshot(
-                &settings,
-                &client,
-                api_key,
-                source,
-                &languages,
-                &ticket.id,
-                &ticket.token,
-                |delta| emit_text_delta(callback, user_data, delta, &ticket.token),
-            ))
+            .block_on(
+                AppCore::execute_translate_text_stream_snapshot_with_preference(
+                    &settings,
+                    &client,
+                    api_key,
+                    source,
+                    &languages,
+                    &ticket.id,
+                    pref_str,
+                    tid_str,
+                    rev_val,
+                    &ticket.token,
+                    |delta| emit_text_delta(callback, user_data, delta, &ticket.token),
+                ),
+            )
             .map_err(|error| error.to_string());
         Ok(response.map_or_else(failure, success))
     })
@@ -1249,5 +1562,429 @@ mod tests {
         assert!(ticket.token.is_cancelled());
         // Second global cancel finds nothing left to cancel.
         assert_eq!(popglot_cancel_active_request(), 0);
+    }
+
+    // ==================== Active preference injection ====================
+    // The v3 translate export must keep the wire request byte-identical to the
+    // legacy default route whenever the active template resolves to nothing
+    // (faithful, or a custom template that was disabled), and must inject the
+    // compiled active-template preference together with its template id and
+    // revision anchors only when an enabled custom template is active. Every
+    // request below terminates on a local loopback mock; nothing leaves the
+    // machine.
+
+    struct MockProvider {
+        base_url: String,
+        captured: thread::JoinHandle<Vec<u8>>,
+    }
+
+    impl MockProvider {
+        // Binds a loopback server that answers exactly one Provider request and
+        // returns the captured raw request bytes through `request_bytes`.
+        fn start(reply_content: &str) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock provider");
+            let base_url = format!("http://{}", listener.local_addr().expect("mock address"));
+            let body = format!(r#"{{"choices":[{{"message":{{"content":"{reply_content}"}}}}]}}"#);
+            let captured = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().expect("accept provider request");
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+                    .expect("set mock read timeout");
+                let raw = read_full_http_request(&mut stream);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write mock response");
+                raw
+            });
+            Self { base_url, captured }
+        }
+
+        fn request_bytes(self) -> Vec<u8> {
+            self.captured.join().expect("mock provider worker")
+        }
+    }
+
+    fn http_header_end(raw: &[u8]) -> Option<usize> {
+        raw.windows(4).position(|window| window == b"\r\n\r\n")
+    }
+
+    fn read_full_http_request(stream: &mut std::net::TcpStream) -> Vec<u8> {
+        let mut raw = Vec::new();
+        let mut chunk = [0_u8; 4096];
+        loop {
+            if let Some(header_end) = http_header_end(&raw)
+                && raw.len() >= header_end + 4 + http_content_length(&raw, header_end)
+            {
+                return raw;
+            }
+            let read = stream.read(&mut chunk).expect("read provider request");
+            assert!(
+                read > 0,
+                "mock provider connection closed before the full request arrived"
+            );
+            raw.extend_from_slice(&chunk[..read]);
+        }
+    }
+
+    fn http_content_length(raw: &[u8], header_end: usize) -> usize {
+        let headers = String::from_utf8_lossy(&raw[..header_end]).to_ascii_lowercase();
+        headers
+            .lines()
+            .find_map(|line| line.strip_prefix("content-length:"))
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(0)
+    }
+
+    fn http_request_body(raw: &[u8]) -> String {
+        let header_end = http_header_end(raw).expect("HTTP header terminator");
+        String::from_utf8_lossy(&raw[header_end + 4..]).into_owned()
+    }
+
+    fn http_request_line(raw: &[u8]) -> String {
+        let line_end = raw
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .expect("HTTP request line");
+        String::from_utf8_lossy(&raw[..line_end])
+            .trim_end()
+            .to_owned()
+    }
+
+    fn cstring(value: &str) -> CString {
+        CString::new(value).expect("CString without interior NUL")
+    }
+
+    // Converts one owned FFI envelope into a String and releases it.
+    fn take_envelope(value: *mut c_char) -> String {
+        assert!(!value.is_null(), "FFI returned a null envelope");
+        // SAFETY: the FFI function returned one owned, nul-terminated envelope.
+        let text = unsafe { CStr::from_ptr(value) }
+            .to_str()
+            .expect("UTF-8 envelope")
+            .to_owned();
+        // SAFETY: the pointer was produced by this library and not yet freed.
+        unsafe { popglot_free_string(value) };
+        text
+    }
+
+    // Initializes the process-global core exactly once per test binary, against
+    // a private scratch config directory. Callers hold the serial test lock.
+    fn initialize_core_for_tests() {
+        if CORE.get().is_some() {
+            return;
+        }
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("popglot-ffi-core-tests-{suffix}"));
+        std::fs::create_dir_all(&directory).expect("create test config directory");
+        let path = cstring(directory.to_str().expect("UTF-8 temp path"));
+        // SAFETY: `path` is a valid nul-terminated UTF-8 pointer for this call.
+        let envelope = unsafe { popglot_initialize(path.as_ptr()) };
+        let text = take_envelope(envelope);
+        assert!(text.contains("\"ok\":true"), "{text}");
+    }
+
+    fn save_core_settings(base_url: &str, source_language: &str, target_language: &str) {
+        let settings = ProviderSettings {
+            api_base_url: base_url.to_owned(),
+            text_model: "mock-model".to_owned(),
+            source_language: source_language.to_owned(),
+            target_language: target_language.to_owned(),
+            ..ProviderSettings::default()
+        };
+        let json = cstring(&serde_json::to_string(&settings).expect("settings JSON"));
+        // SAFETY: `json` is a valid nul-terminated UTF-8 pointer for this call.
+        let envelope = unsafe { popglot_save_settings(json.as_ptr()) };
+        let text = take_envelope(envelope);
+        assert!(text.contains("\"ok\":true"), "{text}");
+    }
+
+    fn save_custom_template(id: &str, instruction: &str, enabled: bool) {
+        let template = PromptTemplate {
+            id: id.to_owned(),
+            schema_version: popglot_domain::PROMPT_SCHEMA_VERSION,
+            name: format!("FFI 测试模板 {id}"),
+            description: "FFI active preference 测试模板".to_owned(),
+            instruction: instruction.to_owned(),
+            domain: String::new(),
+            audience: String::new(),
+            enabled,
+            is_built_in: false,
+            revision: 0,
+            created_at: 0,
+            updated_at: 0,
+            past_revisions: Vec::new(),
+        };
+        let json = cstring(&serde_json::to_string(&template).expect("template JSON"));
+        // SAFETY: `json` is a valid nul-terminated UTF-8 pointer for this call.
+        let envelope = unsafe { popglot_save_prompt_template(json.as_ptr()) };
+        let text = take_envelope(envelope);
+        assert!(text.contains("\"ok\":true"), "{text}");
+    }
+
+    fn activate_template(id: &str) {
+        let id = cstring(id);
+        // SAFETY: `id` is a valid nul-terminated UTF-8 pointer for this call.
+        let envelope = unsafe { popglot_set_active_prompt_template(id.as_ptr()) };
+        let text = take_envelope(envelope);
+        assert!(text.contains("\"ok\":true"), "{text}");
+    }
+
+    fn reset_active_template_to_faithful() {
+        // SAFETY: null is documented to reset the active template to faithful.
+        let envelope = unsafe { popglot_set_active_prompt_template(ptr::null()) };
+        let text = take_envelope(envelope);
+        assert!(text.contains("\"ok\":true"), "{text}");
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn translate_text_v3(
+        api_key: &CStr,
+        source: &CStr,
+        source_lang: Option<&CStr>,
+        target_lang: Option<&CStr>,
+        request_id: &CStr,
+        preference: Option<&CStr>,
+        template_id: Option<&CStr>,
+        template_revision: u64,
+    ) -> String {
+        // SAFETY: every pointer is null or a valid nul-terminated UTF-8 string
+        // that outlives the call.
+        let envelope = unsafe {
+            popglot_translate_text_v3(
+                api_key.as_ptr(),
+                source.as_ptr(),
+                source_lang.map_or(ptr::null(), CStr::as_ptr),
+                target_lang.map_or(ptr::null(), CStr::as_ptr),
+                request_id.as_ptr(),
+                preference.map_or(ptr::null(), CStr::as_ptr),
+                template_id.map_or(ptr::null(), CStr::as_ptr),
+                template_revision,
+            )
+        };
+        take_envelope(envelope)
+    }
+
+    #[test]
+    fn faithful_active_template_sends_legacy_request_bytes_without_preference() {
+        let _lock = lock_test_serial();
+        initialize_core_for_tests();
+        reset_active_template_to_faithful();
+
+        let active_mock = MockProvider::start("最终译文");
+        save_core_settings(
+            &active_mock.base_url,
+            popglot_domain::AUTO_LANGUAGE,
+            "zh-CN",
+        );
+
+        let api_key = cstring("test-key");
+        let source = cstring("hello");
+        let request_id = cstring("ffi-faithful-v3");
+        let active = translate_text_v3(&api_key, &source, None, None, &request_id, None, None, 0);
+        assert!(active.contains("\"ok\":true"), "{active}");
+
+        // The legacy default route: a draft snapshot without any preference.
+        let legacy_mock = MockProvider::start("最终译文");
+        let legacy_settings = ProviderSettings {
+            api_base_url: legacy_mock.base_url.clone(),
+            text_model: "mock-model".to_owned(),
+            ..ProviderSettings::default()
+        };
+        let settings_json = cstring(&serde_json::to_string(&legacy_settings).expect("settings"));
+        let legacy_request_id = cstring("ffi-faithful-legacy");
+        // SAFETY: every argument is a valid nul-terminated UTF-8 pointer.
+        let legacy = take_envelope(unsafe {
+            popglot_translate_text_draft_v1(
+                settings_json.as_ptr(),
+                api_key.as_ptr(),
+                source.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                legacy_request_id.as_ptr(),
+            )
+        });
+        assert!(legacy.contains("\"ok\":true"), "{legacy}");
+
+        let active_raw = active_mock.request_bytes();
+        let legacy_raw = legacy_mock.request_bytes();
+        assert_eq!(
+            http_request_line(&active_raw),
+            "POST /chat/completions HTTP/1.1"
+        );
+        let active_body = http_request_body(&active_raw);
+        let legacy_body = http_request_body(&legacy_raw);
+        // The system instructions ride inside messages[0] of the body, so byte
+        // equality proves the faithful route is unchanged from the old default.
+        assert_eq!(
+            active_body, legacy_body,
+            "faithful active template must not alter the legacy default request"
+        );
+        assert!(
+            active_body.contains("\"model\":\"mock-model\""),
+            "{active_body}"
+        );
+        assert!(
+            active_body.contains("precise translation engine"),
+            "{active_body}"
+        );
+        assert!(
+            !active_body.contains("User style preference"),
+            "faithful route must not inject a preference: {active_body}"
+        );
+    }
+
+    #[test]
+    fn blank_language_arguments_fall_back_to_saved_settings() {
+        let _lock = lock_test_serial();
+        initialize_core_for_tests();
+        reset_active_template_to_faithful();
+
+        let mock = MockProvider::start("最终译文");
+        save_core_settings(&mock.base_url, "fr", "ja");
+
+        let blank = cstring("");
+        let api_key = cstring("test-key");
+        let source = cstring("hello");
+        let request_id = cstring("ffi-blank-language");
+        let response = translate_text_v3(
+            &api_key,
+            &source,
+            Some(&blank),
+            Some(&blank),
+            &request_id,
+            None,
+            None,
+            0,
+        );
+        assert!(response.contains("\"ok\":true"), "{response}");
+
+        let body = http_request_body(&mock.request_bytes());
+        assert!(
+            body.contains("Translate the content from French into Japanese."),
+            "blank languages must fall back to the saved pair: {body}"
+        );
+        assert!(
+            !body.contains("Detect the source language automatically"),
+            "the stored source language must win over auto-detect: {body}"
+        );
+
+        // Same conclusion at the unit level for whitespace-only arguments.
+        let stored = {
+            let core = core_read().expect("core");
+            core.settings().clone()
+        };
+        let languages = resolve_languages(&stored, Some("   "), Some(" "));
+        assert_eq!(
+            (languages.source.as_str(), languages.target.as_str()),
+            ("fr", "ja")
+        );
+    }
+
+    #[test]
+    fn disabled_custom_template_never_injects_a_preference() {
+        let _lock = lock_test_serial();
+        initialize_core_for_tests();
+        reset_active_template_to_faithful();
+
+        save_custom_template(
+            "ffi-disabled-style",
+            "Always answer like a polite pirate in {{target_language}}.",
+            true,
+        );
+        activate_template("ffi-disabled-style");
+        {
+            let core = core_read().expect("core");
+            assert_eq!(
+                core.prompt_store().active_template().id,
+                "ffi-disabled-style"
+            );
+        }
+
+        // Disable it. Content stays identical, so the stored id and revision
+        // survive while runtime resolution must fall back to faithful.
+        save_custom_template(
+            "ffi-disabled-style",
+            "Always answer like a polite pirate in {{target_language}}.",
+            false,
+        );
+        let active_text = take_envelope(popglot_get_active_prompt_template());
+        assert!(active_text.contains("\"id\":\"faithful\""), "{active_text}");
+        let resolved = {
+            let core = core_read().expect("core");
+            resolve_active_preference(&core, None, None)
+        };
+        assert!(
+            resolved.is_none(),
+            "a disabled custom template must resolve to no preference"
+        );
+
+        let mock = MockProvider::start("最终译文");
+        save_core_settings(&mock.base_url, popglot_domain::AUTO_LANGUAGE, "zh-CN");
+        let api_key = cstring("test-key");
+        let source = cstring("hello");
+        let request_id = cstring("ffi-disabled-style");
+        let response = translate_text_v3(&api_key, &source, None, None, &request_id, None, None, 0);
+        assert!(response.contains("\"ok\":true"), "{response}");
+
+        let body = http_request_body(&mock.request_bytes());
+        assert!(
+            !body.contains("User style preference"),
+            "disabled template must not inject a preference: {body}"
+        );
+        assert!(!body.contains("pirate"), "{body}");
+    }
+
+    #[test]
+    fn enabled_custom_template_injects_compiled_preference_with_template_anchors() {
+        let _lock = lock_test_serial();
+        initialize_core_for_tests();
+        reset_active_template_to_faithful();
+
+        let mock = MockProvider::start("最终译文");
+        save_core_settings(&mock.base_url, popglot_domain::AUTO_LANGUAGE, "ja");
+
+        save_custom_template(
+            "ffi-pirate-style",
+            "Always answer like a polite pirate in {{target_language}}.",
+            true,
+        );
+        activate_template("ffi-pirate-style");
+
+        // The FFI forwards exactly this CompiledPrompt (id, revision, compiled
+        // text) as the preference anchors; the anchors themselves are request
+        // metadata and intentionally never serialized onto the wire.
+        let compiled = {
+            let core = core_read().expect("core");
+            resolve_active_preference(&core, None, None).expect("enabled template compiles")
+        };
+        assert_eq!(compiled.template_id, "ffi-pirate-style");
+        assert_eq!(compiled.revision, 1);
+        // Templates receive the stored tag verbatim ("ja"); the English name is
+        // only used by the system-instruction language summary.
+        assert!(
+            compiled.compiled_text.ends_with("in ja."),
+            "compiled text must use the settings fallback language: {}",
+            compiled.compiled_text
+        );
+
+        let api_key = cstring("test-key");
+        let source = cstring("hello");
+        let request_id = cstring("ffi-pirate-style");
+        let response = translate_text_v3(&api_key, &source, None, None, &request_id, None, None, 0);
+        assert!(response.contains("\"ok\":true"), "{response}");
+
+        let body = http_request_body(&mock.request_bytes());
+        assert!(
+            body.contains("User style preference"),
+            "enabled custom template must inject a preference: {body}"
+        );
+        assert!(body.contains("polite pirate in ja."), "{body}");
     }
 }

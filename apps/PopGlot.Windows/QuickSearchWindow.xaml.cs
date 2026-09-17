@@ -22,6 +22,17 @@ public partial class QuickSearchWindow : Window
     private long _searchVersion;
     private CancellationTokenSource? _cts;
     private bool _isClosed;
+    // E3: true when the Escape currently travelling down the tunnel belonged
+    // to a live IME composition on the search box. Window_KeyDown is a
+    // BUBBLING KeyDown handler — by the time it runs, the Ui composition
+    // tracker has already reset the IsComposing flag in the preview pass —
+    // so this is the only reliable place to sample the fact and let the
+    // window handler spare the composition.
+    private bool _escapeOwnedByComposition;
+    // 免费引擎预提示：在真实进展（流式文本、终态）出现前，不允许被
+    // 「正在生成…」等准备态瞬间覆盖。快速搜索只有文字线路，不涉及
+    // 截图视觉直译提示。
+    private string? _pendingStyleNotice;
 
     /// <summary>
     /// C05: set by the host when the window must really die (app exit).
@@ -38,6 +49,11 @@ public partial class QuickSearchWindow : Window
         _openSettings = openSettings;
         _coordinator = new TranslationCoordinator(_history, _vocabulary);
         InitializeComponent();
+        // E3: the sampler must register BEFORE the Ui composition tracker —
+        // it reads IsComposing, which the tracker resets on Escape during
+        // the same tunnelling pass.
+        SearchBox.PreviewKeyDown += OnSearchBoxPreviewKeyDownSample;
+        Ui.AttachCompositionTracker(SearchBox);
 
         _themeChangedHandler = (_, _) =>
         {
@@ -60,11 +76,22 @@ public partial class QuickSearchWindow : Window
         {
             CenterOnCurrentMonitor();
             SearchBox.Focus();
-            var settings = CoreBridge.GetSettings();
-            LangBadge.Text =
-                $"{LanguageCatalog.DisplayName(settings.SourceLanguage)} → " +
-                $"{LanguageCatalog.DisplayName(settings.TargetLanguage)}";
+            RefreshLangBadge();
             SyncUiWithState();
+            RefreshStyleSelector();
+        };
+        // The window hides instead of closing; on every re-show the engine
+        // (and therefore style support) may have changed.
+        IsVisibleChanged += (_, _) =>
+        {
+            if (IsVisible)
+            {
+                // The persisted language pair may have changed on another
+                // surface while this window was hidden — the badge must not
+                // go stale on a re-show.
+                RefreshLangBadge();
+                RefreshStyleSelector();
+            }
         };
         SizeChanged += (_, _) => ClampToWorkArea();
 
@@ -110,10 +137,13 @@ public partial class QuickSearchWindow : Window
         ScreenGeometry.MoveToPixels(this, new Point(x, y));
     }
 
+    private readonly string _sessionId = Guid.NewGuid().ToString("N");
+
     internal QuickSearchState State => _state;
     internal TextBox StreamBox => ResultStreamBox;
     internal RichTextBox RichBox => ResultRichBox;
     internal TextBlock FooterStatusBlock => FooterStatus;
+    internal TextBlock FooterHintsBlock => FooterHints;
     internal TextBlock StreamIndicatorBlock => StreamIndicator;
 
     private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -170,6 +200,25 @@ public partial class QuickSearchWindow : Window
         _debounceTimer.Start();
     }
 
+    /// <summary>
+    /// E3: samples whether this Escape belongs to a live IME composition on
+    /// the search box, and clears the residual composition flag safely (some
+    /// IMEs tear the composition down without a composition-end event). The
+    /// key itself is never marked handled: the IME still needs it to cancel.
+    /// The isolation suite drives the WPF-level events only; real Microsoft
+    /// Pinyin / Sogou behaviour stays an explicit E3 manual verification TODO.
+    /// </summary>
+    private void OnSearchBoxPreviewKeyDownSample(object sender, KeyEventArgs e)
+    {
+        _escapeOwnedByComposition =
+            (e.Key == Key.Escape || e.ImeProcessedKey == Key.Escape) &&
+            Ui.GetIsComposing(SearchBox);
+        if (_escapeOwnedByComposition)
+        {
+            Ui.SetIsComposing(SearchBox, false);
+        }
+    }
+
     private async void SearchBox_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter)
@@ -179,7 +228,7 @@ public partial class QuickSearchWindow : Window
                 return; // Shift+Enter inserts newline
             }
             // IME composition confirm: the composition owns this Enter.
-            if (System.Windows.Input.InputMethod.GetIsInputMethodEnabled(SearchBox))
+            if (Ui.IsImeComposing(SearchBox, e))
             {
                 return;
             }
@@ -231,6 +280,19 @@ public partial class QuickSearchWindow : Window
         _state.StartNewSearch(text);
         var epoch = _state.CurrentEpoch;
         SyncUiWithState();
+
+        // Honest pre-flight notice when the route cannot be proven to honour
+        // the active style: stated BEFORE the request goes out, never blocking
+        // it and never cancelling anything already in flight. The pending
+        // notice rides on top of the preparing statuses in SyncUiWithState
+        // until real progress lands.
+        _pendingStyleNotice = null;
+        if (TranslationStyleMenu.PreTranslateNotice() is { } styleNotice)
+        {
+            _pendingStyleNotice = styleNotice;
+            FooterStatus.Text = styleNotice;
+            RefreshStyleSelector();
+        }
 
         var progress = new Progress<TranslationStreamUpdate>(update =>
         {
@@ -289,6 +351,17 @@ public partial class QuickSearchWindow : Window
                     }
                 }
                 SyncUiWithState();
+
+                // Durable post-hoc honesty: when the free engine actually ran,
+                // the selected style did not apply. Decided by the TYPED
+                // executor, never by matching the PipelineLabel display string.
+                if (session.TextExecutor == TranslationTextExecutor.FreeEngine &&
+                    TranslationStyleMenu.TryGetActiveTemplate() is { } activeStyle &&
+                    activeStyle.Id != TranslationStyleMenu.FaithfulTemplateId)
+                {
+                    FooterStatus.Text =
+                        $"已由内置免费引擎完成：{TranslationStyleMenu.FreeEngineToolTip}，所选文字翻译风格未应用。";
+                }
             }
         }
         catch (OperationCanceledException)
@@ -347,7 +420,29 @@ public partial class QuickSearchWindow : Window
         SpeakButton.IsEnabled = _state.CanSpeak;
         StarButton.IsEnabled = _state.CanStar;
 
-        FooterStatus.Text = _state.StatusText;
+        // 免费引擎预提示在其待决期间压过「正在生成…」这类准备态：一旦真实
+        // 文本开始到达或终态（完成/失败/取消）落地，立即让位给真实状态。
+        if (_pendingStyleNotice is not null)
+        {
+            if (string.IsNullOrEmpty(_state.AccumulatedText) &&
+                _state.Stage is QuickSearchUiStage.Streaming or QuickSearchUiStage.Finalizing)
+            {
+                FooterStatus.Text = _pendingStyleNotice;
+            }
+            else
+            {
+                _pendingStyleNotice = null;
+                FooterStatus.Text = _state.StatusText;
+            }
+        }
+        else
+        {
+            FooterStatus.Text = _state.StatusText;
+        }
+
+        // 动态快捷键提示：只承诺当前阶段真正可用的操作（流式仅 Esc 取消、
+        // 完成含复制/朗读/收藏、partial 只含复制）。
+        FooterHints.Text = _state.HintsText;
 
         if (_state.Stage == QuickSearchUiStage.Failed)
 
@@ -432,6 +527,92 @@ public partial class QuickSearchWindow : Window
     }
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e) => OpenSettings();
+
+    // ================= Language badge =================
+
+    /// <summary>
+    /// Repaints the header badge from the persisted pair. Called on Loaded
+    /// and on every re-show: quick search keeps no language dropdown of its
+    /// own, so the badge must always mirror what the next request will use.
+    /// Degrades quietly when local state is unreadable.
+    /// </summary>
+    private void RefreshLangBadge()
+    {
+        if (_isClosed) return;
+        try
+        {
+            var settings = CoreBridge.GetSettings();
+            LangBadge.Text =
+                $"{LanguageCatalog.DisplayName(settings.SourceLanguage)} → " +
+                $"{LanguageCatalog.DisplayName(settings.TargetLanguage)}";
+        }
+        catch (Exception)
+        {
+            // Headless/offline contexts keep the last badge.
+        }
+    }
+
+    // ================= Global translation-style selector =================
+
+    /// <summary>
+    /// Repaints the shared style selector from local state. The built-in free
+    /// engine disables the selector with the honest wording; an unreadable
+    /// local state keeps it visible with an honest caveat instead.
+    /// </summary>
+    private void RefreshStyleSelector()
+    {
+        if (_isClosed) return;
+        try
+        {
+            TranslationStyleMenu.ApplyTo(StyleSelectorButton, TranslationStyleMenu.SupportedToolTip);
+            StyleSelectorLabel.Text = TranslationStyleMenu.ActiveLabel();
+        }
+        catch (Exception)
+        {
+            // The selector is additive UI; never break quick search over it.
+        }
+    }
+
+    private void StyleSelector_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button)
+        {
+            return;
+        }
+        // Re-probe at open time so the menu never claims support the next
+        // request would not have.
+        RefreshStyleSelector();
+        if (TranslationStyleMenu.ProbeNextTextRoute() == TranslationStyleSupport.FreeEngine)
+        {
+            FooterStatus.Text = $"内置免费引擎{TranslationStyleMenu.FreeEngineToolTip}。";
+            return;
+        }
+        var menu = TranslationStyleMenu.Build(
+            styleChosen: template => _ = ChooseStyleAsync(template),
+            reportStatus: message => FooterStatus.Text = message,
+            // 管理提示词 reuses the existing open-settings callback chain.
+            managePrompts: OpenSettings);
+        if (menu is null)
+        {
+            return;
+        }
+        TranslationStyleMenu.Show(button, menu);
+    }
+
+    private async Task ChooseStyleAsync(PromptTemplateDto template)
+    {
+        // Optimistic label; repainted from the authoritative state if the
+        // persist fails. Nothing is re-translated and nothing in flight is
+        // cancelled — the switch lands with the next request only.
+        StyleSelectorLabel.Text = TranslationStyleMenu.ShortLabel(template);
+        var applied = await TranslationStyleMenu.SwitchActiveTemplateAsync(
+            template.Id,
+            message => FooterStatus.Text = message);
+        if (!applied)
+        {
+            RefreshStyleSelector();
+        }
+    }
 
     internal void OpenSettings()
     {
@@ -638,6 +819,9 @@ public partial class QuickSearchWindow : Window
             ? (Brush)FindResource("AccentSoftBrush")
             : System.Windows.Media.Brushes.Transparent;
         StarButton.ToolTip = starred ? "从生词本移除" : "收藏到生词本";
+        // The static XAML name must follow the dynamic state so screen
+        // readers announce the action the click will actually perform.
+        System.Windows.Automation.AutomationProperties.SetName(StarButton, (string)StarButton.ToolTip);
     }
 
     private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
@@ -673,6 +857,17 @@ public partial class QuickSearchWindow : Window
     {
         if (e.Key == Key.Escape)
         {
+            // E3: a live IME composition owns this Escape — hiding or
+            // cancelling the window out from under the composition would
+            // strand its residue in the search box. The residue was already
+            // cleared safely in the preview pass; leave the key unhandled so
+            // the IME can cancel its own composition, and consume the sample
+            // so it cannot outlive this key press.
+            if (_escapeOwnedByComposition)
+            {
+                _escapeOwnedByComposition = false;
+                return;
+            }
             e.Handled = true;
             // C05/A06 Esc ladder: ANY active phase cancels first (the live
             // _cts is the truth, not a UI stage snapshot), keeping the
@@ -698,11 +893,17 @@ public partial class QuickSearchWindow : Window
 
         {
 
-            // Keep the search editor's native copy behavior. Copying the full
+            // Plain Ctrl+C keeps the native selection copy everywhere: the
 
-            // translation from the keyboard uses Ctrl+Shift+C instead.
+            // search editor and any selected range in the result boxes are
 
-            if (SearchBox.IsKeyboardFocusWithin)
+            // handled by the focused control itself. Copying the FULL
+
+            // translation from the keyboard is Ctrl+Shift+C ONLY — never the
+
+            // bare shortcut.
+
+            if ((Keyboard.Modifiers & ModifierKeys.Shift) == 0)
 
             {
 
@@ -771,11 +972,60 @@ public partial class QuickSearchWindow : Window
         internal static partial uint GetWindowThreadProcessId(nint window, out uint processId);
     }
 
+    private void StoreSessionSnapshot()
+    {
+        var query = SearchBox?.Text?.Trim() ?? string.Empty;
+        var resultText = !string.IsNullOrWhiteSpace(_state.FinalRenderedText)
+            ? _state.FinalRenderedText
+            : _state.AccumulatedText;
+        if (string.IsNullOrEmpty(query) || _state.Stage == QuickSearchUiStage.Idle)
+        {
+            return;
+        }
+
+        var hasResult = !string.IsNullOrWhiteSpace(resultText);
+        var (state, isPartial) = _state.Stage switch
+        {
+            QuickSearchUiStage.Completed => (TranslationSessionState.Completed, false),
+            QuickSearchUiStage.Partial => (TranslationSessionState.Failed, true),
+            QuickSearchUiStage.Failed => (TranslationSessionState.Failed, hasResult),
+            _ => (TranslationSessionState.Cancelled, hasResult),
+        };
+        ProviderSettings settings;
+        try
+        {
+            settings = CoreBridge.GetSettings();
+        }
+        catch
+        {
+            return;
+        }
+
+        var session = StoredSession.Create(
+            sessionId: _sessionId,
+            origin: SessionOrigin.QuickSearch,
+            sourceText: query,
+            sourceLang: settings.SourceLanguage ?? LanguageCatalog.Auto,
+            targetLang: settings.TargetLanguage ?? "zh-CN",
+            engineProfileId: null,
+            engineName: null,
+            state: state,
+            resultText: hasResult ? resultText : null,
+            explanationText: _state.Explanation ?? _state.ErrorMessage,
+            isPartial: isPartial);
+        if (!App.SharedSessionStore.TryStore(session, out var rejection))
+        {
+            // Called from the close path: no surface remains to show it.
+            App.LogSessionStoreRejection(rejection);
+        }
+    }
+
     private void OnClosedCleanup()
     {
         if (_isClosed) return;
         _isClosed = true;
         _debounceTimer.Stop();
+        StoreSessionSnapshot();
         ThemeService.ThemeChanged -= _themeChangedHandler;
         TtsService.SpeakingStateChanged -= OnTtsSpeakingStateChanged;
         _state.OnClose();

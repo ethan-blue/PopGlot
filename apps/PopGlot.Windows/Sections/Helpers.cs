@@ -276,7 +276,8 @@ public sealed record SettingsFormSnapshot(
     bool IncludeExplanation,
     bool ProtectTokens,
     string Theme,
-    RouteDraftSnapshot Route)
+    RouteDraftSnapshot Route,
+    bool CloseToTray = true)
 {
     public static SettingsFormSnapshot Create(
         string? selectionHotkey,
@@ -290,7 +291,8 @@ public sealed record SettingsFormSnapshot(
         bool includeExplanation,
         bool protectTokens,
         string? theme,
-        RouteDraftSnapshot route)
+        RouteDraftSnapshot route,
+        bool closeToTray = true)
     {
         return new SettingsFormSnapshot(
             selectionHotkey ?? string.Empty,
@@ -304,7 +306,8 @@ public sealed record SettingsFormSnapshot(
             includeExplanation,
             protectTokens,
             theme ?? "System",
-            route);
+            route,
+            closeToTray);
     }
 
     public string Serialize() => string.Join('\u001f',
@@ -319,5 +322,6 @@ public sealed record SettingsFormSnapshot(
         IncludeExplanation ? "1" : "0",
         ProtectTokens ? "1" : "0",
         Theme,
-        Route.Serialize());
+        Route.Serialize(),
+        CloseToTray ? "1" : "0");
 }

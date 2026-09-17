@@ -60,5 +60,21 @@
                            FontSize="12" Text="Esc 取消 · 按住 Shift 仅提取文本" />
             </StackPanel>
         </Border>
+
+        <!-- Live drag-phase hint: mirrors the Shift state while the marquee is
+             being dragged. Occupies the same anchor slot as HintChip — the two
+             are never visible at the same time (chip swaps at drag start). -->
+        <Border x:Name="DragHintChip" Visibility="Collapsed" Padding="14,9" CornerRadius="10"
+                Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="0.35" Color="{DynamicResource ShadowColor}" />
+            </Border.Effect>
+            <StackPanel Orientation="Horizontal">
+                <Ellipse x:Name="DragHintDot" Width="7" Height="7" VerticalAlignment="Center"
+                         Fill="{DynamicResource AccentBrush}" Margin="0,0,8,0" />
+                <TextBlock x:Name="DragHintText" Foreground="{DynamicResource TextPrimaryBrush}" FontWeight="SemiBold"
+                           FontSize="12" VerticalAlignment="Center" />
+            </StackPanel>
+        </Border>
     </Canvas>
 </Window>

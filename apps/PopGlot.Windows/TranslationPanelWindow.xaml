@@ -2,9 +2,12 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:PopGlot.Windows"
-        Width="540" Height="360" MinWidth="460" MinHeight="300"
+        Width="540" Height="380" MinWidth="460" MinHeight="380"
         WindowStyle="None" ResizeMode="CanResize"
         Background="{DynamicResource SurfaceBrush}"
+        FontFamily="{StaticResource UiFontFamily}" FontSize="13"
+        Foreground="{DynamicResource TextPrimaryBrush}"
+        TextElement.Foreground="{DynamicResource TextPrimaryBrush}"
         Topmost="True" ShowActivated="False" ShowInTaskbar="False"
         WindowStartupLocation="Manual" UseLayoutRounding="True" SnapsToDevicePixels="True">
 
@@ -185,6 +188,27 @@
                         </StackPanel>
 
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <!-- Global TEXT-translation style selector: compact icon+label+chevron so the
+                                 header (and the window itself) is never squeezed. -->
+                            <Button x:Name="StyleSelectorButton" Style="{StaticResource IconButton}"
+                                    Width="Auto" MinWidth="32" Padding="4,0" Margin="0,0,6,0"
+                                    AutomationProperties.Name="文字翻译风格"
+                                    ToolTipService.ShowOnDisabled="True"
+                                    ToolTip="文字翻译风格（仅影响下一次文字翻译；截图视觉直译不应用）"
+                                    Click="StyleSelector_Click">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Path Width="11" Height="11" Stretch="Uniform"
+                                          Fill="{DynamicResource AccentBrush}"
+                                          Data="{StaticResource IconSparkles}" VerticalAlignment="Center" />
+                                    <TextBlock x:Name="StyleSelectorLabel" Text="风格" FontSize="11.5"
+                                               Margin="4,0,0,0" VerticalAlignment="Center" MaxWidth="56"
+                                               TextTrimming="CharacterEllipsis"
+                                               Foreground="{DynamicResource TextPrimaryBrush}" />
+                                    <Path Width="8" Height="8" Stretch="Uniform" Margin="3,0,0,0"
+                                          Fill="{DynamicResource TextTertiaryBrush}"
+                                          Data="{StaticResource IconChevronDown}" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
                             <Button x:Name="SourceSpeakBtn" Style="{StaticResource IconButton}" Width="32" Height="32" Margin="0,0,2,0"
                                     AutomationProperties.Name="朗读原文"
                                     ToolTip="朗读原文" Click="SourceSpeak_Click">
@@ -231,7 +255,13 @@
                 <Grid Grid.Row="2">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" MinHeight="120" />
+                        <!-- No MinHeight floor here on purpose: the duplicated
+                             120 DIP floors (row + inner grid) used to push the
+                             bottom status bar out of the window at minimum
+                             size. The result boxes keep their own 68 DIP floor
+                             and the window MinHeight (380) guarantees every
+                             fixed row, including the footer, stays visible. -->
+                        <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" MaxHeight="80" />
                     </Grid.RowDefinitions>
 
@@ -309,7 +339,7 @@
                     </Grid>
 
                     <!-- Text Layer (Grid.Row="1") -->
-                    <Grid Grid.Row="1" MinHeight="120">
+                    <Grid Grid.Row="1">
                         <TextBox x:Name="TranslationTextBox" Style="{StaticResource ResultTextBox}"
                                  FontSize="14.5" TextWrapping="Wrap" IsReadOnly="True"
                                  MinHeight="68" VerticalScrollBarVisibility="Auto"

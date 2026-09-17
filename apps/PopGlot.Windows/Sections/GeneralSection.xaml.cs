@@ -18,6 +18,7 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
     internal ToggleButton CloseOnFocusLoss => CloseOnFocusLossToggle;
     internal ToggleButton AutoCopy => AutoCopyToggle;
     internal ToggleButton StartWithWindows => StartWithWindowsToggle;
+    internal ToggleButton CloseToTray => CloseToTrayToggle;
     internal ToggleButton IncludeExplanation => IncludeExplanationToggle;
     internal ToggleButton ProtectTokens => ProtectTokensToggle;
     internal ComboBox ThemeCombo => ThemeComboBox;
@@ -105,5 +106,31 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
         {
             ThemeService.ApplyWindowChrome(window);
         }
+    }
+
+    /// <summary>
+    /// 「重新显示引导」入口：把 HasCompletedOnboarding 复位为未完成并回到
+    /// 主窗口工作台重新展开三步引导条。与「重新启用」自启按钮一样是即时
+    /// 动作，不走设置页的保存条；写盘失败只损失"下次启动再出现"，不影响
+    /// 本次展示。
+    /// </summary>
+    private void RestartOnboarding_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var shell = ShellSettingsStore.Load();
+            ShellSettingsStore.Save(shell with { HasCompletedOnboarding = false });
+        }
+        catch (System.Exception)
+        {
+            // 展示引导本身不依赖这次写盘成功。
+        }
+        var main = Window.GetWindow(this) as MainWindow
+            ?? System.Windows.Application.Current?.MainWindow as MainWindow;
+        if (main is null)
+        {
+            return;
+        }
+        main.RestartOnboarding();
     }
 }

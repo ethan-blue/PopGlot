@@ -55,6 +55,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     private ConfirmButton? _deleteConfirm;
     private ConfirmButton? _clearKeyConfirm;
     private bool? _compactEditor;
+    private bool _detailWidthReported;
     private readonly System.Windows.Threading.DispatcherTimer _recommendationDebounce;
 
     /// <summary>Raised when the section needs to show a status message.</summary>
@@ -113,12 +114,28 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         ApplyEditorLayout();
     }
 
+    /// <summary>
+    /// DetailGrid 的内容宽度是 Provider 编辑器紧凑布局的唯一判据。窗口层只在
+    /// DetailGrid 尚未报告过任何真实尺寸（窗口从未显示、无头环境）时收到一次
+    /// 回退提示；一旦 DetailGrid.SizeChanged 触发，本提示永久失效，窗口宽度
+    /// 不再参与判定，两套判据互相覆盖的问题就此消除。
+    /// </summary>
+    internal void SetWindowWidthHint(double windowWidth)
+    {
+        if (_detailWidthReported)
+        {
+            return;
+        }
+        SetCompact(windowWidth < 700);
+    }
+
     private void DetailGrid_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         if (e.NewSize.Width <= 0)
         {
             return;
         }
+        _detailWidthReported = true;
         SetCompact(e.NewSize.Width < 680);
     }
 
@@ -135,6 +152,20 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
         PlacePair(EndpointFieldsGrid, TextEndpointPanel, VisionEndpointPanel, compact);
         PlacePair(AdvancedDetailsGrid, HeadersPanel, CapabilitiesPanel, compact);
+
+        // Compact 纵向节奏收紧：680 DIP（产品最小窗宽）下，首屏必须把
+        // 「使用模型」卡片的推荐偏好单选行完整放进滚动视口，否则固定底
+        // 部操作栏会压住半行单选内容，看起来像被遮挡。这里只在窄态收紧
+        // 间距，宽态布局保持原样。
+        EditorHeaderGrid.Margin = compact ? new Thickness(2, 0, 2, 10) : new Thickness(2, 0, 2, 18);
+        EditorBackRow.Margin = new Thickness(0, 0, 0, compact ? 8 : 12);
+        ConnectionCard.Margin = new Thickness(0, 0, 0, compact ? 10 : 14);
+        ConnectionCardHint.Margin = new Thickness(0, 4, 0, compact ? 10 : 14);
+        ModelCard.Margin = new Thickness(0, 0, 0, compact ? 10 : 14);
+        PreferenceRowHost.Margin = new Thickness(0, compact ? 8 : 12, 0, 0);
+        IdentityFieldsGrid.Margin = new Thickness(0, 0, 0, compact ? 10 : 14);
+        BaseUrlPanel.Margin = new Thickness(0, 0, 0, compact ? 10 : 14);
+        ApiKeyStateText.Margin = new Thickness(2, compact ? 4 : 7, 0, 0);
 
         Grid.SetColumnSpan(ApiKeyPasswordBox, compact ? 3 : 1);
         if (compact)
@@ -762,6 +793,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private void ShowEditorForm(bool addMode)
     {
+        if (AddEngineHeaderButton is not null)
+        {
+            AddEngineHeaderButton.Visibility = Visibility.Collapsed;
+        }
         EditorEmpty.Visibility = Visibility.Collapsed;
         EditorForm.Visibility = Visibility.Visible;
         PresetsPanel.Visibility = addMode ? Visibility.Visible : Visibility.Collapsed;
@@ -770,18 +805,22 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         ChooseAnotherProviderButton.Visibility = Visibility.Collapsed;
         DeleteServiceButton.Visibility = addMode ? Visibility.Collapsed : Visibility.Visible;
         _isAdding = addMode;
-        if (!_compactEditor.HasValue && DetailGrid.ActualWidth > 0)
-        {
-            _compactEditor = DetailGrid.ActualWidth < 680;
-        }
+        // compact 判定只来自 DetailGrid 内容宽度（SizeChanged）或未布局时的
+        // 一次性窗口宽度提示；这里不再按 ActualWidth 重新推断第二套判据。
         ApplyEditorLayout();
         UpdateSaveButtonLabel();
         UpdateDeleteTooltip();
         EditorOpenStateChanged?.Invoke();
     }
 
-    private void ShowOverview()
+    // internal: SettingsWindow's close guard folds a clean editor back to the
+    // overview (SettingsWindow.xaml.cs "ProviderSection.ShowOverview()").
+    internal void ShowOverview()
     {
+        if (AddEngineHeaderButton is not null)
+        {
+            AddEngineHeaderButton.Visibility = Visibility.Visible;
+        }
         HideDraftGuard();
         EditorForm.Visibility = Visibility.Collapsed;
         EditorEmpty.Visibility = Visibility.Visible;
@@ -1523,9 +1562,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             var host = Uri.TryCreate(draft.ApiBaseUrl, UriKind.Absolute, out var endpointUri)
                 ? endpointUri.Host
                 : draft.ApiBaseUrl;
+            var timestamp = DateTime.Now.ToString("HH:mm:ss");
             SetTestResult(StatusTone.Success,
                 $"连接成功 · {host} · HTTP {response.Diagnostics.StatusCode} · {response.Diagnostics.ElapsedMs} ms" +
-                (string.IsNullOrWhiteSpace(draft.TextModel) ? "" : $" · {draft.TextModel}"),
+                (string.IsNullOrWhiteSpace(draft.TextModel) ? "" : $" · {draft.TextModel}") +
+                $" · {timestamp}",
                 "草稿未保存；保存并设为默认后才用于后续翻译。连接测试只报告健康状态，不是使用前提。");
             if (_editingProfileId is not null)
             {
@@ -1535,7 +1576,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
         catch (Exception exception)
         {
-            SetTestResult(StatusTone.Error, "连接失败", DescribeTestFailure(exception) + "（设置未被修改）");
+            var timestamp = DateTime.Now.ToString("HH:mm:ss");
+            SetTestResult(StatusTone.Error, $"连接失败 · {timestamp}", DescribeTestFailure(exception) + "（设置未被修改）");
             if (_editingProfileId is not null)
             {
                 _testOutcomes[_editingProfileId] = ClassifyTestFailure(exception);

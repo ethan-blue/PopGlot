@@ -20,6 +20,39 @@ function Test-InstanceConflict {
     }
 }
 
+function Get-CpuModel {
+    <#
+    .SYNOPSIS
+    Stable CPU model string for the startup.json machine block. The primary
+    source is Win32_Processor.Name: per-socket names are whitespace-
+    normalized, and distinct names are SORTED before a stable join, so the
+    value does not depend on CIM enumeration order. If CIM fails or answers
+    nothing, the PROCESSOR_IDENTIFIER environment variable is the fallback;
+    if that is missing too, the literal 'unknown' is reported. A model is
+    NEVER fabricated.
+    #>
+    $names = @()
+    try {
+        $names = @(Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop |
+            ForEach-Object { [string]$_.Name } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            ForEach-Object { ($_ -replace '\s+', ' ').Trim() } |
+            Sort-Object -Unique)
+    }
+    catch {
+        # CIM unavailable (WMI service broken / restricted): fall through to
+        # the environment fallback below - never fabricate a model string.
+    }
+    if ($names.Count -gt 0) {
+        return ($names -join ' | ')
+    }
+    $envModel = [Environment]::GetEnvironmentVariable('PROCESSOR_IDENTIFIER')
+    if (-not [string]::IsNullOrWhiteSpace($envModel)) {
+        return (($envModel -replace '\s+', ' ').Trim())
+    }
+    return 'unknown'
+}
+
 function Test-ArtifactPackage {
     <#
     .SYNOPSIS
@@ -38,7 +71,7 @@ function Test-ArtifactPackage {
     if (-not (Test-Path $Exe)) {
         throw "self-contained Release publish not found at '$Exe'. Run scripts/publish-package.ps1 first."
     }
-    $exeDir = Split-Path -Parent $Exe
+    $exeDir = (Get-Item (Split-Path -Parent $Exe)).FullName
     if (-not (Test-Path (Join-Path $exeDir 'hostfxr.dll'))) {
         throw "'$exeDir' does not look like a self-contained publish (hostfxr.dll missing)."
     }
@@ -80,10 +113,11 @@ function Test-ArtifactPackage {
         throw ("the publish package does not match its build manifest: " + ($drift -join '; ') + ". Re-run scripts/publish-package.ps1.")
     }
 
-    # ...and the directory must contain NOTHING the manifest does not list:
+    # ...and the directory must contain NOTHING the manifest does not list
+    # (except the build-manifest.json itself):
     # a leftover artifact would be silently certified otherwise.
     $unmanifested = @(Get-ChildItem $exeDir -Recurse -File | Where-Object {
-        $_.FullName.Substring($exeDir.Length + 1) -notin @($manifest.files | ForEach-Object { $_.file })
+        $_.Name -ne 'build-manifest.json' -and ($_.FullName.Substring($exeDir.Length + 1) -notin @($manifest.files | ForEach-Object { $_.file }))
     } | ForEach-Object { $_.FullName.Substring($exeDir.Length + 1) })
     if ($unmanifested.Count -gt 0) {
         throw ("the publish directory contains files the manifest does not cover: " + ($unmanifested -join '; ') + ". Re-run scripts/publish-package.ps1.")
@@ -321,6 +355,7 @@ function Invoke-MeasurementRun {
         machine = [PSCustomObject]@{
             os = (Get-CimInstance Win32_OperatingSystem).Caption
             cores = [Environment]::ProcessorCount
+            cpuModel = (Get-CpuModel)
             dotnet = [Environment]::Version.ToString()
         }
         startedUtc = [DateTimeOffset]::UtcNow.ToString('o')
@@ -442,4 +477,4 @@ function Invoke-MemorySampling {
     return $result
 }
 
-Export-ModuleMember -Function Test-InstanceConflict, Test-ArtifactPackage, Invoke-SmokeLaunch, Write-MeasurementFailureReport, Invoke-MeasurementRun, Invoke-MemorySampling
+Export-ModuleMember -Function Test-InstanceConflict, Get-CpuModel, Test-ArtifactPackage, Invoke-SmokeLaunch, Write-MeasurementFailureReport, Invoke-MeasurementRun, Invoke-MemorySampling

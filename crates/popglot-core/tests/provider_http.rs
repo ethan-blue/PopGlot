@@ -1485,6 +1485,132 @@ async fn gemini_stream_safety_block_returns_safety_blocked_error() {
     assert_eq!(err2.kind, ProviderErrorKind::SafetyBlocked);
 }
 
+/// Builds a Chat Completions SSE frame whose delta payload carries raw bytes.
+///
+/// Used to verify binary responses: the frame body is deliberately not valid
+/// UTF-8 and must be rejected by the SSE decoder before any JSON parsing.
+fn binary_chat_delta_frame(payload_bytes: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::new();
+    frame.extend_from_slice(b"data: {\"choices\":[{\"delta\":{\"content\":\"");
+    frame.extend_from_slice(payload_bytes);
+    frame.extend_from_slice(b"\"}}]}\n\n");
+    frame
+}
+
+#[tokio::test]
+async fn openai_same_frame_final_delta_completes_cleanly() {
+    for provider_type in [
+        ProviderType::OpenAiCompatible,
+        ProviderType::OpenAiResponses,
+    ] {
+        let delimiter = "PGMETA_same_frame_0123456";
+        let payload = format!("同帧译文\n{delimiter}\n{{\"explanation\":\"同帧说明\"}}");
+        let frame = match provider_type {
+            ProviderType::OpenAiCompatible => {
+                let mut frame = format!(
+                    "data: {{\"choices\":[{{\"delta\":{{\"content\":{}}}}}]}}\n\n",
+                    serde_json::to_string(&payload).expect("json string")
+                )
+                .into_bytes();
+                frame.extend_from_slice(b"data: [DONE]\n\n");
+                frame
+            }
+            ProviderType::OpenAiResponses => {
+                let mut frame = format!(
+                    "event: response.output_text.delta\ndata: {{\"type\":\"response.output_text.delta\",\"delta\":{}}}\n\n",
+                    serde_json::to_string(&payload).expect("json string")
+                )
+                .into_bytes();
+                frame.extend_from_slice(
+                    b"event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n",
+                );
+                frame
+            }
+            _ => unreachable!(),
+        };
+        // The final delta, the metadata trailer, and the protocol completion
+        // marker all arrive inside one transport chunk.
+        let server = SseServer::start(vec![(frame, Duration::ZERO)]);
+        let (deltas, response) = collect_stream(provider_type, &server, delimiter).await;
+        assert_eq!(deltas.concat(), "同帧译文");
+        assert_eq!(response.result.translated_text, "同帧译文");
+        assert_eq!(response.result.explanation, "同帧说明");
+        assert!(!response.result.is_partial);
+        assert!(response.result.warnings.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn illegal_utf8_sse_fails_without_retry() {
+    let frame = binary_chat_delta_frame(&[0xFF, 0xFE, 0xC3, 0x28]);
+    let server = SseServer::start(vec![(frame, Duration::ZERO)]);
+    let config = sse_settings(ProviderType::OpenAiCompatible, &server);
+    let retrying_client = ProviderClient::new(TransportLimits {
+        max_retries: 2,
+        retry_delay: Duration::from_millis(1),
+        ..TransportLimits::default()
+    })
+    .expect("create retrying client");
+    let mut deltas = Vec::new();
+    let error = retrying_client
+        .execute_stream(
+            provider_for(config.provider_type).as_ref(),
+            &config,
+            "stream-key",
+            "illegal-utf8-sse",
+            &TranslationRequest::text("hello", LanguagePair::new("auto", "zh-CN")),
+            Some("PGMETA_illegal_utf8_01234"),
+            &CancellationToken::new(),
+            |delta| deltas.push(delta.to_owned()),
+        )
+        .await
+        .expect_err("illegal UTF-8 SSE must fail as InvalidResponse");
+
+    assert_eq!(error.kind, ProviderErrorKind::InvalidResponse);
+    assert!(!error.retryable);
+    assert!(error.message.contains("UTF-8"));
+    assert_eq!(server.requests().len(), 1);
+    assert!(deltas.is_empty());
+}
+
+#[tokio::test]
+async fn stream_exceeding_size_limit_fails_without_retry() {
+    let big_delta = "x".repeat(256);
+    let frame = format!(
+        "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{big_delta}\"}}}}]}}\n\ndata: [DONE]\n\n"
+    )
+    .into_bytes();
+    let server = SseServer::start(vec![(frame, Duration::ZERO)]);
+    let config = sse_settings(ProviderType::OpenAiCompatible, &server);
+    let retrying_client = ProviderClient::new(TransportLimits {
+        max_response_bytes: 32,
+        max_retries: 2,
+        retry_delay: Duration::from_millis(1),
+        ..TransportLimits::default()
+    })
+    .expect("create retrying client");
+    let mut deltas = Vec::new();
+    let error = retrying_client
+        .execute_stream(
+            provider_for(config.provider_type).as_ref(),
+            &config,
+            "stream-key",
+            "stream-over-limit",
+            &TranslationRequest::text("hello", LanguagePair::new("auto", "zh-CN")),
+            Some("PGMETA_over_limit_01234567"),
+            &CancellationToken::new(),
+            |delta| deltas.push(delta.to_owned()),
+        )
+        .await
+        .expect_err("stream above the byte limit must fail as InvalidResponse");
+
+    assert_eq!(error.kind, ProviderErrorKind::InvalidResponse);
+    assert!(!error.retryable);
+    assert!(error.message.contains("上限"));
+    assert_eq!(server.requests().len(), 1);
+    assert!(deltas.is_empty());
+}
+
 #[tokio::test]
 async fn gemini_illegal_endpoint_fails_with_configuration_error() {
     let server = SseServer::start_multi(vec![]);

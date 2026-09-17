@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 
 namespace PopGlot.Windows;
@@ -157,4 +158,106 @@ internal static class Ui
         viewer is null ||
         viewer.ScrollableHeight <= 0 ||
         viewer.VerticalOffset >= viewer.ScrollableHeight - 1.0;
+
+    // ---- IME Composition tracking (N02) -----------------------------------
+    // InputMethod.GetIsInputMethodEnabled only checks whether an IME is enabled
+    // on the control (always true on Windows whenever a CJK input method is
+    // installed), which mistakenly blocked Enter on every keystroke.
+    // Instead, we track active composition (PreviewTextInputStart / Update /
+    // TextInput / LostFocus), reset on Escape (IMEs cancel silently), and
+    // check Key.ImeProcessed / ImeProcessedKey.
+
+    public static readonly DependencyProperty IsComposingProperty =
+        DependencyProperty.RegisterAttached(
+            "IsComposing",
+            typeof(bool),
+            typeof(Ui),
+            new PropertyMetadata(false));
+
+    public static bool GetIsComposing(DependencyObject element) =>
+        (bool)element.GetValue(IsComposingProperty);
+
+    public static void SetIsComposing(DependencyObject element, bool value) =>
+        element.SetValue(IsComposingProperty, value);
+
+    public static void AttachCompositionTracker(TextBox textBox)
+    {
+        TextCompositionManager.AddPreviewTextInputStartHandler(textBox, OnCompositionStart);
+        TextCompositionManager.AddPreviewTextInputUpdateHandler(textBox, OnCompositionUpdate);
+        TextCompositionManager.AddPreviewTextInputHandler(textBox, OnCompositionEnd);
+        TextCompositionManager.AddTextInputHandler(textBox, OnCompositionEnd);
+        textBox.LostFocus += OnTextBoxLostFocus;
+        textBox.PreviewKeyDown += OnTextBoxPreviewKeyDown;
+    }
+
+    private static void OnCompositionStart(object sender, TextCompositionEventArgs e)
+    {
+        if (sender is DependencyObject d)
+        {
+            SetIsComposing(d, true);
+        }
+    }
+
+    private static void OnTextBoxPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is not DependencyObject d)
+        {
+            return;
+        }
+        // Escape cancels an active composition, but several IMEs tear the
+        // composition down without raising a composition-end event — the
+        // IsComposing flag would stay stuck true and every later Enter be
+        // swallowed as "the composition owns it". Reset on Escape (some IMEs
+        // surface it as an ImeProcessed Escape) so the next Enter submits.
+        // Never mark the key handled: the IME still needs it to cancel.
+        if (e.Key == Key.Escape || e.ImeProcessedKey == Key.Escape)
+        {
+            SetIsComposing(d, false);
+        }
+    }
+
+    private static void OnCompositionUpdate(object sender, TextCompositionEventArgs e)
+    {
+        if (sender is DependencyObject d)
+        {
+            var isComp = e.TextComposition is not null && !string.IsNullOrEmpty(e.TextComposition.CompositionText);
+            SetIsComposing(d, isComp);
+        }
+    }
+
+    private static void OnCompositionEnd(object sender, TextCompositionEventArgs e)
+    {
+        if (sender is DependencyObject d)
+        {
+            SetIsComposing(d, false);
+        }
+    }
+
+    private static void OnTextBoxLostFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is DependencyObject d)
+        {
+            SetIsComposing(d, false);
+        }
+    }
+
+    /// <summary>
+    /// Returns true if the element is currently in an active IME composition
+    /// or if the key event represents an IME-processed keystroke.
+    /// </summary>
+    public static bool IsImeComposing(TextBox? textBox, KeyEventArgs? e = null)
+    {
+        if (e is not null)
+        {
+            if (e.Key == Key.ImeProcessed || e.ImeProcessedKey != Key.None)
+            {
+                return true;
+            }
+        }
+        if (textBox is not null && GetIsComposing(textBox))
+        {
+            return true;
+        }
+        return false;
+    }
 }

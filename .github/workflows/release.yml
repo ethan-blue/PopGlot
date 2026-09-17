@@ -63,12 +63,14 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      # Full gate before packaging: Rust tests/clippy must pass and the shell
-      # logic tests (privacy matrix, DPI screenshots) run against the Release dll.
+      # Full gate before packaging: Rust tests/clippy must pass and both the
+      # pure C# tests and the shell logic tests (privacy matrix, DPI
+      # screenshots) run against the Release build.
       - run: cargo test --workspace --locked --release
       - run: cargo clippy --workspace --all-targets --locked --release -- -D warnings
       - run: cargo fmt --all -- --check
       - run: dotnet build apps/PopGlot.Windows/PopGlot.Windows.csproj --configuration Release
+      - run: dotnet run --project tests/PopGlot.Windows.PureTests/PopGlot.Windows.PureTests.csproj --configuration Release
       - run: dotnet run --project tests/PopGlot.Windows.LogicTests/PopGlot.Windows.LogicTests.csproj --configuration Release
 
       - name: Publish portable build

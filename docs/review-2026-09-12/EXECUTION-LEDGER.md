@@ -18,66 +18,68 @@
 
 | ID | 目标 | 当前状态 | 合同定位 | 当前证据/下一步 |
 |---|---|---|---|---|
-| C00 | 测试隔离与可信基线 | READY_FOR_REVIEW | 第一轮 §8；最终规则见 README | 已验证：守卫移至 Main 首行（先于隔离引导/Core/WPF 初始化），冲突时单一错误 exit 3 零测试，过滤器不可绕过——真机实证 PID 32548 在场 → exit 3 单一错误，带 POPGLOT_TESTS_FILTER 同样拦截；Release 构建 0 警告 0 错误。未验证：无实例时全量套件通过+前后配置哈希不变（待实例退出） |
-| C01 | 免费引擎最终发送授权 | READY_FOR_REVIEW（A04 已返修） | 第一轮 §8；POST-C00-C07 §2/A04 | A04 闭环：TryClaimSend 先实时政策核验后原子消费；once-only 也拒绝签发后的显式 Denied；消费点移至 URL/header 构建后、transport 提交前（构建失败不烧许可）；EndpointsOverride seam 使构建失败可测。pure 8 场景反例矩阵全过。套件执行待实例退出 |
-| C02 | 词库超限/损坏/写入恢复 | READY_FOR_REVIEW（A08 已返修） | 第一轮 §8；POST-C00-C07 §2/A08 | A08 闭环：ReadBounded 单句柄累计上限（读中增长不可穿透）；StrictUtf8；Corrupt 默认只读且隔离副本 hash 验证后才置 QuarantinedSafely；RetryLoad 快照-提交清错误态。pure 损坏/UTF-8/截断/锁定/重试矩阵全过。库页重试按钮挂 W2 UI |
-| C03 | 诊断最小化与脱敏 | READY_FOR_REVIEW（A09 已返修） | 第一轮 §8；POST-C00-C07 §2/A09 | A09 闭环：栈帧降为 Namespace.Method 标识（ExtractFrame），路径形捕获/超长拒绝，非帧行不落盘；message/Data/InnerException 均不入盘；导出功能当前不存在——据实记“不适用”，SanitizeForExport 留作未来入口强制复扫。pure 注入矩阵全过 |
-| C04 | 代码与结构保真 | READY_FOR_REVIEW（A07 已返修） | 第一轮 §8；POST-C00-C07 §2/A07 | A07 闭环：共享 ClassifyFenceLine/ClosesBlock（opener 符号+长度追踪，closer 同符且 ≥N 无 info，反引号 info 含反引号非围栏）；A07 确定性 fixture 四反引号含内三反引号全路径一致（纯文本+视觉块复制断言）；LF 规范化合同明确。pure 5 围栏反例全过 |
-| C05 | 关闭/失焦/取消/恢复 | READY_FOR_REVIEW（A05/A06 已返修） | 第一轮 §8；POST-C00-C07 §2/A05,A06 | A05 闭环：gate.WindowVisible 纳入 ShouldTriggerAutoCopy；剪贴板提交边界复查 IsVisible（复制重试等待中隐藏也不写）；CloseAsUserIntent 统一 X/Alt+F4/关闭热键=取消+隐藏。A06 闭环：Esc 先让菜单/下拉自处理（视觉树探测 ContextMenu.IsOpen）；查词 Esc 以活跃 _cts 为准取消任意阶段；恢复按最近使用元数据；退出 ForceClose 查词（修复 Shutdown 挂起）。pure gate 测试过；LogicTests 新增隐藏完成/恢复不补发测试（待跑）。IME 组合键与真机失焦矩阵留 E3 |
-| C06 | 全局异常策略 | READY_FOR_REVIEW（A10 已返修） | 第一轮 §8；POST-C00-C07 §2/A10 | A10 闭环：泛型 InvalidOperationException 从可恢复白名单移除（未知即熔断）；RuntimeGate.NewWorkAllowed 熔断后拒绝新任务（TranslateTextAsync/TranslateScreenshotAsync 入口 + 热键双保险）；RestartApplication 先清旧实例（热键/窗口/TTS）再交互斥体后启动新进程。注入式熔断演练与真机重启留验证待办 |
-| C07 | 开机启动真实状态 | READY_FOR_REVIEW（A01–A03 已返修） | 第一轮 §8；POST-C00-C07 §2/A01-A03 | A01 闭环：PlanSaveAction 纯决策——OsDisabled==true 时普通保存一律不写注册表；A02 闭环：BuildRunCommand 统一 "path" --background，ExtractExecutablePath 解析引号路径（空格/CJK/带参/未闭引号），marker 在托盘就绪后消费；A03 闭环：OsDisabled 三态（读失败=未知≠未禁用）、修复按钮写入后重读 OS 状态报告真话、回滚失败明示不一致。pure 决策+命令合同矩阵全过。真机登录 20 次留 E3 |
-| C08 | 稳定安装路径与自启修复 | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| C09 | Release 启动与空闲性能 | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| C10 | 热键首帧与取消性能 | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| C11 | UI 线程 I/O 与激活卡顿 | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| C12 | 生命周期与内存回收 | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| C13 | 主工作台 | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| C14 | 极速查词与浮窗 | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| C15 | 通用设置与关闭行为 | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| C16 | 服务配置流程 | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| C17 | 统一空态/错误/反馈 | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| C18 | 主题热切换与高对比 | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| C19 | 图标与可访问性 | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| C20 | 分段与长标识符 | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| C21 | 推荐证据时间与身份 | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| C22 | 免费引擎商业决策 | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| C23 | Provider 网络和 E2E | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| C24 | 安装签名更新回滚 | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| C25 | 首次体验帮助配置 | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| C26 | 商业发布总验收 | SPECIFIED_NOT_IMPLEMENTED | 第一轮 §8；最终规则见 README | 未领取；无本轮实施证据 |
-| N01 | 会话暂存与接续 | SPECIFIED_NOT_IMPLEMENTED | V2 §5 | 未领取；无本轮实施证据 |
-| N02 | 输入/IME/来源复制 | SPECIFIED_NOT_IMPLEMENTED | V2 §5 | 未领取；无本轮实施证据 |
-| N03 | 截图调整与 OCR 校对 | SPECIFIED_NOT_IMPLEMENTED | V2 §5 | 未领取；无本轮实施证据 |
-| N04 | 复制格式与 partial | SPECIFIED_NOT_IMPLEMENTED | V2 §5 | 未领取；无本轮实施证据 |
-| N05 | 语言与风格 | SPECIFIED_NOT_IMPLEMENTED | V2 §5 | 未领取；无本轮实施证据 |
-| N06 | 生词与术语 | SPECIFIED_NOT_IMPLEMENTED | V2 §5 | 未领取；无本轮实施证据 |
-| N07 | 历史检索与版本 | SPECIFIED_NOT_IMPLEMENTED | V2 §5 | 未领取；无本轮实施证据 |
-| N08 | 备份导入恢复 | SPECIFIED_NOT_IMPLEMENTED | V2 §5 | 未领取；无本轮实施证据 |
-| N09 | 朗读控制 | SPECIFIED_NOT_IMPLEMENTED | V2 §5 | 未领取；无本轮实施证据 |
-| N10 | 服务诊断与费用 | SPECIFIED_NOT_IMPLEMENTED | V2 §5 | 未领取；无本轮实施证据 |
-| N11 | 首次无服务体验 | SPECIFIED_NOT_IMPLEMENTED | V2 §5 | 未领取；无本轮实施证据 |
-| N12 | 设置搜索与保存语义 | SPECIFIED_NOT_IMPLEMENTED | V2 §5 | 未领取；无本轮实施证据 |
-| N13 | 快捷键暂停 | SPECIFIED_NOT_IMPLEMENTED | V2 §5 | 未领取；无本轮实施证据 |
-| N14 | 响应布局与显示器 | SPECIFIED_NOT_IMPLEMENTED | V2 §5 | 未领取；无本轮实施证据 |
-| N15 | 质量与人工纠正 | SPECIFIED_NOT_IMPLEMENTED | V2 §5 | 未领取；无本轮实施证据 |
-| N16 | 长文进度与预算 | SPECIFIED_NOT_IMPLEMENTED | V2 §5 | 未领取；无本轮实施证据 |
-| N17 | 第二服务复译（L3） | SPECIFIED_NOT_IMPLEMENTED | V2 §5 | 未领取；无本轮实施证据 |
-| N18 | 文件/学习扩展（研究） | SPECIFIED_NOT_IMPLEMENTED | V2 §5 | 未领取；无本轮实施证据 |
-| UI01 | 设计基线 | SPECIFIED_NOT_IMPLEMENTED | V2 §14；承接 C/N 实现 | 未领取；无本轮实施证据 |
-| UI02 | 配色与控件状态 | SPECIFIED_NOT_IMPLEMENTED | V2 §14；承接 C/N 实现 | 未领取；无本轮实施证据 |
-| UI03 | 主窗/浮窗/查词布局 | SPECIFIED_NOT_IMPLEMENTED | V2 §14；承接 C/N 实现 | 未领取；无本轮实施证据 |
-| UI04 | 设置/服务/隐私布局 | SPECIFIED_NOT_IMPLEMENTED | V2 §14；承接 C/N 实现 | 未领取；无本轮实施证据 |
-| UI05 | 资料库/OCR/托盘 | SPECIFIED_NOT_IMPLEMENTED | V2 §14；承接 C/N 实现 | 未领取；无本轮实施证据 |
-| UI06 | 主题生命周期与无障碍 | SPECIFIED_NOT_IMPLEMENTED | V2 §14；承接 C/N 实现 | 未领取；无本轮实施证据 |
-| UI07 | 集成视觉验收 | SPECIFIED_NOT_IMPLEMENTED | V2 §14；承接 C/N 实现 | 未领取；无本轮实施证据 |
-| P01 | 模板领域模型与存储 | SPECIFIED_NOT_IMPLEMENTED | Prompt 专项 §7 | 未领取；无本轮实施证据 |
-| P02 | 有限变量纯编译器 | SPECIFIED_NOT_IMPLEMENTED | Prompt 专项 §7 | 未领取；无本轮实施证据 |
-| P03 | 四协议与保真接入 | SPECIFIED_NOT_IMPLEMENTED | Prompt 专项 §7 | 未领取；无本轮实施证据 |
-| P04 | 模板管理预览试译 | SPECIFIED_NOT_IMPLEMENTED | Prompt 专项 §7 | 未领取；无本轮实施证据 |
-| P05 | 快照缓存历史 | SPECIFIED_NOT_IMPLEMENTED | Prompt 专项 §7 | 未领取；无本轮实施证据 |
-| P06 | 场景术语临时背景 | SPECIFIED_NOT_IMPLEMENTED | Prompt 专项 §7 | 未领取；无本轮实施证据 |
-| P07 | 配额退化与导入导出 | SPECIFIED_NOT_IMPLEMENTED | Prompt 专项 §7 | 未领取；无本轮实施证据 |
-| P08 | 质量稳定性与放行 | SPECIFIED_NOT_IMPLEMENTED | Prompt 专项 §7 | 未领取；无本轮实施证据 |
+| C00 | 测试隔离与可信基线 | DONE_VERIFIED | 第一轮 §8；POST-C00-C07 §2 | 已闭环（对账A docs/gap-analysis-2026-09-14/C00-C07.md §2, §3）：实例在场 exit 3 单一错误拦截（2026-09-12 真机实证 PID 32548）；无实例全量 LogicTests 3×180/0 + 185/185 全绿；配置哈希不变（套件内建断言 PASS）。HEAD 9e4832a 验证通过 |
+| C01 | 免费引擎最终发送授权 | DONE_VERIFIED | 第一轮 §8；POST-C00-C07 §2/A04 | 已闭环（对账A docs/gap-analysis-2026-09-14/C00-C07.md §2, §3）：A04 线性化先核验后原子消费、构建失败不烧许可、once-only 拒签发后 Denied；W18 Interlocked.Exchange 硬件级单发原子性复验全绿；pure 8 场景与套件全过；真实网络 E2E 归 C23（列债 D9） |
+| C02 | 词库超限/损坏/写入恢复 | DONE_VERIFIED | 第一轮 §8；POST-C00-C07 §2/A08 | 已闭环（对账A docs/gap-analysis-2026-09-14/C00-C07.md §2, §3）：A08 有界读取/严格 UTF-8/损坏只读/快照重试清错误态；V04 UI 损坏重试接线；W8 异步化后经 W16 返修闭环（写失败可见、快照回滚、并发不丢更新）；超限 fixture 哈希不变；列债 D5/D6′ |
+| C03 | 诊断最小化与脱敏 | DONE_VERIFIED | 第一轮 §8；POST-C00-C07 §2/A09 | 已闭环（对账A docs/gap-analysis-2026-09-14/C00-C07.md §2, §3）：A09/V01 栈帧仅来自运行时结构化 API，非帧行/message/Data/InnerException 绝不落盘；W9 异步化 + W15/W18 Flush 接线；注入矩阵/轮转预算全绿；导出功能不存在据实记“不适用”（列债 D6） |
+| C04 | 代码与结构保真 | DONE_VERIFIED | 第一轮 §8；POST-C00-C07 §2/A07 | 已闭环（对账A docs/gap-analysis-2026-09-14/C00-C07.md §2, §3）：A07 围栏符号与长度追踪（四反引号含内三反引号逐字符一致）；7 探针 + 三入口一致（W17 修复回归后全绿）；LF 规范化合同明确；跨应用剪贴板留 E3 列债 D4 |
+| C05 | 关闭/失焦/取消/恢复 | DONE_VERIFIED（附条件） | 第一轮 §8；POST-C00-C07 §2/A05,A06 | 已闭环（对账A docs/gap-analysis-2026-09-14/C00-C07.md §2, §3）：隐藏完成不碰剪贴板（A05/W17）；恢复不补发；查词失焦保留会话；Esc 先菜单/IME 后取消；最近使用恢复；强关真销毁；测试全绿。**挂验证债 D1**：真机失焦矩阵（IME/Alt+Tab/系统通知等）留 E3，保持未验证 |
+| C06 | 全局异常策略 | DONE_VERIFIED（附条件） | 第一轮 §8；POST-C00-C07 §2/A10 | 已闭环（对账A docs/gap-analysis-2026-09-14/C00-C07.md §2, §3）：泛型 InvalidOperation 不再一律恢复；RuntimeGate 熔断拒绝新任务；重启先清旧资源后交互斥体；W18 修复退出时序断言；测试全绿；崩溃风暴已修。**挂验证债 D2**：E3 注入演练与真实重启交接挂账 |
+| C07 | 开机启动真实状态 | DONE_VERIFIED（附条件） | 第一轮 §8；POST-C00-C07 §2/A01-A03 | 已闭环（对账A docs/gap-analysis-2026-09-14/C00-C07.md §2, §3）：A01 PlanSaveAction 普通保存绝不写禁用；A02 BuildRunCommand/ExtractExecutablePath 命令合同；A03 OsDisabled 三态诚实；V03 磁盘真相+重试锁（W18 保持合规接线）；8 状态矩阵全绿。**挂验证债 D3**：真机临时账户登录 20 次留 E3 挂账 |
+| C08 | 稳定安装路径与自启修复 | NOT_STARTED | 第一轮 §8；对账B docs/gap-analysis-2026-09-14/C08-C12.md §0, §1 | 未实施：无 ADR、无安装器、发布形态为便携 zip、无移动文件夹提示；仅前置地基（RepairRunPath 不覆盖 OS 禁用）借道 C07 落地 |
+| C09 | Release 启动与空闲性能 | READY_FOR_REVIEW | 第一轮 §8；对账B docs/gap-analysis-2026-09-14/C08-C12.md §0, §1, §7 | 最终代码树正式复测 PASS（`artifacts/perf/startup.json`：30/30，P50=383/P95=402，600/1200ms 内；WS=103.53MiB 硬门内但 80MiB 软目标未达；空闲 CPU 0%；CPU 型号已记录；dirtyDiffHash a9dda31588861ddc；夹具 41/41）。旧「真实 30 次测量从未执行/缺 startup.json/缺 CPU 型号」为旧时点陈述，已被复测取代（取代声明见对账B §7 与 §6 同日记录）；待独立复核 |
+| C10 | 热键首帧与取消性能 | PARTIAL | 第一轮 §8；对账B docs/gap-analysis-2026-09-14/C08-C12.md §0, §1 | 部分完成：W11 首帧瘦身（PERF-HOTKEY-02/03）与 W7 流式节流 60ms 落地；缺口：无结构化时间点埋点、无 100 次基准、隐藏窗口预热方案已撤回 |
+| C11 | UI 线程 I/O 与激活卡顿 | PARTIAL | 第一轮 §8；对账B docs/gap-analysis-2026-09-14/C08-C12.md §0, §1 | 部分完成：PERF-IO-01~06 全部异步化（词库/历史/注册表/Profile/日志/重启交接）；缺口：MainWindow.RefreshEngineStatus 每次 Activated 同步执行 CredRead 与 File.ReadAllText，违反合同 |
+| C12 | 生命周期与内存回收 | PARTIAL | 第一轮 §8；对账B docs/gap-analysis-2026-09-14/C08-C12.md §0, §1 | 部分完成：SettingsWindow 订阅对称释放、ThemeService 退订系统事件、跨线程加固；缺口：四窗口×200 开关与 WS 非单调增长等真机验收未执行 |
+| C13 | 主工作台 | PARTIAL | 第一轮 §8；对账C docs/gap-analysis-2026-09-14/C13-C19.md §0, §1 | 部分完成：W7/W12 三断点（<720 折叠+堆叠/≥960 宽屏 1:1.25）、MinWidth=560、W2 空态引导卡落地；缺口：清空未降级为次要动作、缺空态三入口、底栏缺隐私/会话状态、7 态验收矩阵未测 |
+| C14 | 极速查词与浮窗 | PARTIAL | 第一轮 §8；对账C docs/gap-analysis-2026-09-14/C13-C19.md §0, §1 | 部分完成：W3/W7/W11/W12 按钮 32×32、Pin 动态提示、失败修复路径、查词工作区居中+高度自适应；缺口：标题栏低频动作未收纳进「更多」菜单、原始异常消息未折叠 |
+| C15 | 通用设置与关闭行为 | PARTIAL | 第一轮 §8；对账C docs/gap-analysis-2026-09-14/C13-C19.md §0, §1 | 部分完成：W2/W5/W13 启动独立分组与实际状态、修复按钮、草稿守卫、未保存徽章；缺口：缺主窗口 X 行为选项（固定关托盘）、主题即时生效与保存条混排无提示 |
+| C16 | 服务配置流程 | PARTIAL | 第一轮 §8；对账C docs/gap-analysis-2026-09-14/C13-C19.md §0, §1 | 部分完成：W2/W5 单一添加入口、测试连接降次要、高级折叠、删除隔离+二次确认、无 Key 拦截；缺口：编辑态顶部未隐藏添加按钮、测试连接无时间戳 |
+| C17 | 统一空态/错误/反馈 | PARTIAL | 第一轮 §8；对账C docs/gap-analysis-2026-09-14/C13-C19.md §0, §1 | 部分完成：W1/W2/W3/W7/W16 FriendlyError 词典三入口共用、取消独立状态、partial 警示色调与复制门；缺口：无结构化 reason code（依赖异常子串匹配）、原始异常仍直接上屏未折叠 |
+| C18 | 主题热切换与高对比 | PARTIAL | 第一轮 §8；对账C docs/gap-analysis-2026-09-14/C13-C19.md §0, §1 | 部分完成：W1/W4/W6 MarkdownPresenter 全动态 SetResourceReference、高对比系统色覆盖与 UserPreferenceChanged 订阅；缺口：状态色未系统色化、高对比人工走查未跑、U10 文档失真未修 |
+| C19 | 图标与可访问性 | PARTIAL | 第一轮 §8；对账C docs/gap-analysis-2026-09-14/C13-C19.md §0, §1 | 部分完成：W2/W7/W12 v5 九档图标、全库 AutomationName 覆盖、FocusRing 焦点环、IME Enter 防护；缺口：多尺寸图标视觉审核未做、真机 IME/读屏/全键盘走查未做 |
+| C20 | 分段与长标识符 | PARTIAL | 第一轮 §8；对账D docs/gap-analysis-2026-09-14/C20-C26.md §逐项判定 | 部分完成：Rust core 分段预算体系与 C01 每段授权落地；缺口：长标识符保真未测、分段与 C# 围栏交互未验证 |
+| C21 | 推荐证据时间与身份 | PARTIAL | 第一轮 §8；对账D docs/gap-analysis-2026-09-14/C20-C26.md §逐项判定 | 部分完成：W2 展示层证据分级去按钮化（官方/推断/实测三档）；缺口：证据无采集时间戳、无来源身份标识，不可追溯 |
+| C22 | 免费引擎商业决策 | NOT_STARTED | 第一轮 §8；对账D docs/gap-analysis-2026-09-14/C20-C26.md §逐项判定 | 未实施：全库无 ADR 文档，商业门禁停留在规划，需负责人决策计费模式与公共服务保留 |
+| C23 | Provider 网络和 E2E | PARTIAL | 第一轮 §8；对账D docs/gap-analysis-2026-09-14/C20-C26.md §逐项判定 | 部分完成：provider_http 27 项通过，EndpointsOverride 支持构建失败注入；缺口：四协议真实网络 E2E 往返验收未执行 |
+| C24 | 安装签名更新回滚 | PARTIAL | 第一轮 §8；对账D docs/gap-analysis-2026-09-14/C20-C26.md §逐项判定 | 部分完成：publish-package.ps1 发布清单与全文件哈希核验；缺口：代码签名、更新源验证、升级回滚未做 |
+| C25 | 首次体验帮助配置 | NOT_STARTED | 第一轮 §8；对账D docs/gap-analysis-2026-09-14/C20-C26.md §逐项判定 | 未实施：仅有 W2/W3 无服务引导卡子集；完整首启流程、演示模式与离线帮助未做 |
+| C26 | 商业发布总验收 | NOT_STARTED | 第一轮 §8；对账D docs/gap-analysis-2026-09-14/C20-C26.md §逐项判定 | 未实施：依赖 C22–C25 与 E3 全矩阵，商业放行签字必须负责人完成 |
+| N01 | 会话暂存与接续 | PARTIAL | V2 §5；对账E docs/gap-analysis-2026-09-14/N01-N09.md §1, §2 | 部分完成：托盘恢复最近翻译、隐藏可见性门禁、展开到工作台已做；缺口：可选独立快捷键、多会话仓（≤5会话/2MiB）、草稿覆盖选择未做 |
+| N02 | 输入/IME/来源复制 | PARTIAL | V2 §5；对账E docs/gap-analysis-2026-09-14/N01-N09.md §1, §2 | 部分完成：Enter 翻译与占位提示、专用复制、修改防抖已做；缺口：IME 组词判定缺陷未修、无 Ctrl+Enter 偏好、连续相同提交无去重 |
+| N03 | 截图调整与 OCR 校对 | NOT_STARTED | V2 §5；对账E docs/gap-analysis-2026-09-14/N01-N09.md §1, §2 | 未实施：仅有框选单次截发；可拖控制点、二次确认、OCR 校对与明确上传全未实现 |
+| N04 | 复制格式与 partial | PARTIAL | V2 §5；对账E docs/gap-analysis-2026-09-14/N01-N09.md §1, §2 | 部分完成：W3 显式 partial 复制放行、W14 复制纯文本落地；缺口：富文本 Markdown 复制、双栏对照流式复制未做 |
+| N05 | 语言与风格 | PARTIAL | V2 §5；对账E docs/gap-analysis-2026-09-14/N01-N09.md §1, §2 | 部分完成：语言选择/交换/自动识别已做；缺口：风格切换仅有模型推荐偏好无翻译风格、语言偏好持久化缺陷 |
+| N06 | 生词与术语 | NOT_STARTED | V2 §5；对账E docs/gap-analysis-2026-09-14/N01-N09.md §1, §2 | 未实施：生词本 CRUD 已做但不属于术语库；术语领域模型、提取注入、双向匹配与保护全未实现 |
+| N07 | 历史检索与版本 | PARTIAL | V2 §5；对账E docs/gap-analysis-2026-09-14/N01-N09.md §1, §2 | 部分完成：W6 真实计数清空、W8 异步写盘、W10 虚拟化过滤已做；缺口：跨会话按请求聚合版本、按日归档、增量清理未做 |
+| N08 | 备份导入恢复 | NOT_STARTED | V2 §5；对账E docs/gap-analysis-2026-09-14/N01-N09.md §1, §2 | 未实施：仅生词本单表导出；整库备份（配置/历史/词库）、导入预检、冲突覆盖机制全未实现 |
+| N09 | 朗读控制 | PARTIAL | V2 §5；对账E docs/gap-analysis-2026-09-14/N01-N09.md §1, §2 | 部分完成：W5/W7 朗读播放状态联动、图标/提示切换、可点击停止；缺口：语速音量控制、语言真实性校验、云朗读降级全未做 |
+| N10 | 服务诊断与费用 | PARTIAL | V2 §5；对账F docs/gap-analysis-2026-09-14/N10-N18.md §判定总览, §逐项判定 | 部分完成：结果显示服务、隔离草稿测试、基础失败分类（401/429/404/网络）；缺口：测试取消按钮、健康时间戳、分层诊断、费用透明 |
+| N11 | 首次无服务体验 | PARTIAL | V2 §5；对账F docs/gap-analysis-2026-09-14/N10-N18.md §判定总览, §逐项判定 | 部分完成：W2/W3 无服务引导卡与前往配置、免费引擎授权链；缺口：无引擎时截图未拦截、缺出网透明提示 |
+| N12 | 设置搜索与保存语义 | PARTIAL | V2 §5；对账F docs/gap-analysis-2026-09-14/N10-N18.md §判定总览, §逐项判定 | 部分完成：V02/V03 纯值比对、W5 双保存条消除、W13 响应式；缺口：设置搜索、恢复默认未实现 |
+| N13 | 快捷键暂停 | NOT_STARTED | V2 §5；对账F docs/gap-analysis-2026-09-14/N10-N18.md §判定总览, §逐项判定 | 未实施：专注模式、全局快捷键一键暂停、托盘对应状态指示全未做 |
+| N14 | 响应布局与显示器 | PARTIAL | V2 §5；对账F docs/gap-analysis-2026-09-14/N10-N18.md §判定总览, §逐项判定 | 部分完成（兑现度最高）：W7/W12/W13 三断点、多屏工作区居中、DIP 换算与夹逼；缺口：显示器位置记忆、极低高度响应、超高分屏微调 |
+| N15 | 质量与人工纠正 | NOT_STARTED | V2 §5；对账F docs/gap-analysis-2026-09-14/N10-N18.md §判定总览, §逐项判定 | 未实施：80 条基准语料、对照打分、人工纠错与回流机制全未实现 |
+| N16 | 长文进度与预算 | PARTIAL | V2 §5；对账F docs/gap-analysis-2026-09-14/N10-N18.md §判定总览, §逐项判定 | 部分完成：分段会话与预算检查既有逻辑；缺口：长文进度百分比、阶段耗时透出未做 |
+| N17 | 第二服务复译（L3） | NOT_STARTED | V2 §5；对账F docs/gap-analysis-2026-09-14/N10-N18.md §判定总览, §逐项判定 | 未实施（L3 级）：第二服务复译与对照，合同明示为后续保留功能 |
+| N18 | 文件/学习扩展（研究） | NOT_STARTED | V2 §5；对账F docs/gap-analysis-2026-09-14/N10-N18.md §判定总览, §逐项判定 | 未实施（L3 研究级）：合同明示不进入当前开发队列 |
+| UI01 | 设计基线 | PARTIAL | V2 §14；对账G docs/gap-analysis-2026-09-14/UI01-UI07.md §一, §二 | 部分完成：U01 侧栏折叠、U02 设置窗尺寸降级落地；缺口：DESIGN_SYSTEM.md 仍 px 口径、U10 未修、Spacing Token 为死资源、无截图清单 |
+| UI02 | 配色与控件状态 | PARTIAL | V2 §14；对账G docs/gap-analysis-2026-09-14/UI01-UI07.md §一, §二 | 部分完成：深浅调色盘自动化对比度审计实质达标、模板状态补齐；缺口：高对比仅基础版（状态色/选中色未覆盖）、无逐控件可视化状态板 |
+| UI03 | 主窗/浮窗/查词布局 | PARTIAL | V2 §14；对账G docs/gap-analysis-2026-09-14/UI01-UI07.md §一, §二 | 部分完成：主窗三断点、查词工作区居中+自适应高度已做；缺口：浮窗语言行仍在标题栏、无更多菜单、低高度未成方案 |
+| UI04 | 设置/服务/隐私布局 | DONE（代码层） | V2 §14；对账G docs/gap-analysis-2026-09-14/UI01-UI07.md §一, §二 | 已闭环（代码层）：两列+窄窗单列收缩、单一保存条与草稿守卫、字段侧错误、实际状态与草稿样例均有代码证据（W2/W5/W9/W13/W16）；视觉样例归 UI07 |
+| UI05 | 资料库/OCR/托盘 | PARTIAL | V2 §14；对账G docs/gap-analysis-2026-09-14/UI01-UI07.md §一, §二 | 部分完成：资料库搜索空态/分栏/删除邻选/虚拟化平滑过滤落地；缺口：截图无确认调整模式、托盘无暂停项、资料库窄窗前进返回未做 |
+| UI06 | 主题生命周期与无障碍 | PARTIAL | V2 §14；对账G docs/gap-analysis-2026-09-14/UI01-UI07.md §一, §二 | 部分完成：旧文档热切主题全链路 SetResourceReference、全从属窗订阅；缺口：文本放大 200% 未做、键盘与读屏仅基础设施无旅程级证据 |
+| UI07 | 集成视觉验收 | NOT_STARTED | V2 §14；对账G docs/gap-analysis-2026-09-14/UI01-UI07.md §一, §二 | 未实施：W1–W18 零波次后截图；旧轮 56 张截图属 W1 前产物；T7 多 DPI/高对比/三用户旅程全未执行 |
+| P01 | 模板领域模型与存储 | NOT_STARTED | Prompt 专项 §7；对账H docs/gap-analysis-2026-09-14/P01-P08-and-others.md §一 | 未实施：popglot-domain 仅 language.rs，无模板领域模型；ShellSettings 无模板字段 |
+| P02 | 有限变量纯编译器 | NOT_STARTED | Prompt 专项 §7；对账H docs/gap-analysis-2026-09-14/P01-P08-and-others.md §一 | 未实施：无四变量白名单与纯编译器，StreamPromptBuilder 仅生成固定协议指令 |
+| P03 | 四协议与保真接入 | NOT_STARTED | Prompt 专项 §7；对账H docs/gap-analysis-2026-09-14/P01-P08-and-others.md §一 | 未实施：四协议映射无偏好层接入点（注：prompt_contract 14 项守住协议底线） |
+| P04 | 模板管理预览试译 | NOT_STARTED | Prompt 专项 §7；对账H docs/gap-analysis-2026-09-14/P01-P08-and-others.md §一 | 未实施：WPF 无翻译偏好设置页与模板管理/编辑/预览 UI |
+| P05 | 快照缓存历史 | NOT_STARTED | Prompt 专项 §7；对账H docs/gap-analysis-2026-09-14/P01-P08-and-others.md §一 | 未实施：无模板快照/缓存机制，历史记录无模板版本追踪 |
+| P06 | 场景术语临时背景 | NOT_STARTED | Prompt 专项 §7；对账H docs/gap-analysis-2026-09-14/P01-P08-and-others.md §一 | 未实施：无 domain/audience/一次性背景字段，N06 术语库亦未实施 |
+| P07 | 配额退化与导入导出 | NOT_STARTED | Prompt 专项 §7；对账H docs/gap-analysis-2026-09-14/P01-P08-and-others.md §一 | 未实施：无 50 模板上限/8KiB 限额/导入导出与 unsupported 降级 |
+| P08 | 质量稳定性与放行 | NOT_STARTED | Prompt 专项 §7；对账H docs/gap-analysis-2026-09-14/P01-P08-and-others.md §一 | 未实施：无 80 语料对照放行流程；注：prompt_contract 14 项全过为协议底线基线 |
+
+> **P 链现状声明（2026-09-14 对账H 建议1）**：P01–P08 判定全部 NOT_STARTED（2026-09-14 对账H）；`crates/popglot-core/tests/prompt_contract.rs` 14 项全过为协议底线基线，不可编辑协议与流式保真已受保护，但用户侧领域模型/编译器/管理 UI 为零；同日负责人已明确授权 P 链实施（从 W20a 模板领域模型/纯编译器起步）。
 
 ## 3. 当前检查点（恢复时先看这里）
 
@@ -86,6 +88,23 @@
 - 已实施改动面：tests/TestIsolation.cs、tests/Program.cs、Services/OutboundPolicy.cs、FreeTranslateService.cs、Services/VocabularyStore.cs、DiagnosticsLog.cs、Services/MarkdownPresenter.cs、TranslationPanelWindow.xaml.cs、QuickSearchWindow.xaml.cs、App.xaml.cs、StartupRegistration.cs、SettingsWindow.xaml.cs、Sections/GeneralSection.xaml(+.cs)、Sections/LibrarySection.xaml.cs、ShellSettings.cs。用户原有 5 个未提交修改全部保留并吸收（划词目标窗口/修饰键释放 → C05；路径校验/自愈 → C07，其中自动覆盖 OS 禁用已按 F11 修正为「只修路径，绝不覆盖禁用」）。
 - 验证状态：cargo test --workspace --locked 完整 **180 通过**（170 为先前 grep 截断漏显 ffi 10 项，差异已核实）；fmt/clippy exit 0；pure 宿主 11/11 实跑 exit 0（用户实例在场）；两 WPF 宿主编译 0 警告 0 错误；LogicTests 守卫实跑 exit 3（实例 PID 32548 在场，符合 C00 合同）。**LogicTests 全量套件待实例退出后执行**（`tests/PopGlot.Windows.LogicTests/bin/Release/net10.0-windows10.0.19041.0/PopGlot.Windows.LogicTests.exe`）；E3（失焦矩阵/登录自启 20 次/复制粘贴/熔断演练）进入验证待办。
 - 下一步：① 负责人退出 PopGlot → 跑全量 LogicTests（预期 0 失败 + VerifyRealFilesUnchanged 通过）→ 据实更新本表；② 独立复核 A01–A12；③ E3 矩阵；④ W1 推进不等用户退出：C09 测量合同/测试夹具/资源清单已领取。未验证共享包按实际覆盖列于 tests/TEST-RESOURCE-CLASSIFICATION.md §未验证共享包——当前至少包括全量 WPF 套件、全部新增 WPF 行为测试与 E3 矩阵，**不是 0**。
+
+### 2026-09-14 检查点：全量对账完成 + 负责人授权 P 链与快赢波
+- 模式：IMPLEMENTATION。负责人 2026-09-14 明确指示：“全部干”——正式授权启动 P 链实施（从 W20a 模板领域模型/纯编译器起步）与后续快赢波次（W22 台账与索引刷新、W23 文档清理与死 Token 处置等）。
+- 对账完成：2026-09-14 完成全量 60 项规划 vs 现实对账（8 份报告在 `docs/gap-analysis-2026-09-14/`，无冲突归档）：
+  - C00–C04 升级 **DONE_VERIFIED**（对账A 证据：全量套件 180×3 全绿 + 185/185，真机实例拦截实证，配置哈希不变）；
+  - C05–C07 升级 **DONE_VERIFIED（附条件）**（对账A 证据：纯逻辑/状态机全绿；挂 D1 真机失焦矩阵、D2 真实重启/熔断、D3 临时账户登录 20 次验证债留 E3）；
+  - UI04 达到 **DONE（代码层）**（对账G 证据：W2/W5/W9/W13/W16 覆盖表单布局/单一保存条/字段错误/草稿样例，视觉样例归 UI07）；
+  - PARTIAL 共 28 项：C09~C12（4项）、C13~C19（7项）、C20/C21/C23/C24（4项）、N01/N02/N04/N05/N07/N09（6项）、N10/N11/N12/N14/N16（5项）、UI01~UI03/UI05/UI06（5项中的4项）；
+  - NOT_STARTED 共 23 项：C08/C22/C25/C26（4项）、N03/N06/N08/N13/N15/N17/N18（7项）、UI07（1项）、P01~P08（8项）。
+- P 链现状声明：P01–P08 NOT_STARTED（2026-09-14 对账H），prompt_contract 14 项=协议底线基线；同日负责人已授权 P 链实施（W20a 起）。
+- 下一步：W22 台账与索引刷新闭环；随后推进 W20a（P01/P02 模板模型与纯编译器）与 W23（文档勘误与 Spacing 死 Token 处置）。
+
+### 2026-09-15 检查点：C09 最终代码树正式复测 PASS（READY_FOR_REVIEW）
+
+- C09 最终代码树正式复测完成并通过：`artifacts/perf/startup.json`（startedUtc 2026-09-15T18:23:57Z）——30/30 成功，P50=383 ms / P95=402 ms（600/1200 ms 内 PASS）；WS=103.53 MiB 低于 120 MiB 发布硬门但**高于 80 MiB 软目标（软目标未达，列开口）**；归一化空闲 CPU=0%；CPU 型号 AMD Ryzen 9 7945HX with Radeon Graphics 已记录；dirtyDiffHash `a9dda31588861ddc`；测量夹具 41/41。C09 状态升为 READY_FOR_REVIEW，DONE_VERIFIED 须独立复核签收；证据与旧时点陈述（「缺 CPU/待复测/从未执行」）取代关系见 §6 同日记录与对账B §7。
+- Esc IME 组词防护仍未接线（`Ui.IsImeComposing` 仅用于 Enter 提交路径，Esc 路径无组词判定），待真实 E3 复核与代码窗口级修复，**未闭环**。
+- 版本 0.1.5 未提升，0.1.6 候选未发布、未打 tag；本检查点不构成任何发布声明。
 
 ## 4. 每轮追加记录模板
 
@@ -880,3 +899,166 @@ V06 证据：
 - 修复：设置窗增加半初始化关闭保护与主题订阅对称释放；撤回 ApplicationIdle 构造完整隐藏翻译窗的预热；同进程崩溃托盘提示最多一次；正常退出先停止生产者，再在后台一次性 Flush，`OnExit` 仅作未 Flush 的兜底；默认设置/服务/词库路径改为按当前数据根惰性解析；词库兼容 UTF-8 BOM、旧单对象格式，并对相同损坏内容复用已验证隔离副本。
 - 验证：Release/Debug 均 0 警告 0 错误；Windows LogicTests 185/185；PureTests 18/18；Rust workspace 180/180（67+12+14+27+5+45+10），clippy/fmt 通过。以当前用户配置副本执行隔离 `--settings` 启动：进程响应、设置窗可创建、0 crash log、0 新 quarantine、词库哈希不变。
 - 边界：未删除真实数据目录中既有 `corrupt-*` 备份；未提交、推送、发布；真实凭据未读取。
+
+### 2026-09-14 W22 台账与索引刷新：60 行状态对齐对账结论 + 索引勘误 + P 链授权登记
+
+- 时间/执行者：2026-09-14 / Pi (teammate)
+- 任务和子包：W22 台账与索引刷新（依据负责人 2026-09-14 “全部干”授权指令 #01a0a018-8347-7ab2-a47e-a88d05a2d2cd；文档专属波次，无代码修改）
+- 本次授权范围：仅修改 `docs/review-2026-09-12/EXECUTION-LEDGER.md` 与 `docs/ui-audit-2026-09-13/README.md`；不改产品文档（UX_DECISIONS 等留 W23 处置），不改代码，不跑 GUI。
+- 状态：READY_FOR_REVIEW
+- 构建身份：HEAD 9e4832a（工作树干净）
+- 读取的规格与依赖证据：
+  - 对账A：`docs/gap-analysis-2026-09-14/C00-C07.md`（C00–C04 升级依据，C05–C07 附 D1-D3 验证债升级依据）
+  - 对账B：`docs/gap-analysis-2026-09-14/C08-C12.md`（C08 未实施，C09 脚本完备缺 30 次测量，C10 首帧优化已做缺基准，C11 异步化大头兑现但 RefreshEngineStatus 违规，C12 卫生已做缺真机）
+  - 对账C：`docs/gap-analysis-2026-09-14/C13-C19.md`（C13–C19 均为 PARTIAL：W1–W18 主战场大幅覆盖，但各条均有严格合同缺口）
+  - 对账D：`docs/gap-analysis-2026-09-14/C20-C26.md`（C20/C21/C23/C24 为 PARTIAL，C22/C25/C26 为 NOT_STARTED）
+  - 对账E：`docs/gap-analysis-2026-09-14/N01-N09.md`（N01/N02/N04/N05/N07/N09 为 PARTIAL，N03/N06/N08 为 NOT_STARTED）
+  - 对账F：`docs/gap-analysis-2026-09-14/N10-N18.md`（N10/N11/N12/N14/N16 为 PARTIAL，N13/N15 为 NOT_STARTED，N17/N18 为 NOT_STARTED L3）
+  - 对账G：`docs/gap-analysis-2026-09-14/UI01-UI07.md`（UI04 代码层 DONE，UI01/UI02/UI03/UI05/UI06 为 PARTIAL，UI07 为 NOT_STARTED；README 8 条勘误清单）
+  - 对账H：`docs/gap-analysis-2026-09-14/P01-P08-and-others.md`（P01–P08 全 NOT_STARTED，prompt_contract 14 项底线基线；其他文档去重清点）
+- 根因/设计依据：全量对账完成，台账主表与审计索引原有标注（待实例退出 / SPECIFIED_NOT_IMPLEMENTED / 未排期 / 进行中）滞后于代码与测试事实，需全面对齐刷新并固化 P 链授权与底线声明。
+- 目标与非目标：目标为精准对齐两文档状态并消除 8 处勘误，非目标为修改任何生产代码或功能测试。
+- 改动文件和用户原有改动的保留方式：
+  - 改动文件：`docs/review-2026-09-12/EXECUTION-LEDGER.md`、`docs/ui-audit-2026-09-13/README.md`
+  - 严格保持无代码脏修改，资产完好保留。
+- 验证命令、exit code、原始输出/证据路径：
+  - `git status --short`: 仅 2 个 markdown 文档变动，exit code 0。
+  - `git diff docs/review-2026-09-12/EXECUTION-LEDGER.md`: 60 行逐行对齐，检查点与追加记录完整。
+- 逐条验收：通过。
+  1. **全量任务表（60 行）逐行刷新**：通过。C00–C04 改 DONE_VERIFIED；C05–C07 改 DONE_VERIFIED（附条件，引 D1-D3 验证债）；UI04 改 DONE（代码层）；其余 51 项按 8 份报告严格对齐为 PARTIAL (28项) 或 NOT_STARTED (23项)，均附报告定位证据；
+  2. **审计索引 README 勘误闭环**：通过。WIN-19 改 W12 已修复；TR-18 标注死资源待处置；PERF-IO-03/04/05 改 W9 已修复；GAP-02 改 W13 已修复；§三台账补 W13、W16、W17、W18 四行并更名为 W1~W18；W15 状态改为已完成（预热撤回）；Backlog 1 归档闭环，Backlog 2 纠正死资源现状；
+  3. **P 链现状声明登记**：通过。在台账 §2 尾部与 §3 检查点增补声明：P01–P08 NOT_STARTED（2026-09-14 对账H），prompt_contract 14 项=协议底线基线；同日负责人已授权 P 链实施（W20a 起）；
+  4. **§3 检查点追加**：通过。追加 2026-09-14 段，记录全量对账完成结论与负责人“全部干”授权决定。
+- 隐私、取消、持久化、兼容和 UI 检查：纯文档刷新，零代码改动，不影响任何运行时行为。
+- 失败原因/已尝试方法/所需输入：无。
+- 新想法：无。
+- 尚未保存/临时状态：无。
+- 下一步具体文件/方法/命令意图：推进 W20a（`crates/popglot-domain` 模板领域模型与纯编译器）或 W23（产品文档清理与 Spacing 死 Token 处置）。
+- 独立复核者与结论：待负责人（slot 01a0987f-61c7-7f62-b8b8-cc512d49d3e3）签收。
+
+### 2026-09-14 W21 快赢波：IME Enter修复/激活零磁盘/主题还原+高对比语义色/A1-A12清扫
+
+- 时间/执行者：2026-09-14 / Pi (teammate, slot 01a09fee-724f)
+- 任务和子包：W21 快赢波（依据负责人 2026-09-14 “全部干”授权指令 #01a0a018-67ae-7b43-924b-24461ceec1d6）
+- 本次授权范围：仅修改 `apps/PopGlot.Windows/**` 与 `tests/PopGlot.Windows.LogicTests/**`；不碰 `crates/**`，不碰 `.github/`，不改产品文档。
+- 状态：READY_FOR_REVIEW
+- 逐项实施内容与交付证据：
+  1. **N02 IME Enter 失效修复（最高优先）**：
+     - 在 `Ui.cs` 中实现 `IsComposing` 附加属性、`AttachCompositionTracker`（监听 `PreviewTextInputStart`/`Update`/`TextInput`/`LostFocus`）与 `IsImeComposing` 统一判定；
+     - 彻底拔除三入口（`Sections/TranslateSection.xaml.cs`、`TranslationPanelWindow.xaml.cs`、`QuickSearchWindow.xaml.cs`）对 `InputMethod.GetIsInputMethodEnabled` 的错误调用；
+     - 中文 IME 开启时，普通 Enter 正常提交翻译；组词期间 Enter 归输入法确认候选，绝不误触翻译；
+     - `LogicTests` 更新并强化断言（测试用例覆盖正在组词不提交与非组词状态必提交双向验证）。
+  2. **主窗激活零磁盘 I/O（C11 逐字违约点修复）**：
+     - `ShellSettings.cs` 中 `ShellSettingsStore` 引入带文件写入时间戳（`GetLastWriteTimeUtc`）校验的线程安全内存缓存（`_cachedSettings`），稳态下 `ShellSettingsStore.Load()` 零磁盘消耗，同时保证外部直写/删除可感知；
+     - `MainWindow.xaml.cs` 的 `RefreshEngineStatusOnActivated` 接入 `Interlocked` 防重入门，并在后台线程 `Task.Run` 中异步执行 `CredentialStore.HasApiKey` (CredRead)、`ProfileManager.Load()` 与 `ShellSettingsStore.Load()`，主线程激活路径彻底达成零磁盘、零 Win32 CredRead。
+  3. **主题还原（UI01 / 对账G）**：
+     - `SettingsWindow.xaml.cs` 在 `LoadAll()`、`Revert_Click` 以及未保存关闭（`OnClosed`）时，自动将应用主题重置回 `_shellSettings.Theme` 基线主题，彻底消除即时预览后取消/关闭遗留脏主题的缺陷。
+  4. **高对比模式语义色映射（C18 / A10）**：
+     - `ThemeService.ApplyHighContrastOverrides` 全面扩充：DangerBrush、WarningBrush、SuccessBrush 映射为系统高对比警示色彩（`HotTrackColor`、`HighlightColor`、`HighlightTextColor`）；所有 Soft 填充底色（`DangerSoftBrush`、`WarningSoftBrush`、`SuccessSoftBrush`、`AccentSoftBrush`）及 `SurfaceHoverBrush` 收敛为 `WindowColor`，消除低对比光晕；
+     - `LogicTests` 增加 `HighContrastOverridesMapSemanticColors` 自动化测试。
+  5. **对账C A1–A12 小缺口清扫**：
+     - **A1**: `ShellSettings` 新增 `CloseMainWindowToTray` 属性（默认 true），`GeneralSection.xaml(.cs)` 增加「关闭主窗口时最小化到托盘」设置项；`MainWindow.OnClosing` 在该项为 false 时通过 `RequestExit` 回调直接退出应用；
+     - **A2**: `ServicesSection.xaml` 顶部「添加引擎」按钮命名为 `AddEngineHeaderButton`，在编辑态（`ShowEditorForm`）自动隐藏，在列表概览态（`ShowOverview`）恢复显示，消除同屏双 PrimaryButton 冲突；
+     - **A3**: `ServicesSection.xaml.cs` 中 `TestConnection_Click` 测试结果与失败说明追加当前时间戳（`DateTime.Now:HH:mm:ss`）；
+     - **A4**: `TranslateSection.xaml` 空态区新增快捷键三入口指引 `ShortcutEntriesHint`，动态展示实际配置的划词与截图快捷键；
+     - **A5**: `TranslateSection.xaml` 顶栏移除「清空」GhostButton，在原文底栏操作区新增「清空原文」图标按钮（对齐浮窗操作规范）；
+     - **A6**: `GeneralSection.xaml` 主题配置行提示文案补充「（即时预览，保存后持久生效）」；
+     - **A7**: `ThemeService.cs:241` 注释中关于 Accent 的描述纠正为 `Accent (blue-purple / 蓝紫)`；
+     - **A9/A11 (C#侧)**: `TranslationPanelWindow.FriendlyError` 扩充 500/502/503/504/服务不可用/服务器错误与坏响应/JSON反序列化失败的友好文案映射。
+- 边界遵从：未修改 `crates/**`，未碰 `.github/`，未改动产品文档。
+- 验证命令与结果：
+  - `dotnet build apps/PopGlot.Windows/PopGlot.Windows.csproj -c Release -o artifacts/w21-final/app`: 0 警告，0 错误，exit code 0；
+  - `dotnet build tests/PopGlot.Windows.PureTests/PopGlot.Windows.PureTests.csproj -c Release -o artifacts/w21-final/pure`: 0 警告，0 错误，exit code 0；
+  - `dotnet build tests/PopGlot.Windows.LogicTests/PopGlot.Windows.LogicTests.csproj -c Release -o artifacts/w21-final/logic`: 0 警告，0 错误，exit code 0；
+  - `./artifacts/w21-final/pure/PopGlot.Windows.PureTests.exe`: 18 passed, 0 failed, exit code 0；
+  - `./artifacts/w21-final/logic/PopGlot.Windows.LogicTests.exe`: 195 passed, 0 failed, exit code 0（套件总数从 192 项扩充至 195 项）。
+- 独立复核者与结论：待负责人（slot 01a0987f-61c7-7f62-b8b8-cc512d49d3e3）签收。
+
+### 2026-09-14 W30 实现波：N01 多会话仓与接续（按 W24 设计落实现实）
+
+- 时间/执行者：2026-09-14 / Pi (teammate, slot 01a09fee-724f)
+- 任务和子包：W30 实现波（依据负责人 2026-09-14 指令 #01a0a053-10cc-72a1-a4f1-62e468c4600f 与 W24 设计文档 `docs/design-2026-09-14/N01-session-store.md`）
+- 本次授权范围：仅修改 `apps/PopGlot.Windows/**` 与测试工程；不碰 `crates/**`，不碰 `.github/`。
+- 状态：READY_FOR_REVIEW
+- 逐项实施内容与交付证据：
+  1. **会话仓核心（`apps/PopGlot.Windows/Services/SessionStore.cs`）**：
+     - 实现 `SessionStore`（`ISessionStore`）与 `StoredSession` 领域模型，硬限制最大 5 条会话、2 MiB 累计文本上限、30 分钟无访问 TTL 惰性淘汰，内部采用 `LinkedList<StoredSession>` + `Dictionary` 双索引 LRU 机制；
+     - 严格遵守 V2/G05 红线：会话模型仅持有不可变纯文本与元数据（SessionId、Origin、语言对、结果、解析、时间戳、字节统计），严禁挂接任何 `byte[]` 或 `BitmapSource` 图像句柄；
+     - 纯内存模型，退出即释放，不向磁盘持久化泄漏任何暂存碎片。
+  2. **浮窗/查词与仓接缝及零重发恢复契约（Zero-Resend Contract）**：
+     - `TranslationPanelWindow` 增加 `CreateSessionSnapshot()` 与 `RestoreSession(StoredSession)`：在面板关闭（`OnClosed`）、用户主动隐藏（`CloseAsUserIntent`）或被新任务替换销毁（`App.DestroyActivePanel`）时，自动向 `SharedSessionStore` 压入当前会话快照；
+     - `RestoreSession` 恢复已有原文、译文、解析与 partial 阶段标记，直接设置 `_gate.OnCompleted` 或 `_gate.OnCancelled`，状态栏显示「已恢复未完成内容（未重发）」或「已恢复最近翻译（未重发）」，**保证 0 次新增网络请求**；
+     - `QuickSearchWindow` 在关闭清理时提取非空输入及结果，入仓供接续。
+  3. **接续与恢复 UI 入口**：
+     - `App.xaml.cs` 托盘菜单新增「暂存会话仓 (最多5条)」二级菜单，动态列出最近暂存会话摘要（来源/时间戳/内容预览），点击任意一条精准拉起并恢复展示，并附带「清空会话仓」入口；`RestoreRecentSurface()` 在无存活窗口时无缝降级从 `SharedSessionStore.PopRecent()` 恢复；
+     - `TranslateSection.xaml(.cs)` 工作台顶部新增「恢复暂存」按钮，支持弹出最近暂存菜单并载入；若工作台已有输入，先将其保全进会话仓再换入，杜绝草稿误丢；
+     - `DataSection.xaml.cs`「清空历史记录」时同步清空会话仓，不留隐私死角；应用退出（`ExitApplication` / `OnExit`）显式调用 `SharedSessionStore.Clear()`。
+  4. **全套自动化测试覆盖**：
+     - `PureTests` 增加 4 项纯逻辑契约测试：5 条容量上限与 LRU 淘汰、2 MiB 字节预算硬拦截与淘汰、30 分钟 TTL 自动淘汰、StoredSession 零图像引用反射审查；
+     - `LogicTests` 增加 2 项集成契约测试：LogicTests 宿主环境下的容量与 TTL 验证、浮窗 RestoreSession 零网络请求验证（断言 `BlockedPublicSends == 0`）。
+- 边界遵从：未修改 `crates/**`，未碰 `.github/`，未改动非台账文档。
+- 验证命令与结果：
+  - `dotnet build apps/PopGlot.Windows/PopGlot.Windows.csproj -c Release -o artifacts/w30-final/app`: 0 警告，0 错误，exit code 0；
+  - `dotnet build tests/PopGlot.Windows.PureTests/PopGlot.Windows.PureTests.csproj -c Release -o artifacts/w30-final/pure`: 0 警告，0 错误，exit code 0；
+  - `dotnet build tests/PopGlot.Windows.LogicTests/PopGlot.Windows.LogicTests.csproj -c Release -o artifacts/w30-final/logic`: 0 警告，0 错误，exit code 0；
+  - `./artifacts/w30-final/pure/PopGlot.Windows.PureTests.exe`: 22 passed, 0 failed, exit code 0（套件从 18 项扩充至 22 项）；
+  - `./artifacts/w30-final/logic/PopGlot.Windows.LogicTests.exe`: 197 passed, 0 failed, exit code 0（套件从 195 项扩充至 197 项）。
+- 独立复核者与结论：待负责人（slot 01a0987f-61c7-7f62-b8b8-cc512d49d3e3）签收。
+
+### 2026-09-15 文档收口波：产品文档与对账报告按最终事实刷新（仅文档，无代码）
+
+- 时间/执行者：2026-09-15 / 文档收口代理（负责人「全部干」授权范围内 W23 文档清理的延续）
+- 任务和子包：README、PRODUCT_SPEC、CHANGELOG、docs/VERSIONING、docs/CONFIGURATION_MIGRATION、对账A（C00-C07）、对账B（C08-C12）、对账H（P01-P08-and-others）、tests/TEST-RESOURCE-CLASSIFICATION 按当前最终事实刷新；**本台账仅追加本条**，不改动任何历史记录。
+- 本次授权范围：仅修改上列 10 个 Markdown 文件；不改代码、不改测试、不跑 GUI、不做 git 写操作（测试实跑与只读探查除外）。
+- 状态：READY_FOR_REVIEW
+- 构建身份：当前工作树（未提交，含 Prompt 0.1.6 候选/W21/W30 改动）；版本号保持 0.1.5 未提升。
+- 读取的规格与依赖证据：
+  - Prompt 闭环代码证据：`crates/popglot-domain/src/prompt.rs`、`crates/popglot-core/src/prompt_store.rs`、`crates/popglot-core/src/provider.rs`（preference/template 快照注入）、`crates/popglot-ffi/src/lib.rs`（popglot_*_prompt_* 与 resolve_active_preference）、`apps/PopGlot.Windows/Sections/PromptSection.xaml(.cs)`、`CoreBridge.cs`（PromptAnchorSnapshot/CompilePromptPreview）、`Services/TranslationModels.cs`（PromptTemplateIdentity，绝不携带指令正文）、`HistoryStore.cs`（PromptTemplateId/Name/Revision）、`SettingsWindow.xaml`（翻译与提示词导航）。
+  - C09：`artifacts/perf/startup.json`（2026-09-14T14:31:59Z，30/30，P50=373/P95=383 PASS；WS 103.7 MiB < 120 MiB 硬门，空闲 CPU 0%）——dirty diff 为 2026-09-14 时点，**非最终树**；`machine` 块**缺 CPU 型号**；`startup-failure.json` 为 manifest 自排除修复前的正确拦截。
+  - ShellSettings 默认值：`ClosePanelOnFocusLoss=false`（HEAD 9e4832a 即已如此）；ProfileManager schema v7（AllowLanEndpoints，缺席=false）。
+  - verify/CI：`scripts/verify.ps1` 与 `.github/workflows/ci.yml` 均已含 PureTests + LogicTests。
+- 根因/设计依据：Prompt 0.1.6 闭环实现后产品文档仍停留在 0.1.5 事实（CONFIGURATION_MIGRATION 还写 schema 6 与 ClosePanelOnFocusLoss=true、对账报告写 P 链全未启动、verify 只跑 Logic 的描述过时）；需在不谎称发布的前提下把文档对齐到当前事实。
+- 目标与非目标：目标=文档与最终事实一致（未发布内容如实标注候选、未实现/排除项明示、测试数字动态口径）；非目标=提升版本号、修改任何代码/测试、改写对账报告的历史判定正文。
+- 改动文件和用户原有改动的保留方式：仅上列 10 个 Markdown；对账报告以「事后追加节」方式补充（C00-C07 §6、C08-C12 §6、P01-P08 §四），原文不篡改。
+- 验证命令、exit code、原始输出/证据路径：2026-09-15 直接实跑（Release，实例未运行）——`PopGlot.Windows.LogicTests.exe` → **203 passed, 0 failed**（含 real user config unchanged / no unsanctioned public network send PASS）；`PopGlot.Windows.PureTests.exe` → **23 passed, 0 failed, 0 send attempts refused**；`cargo test --workspace --locked` → **208 passed, 0 failed**（core 78、domain 55、ffi 14、prompt_contract 14、provider_http 30、benchmark_safety 12、smoke 5）。数字随新增测试变化，对外口径一律以实跑为准。
+- 逐条验收：
+  1. CHANGELOG 顶部新增「未发布（Unreleased）」0.1.6 候选节（明确版本未提升、未打 tag，不冒充发布）：通过。
+  2. README 版本行/核心能力/verify 命令/配置目录按候选事实更新：通过。
+  3. PRODUCT_SPEC 新增 Prompt 风格模板节（0.1.6 候选）与「当前未实现与明确排除」清单；验收计数改为动态口径（2026-09-15 实跑 Logic 203 / Pure 23）：通过。
+  4. VERSIONING 注明 0.1.6 候选在树、版本未提升：通过。
+  5. CONFIGURATION_MIGRATION 修正 schema 6→7（补 v6→v7 局域网许可迁移）、ClosePanelOnFocusLoss 默认 true→false、新增 prompt-templates.json 存储节：通过。
+  6. 对账A/B/H 追加 2026-09-15 事实更新节（D7 前提被超越；C09 artifact 非最终树+缺 CPU 型号+G12/G13 已修；P01/P02/P03/P05 已实现、P04/P06/P07 部分、P08 未实施；C1/B2/E1/E2/E3 已闭合）：通过。
+  7. TEST-RESOURCE-CLASSIFICATION「未验证共享包」节刷新为当前验证状态（含重复编号修复）：通过。
+- 隐私、取消、持久化、兼容和 UI 检查：纯文档改动，零运行时行为变化；未写入任何密钥、截图或用户文本。
+- 失败原因/已尝试方法/所需输入：无。
+- 新想法：仅提案，未实施——C09 测量报告建议在 `measure-core.psm1` machine 块补 CPU 型号（如 `(Get-CimInstance Win32_Processor).Name`），最终树复测时一并闭合 G7。
+- 尚未保存/临时状态：无。
+- 下一步具体文件/方法/命令意图：负责人签收后，可按 VERSIONING 清单执行 0.1.6 发布（提升 csproj/Cargo.toml、CHANGELOG 更名候选节、四方一致性检查）；最终树复测 C09（`scripts/run-c09-when-free.ps1`）前先补 CPU 型号字段。
+- 独立复核者与结论：待负责人签收。
+
+### 2026-09-15 C09 最终代码树正式复测 + 四文档同步（证据登记；无代码改动）
+
+- 时间/执行者：2026-09-15（复测 startedUtc 2026-09-15T18:23:57Z）/ 文档同步代理（负责人「全部干」授权范围内）。
+- 任务和子包：C09 最终代码树正式复测证据登记 + CHANGELOG / PRODUCT_SPEC / 对账B（docs/gap-analysis-2026-09-14/C08-C12.md §7）/ 本台账四处文档同步。本台账除本条、§2 C09 行按 §1「当前表随证据更新」规则刷新、§3 增加同日检查点外，不改任何历史记录。
+- 本次授权范围：仅修改 CHANGELOG.md、PRODUCT_SPEC.md、docs/gap-analysis-2026-09-14/C08-C12.md、docs/review-2026-09-12/EXECUTION-LEDGER.md；不改代码、不改测试、不做 git 写操作、不声称发布。
+- 状态：READY_FOR_REVIEW（C09 复测证据已附，待独立复核）。
+- 构建身份：git `9e4832a66110b3b80b93efde6b2576eff375f223` + dirtyDiffHash `a9dda31588861ddc`（最终代码树）；发布包 artifactFileVersion 0.1.5.0——版本号未提升、未打 tag、未发布。
+- 复测证据（`artifacts/perf/startup.json`，verdict=PASS）：
+  - 30/30 成功、0 失败（另含 2 次不计入预热）；P50=383 ms / P95=402 ms / min 374 / max 407，600/1200 ms 预算内 PASS；
+  - 内存阶段：WS=103.53 MiB（108,556,288 字节）——低于 120 MiB 发布硬门槛（脚本按硬门判定 PASS），高于 80 MiB 软目标，**软目标未达，列开口**；Private Bytes=57.4 MiB；归一化空闲 CPU=0%（PASS）；
+  - `machine.cpuModel` 已记录：AMD Ryzen 9 7945HX with Radeon Graphics；
+  - 测量夹具 `scripts/measure-fixture.ps1` 实跑 41/41 断言通过（与复测同批，2026-09-16 02:22–02:25 本地）。
+- 对旧时点陈述的同步修正（旧文本保留不改，仅在此声明取代关系）：
+  - 对账B §4 G5/G6（真实测量未执行、门槛从未验证）与 §6「artifact 非最终树」「待复测后才可宣称」——已由本次最终树复测闭合/取代；
+  - 对账B §4 G7 与 §6「报告缺 CPU 型号」——本次报告 `machine.cpuModel` 已记录，G7 闭合；
+  - 台账 §2 C09 行原「真实 30 次测量从未执行，缺少 startup.json」——旧时点陈述，该行已随证据更新；
+  - CHANGELOG Unreleased 原「最终代码树复测仍列验证待办」——旧时点陈述，已在候选节内更新为复测结论。
+- 当前结论：C09 取证任务在最终代码树上 PASS（启动延迟、空闲 CPU、内存硬门全过）；80 MiB 空闲 WS 软目标未达为已知开口，不构成硬门失败；C09 状态升为 READY_FOR_REVIEW，DONE_VERIFIED 须独立复核签收后才能标注。
+- **Esc IME 诚实修正（不得写已闭环）**：浮窗 `Esc` 路径当前无输入法组词判定（`Ui.IsImeComposing` 仅接线于 Enter 提交路径，`TranslationPanelWindow.OnPreviewKeyDown` 的 Esc 分支只让上下文菜单/下拉先行），组词期间按 `Esc` 会直接进入取消/隐藏链路；该行为仍待真实 E3 复核与代码窗口级修复。§2 C05 行「Esc 先菜单/IME 后取消」中的「IME」环节按当前代码事实仅为菜单/下拉先行，IME 组词防护未接线，D1 验证债继续挂账。
+- 未声称事项：未发布、未提升版本号、未打 tag、未做商业发布验收（C08/C22/C24/C26 状态不变）。
+- 隐私、取消、持久化、兼容和 UI 检查：纯文档与测量产物登记，零运行时行为变化；未写入任何密钥、截图或用户文本。
+- 失败原因/已尝试方法/所需输入：无。
+- 新想法：仅提案，未实施——80 MiB 软目标缺口（103.53 MiB）可列专项评估（启动路径程序集裁剪/延迟加载）；Esc IME 窗口级修复建议复用 `Ui.IsImeComposing` 接入 Esc 分支并配 LogicTests 断言，真实行为仍归 E3。
+- 尚未保存/临时状态：无。
+- 下一步具体文件/方法/命令意图：独立复核签收 C09 复测证据（`artifacts/perf/startup.json`）；Esc IME 修复排期（`TranslationPanelWindow.xaml.cs` OnPreviewKeyDown + `Ui.IsImeComposing`）与 E3 失焦矩阵一并验证；80 MiB 软目标缺口评估立项与否由负责人决定。
+- 独立复核者与结论：待负责人签收。

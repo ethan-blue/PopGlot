@@ -85,7 +85,7 @@
 | **WIN-16** | P2 | 截图覆盖层与悬浮球内联硬编码画刷与阴影未走 Token | **W7** | **已修复+lead复核** | `CaptureOverlayWindow.xaml`, `FloatingTriggerWindow.xaml` |
 | **WIN-17** | P2 | 浮窗标题栏按钮仅 24×24 DIP，存在 9/10px 极小字号与非标间距 | **W7** | **已修复+lead复核** | `TranslationPanelWindow.xaml` |
 | **WIN-18** | P2 | 主窗口侧栏 `NavButton` 缺失 `IsPressed` 触发器 | **W4** | **已修复+lead复核** | `Themes/Controls.xaml` |
-| **WIN-19** | P2 | PinToggle ToolTip 恒为静态“固定浮窗”，未随选中状态切换为“取消固定” | — | 未排期 | `TranslationPanelWindow.xaml.cs` |
+| **WIN-19** | P2 | PinToggle ToolTip 恒为静态“固定浮窗”，未随选中状态切换为“取消固定” | **W12** | **已修复+lead复核** | `TranslationPanelWindow.xaml.cs` |
 
 ---
 
@@ -110,7 +110,7 @@
 | **TR-15** | P2 | `HotkeyRecorder` 录制中鼠标悬停被基类 Button 模板抹除高亮 | **W4** | **已修复+lead复核** | `Themes/Controls.xaml` |
 | **TR-16** | P2 | 隐私承诺卡片内子容器与父卡片背景同化完全隐形 | **W4** | **已修复+lead复核** | `Sections/PrivacySection.xaml` |
 | **TR-17** | P2 | 隐私分区对结构体 CornerRadius 误用 DynamicResource | **W4** | **已修复+lead复核** | `Sections/PrivacySection.xaml` |
-| **TR-18** | P2 | 全库无间距 Token 资源，各页面充斥散落数值 | **W6** | **已修复+lead复核** | `Themes/Controls.xaml` |
+| **TR-18** | P2 | 全库无间距 Token 资源，各页面充斥散落数值（已定义 Spacing 标尺；当前全库零引用，属死资源待处置） | **W6** | **定义已建立（待接入）** | `Themes/Controls.xaml` |
 | **TR-19** | P2 | 全库 `DropShadowEffect` 一律硬编码 `#000000` 缺少 Token | **W4/W7** | **已修复+lead复核** | `ThemeService.cs`, `Controls.xaml`, 覆盖窗口 |
 
 ---
@@ -121,9 +121,9 @@
 |---|:---:|---|:---:|:---:|---|
 | **PERF-IO-01** | P0 | 收藏生词时 UI 线程被同步文件写入阻塞（卡顿 10~80ms） | **W8** | **已修复+lead复核** | `Services/VocabularyStore.cs` |
 | **PERF-IO-02** | P0 | 历史记录读写在 UI 线程直接执行加锁文件 I/O | **W8** | **已修复+lead复核** | `HistoryStore.cs` |
-| **PERF-IO-03** | P0 | 勾选开机启动时 UI 线程同步操作 Windows 注册表挂起 | **W9** | **进行中** | `SettingsWindow.xaml.cs`, `StartupRegistration.cs` |
-| **PERF-IO-04** | P1 | 切换/重命名服务时同步执行 File.WriteAllText 与 FFI 存盘 | **W9** | **进行中** | `ProfileManager.cs`, `ServicesSection.xaml.cs` |
-| **PERF-IO-05** | P1 | 任何高频诊断日志上报均在 UI 线程同步执行 AppendAllText | **W9** | **进行中** | `DiagnosticsLog.cs` |
+| **PERF-IO-03** | P0 | 勾选开机启动时 UI 线程同步操作 Windows 注册表挂起 | **W9** | **已修复+lead复核** | `SettingsWindow.xaml.cs`, `StartupRegistration.cs` |
+| **PERF-IO-04** | P1 | 切换/重命名服务时同步执行 File.WriteAllText 与 FFI 存盘 | **W9** | **已修复+lead复核** | `ProfileManager.cs`, `ServicesSection.xaml.cs` |
+| **PERF-IO-05** | P1 | 任何高频诊断日志上报均在 UI 线程同步执行 AppendAllText | **W9** | **已修复+lead复核** | `DiagnosticsLog.cs` |
 | **PERF-IO-06** | P2 | 应用重启与实例交接路径中主线程同步阻塞等待 `WaitForExit` | **W15** | **已修复** | `App.xaml.cs` |
 | **PERF-LIST-01**| P1 | 流式翻译期间 FlowDocument 全量重建引发剧烈布局颠簸（60~80ms 节流） | **W7** | **已修复+lead复核** | `TranslationPanelWindow.xaml.cs` |
 | **PERF-LIST-02**| P1 | 资料库列表搜索/切换时 ItemsSource 全量重绑引起视觉闪烁 | **W10** | **已修复+lead复核** | `Sections/LibrarySection.xaml(.cs)` |
@@ -132,12 +132,12 @@
 | **PERF-HOTKEY-02**| P1 | 选词唤起浮窗时星标检测阻塞首帧关键路径 | **W11** | **已修复+lead复核** | `TranslationPanelWindow.xaml.cs` |
 | **PERF-HOTKEY-03**| P2 | 浮窗 OnLoaded 中强制 UpdateLayout() 引发布局双重测量开销 | **W11** | **已修复+lead复核** | `TranslationPanelWindow.xaml.cs` |
 | **GAP-01** | P1 | 主窗口响应式断点未实现（<720 DIP 折叠侧栏；≥960 双栏模式） | **W7/W12** | **已修复+lead复核** | `MainWindow.xaml(.cs)` |
-| **GAP-02** | P2 | 设置页响应式表单收缩为单列标签（在小宽度下） | — | 未排期 | `SettingsWindow.xaml` |
+| **GAP-02** | P2 | 设置页响应式表单收缩为单列标签（在小宽度下） | **W13** | **已修复+lead复核** | `SettingsWindow.xaml(.cs)` |
 | **GAP-03** | P0 | 关键浮窗交互按钮尺寸未达 ≥32 DIP 触控标准 | **W3/W7** | **已修复+lead复核** | 浮窗与查词全量 XAML |
 
 ---
 
-## 三、修复波次执行台账（W1 ~ W15）
+## 三、修复波次执行台账（W1 ~ W18）
 
 | 波次编号 | 核心职责与任务集合 | 状态 | 关键交付物 | 编译与测试验证 |
 |:---:|---|:---:|---|---|
@@ -149,12 +149,16 @@
 | **W6** | 资料库分栏/删除邻近选中/清空计数/间距Token/高对比基础版 | **已完成** | `LibrarySection.xaml(.cs)`, `DataSection`, `ShortcutsSection`, `ThemeService` | GridSplitter 分栏，删除自动选邻项，清空显示真实条数，高对比 Token 覆盖 |
 | **W7** | 浮窗状态补齐/失败页修复路径/多屏DPI/主窗响应式折叠/流式节流 | **已完成** | `TranslationPanelWindow`, `QuickSearchWindow`, `MainWindow`, `FloatingTrigger` | <720 紧凑图标侧栏，流式 60~80ms 节流，DPI 屏幕坐标换算与边界夹逼 |
 | **W8** | 词库/历史后台写盘 (PERF-IO-01/02 P0) + 退出 Flush + 测试缝隙 | **已完成** | `VocabularyStore.cs`, `HistoryStore.cs`, `App.xaml.cs`, 测试套件 | 消除 UI 线程文件 I/O，采用单写者后台队列 + Flush 缝隙 |
-| **W9** | 注册表/Profile保存异步化 + 诊断日志后台写 (PERF-IO-03/04/05) | **进行中** | `SettingsWindow`, `StartupRegistration`, `ProfileManager`, `DiagnosticsLog` | 注册表与配置保存切换 Task.Run，日志写入切后台 Channel 消费线程 |
+| **W9** | 注册表/Profile保存异步化 + 诊断日志后台写 (PERF-IO-03/04/05) | **已完成** | `SettingsWindow`, `StartupRegistration`, `ProfileManager`, `DiagnosticsLog` | 注册表与配置保存切换 Task.Run，日志写入切后台 Channel 消费线程 |
 | **W10** | 资料库列表虚拟化/差量更新 (PERF-LIST-02) + 审计索引文档编制 | **已完成** | `LibrarySection.xaml(.cs)`, `docs/ui-audit-2026-09-13/README.md` | ListBox 启用 UI 虚拟化与容器复用，ICollectionView 内存过滤消除重绑闪烁 |
 | **W11** | 首帧路径瘦身/查词防抖/结果差量更新/禁用态单层淡化 | **已完成** | `TranslationPanelWindow`, `QuickSearchWindow`, `QuickSearchController` | 查词 150ms 防抖，首帧星标异步填入，削减 OnLoaded 双重测量 |
 | **W12** | ≥960双栏断点补全 + PinToggle动态提示 (WIN-19) | **已完成** | `TranslationPanelWindow`, `MainWindow`, `TranslateSection` | ≥960 宽屏 1:1.25 双栏，PinToggle 动态状态与无障碍提示 |
+| **W13** | 设置窗窄窗单列响应式 (GAP-02) + 间距Token渐进采用 | **已完成** | `SettingsWindow.xaml(.cs)`, `GeneralSection`, `ServicesSection` | 窄窗 <700 DIP 触发 SetCompact 单列收缩，680 DIP 最小窗口通过验证 |
 | **W14** | 主窗引擎切换异步化（W9遗留）+ 窗口文件术语统一核查 | **已完成** | `MainWindow.xaml(.cs)` 及各窗口文件 | 切换引擎异步化并加防重入锁，窗口层术语统一为“翻译引擎” |
-| **W15** | 重启交接异步化/日志退出 Flush/索引纠错；隐藏窗口预热经真实故障复核后撤回 | **部分返修完成** | `App.xaml.cs`, `docs/ui-audit-2026-09-13/README.md` | RestartApplication 与退出落盘均不阻塞 UI；删除有生命周期副作用的 ApplicationIdle 完整窗口构造，首帧优化需另做无副作用方案 |
+| **W15** | 重启交接异步化/日志退出 Flush/索引纠错；隐藏窗口预热经真实故障复核后撤回 | **已完成（预热方案撤回，见 PERF-HOTKEY-01）** | `App.xaml.cs`, `docs/ui-audit-2026-09-13/README.md` | RestartApplication 与退出落盘均不阻塞 UI；删除有生命周期副作用的 ApplicationIdle 完整窗口构造，首帧优化需另做无副作用方案 |
+| **W16** | 紧急返修：W8写盘失败可见性/并发丢失/收藏假成功 (C02) | **已完成** | `VocabularyStore.cs`, `HistoryStore.cs`, `TranslationPanelWindow.xaml.cs` | 修复写失败吞异常与提前点亮星标缺陷，LogicTests 全量通过 |
+| **W17** | 紧急返修：面板复制/自动复制/强关/查词签名四项回归 | **已完成** | `TranslationPanelWindow`, `QuickSearchWindow`, `TranslationPanelStreamGate` | 恢复显式复制畅通与正确的剪贴板测试覆盖，LogicTests 180/0 全绿 |
+| **W18** | 紧急返修：免费引擎单发合同验证/V02-V05接线恢复/日志与线程加固 | **已完成** | `OutboundPolicy`, `SettingsWindow`, `ThemeService`, `DiagnosticsLog` | 硬件级原子单发验证、V02 静态接线断言恢复、ThemeService 跨线程调度加固 |
 
 ---
 
@@ -178,11 +182,11 @@
 
 ## 五、待接力遗留项清单（Backlog）
 
-以下为本轮 15 波次修复后建议纳入长期工程迭代的遗留规划项：
+以下为本轮 18 波次修复后建议纳入长期工程迭代的遗留规划项：
 
 1. **SettingsWindow 响应式单列收缩（GAP-02）**：
-   - 当前状态：W2 已将最小尺寸降至 `680×480` 并保证纵向滚动条常驻。
-   - 后续规划：在窗口宽度缩窄至极致（如 <560 DIP）时，表单右侧列自动折行至标签下方，呈现纵向单列排版。
+   - 当前状态：已由 W13 波次落实（客户区 <700 DIP 触发 SetCompact 单列收缩，680 DIP 最小窗口通过验证）。
+   - 历史备注：原标“未排期/后续规划 <560 DIP”现已归档闭环。
 2. **间距 Token 全库业务页面全量替换**：
-   - 当前状态：TR-18 在 `Controls.xaml` 中建立了 `Spacing4` ~ `Spacing24` 标尺并在核心模板内应用。
-   - 后续规划：后续重构中可按业务分区逐步替换各业务页面写死的 Margin 与 Padding。
+   - 当前状态：TR-18 在 `Controls.xaml` 中建立了 `Spacing4` ~ `Spacing24` 标尺定义，但经对账 G 核实当前全库零引用，属于死资源；原台账“在模板内部就近应用”与代码不符，待 W23/后续波次决策真正接入或撤回。
+   - 后续规划：在后续重构中统一决策 Spacing 标尺的去留与接入路径。

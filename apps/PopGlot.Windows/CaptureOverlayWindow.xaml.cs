@@ -21,10 +21,18 @@ public partial class CaptureOverlayWindow : Window
     private long _lastBadgeUpdate;
     private int _lastPixelWidth = -1;
     private int _lastPixelHeight = -1;
+    private bool? _dragHintOcr;
+    private Point _workOrigin;
+    private double _workLocalWidth;
+    private double _workLocalHeight;
+    private readonly DispatcherTimer _tinySelectionTimer;
 
     public CaptureOverlayWindow()
     {
         InitializeComponent();
+        // 选区过小的提醒只强调一小段时间，然后自动恢复常规尺寸徽标。
+        _tinySelectionTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.6) };
+        _tinySelectionTimer.Tick += (_, _) => RestoreBadgeAfterTinyWarning();
         SourceInitialized += OnSourceInitialized;
         Loaded += OnLoaded;
     }
@@ -64,6 +72,7 @@ public partial class CaptureOverlayWindow : Window
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonDown(e);
+        DismissTinySelectionWarning();
         _dragStart = e.GetPosition(this);
         CaptureMouse();
         ShadeFull.Visibility = Visibility.Collapsed;
@@ -73,6 +82,10 @@ public partial class CaptureOverlayWindow : Window
         SetShadeVisibility(Visibility.Visible);
         SelectionBorder.Visibility = Visibility.Visible;
         SizeBadge.Visibility = Visibility.Visible;
+        // 拖选期间的实时状态提示：Shift 按住与否决定松开后的去向。
+        _dragHintOcr = null;
+        DragHintChip.Visibility = Visibility.Visible;
+        UpdateDragHint();
         UpdateSelection(_dragStart.Value);
     }
 
@@ -84,6 +97,7 @@ public partial class CaptureOverlayWindow : Window
         if (_dragStart is not null && e.LeftButton == MouseButtonState.Pressed)
         {
             UpdateSelection(position);
+            UpdateDragHint();
         }
     }
 
@@ -99,13 +113,16 @@ public partial class CaptureOverlayWindow : Window
         var end = e.GetPosition(this);
         _dragStart = null;
         ReleaseMouseCapture();
+        DragHintChip.Visibility = Visibility.Collapsed;
 
         // Both corners go through PointToScreen so the rectangle lands in real
         // desktop pixels regardless of which monitor (and scale) it spans.
         var pixelRect = Normalize(PointToScreen(start), PointToScreen(end));
         if (pixelRect.Width < 6 || pixelRect.Height < 6)
         {
-            Close();
+            // 选区太小不是"取消"：遮罩和选区保持原样，就地提示后允许直接
+            // 重新拖选；Esc / 右键仍是显式退出路径。
+            ShowTinySelectionWarning();
             return;
         }
 
@@ -128,6 +145,21 @@ public partial class CaptureOverlayWindow : Window
         {
             e.Handled = true;
             Close();
+            return;
+        }
+        if (e.Key is Key.LeftShift or Key.RightShift)
+        {
+            UpdateDragHint();
+        }
+    }
+
+    protected override void OnKeyUp(KeyEventArgs e)
+    {
+        base.OnKeyUp(e);
+        // Shift 可以在指针完全不动的情况下按下或松开，KeyUp 也要刷新提示。
+        if (e.Key is Key.LeftShift or Key.RightShift)
+        {
+            UpdateDragHint();
         }
     }
 
@@ -228,17 +260,83 @@ public partial class CaptureOverlayWindow : Window
                 : Math.Max(0, rect.Top - badgeHeight - 8));
     }
 
+    /// <summary>
+    /// 拖选进行中的实时去向提示：Shift 按住时松开将提取文字（OCR），否则
+    /// 松开开始翻译。只在状态翻转时改文本，避免逐事件重排。
+    /// </summary>
+    private void UpdateDragHint()
+    {
+        if (_dragStart is null || DragHintChip.Visibility != Visibility.Visible)
+        {
+            return;
+        }
+        var ocr = _forceOcrMode || Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift);
+        if (_dragHintOcr == ocr)
+        {
+            return;
+        }
+        _dragHintOcr = ocr;
+        DragHintText.Text = ocr
+            ? "松开将提取文字（OCR）· Esc 取消"
+            : "松开开始翻译 · 按住 Shift 仅提取文字（OCR）";
+        // 文本变化会改变气泡宽度，量一次后重新在工作区水平居中。
+        DragHintChip.UpdateLayout();
+        CenterChipOnWorkArea(DragHintChip);
+    }
+
+    /// <summary>选区过小：就地强调 1.6 秒，然后恢复常规尺寸徽标。</summary>
+    private void ShowTinySelectionWarning()
+    {
+        SizeText.Text = "选区太小，请框选文字区域";
+        SizeBadge.SetResourceReference(Border.BackgroundProperty, "WarningSoftBrush");
+        SizeBadge.SetResourceReference(Border.BorderBrushProperty, "WarningBrush");
+        SizeText.SetResourceReference(TextBlock.ForegroundProperty, "WarningBrush");
+        _tinySelectionTimer.Stop();
+        _tinySelectionTimer.Start();
+    }
+
+    /// <summary>新一轮拖选开始时立即撤掉提醒并恢复徽标配色。</summary>
+    private void DismissTinySelectionWarning()
+    {
+        if (!_tinySelectionTimer.IsEnabled)
+        {
+            return;
+        }
+        RestoreBadgeAfterTinyWarning();
+    }
+
+    private void RestoreBadgeAfterTinyWarning()
+    {
+        _tinySelectionTimer.Stop();
+        SizeBadge.SetResourceReference(Border.BackgroundProperty, "SurfaceBrush");
+        SizeBadge.SetResourceReference(Border.BorderBrushProperty, "AccentBorderBrush");
+        SizeText.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
+        var pixelWidth = _lastPixelWidth;
+        var pixelHeight = _lastPixelHeight;
+        SizeText.Text = pixelWidth >= 0 ? $"{pixelWidth} × {pixelHeight} px" : string.Empty;
+        // 尺寸缓存作废：下一次 UpdateSelection 必须重写文本，防止提醒文案滞留。
+        _lastPixelWidth = -1;
+        _lastPixelHeight = -1;
+    }
+
     private void PositionHintNearCursor()
     {
-        HintChip.UpdateLayout();
         var work = ScreenGeometry.WorkAreaForPixel(ScreenGeometry.CursorPixels());
         var scale = ScreenGeometry.ScaleOf(this);
         // Convert the monitor's work area into this window's coordinate space.
         var origin = PointFromScreen(new Point(work.Left, work.Top));
-        var localWidth = work.Width / scale.X;
-        var localHeight = work.Height / scale.Y;
-        Canvas.SetLeft(HintChip, origin.X + ((localWidth - HintChip.ActualWidth) / 2));
-        Canvas.SetTop(HintChip, origin.Y + (localHeight * 0.12));
+        _workOrigin = origin;
+        _workLocalWidth = work.Width / scale.X;
+        _workLocalHeight = work.Height / scale.Y;
+        CenterChipOnWorkArea(HintChip, yFraction: 0.12);
+    }
+
+    /// <summary>Centres a hint chip inside the cached monitor work area.</summary>
+    private void CenterChipOnWorkArea(FrameworkElement chip, double yFraction = 0.12)
+    {
+        chip.UpdateLayout();
+        Canvas.SetLeft(chip, _workOrigin.X + ((_workLocalWidth - chip.ActualWidth) / 2));
+        Canvas.SetTop(chip, _workOrigin.Y + (_workLocalHeight * yFraction));
     }
 
     private static void Place(FrameworkElement element, double x, double y, double width, double height)

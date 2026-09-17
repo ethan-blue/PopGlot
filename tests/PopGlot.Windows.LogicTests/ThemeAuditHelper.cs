@@ -56,6 +56,12 @@ public static class ThemeAuditHelper
         AssertRatio(name, "BorderStrongBrush (input edge)", map["BorderStrongBrush"], "InputBrush", map["InputBrush"], 3.0);
         AssertRatio(name, "BorderStrongBrush (surface edge)", map["BorderStrongBrush"], "SurfaceBrush", map["SurfaceBrush"], 3.0);
 
+        // Accent hover/input border: the old light-theme AccentBorder measured
+        // 2.10:1 on the white input — the token must clear non-text 3:1 on the
+        // input fill and on the soft accent chip it sits on.
+        AssertRatio(name, "AccentBorderBrush (input edge)", map["AccentBorderBrush"], "InputBrush", map["InputBrush"], 3.0);
+        AssertRatio(name, "AccentBorderBrush (accent soft chip)", map["AccentBorderBrush"], "AccentSoftBrush", map["AccentSoftBrush"], 3.0);
+
         // Status badges on their soft chips: >= 4.5:1
         AssertRatio(name, "WarningBrush", map["WarningBrush"], "WarningSoftBrush", map["WarningSoftBrush"], 4.5);
         AssertRatio(name, "DangerBrush", map["DangerBrush"], "DangerSoftBrush", map["DangerSoftBrush"], 4.5);

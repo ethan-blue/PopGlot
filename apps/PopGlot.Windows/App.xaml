@@ -53,10 +53,21 @@
             <Color x:Key="ShadowColor">#000000</Color>
             <SolidColorBrush x:Key="ShadowBrush" Color="#000000" />
 
-            <!-- Global Window Defaults: Sub-pixel ClearType, crisp pixel snapping, layout rounding -->
+            <!--
+                The ONE implicit Window style (authoritative).
+                Themes/Controls.xaml used to declare a second implicit Window
+                style with the ambient TextElement.Foreground, but direct
+                entries of this dictionary always win over merged-dictionary
+                entries — that second style was dead code, and its Foreground
+                setter silently never applied. Everything now lives here:
+                typography, ClearType, pixel snapping AND the ambient text
+                colour. All tokens stay DynamicResource so ThemeService keeps
+                repainting live windows on theme switches.
+            -->
             <Style TargetType="Window">
                 <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
                 <Setter Property="FontSize" Value="13" />
+                <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimaryBrush}" />
                 <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
                 <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
                 <Setter Property="RenderOptions.ClearTypeHint" Value="Enabled" />

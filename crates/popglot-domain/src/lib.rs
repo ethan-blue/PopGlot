@@ -9,8 +9,17 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 pub mod language;
+pub mod prompt;
 
 pub use language::{AUTO_LANGUAGE, LanguagePair, language_english_name, normalize_language_tag};
+pub use prompt::{
+    BUILTIN_FAITHFUL_ID, BUILTIN_FORMAL_ID, BUILTIN_NATURAL_ID, CompileError, CompiledPrompt,
+    MAX_AUDIENCE_BYTES, MAX_AUDIENCE_SCALARS, MAX_COMPILED_BYTES, MAX_CUSTOM_TEMPLATES,
+    MAX_DOMAIN_BYTES, MAX_DOMAIN_SCALARS, MAX_PROMPT_FILE_BYTES, MAX_RETAINED_REVISIONS,
+    MAX_TEMPLATE_BODY_BYTES, MAX_TEMPLATE_DESCRIPTION_SCALARS, MAX_TEMPLATE_NAME_SCALARS,
+    PROMPT_SCHEMA_VERSION, PastRevision, PromptTemplate, PromptVariables, compile_instruction,
+    compile_prompt,
+};
 
 /// User-selected translation pipeline.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

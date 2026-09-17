@@ -95,15 +95,11 @@
         <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
     </Style>
 
-    <!-- Ambient text colour: every window seeds TextPrimaryBrush so bare
-         TextBlocks match the previous implicit-style default, while content
-         inside buttons/menus still picks up the nearer control foreground. -->
-    <Style TargetType="Window">
-        <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-        <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
-        <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
-        <Setter Property="UseLayoutRounding" Value="True" />
-    </Style>
+    <!-- Ambient text colour + window typography live in the ONE implicit
+         Window style in App.xaml (direct dictionary entries beat merged
+         ones, so a second Window style here would be silently shadowed —
+         exactly the trap this file used to fall into). Do not re-add an
+         implicit Window style to a merged dictionary. -->
 
     <!--
         Typography scale. Font sizes live here, never inline in pages:
@@ -206,14 +202,48 @@
     </Style>
 
     <!-- ==================== Scroll bars ==================== -->
+    <!--
+        The thumb HIT area spans the full 12 DIP track, but the visible bar is
+        a fixed 5 DIP sliver centred inside it — thin look, forgiving grab.
+        Resting opacity 0.55 keeps the sliver visible at rest (0.4 vanished on
+        light surfaces); hover/drag go to full strength.
+    -->
     <Style x:Key="ScrollThumb" TargetType="Thumb">
         <Setter Property="OverridesDefaultStyle" Value="True" />
         <Setter Property="IsTabStop" Value="False" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Thumb">
-                    <Border x:Name="Bar" Background="{DynamicResource BorderStrongBrush}"
-                            CornerRadius="1.5" Margin="1" Opacity="0.4" SnapsToDevicePixels="True" />
+                    <Grid Background="Transparent">
+                        <Border x:Name="Bar" Width="5" HorizontalAlignment="Center"
+                                Background="{DynamicResource BorderStrongBrush}"
+                                CornerRadius="2.5" Opacity="0.55" SnapsToDevicePixels="True" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bar" Property="Opacity" Value="0.85" />
+                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource BorderStrongBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsDragging" Value="True">
+                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource BorderStrongBrush}" />
+                            <Setter TargetName="Bar" Property="Opacity" Value="1" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Horizontal twin of ScrollThumb: same 5 DIP sliver, rotated. -->
+    <Style x:Key="ScrollThumbHorizontal" TargetType="Thumb" BasedOn="{StaticResource ScrollThumb}">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Thumb">
+                    <Grid Background="Transparent">
+                        <Border x:Name="Bar" Height="5" VerticalAlignment="Center"
+                                Background="{DynamicResource BorderStrongBrush}"
+                                CornerRadius="2.5" Opacity="0.55" SnapsToDevicePixels="True" />
+                    </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Bar" Property="Opacity" Value="0.85" />
@@ -242,9 +272,11 @@
         </Setter>
     </Style>
 
+    <!-- 12 DIP of transparent track = forgiving pointer/hit target; the thumb
+         style keeps the VISIBLE bar at 5 DIP so the look stays thin. -->
     <Style TargetType="ScrollBar">
-        <Setter Property="Width" Value="5" />
-        <Setter Property="MinWidth" Value="5" />
+        <Setter Property="Width" Value="12" />
+        <Setter Property="MinWidth" Value="12" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
         <Setter Property="Template">
             <Setter.Value>
@@ -270,8 +302,8 @@
         <Style.Triggers>
             <Trigger Property="Orientation" Value="Horizontal">
                 <Setter Property="Width" Value="Auto" />
-                <Setter Property="Height" Value="5" />
-                <Setter Property="MinHeight" Value="5" />
+                <Setter Property="Height" Value="12" />
+                <Setter Property="MinHeight" Value="12" />
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="ScrollBar">
@@ -282,7 +314,7 @@
                                                       Command="ScrollBar.PageLeftCommand" />
                                     </Track.DecreaseRepeatButton>
                                     <Track.Thumb>
-                                        <Thumb Style="{StaticResource ScrollThumb}" />
+                                        <Thumb Style="{StaticResource ScrollThumbHorizontal}" />
                                     </Track.Thumb>
                                     <Track.IncreaseRepeatButton>
                                         <RepeatButton Style="{StaticResource ScrollLineButton}"
@@ -1693,7 +1725,10 @@
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
         <Setter Property="BorderThickness" Value="0" />
-        <Setter Property="Focusable" Value="False" />
+        <!-- Caption buttons participate in Tab order with the shared focus
+             ring; the old Focusable=False made min/max/close unreachable by
+             keyboard and invisible to screen-reader focus. -->
+        <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="Template">
             <Setter.Value>

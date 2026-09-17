@@ -296,17 +296,33 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     private CancellationTokenSource? _translateOperation;
     private long _currentEpoch;
     private TranslateUiState _currentState = TranslateUiState.Initial;
+    // 免费引擎预提示：待决期间压过「连接中」等准备态，真实进展出现即让位。
+    private string? _pendingStyleNotice;
     private bool _languageChangeSuspended = true;
     private bool _isUnloaded;
+    // 恢复暂存按钮的启用态跟随内存会话仓：仓的变化也可能来自浮窗/托盘，
+    // 轻量轮询（纯内存计数）保证按钮状态在变化后最迟 2 秒内跟上。
+    private readonly System.Windows.Threading.DispatcherTimer _sessionStorePollTimer;
 
     public TranslateSection()
     {
         InitializeComponent();
+        Ui.AttachCompositionTracker(TranslateInput);
         TranslateSourceLang.ItemsSource = LanguageCatalog.Sources;
         TranslateTargetLang.ItemsSource = LanguageCatalog.Targets;
+        _sessionStorePollTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(2),
+        };
+        _sessionStorePollTimer.Tick += (_, _) => RefreshRestoreSessionAffordance();
 
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
+        // 顶部工具栏的快捷键提示与左侧标题、右侧按钮组共享一行：窄态下
+        // 三者拥挤，提示会被压成极小的低对比碎片。这里按工作台实际宽度
+        // 自行收起提示；按键说明始终保留在输入框的 HelpText 上，读屏与
+        // 悬停路径不受可见性影响。
+        SizeChanged += (_, _) => UpdateShortcutHintVisibility();
 
         // Start from the persisted language pair; both this workbench and the
         // floating panel keep the pair in sync through core settings.
@@ -325,6 +341,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         _languageChangeSuspended = false;
         UpdateAutoDetectHint();
         ApplyState(_currentState);
+        RefreshStyleSelector();
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -333,12 +350,16 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         TtsService.SpeakingStateChanged += OnTtsSpeakingStateChanged;
         UpdateServiceAvailability();
         RefreshStarState();
+        RefreshStyleSelector();
+        RefreshRestoreSessionAffordance();
+        _sessionStorePollTimer.Start();
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
         _isUnloaded = true;
         TtsService.SpeakingStateChanged -= OnTtsSpeakingStateChanged;
+        _sessionStorePollTimer.Stop();
         _translateOperation?.Cancel();
         _translateOperation?.Dispose();
         _translateOperation = null;
@@ -349,6 +370,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         _coordinator = coordinator;
         _vocabulary = vocabulary;
         RefreshFreeEngineEntryVisibility();
+        RefreshStyleSelector();
     }
 
     // ================= Public accessors for MainWindow =================
@@ -356,9 +378,11 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     internal ComboBox SourceLangCombo => TranslateSourceLang;
     internal ComboBox TargetLangCombo => TranslateTargetLang;
     internal TextBox InputBox => TranslateInput;
+    internal TextBlock ShortcutHint => TranslateShortcutHint;
     internal TextBox ResultBox => TranslateResult;
     internal TextBox StreamResultBox => TranslateStreamResult;
     internal StackPanel EmptyStateGuide => TranslateEmptyState;
+    internal Button StarButton => TranslateStarButton;
     internal Button FreeEngineEntryButton => EnableFreeEngineButton;
     internal Action? OpenSettings { get; set; }
 
@@ -396,6 +420,26 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             TranslateShortcutHint.ToolTip = null;
             TranslateStatus.MaxWidth = 260;
         }
+        UpdateShortcutHintVisibility();
+    }
+
+    /// <summary>
+    /// 工具栏单行能舒适容纳「标题 + 快捷键提示 + 三个按钮」的最小宽度：
+    /// 低于该阈值时标题与按钮组挤占提示文字，收起提示（快捷键说明仍在
+    /// 输入框 HelpText 与 SetCompact 设置的 ToolTip 里）。宽度的零值表示
+    /// 尚未参与布局，保持可见默认，避免构造期误隐藏。
+    /// </summary>
+    internal const double ShortcutHintHideWidth = 620;
+
+    private void UpdateShortcutHintVisibility()
+    {
+        if (ActualWidth <= 0)
+        {
+            return;
+        }
+        TranslateShortcutHint.Visibility = ActualWidth < ShortcutHintHideWidth
+            ? Visibility.Collapsed
+            : Visibility.Visible;
     }
 
     private bool _stacked;
@@ -526,7 +570,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         }
         // An IME (Chinese pinyin etc.) consumes Enter to confirm the current
         // composition — that Enter must never submit a translation.
-        if (System.Windows.Input.InputMethod.GetIsInputMethodEnabled(TranslateInput))
+        if (Ui.IsImeComposing(TranslateInput, e))
         {
             return;
         }
@@ -552,6 +596,20 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
         var sourceLang = Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto);
         var targetLang = Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN");
+
+        // Honest pre-flight notice when the route cannot be proven to honour
+        // the active style (the free engine never personalizes): state it
+        // BEFORE the request goes out. The request itself is never blocked,
+        // nothing in flight is cancelled and nothing is re-translated.
+        // ApplyState keeps the notice above the preparing statuses until real
+        // progress lands, instead of letting it vanish instantly.
+        string? styleNotice = TranslationStyleMenu.PreTranslateNotice();
+        _pendingStyleNotice = styleNotice;
+        if (styleNotice is not null)
+        {
+            TranslateStatus.Text = styleNotice;
+            RefreshStyleSelector();
+        }
 
         ApplyState(TranslateSectionReducer.StartTranslation(_currentState, epoch));
 
@@ -594,6 +652,16 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             }
 
             ApplyState(TranslateSectionReducer.ApplyCompletion(_currentState, session, epoch));
+
+            // Durable post-hoc honesty: when the free engine actually ran the
+            // request, the selected style did not apply — keep saying so
+            // instead of leaving only the transient pre-flight notice.
+            // Decided by the TYPED executor, never by matching PipelineLabel.
+            if (styleNotice is not null && session.TextExecutor == TranslationTextExecutor.FreeEngine)
+            {
+                TranslateStatus.Text =
+                    $"已由{EngineWording.FreeEngineName}完成：{TranslationStyleMenu.FreeEngineToolTip}，所选风格未应用。";
+            }
         }
         catch (OperationCanceledException ex)
         {
@@ -676,8 +744,22 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         TranslateStatus.Text = state.StatusText;
         if (!HasConfiguredUserEngine() && state.Phase == TranslateUiPhase.Idle && string.IsNullOrWhiteSpace(state.FinalText))
         {
-            TranslateEngineBadge.Text = HasFallbackRoute() ? "内置公共翻译" : "未配置";
-            TranslateStatus.Text = HasFallbackRoute() ? "当前使用内置公共翻译" : "未配置引擎，请前往设置接入";
+            TranslateEngineBadge.Text = HasFallbackRoute() ? EngineWording.FreePublicTranslationName : "未配置";
+            TranslateStatus.Text = HasFallbackRoute() ? $"当前使用{EngineWording.FreePublicTranslationName}" : "未配置引擎，请前往设置接入";
+        }
+
+        // 免费引擎预提示不得被「连接中/正在生成…」这类准备态瞬间覆盖：在
+        // Preparing 阶段保持可见，流式文本、完成或失败一旦落地即让位。
+        if (_pendingStyleNotice is not null)
+        {
+            if (state.Phase == TranslateUiPhase.Preparing)
+            {
+                TranslateStatus.Text = _pendingStyleNotice;
+            }
+            else
+            {
+                _pendingStyleNotice = null;
+            }
         }
 
         TranslateResultSpeakButton.IsEnabled = state.AreResultActionsEnabled;
@@ -826,6 +908,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     /// </summary>
     internal void RefreshAfterSettingsChanged()
     {
+        RefreshStyleSelector();
         if (!_currentState.IsProgressVisible &&
             !_currentState.IsStreamLayerVisible &&
             string.IsNullOrWhiteSpace(_currentState.FinalText))
@@ -841,7 +924,14 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         var consent = FreeEngineConsent.Unset;
         try
         {
-            consent = ShellSettingsStore.Load().FreeEngineConsent;
+            var settings = ShellSettingsStore.Load();
+            consent = settings.FreeEngineConsent;
+            if (ShortcutEntriesHint is not null)
+            {
+                var sel = settings.SelectionHotkey?.DisplayName ?? "Ctrl+Alt+W";
+                var cap = settings.ScreenshotHotkey?.DisplayName ?? "Ctrl+Alt+Space";
+                ShortcutEntriesHint.Text = $"快捷键：划词翻译 ({sel}) · 截图翻译 ({cap})";
+            }
         }
         catch
         {
@@ -860,7 +950,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             // Two distinct empty states: fallback allowed vs no route at all.
             if (GuideTitle is not null)
             {
-                GuideTitle.Text = hasFallbackRoute ? "当前使用内置公共翻译" : "尚未配置翻译引擎";
+                GuideTitle.Text = hasFallbackRoute ? $"当前使用{EngineWording.FreePublicTranslationName}" : "尚未配置翻译引擎";
             }
             if (GuideDescription is not null)
             {
@@ -878,8 +968,8 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
         if (!hasUserEngine && _currentState.Phase == TranslateUiPhase.Idle && string.IsNullOrWhiteSpace(_currentState.FinalText))
         {
-            TranslateEngineBadge.Text = hasFallbackRoute ? "内置公共翻译" : "未配置";
-            TranslateStatus.Text = hasFallbackRoute ? "当前使用内置公共翻译" : "未配置引擎，请前往设置接入";
+            TranslateEngineBadge.Text = hasFallbackRoute ? EngineWording.FreePublicTranslationName : "未配置";
+            TranslateStatus.Text = hasFallbackRoute ? $"当前使用{EngineWording.FreePublicTranslationName}" : "未配置引擎，请前往设置接入";
         }
         else if (hasUserEngine && _currentState.Phase == TranslateUiPhase.Idle && string.IsNullOrWhiteSpace(_currentState.FinalText))
         {
@@ -889,7 +979,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             {
                 var config = ProfileManager.Load();
                 var active = config.TryGetActiveProfile();
-                TranslateEngineBadge.Text = active?.Name ?? (config.PreferFreeEngine ? "内置公共翻译" : "未配置");
+                TranslateEngineBadge.Text = active?.Name ?? (config.PreferFreeEngine ? EngineWording.FreePublicTranslationName : "未配置");
             }
             catch
             {
@@ -902,13 +992,14 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     /// <summary>
     /// Fills the agreed demo error — text only, no request. The user's next
     /// action (Enter or the button) decides whether anything goes online.
+    /// The entry point is explicitly labelled 演示 · 未联网 in the empty state.
     /// </summary>
     private void FillExample_Click(object sender, RoutedEventArgs e)
     {
         TranslateInput.Text = "FileNotFoundError: config.json not found";
         TranslateInput.CaretIndex = TranslateInput.Text.Length;
         TranslateInput.Focus();
-        TranslateStatus.Text = "已填入示例，按 Enter 或点「翻译」开始。";
+        TranslateStatus.Text = "已填入演示示例（未联网），按 Enter 或点「翻译」开始。";
     }
 
     /// <summary>
@@ -924,7 +1015,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             var updated = shell with { FreeEngineConsent = FreeEngineConsent.Allowed };
             ShellSettingsStore.Save(updated);
             UpdateServiceAvailability();
-            TranslateStatus.Text = "已允许内置公共翻译；首次翻译会连接 translate.googleapis.com。";
+            TranslateStatus.Text = $"已允许{EngineWording.FreePublicTranslationName}（联网公共服务）；首次翻译会连接 translate.googleapis.com。";
         }
         catch (Exception exception)
         {
@@ -934,8 +1025,76 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
     private void RefreshFreeEngineEntryVisibility() => UpdateServiceAvailability();
 
-    private void TranslateInput_TextChanged(object sender, TextChangedEventArgs e) =>
-        TranslateCounter.Text = $"{TranslateInput.Text.Length} 字符";
+    // ================= Global translation-style selector =================
+
+    /// <summary>
+    /// Repaints the shared style selector from local state: the capability
+    /// probe decides enablement and tooltip, and the authoritative active
+    /// template provides the label. Safe to call any time; degrades quietly
+    /// when local state is unreadable.
+    /// </summary>
+    internal void RefreshStyleSelector()
+    {
+        try
+        {
+            TranslationStyleMenu.ApplyTo(
+                StyleSelectorButton, "翻译风格（仅影响下一次翻译，不重译当前内容）");
+            StyleSelectorLabel.Text = TranslationStyleMenu.ActiveLabel();
+        }
+        catch (Exception)
+        {
+            // The selector is additive UI; never break the workbench over it.
+        }
+    }
+
+    private void StyleSelector_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button)
+        {
+            return;
+        }
+        // Re-probe at open time: the engine may have changed since the last
+        // paint, and the honest state must match the route a new request
+        // would actually take.
+        RefreshStyleSelector();
+        if (TranslationStyleMenu.ProbeNextTextRoute() == TranslationStyleSupport.FreeEngine)
+        {
+            TranslateStatus.Text = $"{EngineWording.FreeEngineName}{TranslationStyleMenu.FreeEngineToolTip}。";
+            return;
+        }
+        var menu = TranslationStyleMenu.Build(
+            styleChosen: template => _ = ChooseStyleAsync(template),
+            reportStatus: message => TranslateStatus.Text = message,
+            managePrompts: () => OpenSettings_Click(this, new RoutedEventArgs()));
+        if (menu is null)
+        {
+            return;
+        }
+        TranslationStyleMenu.Show(button, menu);
+    }
+
+    private async Task ChooseStyleAsync(PromptTemplateDto template)
+    {
+        // Optimistic label; reverted from the authoritative state if the
+        // persist fails. Nothing is re-translated and nothing in flight is
+        // cancelled — the switch lands with the next request only.
+        StyleSelectorLabel.Text = TranslationStyleMenu.ShortLabel(template);
+        var applied = await TranslationStyleMenu.SwitchActiveTemplateAsync(
+            template.Id,
+            message => TranslateStatus.Text = message);
+        if (!applied)
+        {
+            RefreshStyleSelector();
+        }
+    }
+
+    private void TranslateInput_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        var length = TranslateInput.Text.Length;
+        TranslateCounter.Text = $"{length} 字符";
+        // 空输入时隐藏「0 字符」：数字零没有信息量，只会在页脚占位。
+        TranslateCounter.Visibility = length == 0 ? Visibility.Collapsed : Visibility.Visible;
+    }
 
     // ================= Language pair =================
 
@@ -1003,7 +1162,15 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
         if (!string.IsNullOrWhiteSpace(TranslateResult.Text))
         {
-            TranslateInput.Text = TranslateResult.Text;
+            // 结果层保存的是原始 Markdown；换回原文方向时必须携带约定的
+            // 纯文本（与浮窗/极速查词相同的 ToPlainText 格式化器），而不是
+            // 把标记符号塞进输入框。
+            var plain = MarkdownPresenter.ToPlainText(TranslateResult.Text);
+            if (string.IsNullOrWhiteSpace(plain))
+            {
+                return;
+            }
+            TranslateInput.Text = plain;
             var epoch = Interlocked.Increment(ref _currentEpoch);
             ApplyState(TranslateUiState.Initial with { Epoch = epoch });
         }
@@ -1102,20 +1269,143 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         TranslateInput.Focus();
     }
 
+    private void RestoreSession_Click(object sender, RoutedEventArgs e)
+    {
+        var sessions = App.SharedSessionStore.GetAll();
+        RefreshRestoreSessionAffordance();
+        if (sessions.Count == 0)
+        {
+            TranslateStatus.Text = "暂无暂存的会话。";
+            return;
+        }
+
+        var menu = new System.Windows.Controls.ContextMenu();
+        foreach (var s in sessions)
+        {
+            var item = new System.Windows.Controls.MenuItem { Header = s.Summary() };
+            item.Click += (_, _) =>
+            {
+                FocusTranslate(
+                    s.SourceText, s.TargetLanguage, s.SourceLanguage,
+                    s.ResultText, s.State, s.ExplanationText);
+                TranslateStatus.Text = "已恢复暂存会话（未重发）";
+            };
+            menu.Items.Add(item);
+        }
+        menu.Items.Add(new System.Windows.Controls.Separator());
+        var clearItem = new System.Windows.Controls.MenuItem { Header = "清空所有暂存会话" };
+        clearItem.Click += (_, _) =>
+        {
+            App.SharedSessionStore.Clear();
+            RefreshRestoreSessionAffordance();
+            TranslateStatus.Text = "已清空会话仓。";
+        };
+        menu.Items.Add(clearItem);
+
+        menu.PlacementTarget = RestoreSessionButton;
+        menu.IsOpen = true;
+    }
+
+    /// <summary>
+    /// 恢复暂存按钮按会话仓的真实库存决定显示状态：有暂存可恢复时可用，
+    /// 空仓时禁用并说明原因（按钮保持可见，避免工具栏布局跳动）。
+    /// </summary>
+    private void RefreshRestoreSessionAffordance()
+    {
+        if (RestoreSessionButton is null)
+        {
+            return;
+        }
+        var hasSessions = App.SharedSessionStore.GetAll().Count > 0;
+        RestoreSessionButton.IsEnabled = hasSessions;
+        RestoreSessionButton.ToolTip = hasSessions
+            ? "从多会话仓恢复最近未完成或刚关闭的会话（最多暂存5条）"
+            : "暂存会话仓为空；浮窗翻译结束或工作台载入新内容后会自动暂存";
+    }
+
+    /// <summary>
+    /// N01 honesty for the preserved workbench draft: an untranslated draft
+    /// must never be recorded as a Completed session. The session model has
+    /// no Draft state, so the most honest compatible representation wins —
+    /// Cancelled with no result text (a Draft state would take precedence if
+    /// the model ever grows one). Partial or failed text is kept, but the
+    /// state says so and <c>IsPartial</c> flags it, so restoring can never
+    /// open the full result actions for content that was never finished.
+    /// </summary>
+    internal static (TranslationSessionState State, string? ResultText, string? ExplanationText, bool IsPartial) DraftSnapshotFor(TranslateUiState current)
+    {
+        var result = current.FinalText;
+        var hasResult = !string.IsNullOrWhiteSpace(result);
+        var explanation = !string.IsNullOrWhiteSpace(current.ExplanationText) ? current.ExplanationText : null;
+
+        if (current.Phase == TranslateUiPhase.Completed && hasResult)
+        {
+            return (TranslationSessionState.Completed, result, explanation, IsPartial: false);
+        }
+        if (current.Phase == TranslateUiPhase.Failed)
+        {
+            return (TranslationSessionState.Failed, hasResult ? result : null, hasResult ? explanation : null, IsPartial: hasResult);
+        }
+        // Pure drafts, cancellations and partials: Cancelled — never Completed.
+        return (TranslationSessionState.Cancelled, hasResult ? result : null, hasResult ? explanation : null, IsPartial: hasResult);
+    }
+
     /// <summary>Pre-fills the translate page; also receives an expanded panel session.</summary>
+    /// <param name="storedState">
+    /// State of the stored session the translation comes from, when known.
+    /// Only a genuinely Completed session opens the full result actions on
+    /// restore; partial/cancelled/failed snapshots restore their text but
+    /// keep copy/speak/star gated. History/vocabulary loads pass Completed.
+    /// </param>
+    /// <param name="explanation">Explanation/notes carried with the loaded entry, if any.</param>
+    /// <param name="badge">Optional badge text for the loaded entry (e.g. 历史记录/生词本).</param>
     internal void FocusTranslate(
         string? initialText = null,
         string? targetLang = null,
         string? sourceLang = null,
-        string? existingTranslation = null)
+        string? existingTranslation = null,
+        TranslationSessionState? storedState = null,
+        string? explanation = null,
+        string? badge = null)
     {
         if (!string.IsNullOrWhiteSpace(initialText))
         {
+            if (!string.IsNullOrWhiteSpace(TranslateInput.Text) && TranslateInput.Text != initialText)
+            {
+                // N01: Preserve the workbench draft in the session store before
+                // overwriting — with the honest state, never a fake Completed
+                // for an untranslated draft. A rejected stash BLOCKS the
+                // overwrite: silently losing the user's draft is worse than
+                // keeping it, so the reason is shown instead.
+                var draft = DraftSnapshotFor(_currentState);
+                var draftSession = StoredSession.Create(
+                    sessionId: null,
+                    origin: SessionOrigin.Workbench,
+                    sourceText: TranslateInput.Text,
+                    sourceLang: Helpers.SelectedLanguage(TranslateSourceLang, "auto"),
+                    targetLang: Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN"),
+                    engineProfileId: null,
+                    engineName: null,
+                    state: draft.State,
+                    resultText: draft.ResultText,
+                    explanationText: draft.ExplanationText,
+                    isPartial: draft.IsPartial
+                );
+                if (!App.SharedSessionStore.TryStore(draftSession, out var draftRejection))
+                {
+                    TranslateStatus.Text =
+                        $"未能暂存当前草稿，已保留工作台内容：{draftRejection ?? "会话仓暂不可用"}。";
+                    TranslateInput.Focus();
+                    return;
+                }
+            }
             TranslateInput.Text = initialText;
         }
         _languageChangeSuspended = true;
         try
         {
+            // Loading an entry only borrows the dropdowns: suspension keeps
+            // the pair from being persisted as the global default.
             if (!string.IsNullOrWhiteSpace(sourceLang))
             {
                 TranslateSourceLang.SelectedItem = LanguageCatalog.ResolveSource(sourceLang);
@@ -1130,20 +1420,138 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             _languageChangeSuspended = false;
         }
         UpdateAutoDetectHint();
-        if (existingTranslation is not null)
+        if (existingTranslation is not null || storedState is not null)
         {
+            // A restored text is only a finished result when the stored
+            // session says so (callers that predate the state parameter
+            // count as finished); anything else comes back with the full
+            // result actions gated.
+            var isFinishedResult = storedState is null || storedState == TranslationSessionState.Completed;
+            var restoredText = existingTranslation ?? string.Empty;
             var epoch = Interlocked.Increment(ref _currentEpoch);
             ApplyState(TranslateUiState.Initial with
             {
                 Epoch = epoch,
-                FinalText = existingTranslation,
-                BadgeText = "已展开的译文",
-                StatusText = "已从浮窗展开，未重新翻译。",
-                AreResultActionsEnabled = true,
+                FinalText = restoredText,
+                BadgeText = badge ?? (isFinishedResult
+                    ? "已展开的译文"
+                    : storedState == TranslationSessionState.Failed ? "未完成" : "内容不完整"),
+                StatusText = isFinishedResult
+                    ? (badge is null ? "已从浮窗展开，未重新翻译。" : "已载入记录。")
+                    : "已恢复暂存会话（未重发）",
+                AreResultActionsEnabled = isFinishedResult && !string.IsNullOrWhiteSpace(restoredText),
+                IsPartialIncomplete = !isFinishedResult,
+                ExplanationText = explanation ?? string.Empty,
+                IsExplanationVisible = !string.IsNullOrWhiteSpace(explanation),
             });
         }
         TranslateInput.Focus();
         TranslateInput.CaretIndex = TranslateInput.Text.Length;
         RefreshStarState();
+        RefreshRestoreSessionAffordance();
+    }
+
+    // ================= First-run onboarding (non-blocking, in-workbench) =================
+    //
+    // 最小闭环：工作台内联的三步引导条（非模态、可跳过）。第一步复用空态
+    // 卡的「添加翻译引擎」路径；完成或跳过由 shell 持久化
+    // HasCompletedOnboarding（MainWindow.CompleteOnboarding），设置 → 通用
+    // 提供「重新显示引导」入口。绝不弹窗、绝不打断翻译。
+
+    private int _onboardingStep;
+
+    /// <summary>Persisted by the shell (MainWindow) when the guide is completed or skipped.</summary>
+    internal Action? CompleteOnboarding { get; set; }
+
+    internal bool IsOnboardingActive => OnboardingBanner is { Visibility: Visibility.Visible };
+
+    internal void BeginOnboarding()
+    {
+        _onboardingStep = 1;
+        ShowOnboardingStep();
+    }
+
+    internal void EndOnboarding()
+    {
+        if (OnboardingBanner is not null)
+        {
+            OnboardingBanner.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void ShowOnboardingStep()
+    {
+        var hotkeys = ReadHotkeySummary();
+        (string label, string title, string description, string primary) = _onboardingStep switch
+        {
+            1 => ("新手引导 · 第 1 步 / 共 3 步",
+                  "接入一个翻译引擎",
+                  "点「添加翻译引擎」配置你自己的模型服务；也可以稍后在空态卡片中允许内置公共翻译。",
+                  "添加翻译引擎"),
+            2 => ("新手引导 · 第 2 步 / 共 3 步",
+                  "记住两个快捷键",
+                  $"划词翻译 {hotkeys.selection} · 截图翻译 {hotkeys.screenshot}，可在「设置 → 快捷键」更改。",
+                  "下一步"),
+            _ => ("新手引导 · 第 3 步 / 共 3 步",
+                  "开始第一次翻译",
+                  "在工作台输入或粘贴文本，按 Enter 翻译；历史与生词自动保存在本机。",
+                  "完成引导"),
+        };
+        OnboardingStepLabel.Text = label;
+        OnboardingTitle.Text = title;
+        OnboardingDescription.Text = description;
+        OnboardingPrimaryButton.Content = primary;
+        OnboardingBanner.Visibility = Visibility.Visible;
+    }
+
+    private static (string selection, string screenshot) ReadHotkeySummary()
+    {
+        try
+        {
+            var settings = ShellSettingsStore.Load();
+            return (settings.SelectionHotkey?.DisplayName ?? "Ctrl+Alt+W",
+                    settings.ScreenshotHotkey?.DisplayName ?? "Ctrl+Alt+Space");
+        }
+        catch
+        {
+            return ("Ctrl+Alt+W", "Ctrl+Alt+Space");
+        }
+    }
+
+    private void OnboardingPrimary_Click(object sender, RoutedEventArgs e)
+    {
+        switch (_onboardingStep)
+        {
+            case 1:
+                // 复用空态卡完全相同的导航路径：只导航，不探测网络、不改授权。
+                OpenAddEngine_Click(sender, e);
+                AdvanceOnboarding();
+                break;
+            case 2:
+                AdvanceOnboarding();
+                break;
+            default:
+                CompleteOnboardingRun();
+                break;
+        }
+    }
+
+    private void OnboardingSkip_Click(object sender, RoutedEventArgs e) => CompleteOnboardingRun();
+
+    private void AdvanceOnboarding()
+    {
+        if (_onboardingStep >= 3)
+        {
+            CompleteOnboardingRun();
+            return;
+        }
+        _onboardingStep++;
+        ShowOnboardingStep();
+    }
+
+    private void CompleteOnboardingRun()
+    {
+        EndOnboarding();
+        CompleteOnboarding?.Invoke();
     }
 }

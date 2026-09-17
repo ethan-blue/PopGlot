@@ -76,9 +76,9 @@ internal static partial class ThemeService
                 existing.Color = color;
                 continue;
             }
-            var brush = new SolidColorBrush(color);
-            brush.Freeze();
-            resources[key] = brush;
+            // Theme token brushes remain mutable so controls that retained a
+            // FindResource reference observe future theme changes in place.
+            resources[key] = new SolidColorBrush(color);
         }
 
         if (isHighContrast)
@@ -89,13 +89,14 @@ internal static partial class ThemeService
         ThemeChanged?.Invoke(null, EventArgs.Empty);
     }
 
-    private static void ApplyHighContrastOverrides(ResourceDictionary resources)
+    internal static void ApplyHighContrastOverrides(ResourceDictionary resources)
     {
         var windowColor = System.Windows.SystemColors.WindowColor;
         var windowTextColor = System.Windows.SystemColors.WindowTextColor;
         var highlightColor = System.Windows.SystemColors.HighlightColor;
         var highlightTextColor = System.Windows.SystemColors.HighlightTextColor;
         var grayTextColor = System.Windows.SystemColors.GrayTextColor;
+        var hotTrackColor = System.Windows.SystemColors.HotTrackColor;
 
         SetTokenBrush(resources, "CanvasBrush", windowColor);
         SetTokenBrush(resources, "SidebarBrush", windowColor);
@@ -113,9 +114,31 @@ internal static partial class ThemeService
         SetTokenBrush(resources, "AccentBrush", highlightColor);
         SetTokenBrush(resources, "AccentTextBrush", highlightTextColor);
         SetTokenBrush(resources, "AccentBorderBrush", highlightColor);
+        SetTokenBrush(resources, "AccentSoftBrush", windowColor);
         SetTokenBrush(resources, "FocusBrush", highlightColor);
         SetTokenBrush(resources, "PrimaryBrush", highlightColor);
+        SetTokenBrush(resources, "PrimaryHoverBrush", highlightColor);
+        SetTokenBrush(resources, "PrimaryPressedBrush", highlightColor);
         SetTokenBrush(resources, "PrimaryTextBrush", highlightTextColor);
+
+        SetTokenBrush(resources, "SurfaceHoverBrush", windowColor);
+        SetTokenBrush(resources, "SurfacePressedBrush", highlightColor);
+
+        // Semantic status colors in high contrast (C18 / A10):
+        // Danger/Warning/Success mapped to system alert & highlight hues,
+        // while all soft background fills collapse to window background to prevent low-contrast halos.
+        SetTokenBrush(resources, "DangerBrush", hotTrackColor);
+        SetTokenBrush(resources, "DangerSoftBrush", windowColor);
+        SetTokenBrush(resources, "DangerHoverBrush", highlightColor);
+        SetTokenBrush(resources, "DangerHoverTextBrush", highlightTextColor);
+        SetTokenBrush(resources, "DangerPressedBrush", highlightColor);
+        SetTokenBrush(resources, "DangerPressedTextBrush", highlightTextColor);
+
+        SetTokenBrush(resources, "WarningBrush", hotTrackColor);
+        SetTokenBrush(resources, "WarningSoftBrush", windowColor);
+
+        SetTokenBrush(resources, "SuccessBrush", highlightColor);
+        SetTokenBrush(resources, "SuccessSoftBrush", windowColor);
 
         SetTokenBrush(resources, "BorderSubtleBrush", windowTextColor);
         SetTokenBrush(resources, "BorderStrongBrush", windowTextColor);
@@ -130,9 +153,7 @@ internal static partial class ThemeService
             existing.Color = color;
             return;
         }
-        var brush = new SolidColorBrush(color);
-        brush.Freeze();
-        resources[key] = brush;
+        resources[key] = new SolidColorBrush(color);
     }
 
     private static Color ParseColor(string value) =>
@@ -238,7 +259,7 @@ internal static partial class ThemeService
     //   SurfaceRaised popups, dropdown menus, floating overlays
     //   Input         editable controls
     //   ResultSurface translation result reading canvas
-    // Accent (azure blue) is the brand only — success/warning/danger are separate
+    // Accent (blue-purple / 蓝紫) is the brand only — success/warning/danger are separate
     // hues, so "online/OK/default" never borrows the brand colour.
     //
     // Contrast budget (audited by tests/PopGlot.Windows.LogicTests via
@@ -314,7 +335,12 @@ internal static partial class ThemeService
         ("AccentPressedBrush", "#3D478E"),
         ("AccentTextBrush", "#FFFFFF"),
         ("AccentSoftBrush", "#EEF0FA"),
-        ("AccentBorderBrush", "#AAB1D9"),
+        // Input-class hover border: must clear WCAG non-text 3:1 against the
+        // white InputBackground. The old #AAB1D9 measured 2.10:1; #737ECB
+        // measures 3.77:1 on #FFFFFF (and 3.31:1 on AccentSoft #EEF0FA)
+        // while staying lighter than AccentBrush #5563B8, so the focus ring
+        // still outranks the hover hint.
+        ("AccentBorderBrush", "#737ECB"),
         ("FocusBrush", "#5260B5"),
         ("PrimaryBrush", "#5260B5"),
         ("PrimaryHoverBrush", "#4652A0"),

@@ -2,7 +2,7 @@
 
 ## 配置位置
 
-非秘密运行策略由 Windows Shell 指定目录，当前为 `%LOCALAPPDATA%\PopGlot\provider-settings.json`。Rust Core 不自行读取 Windows 环境变量，也不依赖注册表。服务列表另存于 `%LOCALAPPDATA%\PopGlot\product-config.json`，当前 Profile schema 为 `6`。
+非秘密运行策略由 Windows Shell 指定目录，当前为 `%LOCALAPPDATA%\PopGlot\provider-settings.json`。Rust Core 不自行读取 Windows 环境变量，也不依赖注册表。服务列表另存于 `%LOCALAPPDATA%\PopGlot\product-config.json`，当前 Profile schema 为 `7`。
 
 API Key 不进入 JSON。每个 Profile 使用自己的 Windows Credential Manager 通用凭据 `PopGlot/provider/{id}`；历史统一目标 `PopGlot/OpenAICompatibleApiKey` 只作为当前活动 Profile 的兼容读取来源，既不会复制到其他服务，也不会被升级删除。
 
@@ -79,7 +79,7 @@ v2 的 `ctrl-alt-w` 形式与 v3 的 `Ctrl+Alt+W` 由同一个解析器处理，
 
 v3 新增字段：
 
-- `ClosePanelOnFocusLoss`: 默认 `true`
+- `ClosePanelOnFocusLoss`: 默认 `false`（浮窗失焦不自动隐藏；需要自动隐藏时在设置中显式开启）
 - `CopyTranslationAutomatically`: 默认 `false`
 - `StartWithWindows`: 默认 `false`（写入 HKCU 的 Run 项，不需要提权）
 - `HistoryEnabled`: 默认 `true`
@@ -98,6 +98,14 @@ v4 → v5 会移除历史版本自动播种且从未修改、从未保存密钥�
 
 v5 → v6 明确以模型字段作为路由能力的单一事实来源：`SupportsText` 由非空 `TextModel` 判定，`SupportsVision` 由非空 `VisionModel` 判定，`IsLocal` 根据 `ApiBaseUrl` 判定。修复了早期版本在填入视觉模型但 `SupportsVision` 标志位未及时置位导致图片模型不可选的问题。若单一模型同时填入文本与视觉字段，则视为兼任双重能力；若活动默认文本/视觉指向了已被移除或能力不匹配的 Profile，会自动安全回退或置空，已有凭据与自定义字段原样保留。
 
+v6 → v7 引入独立的局域网许可（`AllowLanEndpoints`，默认 `false`）：目标地址落入私有网段不再仅凭「地址像内网」就获得接收内容的权利，必须由用户显式授权。迁移时所有既有 Profile 的该字段一律缺席（按 `false` 处理），随后整体回写一次；用户已保存的地址、模型与凭据全部原样保留。
+
 文字与视觉线路现在是两份完整运行配置：各自携带协议、Base URL、endpoint、模型、headers、Anthropic version 与独立 CredentialTarget。视觉线路可使用与文字线路不同的协议和主机；Core 只在视觉请求中应用视觉快照，并且视觉凭据缺失时失败关闭，绝不拿文字 Key 代替。
 
 模型目录使用协议适配器读取，并返回 `Supported` / `Unsupported` / `Unknown` 三态能力。OpenAI-compatible、Anthropic 与当前 Gemini 目录没有可靠图片输入字段时返回 `Unknown`；UI 明示未知，既不根据模型 id 猜测，也不静默把未知升级为支持。
+
+## 提示词模板存储（prompt-templates.json，0.1.6 候选，未发布）
+
+翻译风格模板不写入 `product-config.json` 或 `provider-settings.json`，而是由 Rust Core 在同一个数据目录 `%LOCALAPPDATA%\PopGlot` 维护独立的 `prompt-templates.json`：临时文件写入 + flush + 原子改名，写前保留 `.bak`。文件无法解析或超过 4 MiB 上限时移入 `prompt-templates.corrupt-*` / `prompt-templates.oversized-*` 备份并重置为内置模板，同时通过启动通知如实告知；遇到更新版本的 schema 文件则以只读模式运行、绝不覆盖。自定义模板上限 50 个，每模板自动保留最近 5 个历史修订。内置「忠实 / 自然 / 正式」模板由程序内置定义生成，不落盘、不可修改，只能复制为自定义模板。
+
+该文件使用与 Prompt 领域模型一致的 camelCase JSON 约定，与设置文件的 snake_case 契约互相独立、永不混用。删除该文件即可整体重置风格配置，不影响其他设置与凭据。

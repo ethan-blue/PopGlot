@@ -8,7 +8,8 @@
 # switch, so the guard stays effective.
 #
 # Covered paths:
-#   1. success            -> startup.json PASS, warmups retained, identity carried
+#   1. success            -> startup.json PASS, warmups retained, identity
+#      carried, machine.cpuModel present + non-empty + stable (C09-d)
 #   2. warmup failure     -> startup-failure.json (phase=warmup), evidence kept
 #   3. all counted failed -> startup-failure.json (phase=all-failed), per-run samples
 #   4. bad marker JSON    -> startup.json FAIL with 'marker unreadable' sample
@@ -18,7 +19,9 @@
 #   8. an existing startup.json survives a failing run BYTE-FOR-BYTE
 #   9. package verification: missing exe / missing deps / manifest drift /
 #      empty file list / missing manifest field / unmanifested extra file (C09-b)
-#  10. instance pre-check refuses while a real PopGlot runs
+#  10. instance pre-check refuses while a PopGlot-named process runs
+#      (deterministic: a fixture-spawned renamed powershell.exe is the
+#      throwaway instance; user-owned processes are never touched)
 #  11. memory phase from disk: PASS / over-budget / sampling exception /
 #      early exit — data and final verdict re-read from startup.json (C09-c)
 #
@@ -115,6 +118,13 @@ try {
     Assert-True (@($r.warmups).Count -eq 2) 'warmup results are retained in the report'
     Assert-True ($r.samples[0].hotkeysRegistered -eq $true) 'the readiness marker carries real hotkey registration'
     Assert-True ($r.buildIdentity.rustFfiSha256 -eq 'fixture-rust') 'the build identity covers the Rust artifact'
+    # C09-d: the machine block must carry a STABLE cpuModel - present in the
+    # persisted report, non-empty (the core falls back to the environment or
+    # the literal 'unknown', never fabricates), and reproducible across calls.
+    Assert-True ($null -ne $r.machine.PSObject.Properties['cpuModel']) 'the startup.json machine block carries a cpuModel field'
+    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$r.machine.cpuModel)) 'the machine cpuModel is non-empty'
+    $freshCpuModel = (Get-CpuModel)
+    Assert-True ([string]$r.machine.cpuModel -eq $freshCpuModel -and $freshCpuModel -eq (Get-CpuModel)) "the persisted cpuModel is stable across queries ($($r.machine.cpuModel))"
 
     # --- 2. warmup failure: structured report with warmup evidence ---
     $launcher = New-FakeLauncher $fakeDir "-1|fail`n-2|success`n0|success`n1|success"
@@ -230,9 +240,32 @@ try {
     Assert-True $thrown 'a manifest missing required fields is rejected'
 
     # --- 10. the instance pre-check refuses while a real PopGlot runs ---
-    $preCheckThrew = $false
-    try { [void] (Test-InstanceConflict) } catch { $preCheckThrew = $true }
-    Assert-True $preCheckThrew 'the instance pre-check refuses while a real PopGlot runs (production guard intact)'
+    # Deterministic on ANY machine (the old live-machine probe failed on
+    # every clean machine): a RENAMED powershell.exe becomes a live process
+    # named 'PopGlot' for the duration of the check. The fixture never
+    # touches a user-owned instance - only its own throwaway process below
+    # is reaped.
+    $guardProc = $null
+    try {
+        $guardDir = Join-Path $fakeDir 'guard'
+        New-Item -ItemType Directory -Force -Path $guardDir | Out-Null
+        $guardExe = Join-Path $guardDir 'PopGlot.exe'
+        Copy-Item (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') $guardExe -Force
+        $guardProc = Start-Process -FilePath $guardExe -ArgumentList '-NoProfile', '-Command', 'Start-Sleep -Seconds 45' -PassThru -WindowStyle Hidden
+        $preCheckThrew = $false
+        $preCheckMessage = $null
+        try { [void] (Test-InstanceConflict) } catch { $preCheckThrew = $true; $preCheckMessage = $_.Exception.Message }
+        Assert-True $preCheckThrew 'the instance pre-check refuses while a PopGlot-named process runs (production guard intact)'
+        Assert-True ($preCheckMessage -like '*a real PopGlot instance is running*') 'the pre-check refusal carries the running-instance evidence'
+    }
+    finally {
+        if ($null -ne $guardProc) {
+            try {
+                if (-not $guardProc.HasExited) { $guardProc.Kill() }
+                [void] ($guardProc.WaitForExit(5000))
+            } catch {}
+        }
+    }
 
     # --- 11. memory phase from disk (C09-c): PASS / over-budget / sampling
     #        exception / early exit, with the final verdict re-read from

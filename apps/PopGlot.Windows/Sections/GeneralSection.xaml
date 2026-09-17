@@ -22,7 +22,7 @@
             <StackPanel x:Name="ThemeTextPanel" VerticalAlignment="Center">
                 <TextBlock Text="主题" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}"
-                           Text="跟随系统外观或固定深浅色" />
+                           Text="跟随系统外观或固定深浅色（即时预览，保存后持久生效）" />
             </StackPanel>
             <ComboBox x:Name="ThemeComboBox" Grid.Column="1" Grid.Row="0" VerticalAlignment="Center"
                       AutomationProperties.Name="主题"
@@ -67,6 +67,47 @@
                               VerticalAlignment="Center"
                               Style="{StaticResource ToggleSwitch}" />
             </StackPanel>
+        </Grid>
+
+        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
+
+        <Grid x:Name="CloseToTrayRowGrid" Style="{StaticResource SettingsRow}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="关闭主窗口时最小化到托盘" Style="{StaticResource RowTitle}" />
+                <TextBlock Style="{StaticResource RowHint}"
+                           Text="开启时关闭主窗口仅隐藏到托盘常驻；关闭时直接退出应用" />
+            </StackPanel>
+            <ToggleButton x:Name="CloseToTrayToggle"
+                          AutomationProperties.Name="关闭主窗口时最小化到托盘" Grid.Column="1"
+                          VerticalAlignment="Center"
+                          Style="{StaticResource ToggleSwitch}" />
+        </Grid>
+
+        <Border Style="{StaticResource SettingsDivider}" Margin="0,6,0,14" />
+
+        <Grid x:Name="OnboardingRowGrid" Style="{StaticResource SettingsRow}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="新手引导" Style="{StaticResource RowTitle}" />
+                <TextBlock Style="{StaticResource RowHint}"
+                           Text="在工作台内重新查看三步上手引导（接入引擎、快捷键、第一次翻译）" />
+            </StackPanel>
+            <Button x:Name="RestartOnboardingButton" Grid.Column="1"
+                    Content="重新显示引导"
+                    Style="{StaticResource GhostButton}"
+                    Height="24" Padding="8,2"
+                    Cursor="Hand"
+                    VerticalAlignment="Center"
+                    AutomationProperties.Name="重新显示新手引导"
+                    ToolTip="回到翻译工作台并展开三步引导；完成或「跳过引导」后不再自动出现"
+                    Click="RestartOnboarding_Click" />
         </Grid>
 
         <Border Style="{StaticResource SettingsDivider}" Margin="0,6,0,14" />

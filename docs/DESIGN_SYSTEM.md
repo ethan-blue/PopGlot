@@ -55,6 +55,10 @@ PopGlot 采用高对比度、低视觉噪音的暗色与亮色调色盘：中性
 
 亮色主题对应值（Canvas `#F6F7F9`、Primary `#5260B5`、Accent `#5563B8` 等）见 `ThemeService.LightTokens`，同样由测试强制对比度。
 
+> **浅色 AccentBorderBrush（v0.1.6 Wave C）**：`#AAB1D9` → `#737ECB`。输入类控件 hover 边框对白色 InputBackground 的实测对比度由 2.10:1 提升到 **3.77:1**（对 AccentSoft `#EEF0FA` 为 3.31:1），达到 WCAG 非文本 ≥3:1；仍浅于 AccentBrush `#5563B8`（5.44:1），hover 弱于 focus 的层级不变。暗色 `#59649D`（3.06:1）与深蓝 Primary 不变；SurfaceHover 等背景差异不适用 3:1 边界规则，未被强行拉高。
+> **滚动条（Wave C）**：轨道加宽为 12 DIP 透明命中区，可见滑条保持 5 DIP 细条，静息不透明度 0.4 → 0.55。
+> **窗口样式（Wave C）**：隐式 `Window` 样式唯一权威在 `App.xaml`（含环境色 `TextElement.Foreground`）；合并字典里的第二个 Window 样式会被直接条目遮蔽成死代码，禁止再添加。
+
 > 历史：v0.1.1 文档曾记录另一套 `#0A0B0F / #2563EB / #4D9FFF`（亮蓝大强调）配色，与当时实现即不一致；当前方向在 v0.1.3 整改中锁定为上表并纳入自动化审计。
 
 ---

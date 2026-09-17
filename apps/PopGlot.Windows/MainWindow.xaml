@@ -3,9 +3,14 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:PopGlot.Windows"
         xmlns:sections="clr-namespace:PopGlot.Windows.Sections"
+        xmlns:services="clr-namespace:PopGlot.Windows.Services"
         Title="PopGlot" Width="1120" Height="760" MinWidth="560" MinHeight="560"
         Icon="/PopGlot;component/Assets/PopGlot-v5.ico"
+        FontFamily="{StaticResource UiFontFamily}" FontSize="13"
         Background="{DynamicResource CanvasBrush}" Foreground="{DynamicResource TextPrimaryBrush}"
+        UseLayoutRounding="True" SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType"
+        RenderOptions.ClearTypeHint="Enabled"
         WindowStartupLocation="CenterScreen">
 
     <WindowChrome.WindowChrome>
@@ -73,7 +78,11 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <!-- Custom TitleBar Caption Controls -->
+            <!-- Custom TitleBar Caption Controls.
+                 Maximize and Close keep DYNAMIC names/tooltips in sync from
+                 code-behind (UpdateMaximizeButtonGlyph /
+                 RefreshCloseButtonForTraySetting); the attributes below are
+                 only the first-paint defaults. -->
             <Grid Grid.Row="0" Background="Transparent">
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
                             WindowChrome.IsHitTestVisibleInChrome="True">
@@ -86,17 +95,20 @@
                             AutomationProperties.Name="最大化"
                             ToolTip="最大化" Click="MaximizeButton_Click" />
                     <Button x:Name="CloseBtn" Style="{StaticResource CaptionCloseButton}"
-                            AutomationProperties.Name="关闭到托盘"
+                            AutomationProperties.Name="{x:Static services:EngineWording.CloseToTrayAction}"
                             local:Ui.Icon="{StaticResource IconCaptionClose}"
-                            ToolTip="关闭到托盘" Click="CloseButton_Click" />
+                            ToolTip="{x:Static services:EngineWording.CloseToTrayAction}"
+                            Click="CloseButton_Click" />
                 </StackPanel>
             </Grid>
 
             <!--
                 High-density workstation surface: tight margins maximize editor
                 and reader area, avoiding floating cards or landing-page padding.
+                Responsive state has ONE authoritative source (RootGrid's
+                SizeChanged); this grid deliberately reports nothing.
             -->
-            <Grid Grid.Row="1" Margin="14,0,14,10" SizeChanged="ContentGrid_SizeChanged">
+            <Grid Grid.Row="1" Margin="14,0,14,10">
                 <sections:TranslateSection x:Name="TranslateSection" />
                 <sections:LibrarySection x:Name="LibrarySection" Visibility="Collapsed" />
             </Grid>
@@ -118,7 +130,6 @@
                                    Style="{StaticResource Metadata}"
                                    VerticalAlignment="Center"
                                    TextTrimming="CharacterEllipsis"
-                                   MaxWidth="380"
                                    ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                    AutomationProperties.LiveSetting="Polite"
                                    AutomationProperties.Name="状态"
@@ -138,7 +149,8 @@
                                        VerticalAlignment="Center" MaxWidth="320"
                                        TextTrimming="CharacterEllipsis"
                                        ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
-                                       Foreground="{DynamicResource TextSecondaryBrush}" Text="内置免费引擎" />
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       Text="{x:Static services:EngineWording.FreeEngineName}" />
                             <Path Width="8" Height="5" Stretch="Uniform" VerticalAlignment="Center"
                                   Fill="{DynamicResource TextTertiaryBrush}" Data="{StaticResource IconChevronDown}" />
                         </StackPanel>
