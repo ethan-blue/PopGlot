@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -22,6 +23,13 @@ public partial class QuickSearchWindow : Window
     private long _searchVersion;
     private CancellationTokenSource? _cts;
     private bool _isClosed;
+    // DPI transition fencing: OnDpiChanged only schedules ONE ApplicationIdle
+    // reposition; until it ran, every generation bump has a pending settle and
+    // the transition-driven SizeChanged/Height events must not re-position or
+    // clamp with the window's stale scale.
+    private long _dpiGeneration;
+    private long _settledDpiGeneration;
+    private bool IsInDpiTransition => _dpiGeneration != _settledDpiGeneration;
     // E3: true when the Escape currently travelling down the tunnel belonged
     // to a live IME composition on the search box. Window_KeyDown is a
     // BUBBLING KeyDown handler — by the time it runs, the Ui composition
@@ -33,6 +41,12 @@ public partial class QuickSearchWindow : Window
     // 「正在生成…」等准备态瞬间覆盖。快速搜索只有文字线路，不涉及
     // 截图视觉直译提示。
     private string? _pendingStyleNotice;
+    // The XAML binds the speak icon's Fill to the button Foreground.
+    // Speaking replaces that expression with a dynamic AccentBrush
+    // reference, so the original binding is captured here for the stop path:
+    // ClearValue would erase the expression for good and leave the idle
+    // icon with no fill (the expression itself is the local value).
+    private readonly System.Windows.Data.Binding? _speakIconFillBinding;
 
     /// <summary>
     /// C05: set by the host when the window must really die (app exit).
@@ -41,6 +55,67 @@ public partial class QuickSearchWindow : Window
     /// </summary>
     private Point? _initialCenterPointPixels;
     internal bool ForceClose { get; set; }
+
+    public new void Show()
+    {
+        base.Show();
+        CenterOnCurrentMonitor();
+        FocusSearchBox();
+    }
+
+    public new bool Activate()
+    {
+        CenterOnCurrentMonitor();
+        var result = base.Activate();
+        FocusSearchBox();
+        return result;
+    }
+
+    public new void Hide()
+    {
+        CancelRunningRequest();
+        // 用户主动收起（Esc 阶梯/失焦）结束本次会话视图的生命周期：一次性
+        // 通知（如划词预读取超时落地提示）与仅作解释的风格提示都不得跨
+        // Hide 残留到下一次普通打开——准备期关闭后重显尤其不能带回过期的
+        // 风格说明。首次 Show→Loaded 不受影响——Loaded 早于任何 Hide 且生
+        // 产超时路径是先 Show 再 Post。会话本身（C05）原样保留。
+        _state.PostPendingNotice(null);
+        _pendingStyleNotice = null;
+        StoreSessionSnapshot();
+        SyncUiWithState();
+        base.Hide();
+    }
+
+    protected override void OnActivated(EventArgs e)
+    {
+        base.OnActivated(e);
+        FocusSearchBox();
+    }
+
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+        if (_isClosed)
+        {
+            return;
+        }
+        // Single driver: during the WM_DPICHANGED transition the window's own
+        // scale is stale, so re-centering here would fight WPF's suggested-rect
+        // resize (the E3 F10 anomaly: a 480 DIP quick search settling 720 px
+        // wide on a 100% screen). One idle reposition, once settled, using the
+        // TARGET monitor's scale.
+        _dpiGeneration++;
+        var generation = _dpiGeneration;
+        Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
+        {
+            if (_isClosed || generation != _dpiGeneration)
+            {
+                return; // a newer DPI change owns the reposition
+            }
+            CenterOnCurrentMonitor();
+            _settledDpiGeneration = _dpiGeneration;
+        }));
+    }
 
     internal QuickSearchWindow(HistoryStore history, VocabularyStore vocabulary, Action? openSettings = null)
     {
@@ -54,6 +129,15 @@ public partial class QuickSearchWindow : Window
         // the same tunnelling pass.
         SearchBox.PreviewKeyDown += OnSearchBoxPreviewKeyDownSample;
         Ui.AttachCompositionTracker(SearchBox);
+        _speakIconFillBinding = SpeakIcon.GetBindingExpression(System.Windows.Shapes.Shape.FillProperty)?.ParentBinding;
+
+        GotKeyboardFocus += (_, e) =>
+        {
+            if (e.NewFocus == this || e.NewFocus is null)
+            {
+                FocusSearchBox();
+            }
+        };
 
         _themeChangedHandler = (_, _) =>
         {
@@ -75,10 +159,12 @@ public partial class QuickSearchWindow : Window
         Loaded += (_, _) =>
         {
             CenterOnCurrentMonitor();
-            SearchBox.Focus();
+            FocusSearchBox();
             RefreshLangBadge();
             SyncUiWithState();
             RefreshStyleSelector();
+            UpdateEmptyStateVisuals();
+            UpdateStatusDot();
         };
         // The window hides instead of closing; on every re-show the engine
         // (and therefore style support) may have changed.
@@ -86,58 +172,226 @@ public partial class QuickSearchWindow : Window
         {
             if (IsVisible)
             {
+                CenterOnCurrentMonitor();
+                FocusSearchBox();
                 // The persisted language pair may have changed on another
                 // surface while this window was hidden — the badge must not
                 // go stale on a re-show.
                 RefreshLangBadge();
                 RefreshStyleSelector();
             }
+            else
+            {
+                StoreSessionSnapshot();
+            }
         };
-        SizeChanged += (_, _) => ClampToWorkArea();
+        // During a DPI transition the idle reposition owns the placement;
+        // transition-driven resizes must not re-clamp with the stale scale.
+        SizeChanged += (_, _) =>
+        {
+            if (IsInDpiTransition) return;
+            ClampToWorkArea();
+        };
 
         Closed += (_, _) => OnClosedCleanup();
     }
 
-    private void CenterOnCurrentMonitor()
+    internal void FocusSearchBox()
     {
+        if (_isClosed || SearchBox is null) return;
+        FocusManager.SetFocusedElement(this, SearchBox);
+        SearchBox.Focus();
+        Keyboard.Focus(SearchBox);
+        SearchBox.SelectAll();
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+        {
+            if (IsVisible && !_isClosed && SearchBox is not null)
+            {
+                FocusManager.SetFocusedElement(this, SearchBox);
+                SearchBox.Focus();
+                Keyboard.Focus(SearchBox);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Posts a ONE-SHOT footer notice (e.g. the hotkey pre-read timeout
+    /// landing notice). State-driven, never a raw footer write: the notice
+    /// lives in <see cref="QuickSearchState.PendingNotice"/>, every
+    /// SyncUiWithState re-applies it — so the queued Loaded sync of a
+    /// first-show cannot swallow it — and the next real query/status update
+    /// clears it naturally.
+    /// </summary>
+    internal void PostPendingNotice(string notice)
+    {
+        if (_isClosed || string.IsNullOrEmpty(notice)) return;
+        _state.PostPendingNotice(notice);
+        SyncUiWithState();
+    }
+
+    protected override void OnPropertyChanged(DependencyPropertyChangedEventArgs e)
+    {
+        base.OnPropertyChanged(e);
+        if (IsInDpiTransition)
+        {
+            // A DPI transition owns the size: its own Height churn must not
+            // trigger work-area clamps computed from the stale scale.
+            return;
+        }
+        if (e.Property == HeightProperty && IsLoaded && e.NewValue is double newHeight && double.IsFinite(newHeight))
+        {
+            if (Math.Abs(newHeight - ActualHeight) > 0.5)
+            {
+                if (SizeToContent == SizeToContent.Height)
+                {
+                    SizeToContent = SizeToContent.Manual;
+                }
+                UpdateLayout();
+                ClampToWorkArea();
+            }
+        }
+    }
+
+    internal void CenterOnCurrentMonitor()
+    {
+        if (_isClosed) return;
+
+        UpdateLayout();
+
         var cursor = ScreenGeometry.CursorPixels();
         var workArea = ScreenGeometry.WorkAreaForPixel(cursor);
-        var scale = ScreenGeometry.ScaleOf(this);
+        // Target-monitor scale from the target point — never the window's own
+        // (mid-transition stale) DPI.
+        var scale = ScreenGeometry.ScaleOfMonitorAtPixel(cursor);
+        var scaleX = scale.X > 0 ? scale.X : 1.0;
+        var scaleY = scale.Y > 0 ? scale.Y : 1.0;
 
-        var workAreaHeightDip = workArea.Height / (scale.Y > 0 ? scale.Y : 1.0);
-        MaxHeight = Math.Min(600, Math.Max(200, workAreaHeightDip - 40));
+        var workAreaHeightDip = workArea.Height / scaleY;
+        var workAreaWidthDip = workArea.Width / scaleX;
+        var maxAllowedHeight = Math.Min(600, Math.Max(120, workAreaHeightDip - 40));
+        MaxHeight = maxAllowedHeight;
 
-        var widthPixels = (ActualWidth > 0 ? ActualWidth : Width) * scale.X;
-        var heightPixels = (ActualHeight > 0 ? ActualHeight : 100) * scale.Y;
+        var widthDip = ActualWidth > 0 ? ActualWidth : (double.IsFinite(Width) ? Width : 640);
+        var heightDip = ActualHeight > 0 ? ActualHeight : 100;
+        if (heightDip > maxAllowedHeight)
+        {
+            heightDip = maxAllowedHeight;
+            if (SizeToContent == SizeToContent.Height)
+            {
+                SizeToContent = SizeToContent.Manual;
+            }
+            Height = maxAllowedHeight;
+        }
 
-        var x = workArea.Left + Math.Max(0, (workArea.Width - widthPixels) / 2);
-        var y = workArea.Top + Math.Max(0, (workArea.Height - heightPixels) / 2);
-        _initialCenterPointPixels = new Point(x, y);
-        ScreenGeometry.MoveToPixels(this, new Point(x, y));
+        var xDip = (workArea.Left / scaleX) + Math.Max(0, (workAreaWidthDip - widthDip) / 2);
+        var yDip = (workArea.Top / scaleY) + Math.Max(0, (workAreaHeightDip - heightDip) / 2);
+
+        _initialCenterPointPixels = new Point(xDip * scaleX, yDip * scaleY);
+        // ONE authoritative landing: move the HWND directly. Writing Left/Top
+        // first and then MoveToPixels double-drove the same placement through
+        // two unit systems (WPF DIP and physical pixels).
+        var handle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        if (handle == 0)
+        {
+            // Pre-show: no HWND yet, the WPF properties carry the position.
+            Left = xDip;
+            Top = yDip;
+            return;
+        }
+        ScreenGeometry.MoveToPixels(this, new Point(xDip * scaleX, yDip * scaleY));
     }
 
     private void ClampToWorkArea()
     {
-        if (_isClosed || !IsLoaded || ActualWidth <= 0 || ActualHeight <= 0) return;
-        var cursor = ScreenGeometry.CursorPixels();
-        var workArea = ScreenGeometry.WorkAreaForPixel(cursor);
+        if (_isClosed || !IsLoaded) return;
+
         var scale = ScreenGeometry.ScaleOf(this);
+        var scaleX = scale.X > 0 ? scale.X : 1.0;
+        var scaleY = scale.Y > 0 ? scale.Y : 1.0;
 
-        var widthPixels = ActualWidth * scale.X;
-        var heightPixels = ActualHeight * scale.Y;
+        var windowTopLeftPixels = new Point(
+            (double.IsFinite(Left) ? Left : 0) * scaleX,
+            (double.IsFinite(Top) ? Top : 0) * scaleY);
+        var workAreaPixels = ScreenGeometry.WorkAreaForPixel(
+            double.IsFinite(Left) && double.IsFinite(Top) ? windowTopLeftPixels : ScreenGeometry.CursorPixels());
 
-        var x = _initialCenterPointPixels?.X ?? (workArea.Left + Math.Max(0, (workArea.Width - widthPixels) / 2));
-        var y = _initialCenterPointPixels?.Y ?? (workArea.Top + Math.Max(0, (workArea.Height - heightPixels) / 2));
+        // The monitor that actually owns the work area decides the scale —
+        // never the transitioning window's own reading.
+        var monitorScale = ScreenGeometry.ScaleOfMonitorAtPixel(
+            new Point(workAreaPixels.Left + workAreaPixels.Width / 2, workAreaPixels.Top + workAreaPixels.Height / 2));
+        var monitorScaleX = monitorScale.X > 0 ? monitorScale.X : scaleX;
+        var monitorScaleY = monitorScale.Y > 0 ? monitorScale.Y : scaleY;
 
-        if (y + heightPixels > workArea.Bottom - 20)
+        var workAreaDip = new Rect(
+            ScreenGeometry.PixelToDip(workAreaPixels.Left, monitorScaleX),
+            ScreenGeometry.PixelToDip(workAreaPixels.Top, monitorScaleY),
+            ScreenGeometry.PixelToDip(workAreaPixels.Width, monitorScaleX),
+            ScreenGeometry.PixelToDip(workAreaPixels.Height, monitorScaleY));
+
+        // 1. 先限制有效高度：不同工作区尺寸/DPI下，任何过高窗口先限制有效高度
+        const double marginDip = 20.0;
+        var maxEffectiveHeight = Math.Max(120.0, workAreaDip.Height - (marginDip * 2));
+        if (MaxHeight > maxEffectiveHeight)
         {
-            y = Math.Max(workArea.Top + 20, workArea.Bottom - heightPixels - 20);
+            MaxHeight = maxEffectiveHeight;
         }
 
-        ScreenGeometry.MoveToPixels(this, new Point(x, y));
+        var currentHeight = ActualHeight > 0 ? ActualHeight : (double.IsFinite(Height) ? Height : DesiredSize.Height);
+        if (currentHeight <= 0) return;
+
+        if (currentHeight > maxEffectiveHeight)
+        {
+            currentHeight = maxEffectiveHeight;
+            if (SizeToContent == SizeToContent.Height)
+            {
+                SizeToContent = SizeToContent.Manual;
+            }
+            Height = maxEffectiveHeight;
+        }
+
+        var currentWidth = ActualWidth > 0 ? ActualWidth : (double.IsFinite(Width) ? Width : 640.0);
+
+        // 2. 再正确夹逼 Top/Left，保证底部不越界
+        var currentLeft = double.IsFinite(Left)
+            ? Left
+            : workAreaDip.Left + Math.Max(0, (workAreaDip.Width - currentWidth) / 2);
+        var currentTop = double.IsFinite(Top)
+            ? Top
+            : workAreaDip.Top + Math.Max(0, (workAreaDip.Height - currentHeight) / 2);
+
+        var minTop = workAreaDip.Top + marginDip;
+        var maxTop = Math.Max(minTop, workAreaDip.Bottom - currentHeight - marginDip);
+        var clampedTop = Math.Clamp(currentTop, minTop, maxTop);
+
+        var minLeft = workAreaDip.Left + marginDip;
+        var maxLeft = Math.Max(minLeft, workAreaDip.Right - currentWidth - marginDip);
+        var clampedLeft = Math.Clamp(currentLeft, minLeft, maxLeft);
+
+        // ONE authoritative landing (MoveToPixels); WPF syncs Left/Top from
+        // the HWND move — never write both unit systems for the same spot.
+        ScreenGeometry.MoveToPixels(this, new Point(clampedLeft * monitorScaleX, clampedTop * monitorScaleY));
     }
 
-    private readonly string _sessionId = Guid.NewGuid().ToString("N");
+    private sealed record SnapshotDeduplicationKey(
+        string SessionId,
+        string Query,
+        string? ResultText,
+        TranslationSessionState State,
+        bool IsPartial);
+
+    private SnapshotDeduplicationKey? _lastStoredKey;
+    private long _lastSessionEpoch = -1;
+    private string _currentSessionId = Guid.NewGuid().ToString("N");
+
+    private string GetSessionId()
+    {
+        if (_lastSessionEpoch != _state.CurrentEpoch)
+        {
+            _lastSessionEpoch = _state.CurrentEpoch;
+            _currentSessionId = Guid.NewGuid().ToString("N");
+        }
+        return _currentSessionId;
+    }
 
     internal QuickSearchState State => _state;
     internal TextBox StreamBox => ResultStreamBox;
@@ -145,6 +399,10 @@ public partial class QuickSearchWindow : Window
     internal TextBlock FooterStatusBlock => FooterStatus;
     internal TextBlock FooterHintsBlock => FooterHints;
     internal TextBlock StreamIndicatorBlock => StreamIndicator;
+    internal Button EnterKeycapButton => SearchEnterKeycap;
+    internal TextBox SearchInputBox => SearchBox;
+    internal TextBlock IncompleteBadgeBlock => IncompleteBadge;
+    internal System.Windows.Shapes.Ellipse StatusDotShape => StatusDot;
 
     private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
@@ -157,6 +415,8 @@ public partial class QuickSearchWindow : Window
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         if (_isClosed) return;
+
+        UpdateEmptyStateVisuals();
 
         var text = SearchBox.Text;
         var version = Interlocked.Increment(ref _searchVersion);
@@ -354,13 +614,14 @@ public partial class QuickSearchWindow : Window
 
                 // Durable post-hoc honesty: when the free engine actually ran,
                 // the selected style did not apply. Decided by the TYPED
-                // executor, never by matching the PipelineLabel display string.
-                if (session.TextExecutor == TranslationTextExecutor.FreeEngine &&
+                // prompt-support fact, rendered through the shared short
+                // status; never by matching the PipelineLabel display string.
+                if (session.PromptSupport == TranslationPromptSupport.NotSupported &&
                     TranslationStyleMenu.TryGetActiveTemplate() is { } activeStyle &&
                     activeStyle.Id != TranslationStyleMenu.FaithfulTemplateId)
                 {
-                    FooterStatus.Text =
-                        $"已由内置免费引擎完成：{TranslationStyleMenu.FreeEngineToolTip}，所选文字翻译风格未应用。";
+                    FooterStatus.Text = TranslationStyleMenu.StyleStatusFor(
+                        TranslationPromptSupport.NotSupported);
                 }
             }
         }
@@ -386,6 +647,13 @@ public partial class QuickSearchWindow : Window
     {
         if (_isClosed) return;
 
+        if (SizeToContent != SizeToContent.Height)
+        {
+            SizeToContent = SizeToContent.Height;
+            ClearValue(HeightProperty);
+        }
+
+        EmptyStateContainer.Visibility = _state.IsResultVisible ? Visibility.Collapsed : Visibility.Visible;
         ResultContainer.Visibility = _state.IsResultVisible ? Visibility.Visible : Visibility.Collapsed;
         ResultStreamBox.Visibility = _state.IsStreamLayerVisible ? Visibility.Visible : Visibility.Collapsed;
         if (_state.IsStreamLayerVisible)
@@ -422,7 +690,16 @@ public partial class QuickSearchWindow : Window
 
         // 免费引擎预提示在其待决期间压过「正在生成…」这类准备态：一旦真实
         // 文本开始到达或终态（完成/失败/取消）落地，立即让位给真实状态。
-        if (_pendingStyleNotice is not null)
+        // 明确的优先级与消费规则：错误/超时类一次性通知（PendingNotice）
+        // 压过仅作解释的风格提示；一旦它接管，风格提示当场消费——既不被
+        // style retirement 分支吞掉，也不在后续 sync 中复活。风格提示自身
+        // 仍按原规则在首个真实 delta / 终态时让位并消费。
+        if (_state.PendingNotice is not null)
+        {
+            _pendingStyleNotice = null;
+            FooterStatus.Text = _state.PendingNotice;
+        }
+        else if (_pendingStyleNotice is not null)
         {
             if (string.IsNullOrEmpty(_state.AccumulatedText) &&
                 _state.Stage is QuickSearchUiStage.Streaming or QuickSearchUiStage.Finalizing)
@@ -437,6 +714,8 @@ public partial class QuickSearchWindow : Window
         }
         else
         {
+            // 走到这里 PendingNotice 必为空（上面第一分支已接管并消费风格
+            // 提示），直接呈现状态机文案。
             FooterStatus.Text = _state.StatusText;
         }
 
@@ -445,39 +724,22 @@ public partial class QuickSearchWindow : Window
         FooterHints.Text = _state.HintsText;
 
         if (_state.Stage == QuickSearchUiStage.Failed)
-
         {
-
-            FooterStatus.Foreground = (Brush)FindResource("DangerBrush");
-
+            FooterStatus.SetResourceReference(TextBlock.ForegroundProperty, "DangerBrush");
         }
-
         else if (_state.Stage is QuickSearchUiStage.Cancelled or QuickSearchUiStage.Partial)
-
         {
-
-            FooterStatus.Foreground = (Brush)FindResource("WarningBrush");
-
+            FooterStatus.SetResourceReference(TextBlock.ForegroundProperty, "WarningBrush");
         }
-
         else
-
         {
-
-            FooterStatus.Foreground = (Brush)FindResource("TextSecondaryBrush");
-
+            FooterStatus.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
         }
-
-
 
         if (_state.IsIncompleteBadgeVisible)
-
         {
-
             IncompleteBadge.Text = _state.Stage == QuickSearchUiStage.Cancelled ? "已取消" : "未完成";
-
-            IncompleteBadge.Foreground = (Brush)FindResource("WarningBrush");
-
+            IncompleteBadge.SetResourceReference(TextBlock.ForegroundProperty, "WarningBrush");
         }
 
 
@@ -524,6 +786,58 @@ public partial class QuickSearchWindow : Window
         }
 
         UpdateStarButton();
+        UpdateEmptyStateVisuals();
+        UpdateStatusDot();
+    }
+
+    private async void SearchEnterKeycap_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isClosed) return;
+        var text = SearchBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(text)) return;
+        _debounceTimer.Stop();
+        _state.OnQueryTextChanged(SearchBox.Text);
+        await PerformTranslateAsync();
+    }
+
+    private void SearchEnterKeycap_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key is Key.Enter or Key.Space)
+        {
+            e.Handled = true;
+            SearchEnterKeycap_Click(sender, e);
+        }
+    }
+
+    private void SearchEnterKeycap_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) =>
+        SearchEnterKeycap_Click(sender, e);
+
+    private void UpdateEmptyStateVisuals()
+    {
+        if (_isClosed) return;
+        var query = SearchBox.Text.Trim();
+        var hasText = !string.IsNullOrWhiteSpace(query);
+        if (SearchEnterKeycap is not null)
+        {
+            SearchEnterKeycap.Opacity = hasText ? 1.0 : 0.45;
+            System.Windows.Automation.AutomationProperties.SetName(SearchEnterKeycap, hasText ? "按 Enter 立即翻译" : "按 Enter 立即翻译（输入框为空）");
+        }
+        // 0.1.6 空态减法：动态提示条已移除（与页脚动态提示重复），此处不再
+        // 有 EmptyStatePrompt 需要刷新。
+    }
+
+    private void UpdateStatusDot()
+    {
+        if (_isClosed || StatusDot is null) return;
+        var resourceKey = _state.Stage switch
+        {
+            QuickSearchUiStage.Failed => "DangerBrush",
+            QuickSearchUiStage.Cancelled or QuickSearchUiStage.Partial => "WarningBrush",
+            QuickSearchUiStage.Streaming or QuickSearchUiStage.Finalizing => "AccentBrush",
+            QuickSearchUiStage.Completed => "SuccessBrush",
+            _ => "TextTertiaryBrush",
+        };
+        StatusDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, resourceKey);
     }
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e) => OpenSettings();
@@ -564,7 +878,7 @@ public partial class QuickSearchWindow : Window
         if (_isClosed) return;
         try
         {
-            TranslationStyleMenu.ApplyTo(StyleSelectorButton, TranslationStyleMenu.SupportedToolTip);
+            TranslationStyleMenu.ApplyTo(StyleSelectorButton);
             StyleSelectorLabel.Text = TranslationStyleMenu.ActiveLabel();
         }
         catch (Exception)
@@ -794,14 +1108,25 @@ public partial class QuickSearchWindow : Window
         {
             if (isSpeaking)
             {
-                SpeakIcon.Fill = (Brush)FindResource("AccentBrush");
+                SpeakIcon.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "AccentBrush");
                 SpeakButton.ToolTip = "停止朗读 (Ctrl+P)";
             }
             else
             {
-                SpeakIcon.ClearValue(System.Windows.Shapes.Shape.FillProperty);
+                // Re-apply the captured Foreground binding instead of
+                // ClearValue: the binding expression IS the local value, so
+                // clearing it would leave the idle icon with no fill at all.
+                if (_speakIconFillBinding is not null)
+                {
+                    SpeakIcon.SetBinding(System.Windows.Shapes.Shape.FillProperty, _speakIconFillBinding);
+                }
                 SpeakButton.ToolTip = "朗读译文 (Ctrl+P)";
             }
+            // The accessibility name must follow the ToolTip so screen readers
+            // announce the action the click will actually perform right now.
+            System.Windows.Automation.AutomationProperties.SetName(
+                SpeakButton,
+                isSpeaking ? "停止朗读" : "朗读译文");
         });
     }
 
@@ -814,10 +1139,15 @@ public partial class QuickSearchWindow : Window
                 word,
                 settings.SourceLanguage ?? LanguageCatalog.Auto,
                 settings.TargetLanguage ?? "zh-CN");
-        StarIcon.Fill = (Brush)FindResource(starred ? "AccentBrush" : "TextSecondaryBrush");
-        StarButton.Background = starred
-            ? (Brush)FindResource("AccentSoftBrush")
-            : System.Windows.Media.Brushes.Transparent;
+        StarIcon.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, starred ? "AccentBrush" : "TextSecondaryBrush");
+        if (starred)
+        {
+            StarButton.SetResourceReference(Button.BackgroundProperty, "AccentSoftBrush");
+        }
+        else
+        {
+            StarButton.ClearValue(Button.BackgroundProperty);
+        }
         StarButton.ToolTip = starred ? "从生词本移除" : "收藏到生词本";
         // The static XAML name must follow the dynamic state so screen
         // readers announce the action the click will actually perform.
@@ -841,13 +1171,19 @@ public partial class QuickSearchWindow : Window
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
+        CancelRunningRequest();
+        StoreSessionSnapshot();
         if (!ForceClose)
         {
             // C05: X/Alt+F4 cancel the running request, keep the partial and
             // hide. Real destruction happens only on app exit.
             e.Cancel = true;
-            CancelRunningRequest();
-            Hide();
+            // Close-as-hide 与用户 Hide 同属视图生命周期终点：一次性通知
+            // （如预读取超时落地提示）与仅作解释的风格提示都不跨收起存活。
+            _state.PostPendingNotice(null);
+            _pendingStyleNotice = null;
+            SyncUiWithState();
+            base.Hide();
             return;
         }
         base.OnClosing(e);
@@ -972,12 +1308,18 @@ public partial class QuickSearchWindow : Window
         internal static partial uint GetWindowThreadProcessId(nint window, out uint processId);
     }
 
-    private void StoreSessionSnapshot()
+    internal void StoreSessionSnapshot()
     {
-        var query = SearchBox?.Text?.Trim() ?? string.Empty;
+        if (_isClosed) return;
+
+        var query = !string.IsNullOrWhiteSpace(_state.CurrentQuery)
+            ? _state.CurrentQuery.Trim()
+            : SearchBox?.Text?.Trim() ?? string.Empty;
+
         var resultText = !string.IsNullOrWhiteSpace(_state.FinalRenderedText)
             ? _state.FinalRenderedText
             : _state.AccumulatedText;
+
         if (string.IsNullOrEmpty(query) || _state.Stage == QuickSearchUiStage.Idle)
         {
             return;
@@ -991,29 +1333,57 @@ public partial class QuickSearchWindow : Window
             QuickSearchUiStage.Failed => (TranslationSessionState.Failed, hasResult),
             _ => (TranslationSessionState.Cancelled, hasResult),
         };
-        ProviderSettings settings;
-        try
-        {
-            settings = CoreBridge.GetSettings();
-        }
-        catch
+
+        var sessionId = GetSessionId();
+        var key = new SnapshotDeduplicationKey(sessionId, query, hasResult ? resultText : null, state, isPartial);
+        if (_lastStoredKey == key)
         {
             return;
         }
 
+        var recent = App.SharedSessionStore.PeekRecent();
+        if (recent is not null &&
+            recent.Origin == SessionOrigin.QuickSearch &&
+            string.Equals(recent.SourceText, query, StringComparison.Ordinal) &&
+            string.Equals(recent.ResultText, hasResult ? resultText : null, StringComparison.Ordinal) &&
+            recent.State == state &&
+            recent.IsPartial == isPartial)
+        {
+            _lastStoredKey = key;
+            return;
+        }
+
+        string sourceLang = LanguageCatalog.Auto;
+        string targetLang = "zh-CN";
+        try
+        {
+            var settings = CoreBridge.GetSettings();
+            sourceLang = settings.SourceLanguage ?? LanguageCatalog.Auto;
+            targetLang = settings.TargetLanguage ?? "zh-CN";
+        }
+        catch
+        {
+            // Headless / offline fallback
+        }
+
         var session = StoredSession.Create(
-            sessionId: _sessionId,
+            sessionId: sessionId,
             origin: SessionOrigin.QuickSearch,
             sourceText: query,
-            sourceLang: settings.SourceLanguage ?? LanguageCatalog.Auto,
-            targetLang: settings.TargetLanguage ?? "zh-CN",
+            sourceLang: sourceLang,
+            targetLang: targetLang,
             engineProfileId: null,
             engineName: null,
             state: state,
             resultText: hasResult ? resultText : null,
             explanationText: _state.Explanation ?? _state.ErrorMessage,
             isPartial: isPartial);
-        if (!App.SharedSessionStore.TryStore(session, out var rejection))
+
+        if (App.SharedSessionStore.TryStore(session, out var rejection))
+        {
+            _lastStoredKey = key;
+        }
+        else
         {
             // Called from the close path: no surface remains to show it.
             App.LogSessionStoreRejection(rejection);
@@ -1023,9 +1393,9 @@ public partial class QuickSearchWindow : Window
     private void OnClosedCleanup()
     {
         if (_isClosed) return;
+        StoreSessionSnapshot();
         _isClosed = true;
         _debounceTimer.Stop();
-        StoreSessionSnapshot();
         ThemeService.ThemeChanged -= _themeChangedHandler;
         TtsService.SpeakingStateChanged -= OnTtsSpeakingStateChanged;
         _state.OnClose();

@@ -28,50 +28,114 @@
         <Rectangle x:Name="ShadeRight" Fill="{DynamicResource OverlayScrimBrush}" Visibility="Collapsed" />
         <Rectangle x:Name="ShadeBottom" Fill="{DynamicResource OverlayScrimBrush}" Visibility="Collapsed" />
 
-        <!-- Crosshair guides shown until the drag starts. -->
-        <Line x:Name="CrossHorizontal" Stroke="{StaticResource CaptureCrosshairBrush}" StrokeThickness="1" StrokeDashArray="4 4" />
-        <Line x:Name="CrossVertical" Stroke="{StaticResource CaptureCrosshairBrush}" StrokeThickness="1" StrokeDashArray="4 4" />
+        <!-- Crosshair guides and optical reticle shown until the drag starts. -->
+        <Line x:Name="CrossHorizontal" Stroke="{StaticResource CaptureCrosshairBrush}" StrokeThickness="1" StrokeDashArray="3 3" />
+        <Line x:Name="CrossVertical" Stroke="{StaticResource CaptureCrosshairBrush}" StrokeThickness="1" StrokeDashArray="3 3" />
+        <Ellipse x:Name="CrosshairReticle" Width="26" Height="26" Stroke="{StaticResource CaptureCrosshairBrush}"
+                 StrokeThickness="1" StrokeDashArray="3 3" IsHitTestVisible="False" />
+        <Ellipse x:Name="CrosshairDot" Width="4" Height="4" Fill="{DynamicResource AccentBrush}" IsHitTestVisible="False" />
 
-        <!-- No DropShadowEffect here: this element changes size on every
-             pointer move and a live bitmap effect makes the full-screen
-             layered window visibly trail the cursor. -->
-        <Border x:Name="SelectionBorder" Visibility="Collapsed" CornerRadius="2"
-                BorderBrush="{StaticResource CaptureMarqueeBrush}" BorderThickness="2" Background="Transparent" />
+        <!-- Dual-layer high-contrast marquee:
+             Outer layer: dark contrast rim (#90000000) for bright backgrounds;
+             Inner layer: dynamic accent border for dark and saturated surfaces;
+             Precision corner brackets (reticles) for professional viewfinder framing.
+             No DropShadowEffect here to avoid cursor lag. -->
+        <Border x:Name="SelectionBorder" Visibility="Collapsed"
+                BorderBrush="#90000000" BorderThickness="1" SnapsToDevicePixels="True">
+            <Grid ClipToBounds="True">
+                <!-- Inner high-visibility accent border -->
+                <Border BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1.5" SnapsToDevicePixels="True" />
 
+                <!-- Inner hairline for subtle luminous definition on dark surfaces -->
+                <Border BorderBrush="#35FFFFFF" BorderThickness="1" Margin="1.5" SnapsToDevicePixels="True" />
+
+                <!-- Professional viewfinder corner reticles (L-brackets) -->
+                <!-- Top-Left bracket -->
+                <Path HorizontalAlignment="Left" VerticalAlignment="Top"
+                      Stroke="{DynamicResource AccentBrush}" StrokeThickness="2.5"
+                      StrokeStartLineCap="Square" StrokeEndLineCap="Square"
+                      Data="M 0,12 L 0,0 L 12,0" SnapsToDevicePixels="True" />
+                <!-- Top-Right bracket -->
+                <Path HorizontalAlignment="Right" VerticalAlignment="Top"
+                      Stroke="{DynamicResource AccentBrush}" StrokeThickness="2.5"
+                      StrokeStartLineCap="Square" StrokeEndLineCap="Square"
+                      Data="M 0,0 L 12,0 L 12,12" SnapsToDevicePixels="True" />
+                <!-- Bottom-Left bracket -->
+                <Path HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                      Stroke="{DynamicResource AccentBrush}" StrokeThickness="2.5"
+                      StrokeStartLineCap="Square" StrokeEndLineCap="Square"
+                      Data="M 0,0 L 0,12 L 12,12" SnapsToDevicePixels="True" />
+                <!-- Bottom-Right bracket -->
+                <Path HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                      Stroke="{DynamicResource AccentBrush}" StrokeThickness="2.5"
+                      StrokeStartLineCap="Square" StrokeEndLineCap="Square"
+                      Data="M 0,12 L 12,12 L 12,0" SnapsToDevicePixels="True" />
+            </Grid>
+        </Border>
+
+        <!-- Integrated Size & Mode HUD -->
         <Border x:Name="SizeBadge" Visibility="Collapsed" Padding="8,4" CornerRadius="6"
                 Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1">
-            <TextBlock x:Name="SizeText" Foreground="{DynamicResource TextPrimaryBrush}"
-                       FontFamily="{StaticResource MonoFontFamily}" FontSize="12" />
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="12" ShadowDepth="2" Opacity="0.30" Color="{DynamicResource ShadowColor}" />
+            </Border.Effect>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock x:Name="SizeText" Foreground="{DynamicResource TextPrimaryBrush}"
+                           FontFamily="{StaticResource MonoFontFamily}" FontSize="12" VerticalAlignment="Center" />
+                <Border x:Name="HudDivider" Width="1" Height="10" Background="{DynamicResource BorderSubtleBrush}" Margin="7,0" VerticalAlignment="Center" />
+                <Border x:Name="HudModeBadge" CornerRadius="4" Background="{DynamicResource AccentSoftBrush}" Padding="5,1" VerticalAlignment="Center">
+                    <TextBlock x:Name="HudModeText" Text="翻译" Foreground="{DynamicResource AccentBrush}"
+                               FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" />
+                </Border>
+            </StackPanel>
         </Border>
 
         <!-- Instruction chip, centred on the monitor under the cursor. -->
-        <Border x:Name="HintChip" Padding="14,9" CornerRadius="10"
+        <Border x:Name="HintChip" Padding="14,8" CornerRadius="10"
                 Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
             <Border.Effect>
                 <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="0.35" Color="{DynamicResource ShadowColor}" />
             </Border.Effect>
-            <StackPanel Orientation="Horizontal">
-                <Ellipse Width="7" Height="7" VerticalAlignment="Center"
-                         Fill="{DynamicResource AccentBrush}" Margin="0,0,8,0" />
-                <TextBlock Text="框选翻译区域" Foreground="{DynamicResource TextPrimaryBrush}" FontWeight="SemiBold"
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Ellipse x:Name="HintDot" Width="7" Height="7" VerticalAlignment="Center"
+                         Fill="{DynamicResource AccentBrush}" Margin="0,0,9,0" />
+                <TextBlock x:Name="HintTitle" Text="框选翻译区域" Foreground="{DynamicResource TextPrimaryBrush}" FontWeight="SemiBold"
                            FontSize="12.5" VerticalAlignment="Center" />
-                <Border Width="1" Height="12" Background="{StaticResource CaptureCrosshairBrush}" Margin="10,0" />
-                <TextBlock x:Name="HintDetail" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center"
-                           FontSize="12" Text="Esc 取消 · 按住 Shift 仅提取文本" />
+                <Border Width="1" Height="12" Background="{DynamicResource BorderSubtleBrush}" Margin="12,0" VerticalAlignment="Center" />
+
+                <!-- Explicit keycaps: Shift -->
+                <StackPanel x:Name="ShiftHintGroup" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,0">
+                    <Border CornerRadius="4" Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}"
+                            BorderThickness="1" Padding="5,1" Margin="0,0,5,0" VerticalAlignment="Center">
+                        <TextBlock Text="Shift" FontFamily="{StaticResource MonoFontFamily}" FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock Text="仅提取文本" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" />
+                </StackPanel>
+
+                <!-- Explicit keycaps: Esc -->
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border CornerRadius="4" Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}"
+                            BorderThickness="1" Padding="5,1" Margin="0,0,5,0" VerticalAlignment="Center">
+                        <TextBlock Text="Esc" FontFamily="{StaticResource MonoFontFamily}" FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock x:Name="HintDetail" Text="取消" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" />
+                </StackPanel>
             </StackPanel>
         </Border>
 
         <!-- Live drag-phase hint: mirrors the Shift state while the marquee is
              being dragged. Occupies the same anchor slot as HintChip — the two
              are never visible at the same time (chip swaps at drag start). -->
-        <Border x:Name="DragHintChip" Visibility="Collapsed" Padding="14,9" CornerRadius="10"
+        <Border x:Name="DragHintChip" Visibility="Collapsed" Padding="14,8" CornerRadius="10"
                 Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
             <Border.Effect>
                 <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="0.35" Color="{DynamicResource ShadowColor}" />
             </Border.Effect>
-            <StackPanel Orientation="Horizontal">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <Ellipse x:Name="DragHintDot" Width="7" Height="7" VerticalAlignment="Center"
-                         Fill="{DynamicResource AccentBrush}" Margin="0,0,8,0" />
+                         Fill="{DynamicResource AccentBrush}" Margin="0,0,9,0" />
                 <TextBlock x:Name="DragHintText" Foreground="{DynamicResource TextPrimaryBrush}" FontWeight="SemiBold"
                            FontSize="12" VerticalAlignment="Center" />
             </StackPanel>

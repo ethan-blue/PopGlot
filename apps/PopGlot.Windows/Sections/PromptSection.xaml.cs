@@ -190,10 +190,10 @@ public partial class PromptSection : System.Windows.Controls.UserControl
         CustomsList.ItemsSource = customs.Select(t => RowFor(t, isBuiltIn: false)).ToList();
 
         var quotaFull = customs.Count >= MaxCustomTemplates;
-        CustomQuotaText.Text = $"已保存 {customs.Count}/{MaxCustomTemplates} 个（内置模板不占用配额）";
+        CustomQuotaText.Text = $"已保存 {customs.Count}/{MaxCustomTemplates} 个";
         AddTemplateButton.IsEnabled = !quotaFull;
         AddTemplateButton.ToolTip = quotaFull
-            ? $"自定义模板数量已达上限（{MaxCustomTemplates} 个）。删除不需要的模板后再新建。"
+            ? $"已达上限（{MaxCustomTemplates} 个），请先删除"
             : "创建一个自定义提示词模板";
         CustomsEmptyPanel.Visibility = customs.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         CustomsList.Visibility = customs.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
@@ -207,7 +207,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             ActiveTemplateDescription.Text = string.IsNullOrWhiteSpace(active.Description)
                 ? "（无说明）"
                 : active.Description;
-            ActiveTemplateMeta.Text = $"{(active.IsBuiltIn ? "内置模板" : "自定义模板")} · 修订 {active.Revision} · 之后发起的翻译立即使用";
+            ActiveTemplateMeta.Text = $"{(active.IsBuiltIn ? "内置模板" : "自定义模板")} · 修订 {active.Revision}";
         }
     }
 
@@ -262,13 +262,13 @@ public partial class PromptSection : System.Windows.Controls.UserControl
         // 「设为当前翻译风格」是两回事——停用≠取消当前风格。
         EnabledPanel.Visibility = viewingBuiltin ? Visibility.Collapsed : Visibility.Visible;
         EnabledHintText.Text = template.Enabled
-            ? "停用后此模板不参与翻译；设为当前风格是另一回事，互不影响。"
-            : "此模板已停用：不参与翻译。若它是当前风格，翻译会回退到内置「忠实翻译」。";
+            ? "停用后不参与翻译"
+            : "已停用，不参与翻译";
         EditorMetaText.Text = viewingBuiltin
-            ? $"内置模板 · 修订 {template.Revision}。内置风格受系统保护：不可修改或删除，可复制为自定义模板后再调整。"
+            ? $"内置模板 · 修订 {template.Revision} · 只读"
             : adding
-                ? "保存后可设为默认翻译风格；模板只保存在本机。"
-                : $"自定义模板 · 修订 {template.Revision}。保存后立即对之后发起的翻译生效。";
+                ? "保存后可设为默认风格"
+                : $"自定义模板 · 修订 {template.Revision}";
 
         ListHost.Visibility = Visibility.Collapsed;
         EditorForm.Visibility = Visibility.Visible;
@@ -361,7 +361,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             Enabled: true,
             IsBuiltIn: false);
         OpenEditor(draft, adding: true, viewingBuiltin: false);
-        StatusChanged?.Invoke($"已以内置风格「{source.Name}」为底稿新建自定义模板，调整后点「保存」。", StatusTone.Info);
+        StatusChanged?.Invoke($"已复制为自定义模板「{source.Name} 副本」，调整后保存", StatusTone.Info);
     }
 
     /// <summary>The quota is enforced by Rust; the entry point checks it early
@@ -397,8 +397,8 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             PaintLists();
             StatusChanged?.Invoke(
                 !template.Enabled
-                    ? $"已把当前风格指向「{template.Name}」，但该模板处于停用状态：翻译会先回退到内置「忠实翻译」，启用后生效。"
-                    : $"已切换翻译风格：{template.Name}。之后发起的翻译立即使用。",
+                    ? $"已设为「{template.Name}」；模板停用中，翻译暂用「忠实翻译」"
+                    : $"已切换风格：{template.Name}",
                 !template.Enabled ? StatusTone.Warning : StatusTone.Success);
         }
         catch (Exception exception)
@@ -431,7 +431,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             button.Content = "确认删除";
             button.SetResourceReference(Button.BackgroundProperty, "DangerSoftBrush");
             button.SetResourceReference(Button.ForegroundProperty, "DangerBrush");
-            button.ToolTip = "再次点击确认删除；该模板的历史版本会一并删除，已有翻译记录仍保留。3 秒无操作自动还原。";
+            button.ToolTip = "再次点击确认删除；历史版本一并删除，3 秒后自动还原。";
             _deleteArmTimer.Stop();
             _deleteArmTimer.Start();
             return;
@@ -462,8 +462,8 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             }
             StatusChanged?.Invoke(
                 wasActive
-                    ? "已删除模板；翻译风格已重置为内置「忠实翻译」。该模板的历史版本一并删除，已有翻译记录不受影响。"
-                    : "已删除自定义模板。它的历史版本一并删除，已有翻译记录不受影响。",
+                    ? "已删除模板，风格重置为「忠实翻译」"
+                    : "已删除模板",
                 StatusTone.Success);
         }
         catch (Exception exception)
@@ -564,8 +564,8 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             OpenEditor(saved, adding: false, viewingBuiltin: false);
             StatusChanged?.Invoke(
                 saved.Enabled
-                    ? $"已保存自定义模板「{saved.Name}」（修订 {saved.Revision}）。"
-                    : $"已保存自定义模板「{saved.Name}」（修订 {saved.Revision}）；模板处于停用状态，不参与翻译。",
+                    ? $"已保存「{saved.Name}」（修订 {saved.Revision}）"
+                    : $"已保存「{saved.Name}」（修订 {saved.Revision}）；停用中，不参与翻译",
                 StatusTone.Success);
             return true;
         }
@@ -638,8 +638,8 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             return;
         }
         EnabledHintText.Text = EnabledToggle.IsChecked == true
-            ? "停用后此模板不参与翻译；设为当前风格是另一回事，互不影响。"
-            : "此模板已停用：不参与翻译。若它是当前风格，翻译会回退到内置「忠实翻译」。";
+            ? "停用后不参与翻译"
+            : "已停用，不参与翻译";
         MarkEditorDirty();
     }
 
@@ -721,8 +721,8 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             AudienceTextBox.Text = _editorSaved.Audience;
             EnabledToggle.IsChecked = _editorSaved.Enabled;
             EnabledHintText.Text = _editorSaved.Enabled
-                ? "停用后此模板不参与翻译；设为当前风格是另一回事，互不影响。"
-                : "此模板已停用：不参与翻译。若它是当前风格，翻译会回退到内置「忠实翻译」。";
+                ? "停用后不参与翻译"
+                : "已停用，不参与翻译";
         }
         finally
         {
@@ -745,7 +745,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
         if (_editorDirty)
         {
             BeginDraftGuard(
-                "返回模板列表前，请先保存或放弃这个模板的未保存修改。",
+                "有未保存修改，请先保存或放弃。",
                 ShowList);
             return;
         }
@@ -853,13 +853,13 @@ public partial class PromptSection : System.Windows.Controls.UserControl
         {
             var compiled = CoreBridge.CompilePromptPreview(template, variables);
             PreviewTextBox.Text = compiled.CompiledText;
-            PreviewStatusText.Text = "本地编译成功：未发送任何网络请求。";
+            PreviewStatusText.Text = "预览已生成（未联网）";
             PreviewStatusText.SetResourceReference(TextBlock.ForegroundProperty, "SuccessBrush");
         }
         catch (Exception exception)
         {
             PreviewTextBox.Text = string.Empty;
-            PreviewStatusText.Text = $"无法编译：{exception.Message}";
+            PreviewStatusText.Text = $"无法生成预览：{exception.Message}";
             PreviewStatusText.SetResourceReference(TextBlock.ForegroundProperty, "DangerBrush");
         }
     }
@@ -870,7 +870,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
         {
             var copied = await Helpers.CopyToClipboardAsync(PreviewTextBox.Text);
             StatusChanged?.Invoke(
-                copied ? "编译预览已复制到剪贴板。" : "复制失败：剪贴板被其他程序占用。",
+                copied ? "已复制预览" : "复制失败：剪贴板被其他程序占用。",
                 copied ? StatusTone.Success : StatusTone.Warning);
         }
         catch (Exception exception)

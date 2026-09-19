@@ -194,6 +194,8 @@ async fn stream_benchmark_loopback_smoke_test() {
     let client = ProviderClient::new(TransportLimits {
         connect_timeout: Duration::from_secs(2),
         total_timeout: Duration::from_secs(10),
+        stream_idle_timeout: Duration::from_secs(10),
+        stream_total_timeout: Duration::from_secs(30),
         max_response_bytes: 1024 * 1024,
         max_retries: 0,
         retry_delay: Duration::from_millis(1),
@@ -277,6 +279,8 @@ async fn stream_benchmark_clean_chunked_eof_stress_test() {
     let client = ProviderClient::new(TransportLimits {
         connect_timeout: Duration::from_secs(2),
         total_timeout: Duration::from_secs(10),
+        stream_idle_timeout: Duration::from_secs(10),
+        stream_total_timeout: Duration::from_secs(30),
         max_response_bytes: 1024 * 1024,
         max_retries: 0,
         retry_delay: Duration::from_millis(1),
@@ -419,6 +423,8 @@ async fn stream_benchmark_corrupted_sse_smoke_test() {
     let client = ProviderClient::new(TransportLimits {
         connect_timeout: Duration::from_secs(2),
         total_timeout: Duration::from_secs(10),
+        stream_idle_timeout: Duration::from_secs(10),
+        stream_total_timeout: Duration::from_secs(30),
         max_response_bytes: 1024 * 1024,
         max_retries: 0,
         retry_delay: Duration::from_millis(1),

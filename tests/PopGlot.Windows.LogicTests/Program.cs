@@ -62,6 +62,8 @@ internal static class Program
         await RunAsync("cancelled read restores clipboard", CancelledReadRestoresClipboardAsync);
         await RunAsync("missing selection is explicit", MissingSelectionIsExplicitAsync);
         await RunAsync("clipboard selection supports target window", ClipboardSelectionSupportsTargetWindowAsync);
+        await RunAsync("selection pre-read is bounded, recoverable and never double-copies", SelectionPrereadIsBoundedAndDegradesWithFeedbackAsync);
+        await RunAsync("selection copy keystrokes honor cancellation checkpoints", SelectionSendCopyCoreHonorsCancellationCheckpointsAsync);
 
         Run("panel positioning stays in work area", PanelPositionStaysInWorkArea);
         Run("panel positioning supports negative monitor coordinates", PanelPositionSupportsNegativeCoordinates);
@@ -76,6 +78,8 @@ internal static class Program
         Run("v2 shortcut configuration migrates", V2ShortcutConfigurationMigrates);
         Run("shortcut conflicts are rejected", ShortcutConflictsAreRejected);
         Run("shell settings round-trip", ShellSettingsRoundTrip);
+        Run("shell settings utf8 bom file loads user settings and keeps bytes cache identity", ShellSettingsBomFileLoadsUserSettingsAndKeepsBytesCacheIdentity);
+        Run("shell settings utf-16 bom files load user settings and keep bytes cache identity", ShellSettingsUtf16BomFileLoadsUserSettingsAndKeepsBytesCacheIdentity);
         Run("transient load failure does not poison the settings cache", TransientLoadFailureDoesNotPoisonCache);
         Run("startup state model is honest and never overrides an OS disable", StartupStateModelIsHonest);
 
@@ -116,7 +120,14 @@ internal static class Program
         Run("history store csv and markdown export conform to format", HistoryStoreExportConforms);
         Run("hotkey action enum values are recognized without exception", HotkeyActionsRecognized);
         Run("show window hotkey and free engine consent round-trip", ShellSettingsShowWindowAndConsentRoundTrip);
+        RunSta("quick search hotkey registration serialization and degradation behavior", QuickSearchHotkeyRegistrationSerializationAndDegradation);
+        RunSta("style menu tooltip single source and typed short status mapping", StyleMenuTooltipSingleSourceAndShortStatusMapping);
         await RunAsync("free engine consent gates the outbound decision", FreeEngineConsentGatesOutbound);
+        await RunAsync("free engine falls back to the second endpoint when json does not parse", FreeEngineFallsBackOnUnparsableJson);
+        await RunAsync("free engine 429 cooldown is per host", FreeEngineRateLimitCooldownIsPerHost);
+        await RunAsync("free engine 429 cooldown follows a monotonic clock instead of the wall clock", FreeEngineRateLimitCooldownUsesMonotonicClock);
+        await RunAsync("free engine skips over-budget urls without sending or consuming the permit", FreeEngineSkipsOverBudgetUrlsWithoutSending);
+        Run("free engine failures classify by typed kind, not message strings", FreeEngineFailuresClassifyByTypedKind);
         await RunAsync("free engine authorization matrix at the send boundary", FreeEngineAuthorizationMatrixAtSendBoundary);
         await RunAsync("free engine authorization is consumed once at the send boundary", FreeEngineSendBoundaryConsumesAuthorization);
         await RunAsync("offline policy blocks remote but allows local providers", OfflineModeSendsNothing);
@@ -148,6 +159,7 @@ internal static class Program
         Run("settings and services draft guard transitions", SettingsAndServicesDraftGuardTransitions);
 
         Run("shortcut recording suspends global shortcuts", ShortcutRecordingSuspendsGlobalShortcuts);
+        RunSta("shortcuts section quick search hotkey UI wiring and draft contracts", ShortcutsSectionQuickSearchHotkeyWiringAndContracts);
         Run("capture drag avoids forced layout", CaptureDragAvoidsForcedLayout);
         Run("settings closes transient translation surfaces", SettingsClosesTransientSurfaces);
         Run("screenshot draft route is visible", ScreenshotDraftRouteIsVisible);
@@ -218,7 +230,10 @@ internal static class Program
 
         // QuickSearch streaming and state machine tests
         Run("quick search epoch and query fencing rejects stale updates", QuickSearchEpochAndQueryFencing);
+        Run("quick search status copy stays neutral, ttft-free and seconds-based", QuickSearchStatusCopyIsNeutralAndTtftFree);
         Run("quick search action gates protect partial and streaming states", QuickSearchPartialActionGate);
+        Run("quick search partial error shows message plus deduplicated suggestion", QuickSearchPartialErrorShowsMessageAndSuggestion);
+        Run("quick search pending notice is state-driven and cleared by real updates", QuickSearchPendingNoticeIsStateDriven);
         Run("quick search closed guard drops updates and prevents UI leaks", QuickSearchClosedGuard);
         Run("quick search min height and headless rendering contracts conform", QuickSearchMinHeightAndHeadlessContract);
 
@@ -240,6 +255,7 @@ internal static class Program
         RunStaBatch(
             ("settings window constructs and closes safely", SettingsWindowConstructsAndClosesSafely),
             ("quick search component lifecycle and stream contracts", QuickSearchComponentLifecycleAndStreamContracts),
+            ("quick search ux details recenter colors snapshot and enter keycap", QuickSearchUxDetailsRecenteringColorsSnapshotAndKeycap),
             ("translate section component lifecycle and stream contracts", TranslateSectionComponentLifecycleAndStreamContracts),
             ("translate section stacks when narrow", TranslateSectionStacksWhenNarrow),
             ("stream scroll position is preserved while reading", StreamScrollPositionIsPreservedWhileReading),
@@ -264,13 +280,22 @@ internal static class Program
             ("render screenshots and measure performance baseline", RenderScreenshotsAndMeasureBaseline),
             ("a failed save recovers to dirty then clean", FailedSaveRecoversToDirtyThenClean),
             ("settings cloud speech consent round-trip", SettingsCloudSpeechConsentRoundTrip),
+            ("settings save preserves quick search hotkey even when cache invalidated", SettingsSavePreservesQuickSearchHotkeyWhenCacheInvalidated),
             ("hotkey service suspension and retention behavior", HotkeyServiceSuspensionAndRetentionBehavior),
+            ("hotkey restored events fire once per cycle and reopen after recovery", HotkeyRestoredEventsOncePerCycleBehavior),
+            ("main window hotkey channel stays resident until cleared", MainWindowHotkeyChannelResidentAndClear),
+            ("settings probe conflict stays inline and stays retryable", SettingsProbeConflictStaysInlineAndRetryable),
             ("tts cloud speech needs its own consent", TtsCloudSpeechNeedsOwnConsent));
 
         await RunAsync("clipboard isolation and hard timeout resilience", ClipboardIsolationAndHardTimeoutAsync);
         await RunAsync("clipboard snapshot fail closed behavior", ClipboardSnapshotFailClosedBehaviorAsync);
         await RunAsync("screen capture async execution off UI thread", ScreenCaptureAsyncExecution);
         Run("hotkey service atomicity and failure visibility", HotkeyServiceAtomicityAndFailureVisibility);
+        Run("hotkey failure coordinator dedupes per cycle and reopens after recovery", HotkeyFailureCoordinatorDedupesAndReopensCycles);
+        Run("hotkey failure detail change inside an open cycle updates surfaces without re-ballooning", HotkeyFailureDetailChangeInsideOpenCycleUpdatesWithoutReballooning);
+        Run("settings apply failure routing follows service evidence, not cycle state", ShellApplyFailureRoutingFollowsEvidenceNotCycleState);
+        Run("hotkey registration failure copy classifies win32 error codes", HotkeyFailureCopyClassifiesWin32Error);
+        Run("hotkey failure dedup and probe wiring is real production code", HotkeyFailureDedupWiringIsReal);
         Run("release workflow specifies self-contained", ReleaseWorkflowSpecifiesSelfContained);
         Run("focus-loss and close contracts are wired through the shell", FocusLossAndCloseContractsAreWired);
         Run("global exception policy classifies and fuses", GlobalExceptionPolicyClassifiesAndFuses);
@@ -314,11 +339,17 @@ internal static class Program
             ("workbench restore keeps states honest and never persists the borrowed language pair", WaveRegressionTests.WorkbenchRestoreHonestyAndLanguageNotPersisted),
             ("a rejected draft stash blocks the overwrite and says so", WaveRegressionTests.RejectedDraftStashBlocksOverwrite),
             ("panel new operation never resurfaces the previous attempt's text", WaveRegressionTests.PanelNewOperationClearsStaleText),
+            ("panel streaming close keeps the real partial and stays partial", WaveRegressionTests.PanelStreamingSnapshotKeepsRealPartial),
+            ("panel without partial stores no fake text", WaveRegressionTests.PanelWithoutPartialStoresNoFakeText),
             ("panel restore keeps failed cancelled and completed states distinct", WaveRegressionTests.PanelRestoreKeepsStatesDistinct),
             ("panel height tiers stay above the window minheight", WaveRegressionTests.PanelHeightTiersRespectMinHeight),
             ("quick search re-show repaints the language badge from persisted state", WaveRegressionTests.QuickSearchReshowRefreshesLangBadge),
             ("quick search star automation name follows the starred state", WaveRegressionTests.QuickSearchStarAutomationNameFollowsState),
             ("quick search clamp keeps an oversized window inside the work area", WaveRegressionTests.QuickSearchClampToWorkArea),
+            ("quick search pending notice survives the first-show loaded sync", WaveRegressionTests.QuickSearchPendingNoticeSurvivesFirstShowLoaded),
+            ("quick search pending notice clears on the next real query", WaveRegressionTests.QuickSearchPendingNoticeClearsOnNextQuery),
+            ("quick search pending notice outranks and consumes the style notice", WaveRegressionTests.QuickSearchPendingNoticeOutranksStyleNotice),
+            ("hide during preparation clears both notices and keeps the session", WaveRegressionTests.QuickSearchHideDuringPreparationClearsStyleNotice),
             ("close button wording follows the tray residency setting", WaveRegressionTests.CloseButtonWordingFollowsTraySetting),
             ("settings saving locks both save-bar actions and refuses close", WaveRegressionTests.SettingsSavingLocksSaveBar),
             ("closing with a dirty form and a clean editor exposes the save bar", WaveRegressionTests.DirtyFormCleanEditorCloseShowsSaveBar),
@@ -326,7 +357,28 @@ internal static class Program
             ("prompt editor counters show usage and overflow honestly", WaveRegressionTests.PromptCountersShowUsageAndOverflow),
             ("prompt saving locks the template list until the save settles", WaveRegressionTests.PromptSavingLocksTemplateList),
             ("prompt delete confirmation arms and disarms without waiting", WaveRegressionTests.PromptDeleteArmDisarmWithoutWaiting),
-            ("main window responsive layout has one source and the agreed breakpoints", WaveRegressionTests.MainWindowSingleResponsiveSource));
+            ("main window responsive layout has one source and the agreed breakpoints", WaveRegressionTests.MainWindowSingleResponsiveSource),
+            ("settings nav rail follows programmatic page changes", WaveRegressionTests.SettingsNavRailFollowsProgrammaticShowPage),
+            ("settings draft guard nav bounce stays synced", WaveRegressionTests.SettingsDraftGuardNavBounceStaysSynced),
+            ("panel error brushes track the live theme", WaveRegressionTests.PanelErrorBrushesTrackLiveTheme),
+            ("panel footer stays inside the real 540x380 and 460x380 footprint", WaveRegressionTests.PanelFooterStaysInsideRealFootprint),
+            ("tts automation names follow speaking state on all three surfaces", WaveRegressionTests.TtsAutomationNamesFollowSpeakingState),
+            ("tts speaking icon brush tracks the live theme on the workbench", WaveRegressionTests.TtsSpeakingIconTracksLiveTheme),
+            ("tts stop restores the speak icon foreground binding on quick search and panel", WaveRegressionTests.TtsSpeakIconFillRestoresForegroundBinding),
+            ("copy feedback restores the copy icon foreground binding without touching the clipboard", WaveRegressionTests.CopyFeedbackIconsRestoreForegroundBinding),
+            ("star automation names follow the starred state on workbench and panel", WaveRegressionTests.StarAutomationNamesFollowStarredState),
+            ("settings maximize button announces the state it will switch to", WaveRegressionTests.SettingsMaximizeAutomationNameFollowsWindowState),
+            ("core reading controls carry exact automation names", WaveRegressionTests.CoreReadingControlsCarryExactAutomationNames),
+            ("hotkey recorders announce their row function and how to record", WaveRegressionTests.HotkeyRecordersAnnounceRowFunctionAndHowToRecord));
+
+        // E3 follow-ups: high-contrast seam and PerMonitorV2 DPI robustness.
+        Run("dpi geometry dip pixel roundtrips stay within a pixel", WaveRegressionTests.DpiGeometryRoundtripsAreIdentity);
+        Run("main window F14 stable normal size survives the dpi roundtrip", WaveRegressionTests.MainWindowF14StableSizeSurvivesDpiRoundtrip);
+        Run("stable normal size tracker rejects transition and non-normal pollution", WaveRegressionTests.StableNormalSizeTrackerRejectsPollution);
+        RunStaBatch(
+            ("high contrast apply resolved round trip restores the normal theme", WaveRegressionTests.HighContrastApplyResolvedRoundTripRestoresNormalTheme),
+            ("main window dpi transition guards the stable normal size", WaveRegressionTests.MainWindowDpiTransitionGuardsStableSize),
+            ("quick search dpi transition settles once and keeps the 480 dip width", WaveRegressionTests.QuickSearchDpiTransitionSettlesOnceAtMinWidth));
 
 
         if (Environment.GetEnvironmentVariable("POPGLOT_SMOKE_FREE") == "1")
@@ -427,6 +479,213 @@ internal static class Program
         var text = await service.ReadSelectionAsync(CancellationToken.None, targetWindow: (nint)12345);
         Equal("SelectionWithTargetWindow", text);
         True(adapter.Restored, "original clipboard was restored");
+    }
+
+    /// <summary>
+    /// The hotkey selection pre-read used to run on CancellationToken.None
+    /// with no feedback: a stuck clipboard STA call or a COM retry storm left
+    /// the hotkey silently dead. The read is now bounded via
+    /// <see cref="App.ReadSelectionPrereadAsync"/>; on budget exhaustion the
+    /// app takes the recoverable quick-search path with an honest notice,
+    /// while an empty selection still degrades silently through the service's
+    /// own 1s verdict, and a timed-out attempt aborts BEFORE the synthetic
+    /// Ctrl+C so the target application never receives a second keystroke.
+    /// </summary>
+    private static async Task SelectionPrereadIsBoundedAndDegradesWithFeedbackAsync()
+    {
+        // 0. Source contract: the unbounded, feedback-free call is gone, the
+        //    bound keeps the service's own verdict authoritative, and the
+        //    notice is delivered through the state-driven pending-notice
+        //    mechanism — a raw footer write loses the first-show Loaded race.
+        var root = FindProjectRoot();
+        var appCode = File.ReadAllText(Path.Combine(root, "apps", "PopGlot.Windows", "App.xaml.cs"));
+        True(!appCode.Contains("ReadSelectionAsync(CancellationToken.None"),
+            "the pre-read must not run unbounded on CancellationToken.None any more");
+        True(appCode.Contains("SelectionPrereadTimeout"), "the pre-read must be bounded");
+        True(appCode.Contains("SelectionPrereadTimeoutNotice"), "the timeout path must carry user feedback");
+        True(!appCode.Contains("FooterStatusBlock.Text = SelectionPrereadTimeoutNotice"),
+            "the timeout notice must be posted state-driven, never written directly into the footer");
+        True(appCode.Contains("PostPendingNotice(SelectionPrereadTimeoutNotice)"),
+            "the timeout path must post the notice through the pending-notice mechanism");
+        True(App.SelectionPrereadTimeout >= TimeSpan.FromSeconds(1),
+            "the bound must stay above the service's internal 1s verdict so an empty selection still degrades silently");
+        True(App.SelectionPrereadTimeout <= TimeSpan.FromSeconds(3), "the bound must stay short");
+        True(!string.IsNullOrWhiteSpace(App.SelectionPrereadTimeoutNotice) &&
+             App.SelectionPrereadTimeoutNotice.Contains("极速查词", StringComparison.Ordinal) &&
+             App.SelectionPrereadTimeoutNotice.Contains("粘贴", StringComparison.Ordinal),
+            $"the timeout notice must say where the user landed and what to do, got: {App.SelectionPrereadTimeoutNotice}");
+
+        // 1. A healthy selection still succeeds through the bounded wrapper.
+        var okAdapter = new FakeClipboardAdapter { SelectedText = "bounded ok" };
+        var ok = await App.ReadSelectionPrereadAsync(new ClipboardSelectionService(okAdapter), 0, TimeSpan.FromSeconds(5));
+        True(ok.Succeeded, "a healthy read must succeed through the bounded wrapper");
+        Equal("bounded ok", ok.Text);
+        True(!ok.TimedOut && ok.Failure is null, "a healthy read must not be flagged as timeout or failure");
+
+        // 2. Empty selection: the service's own explicit failure keeps its
+        //    silent-degrade classification (IsNoSelectionException) — no
+        //    timeout, no fabricated text.
+        var emptyAdapter = new FakeClipboardAdapter { SelectedText = string.Empty, CopyChangesSequence = false };
+        var empty = await App.ReadSelectionPrereadAsync(new ClipboardSelectionService(emptyAdapter), 0, TimeSpan.FromSeconds(5));
+        True(!empty.Succeeded && !empty.TimedOut && empty.Failure is InvalidOperationException,
+            "an empty selection must surface as the explicit no-selection failure");
+        True(App.IsNoSelectionException(empty.Failure as InvalidOperationException),
+            "the empty-selection failure must keep the silent-degrade classification");
+
+        // 3. Budget exhaustion: a read stuck past the bound is reported as a
+        //    timeout, and the abandoned attempt aborts at the post-capture
+        //    checkpoint BEFORE the synthetic Ctrl+C.
+        var stuckAdapter = new FakeClipboardAdapter
+        {
+            SelectedText = "late",
+            CaptureDelay = TimeSpan.FromMilliseconds(250),
+        };
+        var timedOut = await App.ReadSelectionPrereadAsync(
+            new ClipboardSelectionService(stuckAdapter), 0, TimeSpan.FromMilliseconds(50));
+        True(timedOut.TimedOut && !timedOut.Succeeded && timedOut.Failure is null,
+            "a read past its budget must be reported as a timeout");
+        await Task.Delay(500); // let the abandoned attempt unwind
+        Equal(0, stuckAdapter.CopyCalls, "a timed-out attempt must abort before the synthetic Ctrl+C");
+    }
+
+    /// <summary>
+    /// The synthetic Ctrl+C must honour the caller's budget at EVERY stage:
+    /// entry, after target activation, during the modifier-release wait, and
+    /// immediately before the keystrokes. Driven through the injected seam of
+    /// <see cref="WindowsSelectionClipboardAdapter.SendCopyCoreAsync"/> — no
+    /// real keyboard, window station or clipboard. The keystroke bundle itself
+    /// must stay exactly ONE Ctrl+C (with any held modifier released first),
+    /// so a timed-out read can neither skip the copy nor stack a second one.
+    /// </summary>
+    private static async Task SelectionSendCopyCoreHonorsCancellationCheckpointsAsync()
+    {
+        const ushort altKey = 0x12;
+        const ushort shiftKey = 0x10;
+        const ushort ctrlKey = 0x11;
+        const ushort cKey = 0x43;
+        const uint keyUpFlag = 0x0002;
+        const uint keyDownFlag = 0;
+
+        // 1. Entry checkpoint: a pre-expired budget aborts before anything
+        //    happens — no activation, no keystrokes.
+        using (var canceled = new CancellationTokenSource())
+        {
+            canceled.Cancel();
+            var activations = 0;
+            var sends = 0;
+            await ThrowsAsync<OperationCanceledException>(() =>
+                WindowsSelectionClipboardAdapter.SendCopyCoreAsync(
+                    (nint)999,
+                    canceled.Token,
+                    () => { activations++; return 0; },
+                    _ => { },
+                    () => false,
+                    () => [],
+                    inputs => { sends++; return (uint)inputs.Count; },
+                    TimeSpan.FromMilliseconds(1),
+                    TimeSpan.FromMilliseconds(1)));
+            Equal(0, activations, "an expired budget must not even activate the target window");
+            Equal(0, sends, "an expired budget must not synthesize any keystroke");
+        }
+
+        // 2. Post-activation checkpoint: the budget expiring right after
+        //    SetForegroundWindow still stops before the keys leave.
+        using (var canceled = new CancellationTokenSource())
+        {
+            var activations = 0;
+            var sends = 0;
+            await ThrowsAsync<OperationCanceledException>(() =>
+                WindowsSelectionClipboardAdapter.SendCopyCoreAsync(
+                    (nint)999,
+                    canceled.Token,
+                    () => (nint)555, // a different window currently owns the foreground
+                    _ => { activations++; canceled.Cancel(); },
+                    () => false,
+                    () => [],
+                    inputs => { sends++; return (uint)inputs.Count; },
+                    TimeSpan.FromMilliseconds(1),
+                    TimeSpan.FromMilliseconds(1)));
+            Equal(1, activations, "setup: the target must have been activated exactly once");
+            Equal(0, sends, "a cancellation during activation must abort before the keystrokes");
+        }
+
+        // 3. Modifier-wait checkpoint: the budget expiring during the
+        //    modifier-release poll stops before the keys leave.
+        using (var canceled = new CancellationTokenSource())
+        {
+            var polls = 0;
+            var sends = 0;
+            await ThrowsAsync<OperationCanceledException>(() =>
+                WindowsSelectionClipboardAdapter.SendCopyCoreAsync(
+                    0, // no activation branch
+                    canceled.Token,
+                    () => 0,
+                    _ => { },
+                    () => { polls++; canceled.Cancel(); return true; },
+                    () => [],
+                    inputs => { sends++; return (uint)inputs.Count; },
+                    TimeSpan.FromMilliseconds(1),
+                    TimeSpan.FromMilliseconds(10)));
+            True(polls >= 1, "setup: the modifier wait must have polled at least once");
+            Equal(0, sends, "a cancellation during the modifier wait must abort before the keystrokes");
+        }
+
+        // 4. Happy path, target already foreground, nothing held: exactly ONE
+        //    synthetic Ctrl+C — Ctrl down, C down, C up, Ctrl up.
+        {
+            List<WindowsSelectionClipboardAdapter.NativeInput>? sent = null;
+            await WindowsSelectionClipboardAdapter.SendCopyCoreAsync(
+                (nint)999,
+                CancellationToken.None,
+                () => (nint)999,
+                _ => { },
+                () => false,
+                () => [],
+                inputs => { sent = inputs; return (uint)inputs.Count; },
+                TimeSpan.FromMilliseconds(1),
+                TimeSpan.FromMilliseconds(1));
+            True(sent is not null, "the keystroke bundle must be submitted exactly once");
+            Equal(4, sent!.Count, "nothing held: the bundle must be exactly the Ctrl+C quadruple");
+            Equal(ctrlKey, sent[0].Union.Keyboard.VirtualKey, "the combo starts with Ctrl down");
+            Equal(keyDownFlag, sent[0].Union.Keyboard.Flags, "Ctrl goes down, not up");
+            Equal(cKey, sent[1].Union.Keyboard.VirtualKey, "exactly one C key-down");
+            Equal(keyDownFlag, sent[1].Union.Keyboard.Flags, "C goes down, not up");
+            Equal(cKey, sent[2].Union.Keyboard.VirtualKey, "then the C key-up");
+            Equal(keyUpFlag, sent[2].Union.Keyboard.Flags, "the C release must be a KeyUp");
+            Equal(ctrlKey, sent[3].Union.Keyboard.VirtualKey, "and finally the Ctrl key-up");
+            Equal(keyUpFlag, sent[3].Union.Keyboard.Flags, "the Ctrl release must be a KeyUp");
+        }
+
+        // 5. Modifiers still held (Alt+Shift from the hotkey): they are
+        //    released with KeyUp events BEFORE the single Ctrl+C pair.
+        {
+            List<WindowsSelectionClipboardAdapter.NativeInput>? sent = null;
+            await WindowsSelectionClipboardAdapter.SendCopyCoreAsync(
+                (nint)999,
+                CancellationToken.None,
+                () => (nint)999,
+                _ => { },
+                () => false,
+                () => [altKey, shiftKey],
+                inputs => { sent = inputs; return (uint)inputs.Count; },
+                TimeSpan.FromMilliseconds(1),
+                TimeSpan.FromMilliseconds(1));
+            True(sent is not null, "the keystroke bundle must be submitted");
+            Equal(6, sent!.Count, "two held modifiers plus the Ctrl+C quadruple");
+            Equal(altKey, sent[0].Union.Keyboard.VirtualKey, "held Alt must be released first");
+            Equal(keyUpFlag, sent[0].Union.Keyboard.Flags, "the Alt release must be a KeyUp");
+            Equal(shiftKey, sent[1].Union.Keyboard.VirtualKey, "held Shift released next");
+            Equal(keyUpFlag, sent[1].Union.Keyboard.Flags, "the Shift release must be a KeyUp");
+            var cKeyDowns = 0;
+            foreach (var input in sent)
+            {
+                if (input.Union.Keyboard.VirtualKey == cKey && input.Union.Keyboard.Flags == keyDownFlag)
+                {
+                    cKeyDowns++;
+                }
+            }
+            Equal(1, cKeyDowns, "still exactly ONE synthetic C key-down — never a second Ctrl+C");
+        }
     }
 
     // ================= Panel positioning =================
@@ -535,6 +794,7 @@ internal static class Program
             Equal("Ctrl+Alt+W", settings.SelectionHotkey.DisplayName);
             Equal("Ctrl+Shift+T", settings.ScreenshotHotkey.DisplayName);
             Equal("Ctrl+Alt+X", settings.CloseHotkey.DisplayName);
+            Equal("Ctrl+Alt+Q", settings.QuickSearchHotkey.DisplayName);
             True(!settings.HistoryEnabled, "history must remain opt-in after migration");
         }
         finally
@@ -559,6 +819,7 @@ internal static class Program
             Equal("Ctrl+Shift+F", settings.SelectionHotkey.DisplayName);
             Equal("Ctrl+Shift+T", settings.ScreenshotHotkey.DisplayName);
             Equal("Ctrl+Shift+X", settings.CloseHotkey.DisplayName);
+            Equal("Ctrl+Alt+Q", settings.QuickSearchHotkey.DisplayName);
         }
         finally
         {
@@ -574,6 +835,15 @@ internal static class Program
         };
         True(settings.ValidateHotkeys() is not null, "duplicate shortcut was accepted");
         True(ShellSettings.Default.ValidateHotkeys() is null, "the default set must be valid");
+
+        var qsConflict = ShellSettings.Default with
+        {
+            QuickSearchHotkey = ShellSettings.Default.SelectionHotkey,
+        };
+        var qsError = qsConflict.ValidateHotkeys();
+        True(qsError is not null, "duplicate quick search shortcut must be rejected");
+        True(qsError!.Contains("极速查词") && qsError.Contains("划词翻译"),
+            "duplicate error must name both conflicting actions");
     }
 
     private static void ShellSettingsRoundTrip()
@@ -675,6 +945,153 @@ internal static class Program
             var retried = ShellSettingsStore.Load(path);
             Equal(ThemePreference.Dark, retried.Theme,
                 "the next load after a transient failure must return the real settings");
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { /* best effort */ }
+            ShellSettingsStore.InvalidateCache();
+        }
+    }
+
+    /// <summary>
+    /// Release regression (0.1.6 Major): a settings file saved by an external
+    /// editor with a UTF-8 BOM made <see cref="ShellSettingsStore.Load"/>
+    /// throw inside the JSON deserializer; the fallback then reported — and
+    /// any later Save persisted — the DEFAULTS, silently discarding the user's
+    /// custom hotkey and theme. Load must skip the 3-byte BOM for the
+    /// deserialization input ONLY: the SHA-256/length cache identity stays
+    /// computed over the full original bytes (never a timestamp-only cache),
+    /// so the rewritten-same-length-same-timestamp probe below still reloads.
+    /// </summary>
+    private static void ShellSettingsBomFileLoadsUserSettingsAndKeepsBytesCacheIdentity()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"popglot-shell-bom-{Guid.NewGuid():N}.json");
+        try
+        {
+            ShellSettingsStore.InvalidateCache();
+
+            var settingsJson = """
+                {
+                    "SchemaVersion": 3,
+                    "SelectionHotkey": "Ctrl+Shift+Y",
+                    "Theme": "Dark",
+                    "HistoryEnabled": false
+                }
+                """;
+            File.WriteAllText(path, settingsJson, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+            True(new FileInfo(path).Length > Encoding.UTF8.GetByteCount(settingsJson),
+                "fixture: the file must actually carry the 3-byte BOM");
+
+            // 1. The old bug lost the user's settings here: the BOM crashed the
+            //    byte deserializer, the catch returned Default, and the custom
+            //    hotkey/theme fell back silently.
+            var loaded = ShellSettingsStore.Load(path);
+            Equal("Ctrl+Shift+Y", loaded.SelectionHotkey.DisplayName,
+                "a BOM-prefixed settings file must load the user's custom hotkey, not the default");
+            Equal(ThemePreference.Dark, loaded.Theme,
+                "a BOM-prefixed settings file must keep the user's theme");
+            True(!loaded.HistoryEnabled, "the stored history preference must survive a BOM");
+
+            // 2. Cache identity is still built from the FULL original bytes:
+            //    rewrite the file with different settings at the SAME byte
+            //    length and SAME write time — the next Load must re-read the
+            //    file instead of answering from the stale snapshot.
+            var cachedWrite = File.GetLastWriteTimeUtc(path);
+            var rewrittenJson = settingsJson.Replace("Ctrl+Shift+Y", "Ctrl+Shift+Z", StringComparison.Ordinal);
+            True(!string.Equals(settingsJson, rewrittenJson, StringComparison.Ordinal),
+                "fixture: the rewrite must actually change the settings");
+            Equal(Encoding.UTF8.GetByteCount(settingsJson), Encoding.UTF8.GetByteCount(rewrittenJson),
+                "fixture: the rewrite must preserve the payload byte length");
+            File.WriteAllText(path, rewrittenJson, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+            File.SetLastWriteTimeUtc(path, cachedWrite);
+
+            var reloaded = ShellSettingsStore.Load(path);
+            Equal("Ctrl+Shift+Z", reloaded.SelectionHotkey.DisplayName,
+                "cache identity must follow the original file bytes (BOM included), not reuse the stale snapshot");
+            Equal(ThemePreference.Dark, reloaded.Theme,
+                "the untouched fields must still load with their stored values");
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { /* best effort */ }
+            ShellSettingsStore.InvalidateCache();
+        }
+    }
+
+    /// <summary>
+    /// The old <c>File.ReadAllText</c> pipeline autodetected UTF-16 LE/BE BOMs;
+    /// the byte-span JSON path only knew the UTF-8 BOM, so a settings file an
+    /// external editor saved as UTF-16 (Notepad "Unicode" / "Unicode big
+    /// endian") crashed the deserializer and silently reset the user's custom
+    /// hotkeys/theme to the DEFAULTS. Load must decode UTF-16 LE (FF FE) and
+    /// UTF-16 BE (FE FF) — like UTF-8 BOM, for the deserialization input ONLY:
+    /// the timestamp/length/SHA-256 cache identity stays computed over the
+    /// FULL original bytes (same-length rewrite probe below), and content that
+    /// is not valid JSON still fails closed to the defaults.
+    /// </summary>
+    private static void ShellSettingsUtf16BomFileLoadsUserSettingsAndKeepsBytesCacheIdentity()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"popglot-shell-utf16-{Guid.NewGuid():N}.json");
+        try
+        {
+            ShellSettingsStore.InvalidateCache();
+
+            var settingsJson = """
+                {
+                    "SchemaVersion": 3,
+                    "SelectionHotkey": "Ctrl+Shift+Y",
+                    "Theme": "Dark",
+                    "HistoryEnabled": false
+                }
+                """;
+
+            // 1. UTF-16 LE (FF FE): the custom settings must survive — never
+            //    fall back to Default.
+            File.WriteAllText(path, settingsJson, new UnicodeEncoding(bigEndian: false, byteOrderMark: true));
+            var leBytes = File.ReadAllBytes(path);
+            True(leBytes.Length >= 2 && leBytes[0] == 0xFF && leBytes[1] == 0xFE,
+                "fixture: the file must carry the UTF-16 LE BOM");
+            var leLoaded = ShellSettingsStore.Load(path);
+            Equal("Ctrl+Shift+Y", leLoaded.SelectionHotkey.DisplayName,
+                "a UTF-16 LE settings file must load the user's custom hotkey, not the default");
+            Equal(ThemePreference.Dark, leLoaded.Theme,
+                "a UTF-16 LE settings file must keep the user's theme");
+            True(!leLoaded.HistoryEnabled,
+                "a UTF-16 LE settings file must keep the stored history preference");
+
+            // 2. Cache identity is still built from the FULL original bytes
+            //    (BOM included): rewrite with different settings at the SAME
+            //    byte length and SAME write time — the next Load must re-read
+            //    the file instead of answering from the stale snapshot.
+            var cachedWrite = File.GetLastWriteTimeUtc(path);
+            var rewritten = settingsJson.Replace("Ctrl+Shift+Y", "Ctrl+Shift+Z", StringComparison.Ordinal);
+            Equal(Encoding.Unicode.GetByteCount(settingsJson), Encoding.Unicode.GetByteCount(rewritten),
+                "fixture: the rewrite must preserve the payload byte length");
+            File.WriteAllText(path, rewritten, new UnicodeEncoding(bigEndian: false, byteOrderMark: true));
+            File.SetLastWriteTimeUtc(path, cachedWrite);
+            var leReloaded = ShellSettingsStore.Load(path);
+            Equal("Ctrl+Shift+Z", leReloaded.SelectionHotkey.DisplayName,
+                "cache identity must follow the original UTF-16 bytes, not reuse the stale snapshot");
+
+            // 3. UTF-16 BE (FE FF): the same contract.
+            ShellSettingsStore.InvalidateCache();
+            File.WriteAllText(path, settingsJson, new UnicodeEncoding(bigEndian: true, byteOrderMark: true));
+            var beBytes = File.ReadAllBytes(path);
+            True(beBytes.Length >= 2 && beBytes[0] == 0xFE && beBytes[1] == 0xFF,
+                "fixture: the file must carry the UTF-16 BE BOM");
+            var beLoaded = ShellSettingsStore.Load(path);
+            Equal("Ctrl+Shift+Y", beLoaded.SelectionHotkey.DisplayName,
+                "a UTF-16 BE settings file must load the user's custom hotkey, not the default");
+            Equal(ThemePreference.Dark, beLoaded.Theme,
+                "a UTF-16 BE settings file must keep the user's theme");
+
+            // 4. Invalid content under a supported encoding still fails closed:
+            //    the defaults come back instead of a crash or a partial read.
+            ShellSettingsStore.InvalidateCache();
+            File.WriteAllText(path, "{ this is not json", new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            var invalid = ShellSettingsStore.Load(path);
+            Equal(ShellSettings.Default, invalid,
+                "invalid JSON must keep the existing fail-closed behaviour");
         }
         finally
         {
@@ -2669,6 +3086,150 @@ internal static class Program
         True(values.Contains(HotkeyAction.CaptureScreen), "HotkeyAction.CaptureScreen must exist");
         True(values.Contains(HotkeyAction.ClosePanel), "HotkeyAction.ClosePanel must exist");
         True(values.Contains(HotkeyAction.ShowWindow), "HotkeyAction.ShowWindow must exist");
+        True(values.Contains(HotkeyAction.QuickSearch), "HotkeyAction.QuickSearch must exist");
+        Equal("极速查词", ShellSettings.ActionName(HotkeyAction.QuickSearch));
+    }
+
+    private static void QuickSearchHotkeyRegistrationSerializationAndDegradation()
+    {
+        // 1. Low-conflict default combination verification (never Alt+Space)
+        Equal("Ctrl+Alt+Q", HotkeyBinding.QuickSearchDefault.DisplayName);
+        True(!string.Equals(HotkeyBinding.QuickSearchDefault.DisplayName, "Alt+Space", StringComparison.OrdinalIgnoreCase),
+            "QuickSearch default hotkey must not be Alt+Space");
+        True(HotkeyBinding.QuickSearchDefault.IsValid, "QuickSearch default combination must be valid");
+
+        // 2. Action enum and name mapping
+        Equal("极速查词", ShellSettings.ActionName(HotkeyAction.QuickSearch));
+        True(ShellSettings.Default.Hotkeys.ContainsKey(HotkeyAction.QuickSearch),
+            "Default hotkeys dictionary must include QuickSearch");
+        Equal(HotkeyBinding.QuickSearchDefault, ShellSettings.Default.Hotkeys[HotkeyAction.QuickSearch]);
+
+        // 3. Serialization and round-trip with custom combination
+        var path = Path.Combine(Path.GetTempPath(), $"popglot-shell-qs-{Guid.NewGuid():N}.json");
+        try
+        {
+            var custom = ShellSettings.Default with
+            {
+                QuickSearchHotkey = HotkeyBinding.Parse("Ctrl+Alt+H", HotkeyBinding.QuickSearchDefault),
+            };
+            ShellSettingsStore.Save(custom, path);
+            var reloaded = ShellSettingsStore.Load(path);
+            Equal(custom, reloaded);
+            Equal("Ctrl+Alt+H", reloaded.QuickSearchHotkey.DisplayName);
+
+            // A fast external rewrite can preserve both timestamp and byte length.
+            // Cache identity must still follow the actual file bytes, not return
+            // the previous shortcut from a stale snapshot.
+            var cachedTimestamp = File.GetLastWriteTimeUtc(path);
+            var originalJson = File.ReadAllText(path);
+            var rewritten = originalJson
+                .Replace("Ctrl+Alt+H", "Ctrl+Alt+J", StringComparison.Ordinal)
+                .Replace("Ctrl\\u002BAlt\\u002BH", "Ctrl\\u002BAlt\\u002BJ", StringComparison.Ordinal);
+            True(!string.Equals(originalJson, rewritten, StringComparison.Ordinal),
+                "the same-metadata fixture must actually rewrite the shortcut bytes");
+            Equal(Encoding.UTF8.GetByteCount(originalJson), Encoding.UTF8.GetByteCount(rewritten),
+                "the cache regression fixture must preserve file length");
+            File.WriteAllText(path, rewritten);
+            File.SetLastWriteTimeUtc(path, cachedTimestamp);
+            var sameMetadataRewrite = ShellSettingsStore.Load(path);
+            Equal("Ctrl+Alt+J", sameMetadataRewrite.QuickSearchHotkey.DisplayName);
+
+            // 4. Old configuration backward compatibility (missing QuickSearchHotkey field defaults cleanly)
+            File.WriteAllText(path, """
+                {
+                    "SchemaVersion": 3,
+                    "SelectionHotkey": "Ctrl+Alt+W",
+                    "ScreenshotHotkey": "Ctrl+Alt+Space",
+                    "CloseHotkey": "Ctrl+Alt+X"
+                }
+                """);
+            var migrated = ShellSettingsStore.Load(path);
+            Equal("Ctrl+Alt+Q", migrated.QuickSearchHotkey.DisplayName);
+            True(migrated.Hotkeys.ContainsKey(HotkeyAction.QuickSearch));
+            Equal(HotkeyBinding.QuickSearchDefault, migrated.Hotkeys[HotkeyAction.QuickSearch]);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+
+        // 5. HotkeyService registration and dispatch with QuickSearch action
+        EnsureApplication();
+        var targetWindow = new Window();
+        using var service = new HotkeyService(targetWindow);
+        HotkeyAction? firedAction = null;
+        service.Pressed += (_, action) => firedAction = action;
+
+        var hotkeys = new Dictionary<HotkeyAction, HotkeyBinding>
+        {
+            [HotkeyAction.QuickSearch] = new(
+                HotkeyBinding.ModControl | HotkeyBinding.ModAlt | HotkeyBinding.ModShift,
+                0x7E), // F15
+        };
+        True(service.TryRegisterAll(hotkeys, out var conflict), $"QuickSearch must register: {conflict}");
+        Equal(1, service.CurrentHotkeys.Count);
+        True(service.CurrentHotkeys.ContainsKey(HotkeyAction.QuickSearch));
+
+        // 6. Code-level contract verification for App.xaml.cs degradation and wiring
+        var root = FindProjectRoot();
+        var appCode = File.ReadAllText(Path.Combine(root, "apps", "PopGlot.Windows", "App.xaml.cs"));
+        True(appCode.Contains("HotkeyAction.QuickSearch"), "App must handle HotkeyAction.QuickSearch");
+        True(appCode.Contains("ShowQuickSearch()"), "App must trigger ShowQuickSearch for QuickSearch hotkey");
+        True(appCode.Contains("IsNoSelectionException"),
+            "App must classify missing selection when TranslateSelection runs");
+        True(appCode.Contains("PreloadedSelectionClipboardAdapter"),
+            "App must use a preloaded adapter to prevent double clipboard copy");
+
+        // 7. Whitelist-only degradation verification for App.IsNoSelectionException
+        True(!appCode.Contains("!ex.Message.Contains(\"64 KiB\")"),
+            "IsNoSelectionException must not use 64 KiB blacklist to classify no-selection");
+        True(!appCode.Contains("!ex.Message.Contains(\"NUL\")"),
+            "IsNoSelectionException must not use NUL blacklist to classify no-selection");
+
+        // True no-selection / no available text exceptions MUST degrade to QuickSearch
+        var noSelectionEx = new InvalidOperationException("未检测到可复制的选中文本。请先选中文字再按划词键；若当前应用（如终端或受限文档）不支持快捷键复制，可直接在浮窗中粘贴。");
+        True(App.IsNoSelectionException(noSelectionEx),
+            "True 'no selection' exception must be recognized as no-selection and degrade to QuickSearch");
+
+        var noTextEx = new InvalidOperationException("选区没有可用文本，或当前应用禁止复制。");
+        True(App.IsNoSelectionException(noTextEx),
+            "True 'no available text' exception must be recognized as no-selection and degrade to QuickSearch");
+
+        // Permission (UIPI), clipboard lock, length limit, NUL, and other exceptions MUST NOT degrade to QuickSearch
+        var uipiEx = new InvalidOperationException("无法向当前应用发送复制指令：目标窗口以管理员权限运行（受 Windows UIPI 权限隔离保护）。请以管理员身份运行 PopGlot，或手动复制后在浮窗中粘贴。");
+        True(!App.IsNoSelectionException(uipiEx),
+            "UIPI permission exception must NOT be classified as no-selection (must not downgrade to QuickSearch)");
+
+        var lockEx = new InvalidOperationException("上一次剪贴板操作仍未响应，已取消本次划词。请关闭占用剪贴板的程序后重试。");
+        True(!App.IsNoSelectionException(lockEx),
+            "Clipboard lock/busy exception must NOT be classified as no-selection (must not downgrade to QuickSearch)");
+
+        var busyEx = new InvalidOperationException("剪贴板正被其他应用占用，请稍后重试。");
+        True(!App.IsNoSelectionException(busyEx),
+            "Clipboard retry exhaustion exception must NOT be classified as no-selection");
+
+        var formatEx = new InvalidOperationException("剪贴板格式“text”无法完整读取；为保护原内容，本次划词已取消。");
+        True(!App.IsNoSelectionException(formatEx),
+            "Clipboard format read failure must NOT be classified as no-selection");
+
+        var unsupportedFormatEx = new InvalidOperationException("剪贴板包含暂不支持安全复制的格式“custom”；为保护原内容，本次划词已取消。");
+        True(!App.IsNoSelectionException(unsupportedFormatEx),
+            "Clipboard unsupported format must NOT be classified as no-selection");
+
+        var oversizedEx = new InvalidOperationException("选中文本超过 64 KiB，请缩小选区。");
+        True(!App.IsNoSelectionException(oversizedEx),
+            "64 KiB oversized exception must NOT be classified as no-selection");
+
+        var nulEx = new InvalidOperationException("选中文本包含不支持的 NUL 字符。");
+        True(!App.IsNoSelectionException(nulEx),
+            "NUL character exception must NOT be classified as no-selection");
+
+        var otherEx = new InvalidOperationException("其他未预期的操作失败。");
+        True(!App.IsNoSelectionException(otherEx),
+            "Arbitrary InvalidOperationException must NOT be classified as no-selection");
+
+        True(!App.IsNoSelectionException(null),
+            "Null exception must return false");
     }
 
     private static string FindProjectRoot()
@@ -3011,6 +3572,448 @@ internal static class Program
             FreeTranslateService.HttpSenderOverride = originalSender;
             File.Delete(consentPath);
         }
+    }
+
+    /// <summary>Shape both fake endpoints parse: [["译文"], ...].</summary>
+    private static (string Translated, string Phonetic) ParseJsonShapeForFreeEngineTests(string json)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(json);
+        var root = document.RootElement;
+        if (root.ValueKind == System.Text.Json.JsonValueKind.Array &&
+            root.GetArrayLength() > 0 &&
+            root[0].ValueKind == System.Text.Json.JsonValueKind.Array &&
+            root[0].GetArrayLength() > 0 &&
+            root[0][0].ValueKind == System.Text.Json.JsonValueKind.String)
+        {
+            return (root[0][0].GetString() ?? string.Empty, string.Empty);
+        }
+        return (string.Empty, string.Empty);
+    }
+
+    private static FreeTranslateService.FreeEndpoint[] TwoFakeEndpoints() =>
+    [
+        new FreeTranslateService.FreeEndpoint(
+            "endpoint-a.test",
+            static (sl, tl, q) => $"https://endpoint-a.test/x?sl={sl}&tl={tl}&q={Uri.EscapeDataString(q)}",
+            ParseJsonShapeForFreeEngineTests),
+        new FreeTranslateService.FreeEndpoint(
+            "endpoint-b.test",
+            static (sl, tl, q) => $"https://endpoint-b.test/x?sl={sl}&tl={tl}&q={Uri.EscapeDataString(q)}",
+            ParseJsonShapeForFreeEngineTests),
+    ];
+
+    /// <summary>
+    /// Release Major: a 200 response whose body does not parse used to throw
+    /// the raw JsonException out of <see cref="FreeTranslateService.TranslateAsync"/>,
+    /// so the second endpoint was never tried and the user saw serializer
+    /// internals. A parse failure must be recorded as ONE user-readable
+    /// message while the fallback continues; when both endpoints fail to
+    /// parse, the surfaced error is the friendly wording — never STJ text.
+    /// </summary>
+    private static async Task FreeEngineFallsBackOnUnparsableJson()
+    {
+        var originalSender = FreeTranslateService.HttpSenderOverride;
+        var originalEndpoints = FreeTranslateService.EndpointsOverride;
+        var originalLoader = OutboundPolicy.SettingsLoader;
+        FreeTranslateService.ResetRateLimitStateForTest();
+        OutboundPolicy.SettingsLoader = () =>
+            ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed };
+        var hosts = new List<string>();
+        var allBad = false;
+        var guid = Guid.NewGuid().ToString("N");
+        FreeTranslateService.HttpSenderOverride = (request, _) =>
+        {
+            hosts.Add(request.RequestUri?.Host ?? string.Empty);
+            var bad = request.RequestUri?.Host == "endpoint-a.test" || allBad;
+            var body = bad ? "not-json-at-all" : $"[[\"B-译文 {guid}\"]]";
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            });
+        };
+        FreeTranslateService.EndpointsOverride = TwoFakeEndpoints();
+        var settings = CoreBridge.GetSettings() with { SafeDevMode = false, NetworkEnabled = true };
+        var auth = new FreeEngineAuthorization(settings, IsOnceOnly: false);
+        try
+        {
+            // 1. Endpoint A answers 200 + garbage, endpoint B 200 + valid:
+            //    the fallback must succeed with exactly two sends.
+            var ok = await FreeTranslateService.TranslateAsync($"fallback {guid}", "auto", "zh-CN", auth);
+            Equal("B-译文 " + guid, ok.Result.TranslatedText,
+                "the second endpoint must answer after a parse failure on the first");
+            Equal(2, hosts.Count, "a parse failure must fall through to the second endpoint");
+            Equal("endpoint-a.test", hosts[0], "the first attempt must hit endpoint A");
+            Equal("endpoint-b.test", hosts[1], "the second attempt must hit endpoint B");
+
+            // 2. Both endpoints return garbage: the surfaced error is the
+            //    friendly wording, with no serializer internals.
+            hosts.Clear();
+            allBad = true;
+            var failure = await ThrowsAsync<FreeTranslateException>(() =>
+                FreeTranslateService.TranslateAsync($"both-bad {guid}", "auto", "zh-CN", auth));
+            Equal(2, hosts.Count, "both endpoints must get their attempt");
+            Equal("免费翻译服务返回了无法解析的响应，请重试。", failure.Message,
+                "the surfaced message must be the friendly wording, not a JsonException");
+            True(!failure.Message.Contains("JsonException") && !failure.Message.Contains("0x"),
+                "no serializer internals may leak into the user message");
+            Equal(FreeTranslateFailureKind.Unparsable, failure.Kind);
+        }
+        finally
+        {
+            FreeTranslateService.HttpSenderOverride = originalSender;
+            FreeTranslateService.EndpointsOverride = originalEndpoints;
+            OutboundPolicy.SettingsLoader = originalLoader;
+            FreeTranslateService.ResetRateLimitStateForTest();
+        }
+    }
+
+    /// <summary>
+    /// The 429 cooldown used to be one global value: after endpoint A answered
+    /// 429, the next request did not even try the healthy endpoint B. The
+    /// cooldown is now PER HOST — A benches only itself for the window, B
+    /// keeps serving, and only when every endpoint is cooling does a request
+    /// fail fast with the explicit rate-limit message and zero sends.
+    /// </summary>
+    private static async Task FreeEngineRateLimitCooldownIsPerHost()
+    {
+        var originalSender = FreeTranslateService.HttpSenderOverride;
+        var originalEndpoints = FreeTranslateService.EndpointsOverride;
+        var originalLoader = OutboundPolicy.SettingsLoader;
+        FreeTranslateService.ResetRateLimitStateForTest();
+        OutboundPolicy.SettingsLoader = () =>
+            ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed };
+        var aSends = 0;
+        var bSends = 0;
+        var bRateLimited = false;
+        FreeTranslateService.HttpSenderOverride = (request, _) =>
+        {
+            var host = request.RequestUri?.Host ?? string.Empty;
+            if (host == "endpoint-a.test")
+            {
+                Interlocked.Increment(ref aSends);
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.TooManyRequests)
+                {
+                    Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+                });
+            }
+            Interlocked.Increment(ref bSends);
+            HttpResponseMessage response = bRateLimited
+                ? new HttpResponseMessage(System.Net.HttpStatusCode.TooManyRequests)
+                : new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+            response.Content = new StringContent(
+                bRateLimited ? "{}" : "[[\"B-译文\"]]", Encoding.UTF8, "application/json");
+            return Task.FromResult(response);
+        };
+        FreeTranslateService.EndpointsOverride = TwoFakeEndpoints();
+        var settings = CoreBridge.GetSettings() with { SafeDevMode = false, NetworkEnabled = true };
+        var auth = new FreeEngineAuthorization(settings, IsOnceOnly: false);
+        try
+        {
+            // 1. A=429, B=200: the first request still succeeds through B.
+            await FreeTranslateService.TranslateAsync($"perhost-1 {Guid.NewGuid():N}", "auto", "zh-CN", auth);
+            Equal(1, Volatile.Read(ref aSends), "the first request must reach A once");
+            Equal(1, Volatile.Read(ref bSends), "the first request must fall through to B");
+
+            // 2. The next request must NOT touch the cooling A again, and the
+            //    healthy B must keep serving it.
+            var second = await FreeTranslateService.TranslateAsync(
+                $"perhost-2 {Guid.NewGuid():N}", "auto", "zh-CN", auth);
+            Equal("B-译文", second.Result.TranslatedText, "the healthy endpoint must keep serving");
+            Equal(1, Volatile.Read(ref aSends),
+                "a cooling host must not be contacted again within the cooldown");
+            Equal(2, Volatile.Read(ref bSends), "the next request must go straight to B");
+
+            // 3. When B rate-limits too, that request reports the live 429
+            //    (B benches itself from now on).
+            bRateLimited = true;
+            var bothFailed = await ThrowsAsync<FreeTranslateException>(() =>
+                FreeTranslateService.TranslateAsync($"perhost-3 {Guid.NewGuid():N}", "auto", "zh-CN", auth));
+            Equal(FreeTranslateFailureKind.RateLimited, bothFailed.Kind);
+            True(bothFailed.Message.Contains("限流"), "a live 429 must say so");
+            Equal(3, Volatile.Read(ref bSends), "B got one attempt before benching itself");
+
+            // 4. With EVERY host cooling, the next request fails fast with
+            //    zero sends and the cooldown wording.
+            var sendsBeforeAllCooling = Volatile.Read(ref aSends) + Volatile.Read(ref bSends);
+            var allCooling = await ThrowsAsync<FreeTranslateException>(() =>
+                FreeTranslateService.TranslateAsync($"perhost-4 {Guid.NewGuid():N}", "auto", "zh-CN", auth));
+            True(allCooling.Message.Contains("一分钟内暂不自动重试"),
+                "the all-cooling fast fail must carry the cooldown wording");
+            Equal(sendsBeforeAllCooling, Volatile.Read(ref aSends) + Volatile.Read(ref bSends),
+                "a fully cooled-down endpoint table must send nothing");
+        }
+        finally
+        {
+            FreeTranslateService.HttpSenderOverride = originalSender;
+            FreeTranslateService.EndpointsOverride = originalEndpoints;
+            OutboundPolicy.SettingsLoader = originalLoader;
+            FreeTranslateService.ResetRateLimitStateForTest();
+        }
+    }
+
+    /// <summary>
+    /// The 429 cooldown used to be measured against <c>DateTime.UtcNow</c>
+    /// (wall clock): a system clock step backward benched hosts for the whole
+    /// step, a step forward released them instantly. The cooldown now follows
+    /// a monotonic clock (Environment.TickCount64 in production) with a
+    /// wrap-safe signed comparison. The injected fake clock below parks 30s
+    /// before the TickCount64 wrap boundary: a host marked there must stay
+    /// benched for exactly the cooldown — THROUGH the wrap — and must retry
+    /// the moment the monotonic cooldown elapses even though the wall clock
+    /// barely moved (the old wall-clock implementation fails this test).
+    /// </summary>
+    private static async Task FreeEngineRateLimitCooldownUsesMonotonicClock()
+    {
+        var originalSender = FreeTranslateService.HttpSenderOverride;
+        var originalEndpoints = FreeTranslateService.EndpointsOverride;
+        var originalLoader = OutboundPolicy.SettingsLoader;
+        var originalClock = FreeTranslateService.MonotonicClockOverrideForTest;
+        FreeTranslateService.ResetRateLimitStateForTest();
+
+        long fakeNow = long.MaxValue - 30_000; // 30s before the TickCount64 wrap
+        FreeTranslateService.MonotonicClockOverrideForTest = () => Interlocked.Read(ref fakeNow);
+
+        var aSends = 0;
+        var bSends = 0;
+        FreeTranslateService.HttpSenderOverride = (request, _) =>
+        {
+            if (request.RequestUri?.Host == "endpoint-a.test")
+            {
+                Interlocked.Increment(ref aSends);
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.TooManyRequests)
+                {
+                    Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+                });
+            }
+            Interlocked.Increment(ref bSends);
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("[[\"B-译文\"]]", Encoding.UTF8, "application/json"),
+            });
+        };
+        FreeTranslateService.EndpointsOverride = TwoFakeEndpoints();
+        OutboundPolicy.SettingsLoader = () =>
+            ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed };
+        var settings = CoreBridge.GetSettings() with { SafeDevMode = false, NetworkEnabled = true };
+        var auth = new FreeEngineAuthorization(settings, IsOnceOnly: false);
+        try
+        {
+            // 1. A answers 429: the mark lands at fakeNow + 60s — i.e. 30s
+            //    PAST the wrap, as a negative long. B still serves.
+            await FreeTranslateService.TranslateAsync($"mono-1 {Guid.NewGuid():N}", "auto", "zh-CN", auth);
+            Equal(1, Volatile.Read(ref aSends), "setup: A must receive the first attempt");
+            Equal(1, Volatile.Read(ref bSends), "setup: B must serve after A's 429");
+
+            // 2. Advance the fake monotonic clock by 1s (wall clock frozen): A
+            //    must still be benched across the wrap boundary. A wall-clock
+            //    mark would compare far BELOW the fake monotonic now and
+            //    release A immediately — so this also catches a half-migrated
+            //    implementation.
+            Interlocked.Add(ref fakeNow, 1_000);
+            await FreeTranslateService.TranslateAsync($"mono-2 {Guid.NewGuid():N}", "auto", "zh-CN", auth);
+            Equal(1, Volatile.Read(ref aSends),
+                "the cooldown must bench A across the TickCount64 wrap boundary, not follow the wall clock");
+            Equal(2, Volatile.Read(ref bSends), "the healthy endpoint must keep serving");
+
+            // 3. Advance past the remaining cooldown on the fake monotonic
+            //    clock (wall clock still ~frozen): A must become reachable
+            //    exactly when the monotonic cooldown expires.
+            Interlocked.Add(ref fakeNow, 61_000);
+            await FreeTranslateService.TranslateAsync($"mono-3 {Guid.NewGuid():N}", "auto", "zh-CN", auth);
+            Equal(2, Volatile.Read(ref aSends),
+                "A must retry once the monotonic cooldown expires, regardless of the wall clock");
+        }
+        finally
+        {
+            FreeTranslateService.HttpSenderOverride = originalSender;
+            FreeTranslateService.EndpointsOverride = originalEndpoints;
+            OutboundPolicy.SettingsLoader = originalLoader;
+            FreeTranslateService.MonotonicClockOverrideForTest = originalClock;
+            FreeTranslateService.ResetRateLimitStateForTest();
+        }
+    }
+
+    /// <summary>
+    /// GET URLs balloon with percent-encoded CJK, so every endpoint's final
+    /// URI is measured against the conservative local budget BEFORE the
+    /// authorization is claimed. Over-budget endpoints are skipped without a
+    /// single send; if all of them are over budget the request fails fast
+    /// with zero sends and the explicit long-content message — and an
+    /// AllowOnce permit is NOT consumed by a local rejection. Short text
+    /// behaves exactly as before.
+    /// </summary>
+    private static async Task FreeEngineSkipsOverBudgetUrlsWithoutSending()
+    {
+        var originalSender = FreeTranslateService.HttpSenderOverride;
+        var originalEndpoints = FreeTranslateService.EndpointsOverride;
+        var originalLoader = OutboundPolicy.SettingsLoader;
+        FreeTranslateService.ResetRateLimitStateForTest();
+        OutboundPolicy.SettingsLoader = () =>
+            ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed };
+        long sends = 0;
+        FreeTranslateService.HttpSenderOverride = (request, _) =>
+        {
+            Interlocked.Increment(ref sends);
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("[[\"短文译文\"]]", Encoding.UTF8, "application/json"),
+            });
+        };
+        FreeTranslateService.EndpointsOverride = TwoFakeEndpoints();
+        var settings = CoreBridge.GetSettings() with { SafeDevMode = false, NetworkEnabled = true };
+        try
+        {
+            // 1. 1500 CJK characters percent-encode to a URL far beyond the
+            //    budget on BOTH endpoints: zero sends, explicit fast fail.
+            var longText = new string('翻', 1500);
+            var longFailure = await ThrowsAsync<FreeTranslateException>(() =>
+                FreeTranslateService.TranslateAsync(longText, "auto", "zh-CN",
+                    new FreeEngineAuthorization(settings, IsOnceOnly: false)));
+            Equal(0L, Interlocked.Read(ref sends), "an over-budget request must send nothing");
+            Equal("内容较长，内置免费引擎单次无法处理，请缩短内容或使用已配置的翻译引擎。", longFailure.Message);
+            Equal(FreeTranslateFailureKind.LongContent, longFailure.Kind);
+
+            // 2. The local length rejection must not consume an AllowOnce
+            //    permit: nothing reached the send boundary.
+            var onceAuth = new FreeEngineAuthorization(settings, IsOnceOnly: true);
+            await ThrowsAsync<FreeTranslateException>(() =>
+                FreeTranslateService.TranslateAsync(longText, "auto", "zh-CN", onceAuth));
+            True(!onceAuth.IsConsumed,
+                "a local budget rejection must not burn the AllowOnce permit");
+
+            // 3. Short text behaves exactly as before: the first endpoint is
+            //    attempted and answers.
+            var ok = await FreeTranslateService.TranslateAsync(
+                $"short-ok {Guid.NewGuid():N}", "auto", "zh-CN",
+                new FreeEngineAuthorization(settings, IsOnceOnly: false));
+            Equal("短文译文", ok.Result.TranslatedText);
+            Equal(1L, Interlocked.Read(ref sends), "a short request must translate as before");
+        }
+        finally
+        {
+            FreeTranslateService.HttpSenderOverride = originalSender;
+            FreeTranslateService.EndpointsOverride = originalEndpoints;
+            OutboundPolicy.SettingsLoader = originalLoader;
+            FreeTranslateService.ResetRateLimitStateForTest();
+        }
+    }
+
+    /// <summary>
+    /// Typed classification: a free-engine 401 must not tell the user to
+    /// check an API key (the free engine has none), and a transport
+    /// timeout/DNS miss must not be classified as the "网络翻译已关闭"
+    /// setting. Classification is driven by the typed
+    /// <see cref="FreeTranslateFailureKind"/>, not by message strings; policy
+    /// refusals (safe offline mode) keep their existing honest mapping.
+    /// </summary>
+    private static void FreeEngineFailuresClassifyByTypedKind()
+    {
+        var classify = typeof(TranslationCoordinator).GetMethod(
+            "ClassifyException",
+            System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.NonPublic);
+        True(classify is not null, "ClassifyException must remain reachable for the typed mapping");
+
+        var unauthorized = (TranslationError)classify!.Invoke(null, new Exception[]
+        {
+            new FreeTranslateException(
+                FreeTranslateFailureKind.Unauthorized,
+                "免费翻译服务不可用（HTTP 401）；可在设置中配置模型服务以获得稳定翻译。"),
+        })!;
+        True(unauthorized.Kind != TranslationErrorKind.Unauthorized,
+            "a free-endpoint 401 must not be classified as the user's key problem");
+        True(unauthorized.ActionableSuggestion is not null &&
+            !unauthorized.ActionableSuggestion.Contains("请检查") &&
+            !unauthorized.ActionableSuggestion.Contains("已过期"),
+            $"the 401 suggestion must not tell the user to check a key, got: {unauthorized.ActionableSuggestion}");
+
+        var timeout = (TranslationError)classify.Invoke(null, new Exception[]
+        {
+            new FreeTranslateException(
+                FreeTranslateFailureKind.NetworkOrTimeout,
+                "免费翻译服务暂时无法访问（The request was canceled due to the configured HttpClient.Timeout）；请检查本机网络后重试。"),
+        })!;
+        True(timeout.Kind != TranslationErrorKind.NetworkDisabled,
+            "a transport timeout must not be classified as 'network translation disabled'");
+        True(timeout.ActionableSuggestion is not null &&
+            timeout.ActionableSuggestion.Contains("本机网络") &&
+            !timeout.ActionableSuggestion.Contains("开启"),
+            $"the timeout suggestion must point at the real network, got: {timeout.ActionableSuggestion}");
+
+        var rateLimited = (TranslationError)classify.Invoke(null, new Exception[]
+        {
+            new FreeTranslateException(
+                FreeTranslateFailureKind.RateLimited,
+                "免费翻译接口被限流（HTTP 429，本机 IP 已被暂时限制）；通常几分钟内自动恢复。"),
+        })!;
+        Equal(TranslationErrorKind.RateLimited, rateLimited.Kind);
+        True(rateLimited.IsTransient, "429 must stay transient");
+
+        var unparsable = (TranslationError)classify.Invoke(null, new Exception[]
+        {
+            new FreeTranslateException(
+                FreeTranslateFailureKind.Unparsable,
+                "免费翻译服务返回了无法解析的响应，请重试。"),
+        })!;
+        Equal(TranslationErrorKind.ParseError, unparsable.Kind);
+
+        var offline = (TranslationError)classify.Invoke(null, new Exception[]
+        {
+            new InvalidOperationException("已开启安全离线模式或网络翻译已关闭；未发送任何请求。"),
+        })!;
+        Equal(TranslationErrorKind.OfflineOnly, offline.Kind,
+            "policy refusals keep their existing honest classification");
+    }
+
+    /// <summary>
+    /// 0.1.6 wording slim-down: the style selector tooltip has ONE source —
+    /// <see cref="TranslationStyleMenu.SupportedToolTip"/>; <see cref="TranslationStyleMenu.ApplyTo"/>
+    /// no longer accepts a caller-provided copy, so the workbench cannot drift
+    /// again — and the free-engine / vision-direct statuses map purely from
+    /// the typed <see cref="TranslationPromptSupport"/> over all five values.
+    /// </summary>
+    private static void StyleMenuTooltipSingleSourceAndShortStatusMapping()
+    {
+        EnsureApplication();
+
+        // Applied/Pending: nothing to disclaim.
+        Equal(string.Empty, TranslationStyleMenu.StyleStatusFor(TranslationPromptSupport.Applied),
+            "an applied style needs no disclaimer");
+        Equal(string.Empty, TranslationStyleMenu.StyleStatusFor(TranslationPromptSupport.Pending),
+            "a pending session makes no claim");
+
+        // NotSupported (free engine): one shared honest one-liner.
+        var freeStatus = TranslationStyleMenu.StyleStatusFor(TranslationPromptSupport.NotSupported);
+        Equal(TranslationStyleMenu.FreeEngineStyleNotAppliedStatus, freeStatus);
+        True(freeStatus.Contains("内置免费引擎"), "the free-engine status must name the free engine");
+        True(freeStatus.Contains("未应用"), "the free-engine status must say the style was not applied");
+        True(freeStatus.Length <= 40, $"the status must stay a single short line, got: {freeStatus}");
+
+        // NotApplicable (vision-direct): the shared vision one-liner.
+        var visionStatus = TranslationStyleMenu.StyleStatusFor(TranslationPromptSupport.NotApplicable);
+        Equal(TranslationStyleMenu.VisionDirectStyleNotAppliedStatus, visionStatus);
+        True(visionStatus.Contains("视觉模型"), "the vision-direct status must name the vision route");
+        True(visionStatus.Length <= 40, $"the status must stay a single short line, got: {visionStatus}");
+
+        // Unknown keeps the honest caveat instead of over-claiming.
+        True(TranslationStyleMenu.StyleStatusFor(TranslationPromptSupport.Unknown).Contains("无法确认"),
+            "the unknown status must not over-claim");
+
+        // ApplyTo takes no tooltip argument anymore: whatever the isolated
+        // environment probes, the button text comes from the single source.
+        var button = new System.Windows.Controls.Button();
+        var probe = TranslationStyleMenu.ApplyTo(button);
+        var expected = probe switch
+        {
+            TranslationStyleSupport.FreeEngine => TranslationStyleMenu.FreeEngineToolTip,
+            TranslationStyleSupport.Unknown => TranslationStyleMenu.UnknownToolTip,
+            _ => TranslationStyleMenu.SupportedToolTip,
+        };
+        Equal(expected, $"{button.ToolTip}",
+            "the tooltip must come from the single SupportedToolTip source");
+        Equal(expected, System.Windows.Automation.AutomationProperties.GetHelpText(button),
+            "the automation help text must mirror the same single-source wording");
     }
 
     /// <summary>
@@ -3466,7 +4469,7 @@ internal static class Program
         var source = File.ReadAllText(Path.Combine(
             FindProjectRoot(), "apps", "PopGlot.Windows", "SettingsWindow.xaml.cs"));
         var validate = source.IndexOf("shellSettings.ValidateHotkeys()", StringComparison.Ordinal);
-        var register = source.IndexOf("ApplyShellSettings(shellSettings)", StringComparison.Ordinal);
+        var register = source.IndexOf("ApplyShellSettings?.Invoke(shellSettings)", StringComparison.Ordinal);
         var coreSave = source.IndexOf("CoreBridge.SaveSettingsAsync(policySettings)", StringComparison.Ordinal);
         var shellSave = source.IndexOf("ShellSettingsStore.Save(shellSettings)", StringComparison.Ordinal);
         True(validate >= 0, "hotkey validation must exist in the save flow");
@@ -3479,6 +4482,8 @@ internal static class Program
             "a failed commit must tell the user the rollback happened");
         True(source.Contains("未保存任何修改", StringComparison.Ordinal),
             "validation failures must state that nothing was saved");
+        True(source.Contains("QuickSearchHotkey: _shellSettings.QuickSearchHotkey", StringComparison.Ordinal),
+            "Save_Click must explicitly pass through QuickSearchHotkey from _shellSettings");
     }
 
     /// <summary>Connection-test failures must name the next action to take.</summary>
@@ -4136,7 +5141,7 @@ internal static class Program
             {
                 // Deterministic save failure at hotkey registration - before
                 // any write, so the test cannot touch real settings.
-                ApplyShellSettings = _ => false,
+                ApplyShellSettings = _ => ShellApplyOutcome.Failed(ShellApplyFailureKind.HotkeyConflictRestored, "划词翻译：Ctrl+Alt+W 可能已被其他程序占用"),
             };
 
             Equal(SettingsEditState.Clean, window.EditState, "a freshly loaded window must be Clean");
@@ -4179,6 +5184,87 @@ internal static class Program
     }
 
     /// <summary>
+    /// When SettingsWindow.Save_Click constructs ShellSettings, it must explicitly
+    /// pass through QuickSearchHotkey from _shellSettings. If the settings cache is
+    /// invalidated or expired, saving unrelated settings must never silently reset
+    /// the user's custom QuickSearch hotkey back to default.
+    /// </summary>
+    private static void SettingsSavePreservesQuickSearchHotkeyWhenCacheInvalidated()
+    {
+        ProfileManager.ResetForTests();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-save-qs-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        ProfileManager.ConfigPathOverride = Path.Combine(dir, "product-config.json");
+        CoreBridge.Initialize();
+        EnsureApplication();
+        var originalStartupSeam = StartupRegistration.TrySetOverride;
+        var customHotkey = HotkeyBinding.Parse("Ctrl+Alt+H", HotkeyBinding.QuickSearchDefault);
+        ShellSettings? appliedSettings = null;
+        var windowHolder = new SettingsWindow?[] { null };
+        try
+        {
+            StartupRegistration.TrySetOverride = _ => true;
+            var shell = ShellSettings.Default with { QuickSearchHotkey = customHotkey };
+            ShellSettingsStore.Save(shell);
+
+            // Invalidate the cache completely so CurrentCachedSettings returns null
+            ShellSettingsStore.InvalidateCache();
+            Equal(null, ShellSettingsStore.CurrentCachedSettings, "cache must be invalidated for test");
+
+            var window = new SettingsWindow(
+                shell, new HistoryStore(Path.Combine(dir, "history.json")))
+            {
+                ApplyShellSettings = s =>
+                {
+                    appliedSettings = s;
+                    return ShellApplyOutcome.Ok();
+                },
+            };
+            windowHolder[0] = window;
+
+            // Invalidate again right before save to ensure Save_Click cannot rely on cache
+            ShellSettingsStore.InvalidateCache();
+            Equal(null, ShellSettingsStore.CurrentCachedSettings, "cache must be null before Save_Click");
+
+            // Mark form dirty with an unrelated edit
+            var autoCopy = window.GeneralSection.AutoCopy;
+            var autoCopyOriginal = autoCopy.IsChecked == true;
+            autoCopy.IsChecked = !autoCopyOriginal;
+            Equal(SettingsEditState.Dirty, window.EditState, "form must be dirty");
+
+            // Invoke Save_Click
+            typeof(SettingsWindow).GetMethod("Save_Click",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(window, new object[] { window, new RoutedEventArgs() });
+            SpinUntil(() => window.EditState == SettingsEditState.Clean, "the save must reach Clean");
+
+            // Verify appliedSettings passed to ApplyShellSettings preserved QuickSearchHotkey
+            True(appliedSettings is not null, "ApplyShellSettings must have been called");
+            Equal(customHotkey, appliedSettings!.QuickSearchHotkey,
+                "Save_Click must pass through _shellSettings.QuickSearchHotkey to ApplyShellSettings");
+
+            // Verify persisted settings on disk also preserved QuickSearchHotkey
+            var diskSettings = ShellSettingsStore.Load();
+            Equal(customHotkey, diskSettings.QuickSearchHotkey,
+                "disk settings must preserve custom QuickSearchHotkey even after cache invalidation");
+        }
+        finally
+        {
+            StartupRegistration.TrySetOverride = originalStartupSeam;
+            ShellSettingsStore.InvalidateCache();
+            try
+            {
+                windowHolder[0]?.Close();
+            }
+            catch (Exception)
+            {
+            }
+            ProfileManager.ResetForTests();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>
     /// T06 acceptance: the privacy page exposes the cloud-speech consent with
     /// its own destination. The toggle persists immediately, never becomes a
     /// form draft, and saving unrelated settings preserves the consent (the
@@ -4201,7 +5287,7 @@ internal static class Program
             var window = new SettingsWindow(
                 shell, new HistoryStore(Path.Combine(dir, "history.json")))
             {
-                ApplyShellSettings = _ => true,
+                ApplyShellSettings = _ => ShellApplyOutcome.Ok(),
             };
             windowHolder[0] = window;
 
@@ -4771,6 +5857,122 @@ internal static class Program
         True(settings.Contains("SetHotkeysSuspended"), "settings must connect recording to suspension");
     }
 
+    private static void ShortcutsSectionQuickSearchHotkeyWiringAndContracts()
+    {
+        EnsureApplication();
+
+        // 1. Verify layout and control contracts on ShortcutsSection standalone
+        var section = new ShortcutsSection();
+        True(section.SelectionHotkey is not null, "SelectionHotkey recorder accessor must exist");
+        True(section.ScreenshotHotkey is not null, "ScreenshotHotkey recorder accessor must exist");
+        True(section.QuickSearchHotkey is not null, "QuickSearchHotkey recorder accessor must exist");
+        True(section.CloseHotkey is not null, "CloseHotkey recorder accessor must exist");
+        True(section.ShowWindowHotkey is not null, "ShowWindowHotkey recorder accessor must exist");
+
+        // Verify ResetDefaults resets QuickSearchHotkey to Ctrl+Alt+Q
+        section.QuickSearchHotkey!.BindingValue = HotkeyBinding.Parse("Ctrl+Shift+Z", HotkeyBinding.QuickSearchDefault);
+        section.ResetDefaults();
+        Equal(HotkeyBinding.QuickSearchDefault, section.QuickSearchHotkey!.BindingValue);
+        Equal("Ctrl+Alt+Q", section.QuickSearchHotkey!.BindingValue!.DisplayName);
+
+        // 2. Verify XAML markup conforms to layout contract
+        var xaml = File.ReadAllText(Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows", "Sections", "ShortcutsSection.xaml"));
+        True(xaml.Contains("QuickSearchHotkeyRecorder"), "XAML must declare QuickSearchHotkeyRecorder");
+        True(xaml.Contains("极速查词"), "XAML must display 极速查词 title");
+        True(!xaml.Contains("快捷查词"), "the old 快捷查词 wording must not survive in the shortcuts UI");
+
+        // 3. Verify SettingsWindow integration: load, draft tracking, conflict detection, revert and save
+        ProfileManager.ResetForTests();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-shortcuts-qs-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        ProfileManager.ConfigPathOverride = Path.Combine(dir, "product-config.json");
+        CoreBridge.Initialize();
+        var originalStartupSeam = StartupRegistration.TrySetOverride;
+        var windowHolder = new SettingsWindow?[] { null };
+
+        try
+        {
+            StartupRegistration.TrySetOverride = _ => true;
+            var initialShell = ShellSettings.Default with
+            {
+                QuickSearchHotkey = HotkeyBinding.Parse("Ctrl+Alt+H", HotkeyBinding.QuickSearchDefault),
+            };
+            ShellSettingsStore.Save(initialShell);
+
+            ShellSettings? appliedSettings = null;
+            var window = new SettingsWindow(initialShell, new HistoryStore(Path.Combine(dir, "history.json")))
+            {
+                ApplyShellSettings = s =>
+                {
+                    appliedSettings = s;
+                    return ShellApplyOutcome.Ok();
+                },
+            };
+            windowHolder[0] = window;
+
+            // Loaded state: QuickSearchHotkey reflects loaded settings, form is Clean
+            Equal("Ctrl+Alt+H", window.ShortcutsSection.QuickSearchHotkey.BindingValue?.DisplayName);
+            Equal(SettingsEditState.Clean, window.EditState, "initial settings form must be Clean");
+
+            // Edit QuickSearchHotkey -> Draft state becomes Dirty
+            var newCandidate = HotkeyBinding.Parse("Ctrl+Alt+J", HotkeyBinding.QuickSearchDefault);
+            window.ShortcutsSection.QuickSearchHotkey.BindingValue = newCandidate;
+            typeof(SettingsWindow).GetMethod("MarkDirtyHandler",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(window, new object?[] { window.ShortcutsSection.QuickSearchHotkey, new RoutedEventArgs() });
+            Equal(SettingsEditState.Dirty, window.EditState, "modifying QuickSearchHotkey must mark form Dirty");
+
+            // Revert restores baseline
+            typeof(SettingsWindow).GetMethod("Revert_Click",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(window, new object[] { window, new RoutedEventArgs() });
+            Equal("Ctrl+Alt+H", window.ShortcutsSection.QuickSearchHotkey.BindingValue?.DisplayName,
+                "reverting must restore loaded QuickSearchHotkey");
+            Equal(SettingsEditState.Clean, window.EditState, "reverting must return form to Clean");
+
+            // Duplicate conflict rejection: setting QuickSearchHotkey = SelectionHotkey (Ctrl+Alt+W)
+            window.ShortcutsSection.QuickSearchHotkey.BindingValue = window.ShortcutsSection.SelectionHotkey.BindingValue;
+            typeof(SettingsWindow).GetMethod("MarkDirtyHandler",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(window, new object?[] { window.ShortcutsSection.QuickSearchHotkey, new RoutedEventArgs() });
+            Equal(SettingsEditState.Dirty, window.EditState);
+
+            typeof(SettingsWindow).GetMethod("Save_Click",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(window, new object[] { window, new RoutedEventArgs() });
+            True(window.StatusTextBlock.Text.Contains("极速查词") && window.StatusTextBlock.Text.Contains("未保存任何修改"),
+                $"conflict error must name 极速查词 and state nothing was saved, got: {window.StatusTextBlock.Text}");
+            Equal(SettingsEditState.Dirty, window.EditState, "conflicting hotkey must not commit and remain Dirty");
+
+            // Successful save with valid candidate
+            window.ShortcutsSection.QuickSearchHotkey.BindingValue = newCandidate;
+            typeof(SettingsWindow).GetMethod("MarkDirtyHandler",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(window, new object?[] { window.ShortcutsSection.QuickSearchHotkey, new RoutedEventArgs() });
+
+            typeof(SettingsWindow).GetMethod("Save_Click",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(window, new object[] { window, new RoutedEventArgs() });
+            SpinUntil(() => window.EditState == SettingsEditState.Clean, "saving valid hotkey must reach Clean");
+
+            True(appliedSettings is not null, "ApplyShellSettings must have been called");
+            Equal(newCandidate, appliedSettings!.QuickSearchHotkey, "saved settings must apply new QuickSearchHotkey");
+
+            var persisted = ShellSettingsStore.Load();
+            Equal(newCandidate, persisted.QuickSearchHotkey, "persisted settings must store new QuickSearchHotkey");
+
+            window.ForceClose = true;
+            window.Close();
+        }
+        finally
+        {
+            StartupRegistration.TrySetOverride = originalStartupSeam;
+            try { windowHolder[0]?.Close(); } catch { }
+            ProfileManager.ResetForTests();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     private static void CaptureDragAvoidsForcedLayout()
     {
         var code = File.ReadAllText(Path.Combine(
@@ -5189,7 +6391,7 @@ internal static class Program
                 ShellSettings.Default with { StartWithWindows = false },
                 new HistoryStore(Path.Combine(dir, "history.json")))
             {
-                ApplyShellSettings = _ => true,
+                ApplyShellSettings = _ => ShellApplyOutcome.Ok(),
             };
             var otherFieldOriginal = window.GeneralSection.AutoCopy.IsChecked == true;
             window.GeneralSection.StartWithWindows.IsChecked = true;
@@ -5264,7 +6466,7 @@ internal static class Program
                 ShellSettings.Default with { StartWithWindows = false },
                 new HistoryStore(Path.Combine(abandonDir, "history.json")))
             {
-                ApplyShellSettings = _ => true,
+                ApplyShellSettings = _ => ShellApplyOutcome.Ok(),
             };
             window.GeneralSection.StartWithWindows.IsChecked = true;
             typeof(SettingsWindow).GetMethod("Save_Click",
@@ -6101,7 +7303,7 @@ internal static class Program
             Equal(Visibility.Visible, guide.Visibility,
                 "0 profiles + allowed fallback must still show the configuration entry");
             var title = (TextBlock)section.FindName("GuideTitle")!;
-            Equal("当前使用内置公共翻译", title.Text, "fallback-allowed empty state headline");
+            Equal("当前使用内置免费引擎", title.Text, "fallback-allowed empty state headline");
             var description = (TextBlock)section.FindName("GuideDescription")!;
             Equal("添加自己的翻译引擎，可使用指定模型和服务商。", description.Text,
                 "fallback-allowed empty state description");
@@ -6334,9 +7536,11 @@ internal static class Program
                     "opening the menu must not modify the config");
                 Equal(diskBefore.PreferFreeEngine, after.PreferFreeEngine,
                     "opening the menu must not modify PreferFreeEngine");
-                // The explicit re-probe action must exist as a menu item.
+                // The explicit re-probe action must exist as a menu item,
+                // named with the unified free-engine wording (EngineWording
+                // is the single source of truth for user-visible terms).
                 True(menu.Items.OfType<System.Windows.Controls.MenuItem>()
-                        .Any(item => $"{item.Header}" == "重新检测免费引擎"),
+                        .Any(item => $"{item.Header}" == $"重新检测{EngineWording.FreeEngineName}"),
                     "free-engine probing must be an explicit menu action");
             }
             finally
@@ -6731,10 +7935,12 @@ internal static class Program
             null,
             null,
             vocab);
-        panel.Width = 420;
-        panel.Height = 520;
-        panel.Measure(new Size(420, 520));
-        panel.Arrange(new Rect(0, 0, 420, 520));
+        // The window's REAL opening footprint (XAML Width/Height; the height
+        // tier FitInitialHeightToSource picks for short sources).
+        panel.Width = 540;
+        panel.Height = 380;
+        panel.Measure(new Size(540, 380));
+        panel.Arrange(new Rect(0, 0, 540, 380));
         panel.UpdateLayout();
         swConstructArrange.Stop();
         var windowConstructArrangeMs = swConstructArrange.ElapsedMilliseconds;
@@ -6748,7 +7954,7 @@ internal static class Program
         Console.WriteLine($"CoreInitialize (native init + settings load): {coreInitializeMs} ms");
         Console.WriteLine($"WindowConstruct (QuickSearch constructor): {windowConstructMs} ms");
         Console.WriteLine($"Test-host process working set (NOT the app's idle WS): {workingSetMb:F1} MB");
-        Console.WriteLine($"WindowConstructArrange (panel 420x520): {windowConstructArrangeMs} ms");
+        Console.WriteLine($"WindowConstructArrange (panel 540x380): {windowConstructArrangeMs} ms");
         Console.WriteLine($"CancelNoopOverhead (no active request): {cancelNoopMs:F2} ms");
         Console.WriteLine($"App-level budgets (startup P50/P95, tray, hotkey→frame, idle WS): see artifacts/perf/startup.json from scripts/measure-startup.ps1 — NOT measured here.\n");
 
@@ -6762,12 +7968,19 @@ internal static class Program
         RenderAndSave(new SettingsWindow(ShellSettings.Default, history, vocab), 960, 680, Path.Combine(outDir, "settings_dark.png"), ThemePreference.Dark);
         RenderAndSave(new SettingsWindow(ShellSettings.Default, history, vocab), 960, 680, Path.Combine(outDir, "settings_light.png"), ThemePreference.Light);
         // The privacy page carries the destination consents (free engine,
-        // cloud speech); it needs its own visual regression capture.
+        // cloud speech); it needs its own visual regression capture. The
+        // programmatic ShowPage must also move the sidebar highlight — a
+        // privacy capture with 翻译引擎 still lit is evidence of a broken
+        // window, so the rail state is asserted, not assumed.
         var privacyDark = new SettingsWindow(ShellSettings.Default, history, vocab);
         privacyDark.ShowPage("Privacy");
+        True(privacyDark.NavPrivacy.IsChecked == true,
+            "settings_privacy capture: the sidebar must highlight 隐私与数据 after ShowPage(\"Privacy\")");
         RenderAndSave(privacyDark, 960, 760, Path.Combine(outDir, "settings_privacy_dark.png"), ThemePreference.Dark);
         var privacyLight = new SettingsWindow(ShellSettings.Default, history, vocab);
         privacyLight.ShowPage("Privacy");
+        True(privacyLight.NavPrivacy.IsChecked == true,
+            "settings_privacy capture: the sidebar must highlight 隐私与数据 after ShowPage(\"Privacy\")");
         RenderAndSave(privacyLight, 960, 760, Path.Combine(outDir, "settings_privacy_light.png"), ThemePreference.Light);
         RenderAndSave(CreateServiceEditorPreview(), 760, 620, Path.Combine(outDir, "service_editor_dark.png"), ThemePreference.Dark);
         RenderAndSave(CreateServiceEditorPreview(), 760, 620, Path.Combine(outDir, "service_editor_light.png"), ThemePreference.Light);
@@ -6788,23 +8001,82 @@ internal static class Program
         var narrowHelp = AutomationProperties.GetHelpText(narrowMain.TranslateSection.InputBox);
         True(narrowHelp.Contains("Enter") && narrowHelp.Contains("换行"),
             $"the translate input must keep the shortcut explanation in its HelpText when the hint collapses; got '{narrowHelp}'");
-        // T11: a long model identifier must not push the form apart.
-        RenderAndSave(CreateServiceEditorPreview("demo-provider/very-long-preview-model-identifier-v9.3.2-preview-20260905-8192k-context"), 760, 620, Path.Combine(outDir, "service_editor_long_model_light.png"), ThemePreference.Light);
+        // T11: a long model identifier must not push the form apart — and the
+        // model area itself must be ON the evidence. The editor form opens
+        // with the connection card in view; the model card sits below the
+        // fold, so the capture explicitly brings it into the scroll viewport
+        // (the exact BringIntoView path a user's scroll exercises) and the
+        // assertions prove the combo (with the long name) is inside it.
+        const string longModel = "demo-provider/very-long-preview-model-identifier-v9.3.2-preview-20260905-8192k-context";
+        ServicesSection? longModelSection = null;
+        RenderAndSave(
+            CreateServiceEditorPreview(
+                longModel,
+                afterEditorShown: section =>
+                {
+                    longModelSection = section;
+                    section.ModelCard.BringIntoView();
+                    section.UpdateLayout();
+                }),
+            760, 620, Path.Combine(outDir, "service_editor_long_model_light.png"), ThemePreference.Light);
         AssertCanvasFilled(Path.Combine(outDir, "service_editor_long_model_light.png"), "service_editor_long_model_light.png");
-        // T11: error state with a long reason + actionable next step.
-        var errorPanel = new TranslationPanelWindow(new Rect(100, 100, 20, 20), history, () => ShellSettings.Default, null, null, vocab);
-        DrivePanelSession(errorPanel, "demo source for the error state", new TranslationSession
+        True(longModelSection is not null, "the long-model preview must expose its section for assertions");
+        AssertModelCardVisibleInEditorViewport(longModelSection!, longModel);
+        // T11: error state with a long reason + actionable next step. The
+        // panel renders at its REAL footprint: 540 DIP wide (XAML default)
+        // and 380 DIP tall — the tier FitInitialHeightToSource picks for this
+        // short source, and the window MinHeight. The retired 560-tall
+        // capture showed a window the product can never open. Both themes are
+        // captured, and the footer must remain fully inside the canvas —
+        // the error copy is worthless if the status row it points to is
+        // clipped away.
+        TranslationPanelWindow? errorPanel = null;
+        var errorSession = new TranslationSession
         {
             Stage = TranslationSessionStage.Failed,
             Error = new TranslationError(
                 TranslationErrorKind.ServerError,
                 "连接超时（120 秒无响应）：mock-provider/northcentralus/deployments/very-long-deployment-name-20260905",
                 "检查服务地址与网络后重试；离线模式会阻止本次请求。"),
-        });
-        RenderAndSave(errorPanel, 420, 560, Path.Combine(outDir, "translation_panel_error_dark.png"), ThemePreference.Dark);
+        };
+        RenderAndSave(
+            CreatePanelInSession(history, vocab, errorSession, out errorPanel),
+            540, 380, Path.Combine(outDir, "translation_panel_error_dark.png"), ThemePreference.Dark);
         AssertCanvasFilled(Path.Combine(outDir, "translation_panel_error_dark.png"), "translation_panel_error_dark.png");
-        RenderAndSave(new TranslationPanelWindow(new Rect(100, 100, 20, 20), history, () => ShellSettings.Default, null, null, vocab), 420, 520, Path.Combine(outDir, "translation_panel_dark.png"), ThemePreference.Dark);
-        RenderAndSave(new TranslationPanelWindow(new Rect(100, 100, 20, 20), history, () => ShellSettings.Default, null, null, vocab), 420, 520, Path.Combine(outDir, "translation_panel_light.png"), ThemePreference.Light);
+        AssertPanelContentWithinBounds(errorPanel, 380, "translation_panel_error_dark");
+        errorPanel.ForceClose = true;
+        errorPanel.Close();
+        TranslationPanelWindow errorPanelLight;
+        RenderAndSave(
+            CreatePanelInSession(history, vocab, errorSession, out errorPanelLight),
+            540, 380, Path.Combine(outDir, "translation_panel_error_light.png"), ThemePreference.Light);
+        AssertCanvasFilled(Path.Combine(outDir, "translation_panel_error_light.png"), "translation_panel_error_light.png");
+        AssertPanelContentWithinBounds(errorPanelLight, 380, "translation_panel_error_light");
+        errorPanelLight.ForceClose = true;
+        errorPanelLight.Close();
+        var basePanelDark = new TranslationPanelWindow(new Rect(100, 100, 20, 20), history, () => ShellSettings.Default, null, null, vocab);
+        RenderAndSave(basePanelDark, 540, 380, Path.Combine(outDir, "translation_panel_dark.png"), ThemePreference.Dark);
+        AssertPanelContentWithinBounds(basePanelDark, 380, "translation_panel_dark");
+        basePanelDark.ForceClose = true;
+        basePanelDark.Close();
+        RenderAndSave(new TranslationPanelWindow(new Rect(100, 100, 20, 20), history, () => ShellSettings.Default, null, null, vocab), 540, 380, Path.Combine(outDir, "translation_panel_light.png"), ThemePreference.Light);
+
+        // The user-resizable floor (MinWidth 460 × MinHeight 380) is the
+        // harshest reachable footprint; the fixed chrome plus the error copy
+        // must still fit without clipping the footer. Evidence is produced
+        // for both themes so the claim is diffable, not asserted on trust.
+        foreach (var theme in new[] { ThemePreference.Dark, ThemePreference.Light })
+        {
+            TranslationPanelWindow minPanel;
+            var label = $"translation_panel_min_{theme.ToString().ToLowerInvariant()}";
+            RenderAndSave(
+                CreatePanelInSession(history, vocab, errorSession, out minPanel),
+                460, 380, Path.Combine(outDir, $"{label}.png"), theme);
+            AssertCanvasFilled(Path.Combine(outDir, $"{label}.png"), label);
+            AssertPanelContentWithinBounds(minPanel, 380, label);
+            minPanel.ForceClose = true;
+            minPanel.Close();
+        }
         RenderAndSave(new FloatingTriggerWindow(new Point(100, 100), () => { }), 64, 64, Path.Combine(outDir, "floating_trigger_dark.png"), ThemePreference.Dark);
         RenderAndSave(new FloatingTriggerWindow(new Point(100, 100), () => { }), 64, 64, Path.Combine(outDir, "floating_trigger_light.png"), ThemePreference.Light);
 
@@ -6815,6 +8087,8 @@ internal static class Program
         {
             var promptPage = new SettingsWindow(ShellSettings.Default, history, vocab);
             promptPage.ShowPage("Prompt");
+            True(promptPage.NavPrompt.IsChecked == true,
+                "settings_prompt capture: the sidebar must highlight 翻译与提示词 after ShowPage(\"Prompt\")");
             WaitForPromptTemplateList(promptPage);
             RenderAndSave(promptPage, 960, 760, Path.Combine(outDir, $"settings_prompt_{theme.ToString().ToLowerInvariant()}.png"), theme);
             AssertCanvasFilled(Path.Combine(outDir, $"settings_prompt_{theme.ToString().ToLowerInvariant()}.png"), $"settings_prompt_{theme.ToString().ToLowerInvariant()}.png");
@@ -6845,7 +8119,7 @@ internal static class Program
             AssertCompactProviderEditorLayout(compactSettings.ProviderSection);
         }
 
-        // Expanded translation-style menu across the three selector viewports
+        // Expanded translation-style menu across the selector viewports
         // (workbench / floating panel / quick search). The menu is a WPF
         // ContextMenu and therefore lives in its OWN popup hwnd. The flow:
         // show the real window, open the shared production menu
@@ -6853,27 +8127,42 @@ internal static class Program
         // with the menu closed (baseline) and open, then PrintWindow the
         // popup hwnd itself. Whether the owner capture composites the popup
         // is MEASURED by pixel diff and reported — nothing is ever composited
-        // by hand. At least one viewport must yield a real popup capture.
+        // by hand. The floating-panel viewport is captured in BOTH themes so
+        // the expanded menu has light-theme evidence too; the other viewports
+        // keep their dark baseline. The panel viewport uses the window's real
+        // minimum footprint (460x380 DIP) — Show() would clamp anything
+        // smaller against MinWidth, and the retired 420x520 capture showed an
+        // unreachable window size.
         var styleMenuPopupCaptures = 0;
         styleMenuPopupCaptures += CaptureStyleMenuExpanded(
-            "main_workbench",
+            "main_workbench_dark",
             () => new MainWindow(ShellSettings.Default, history, vocab),
             window => ((MainWindow)window).TranslateSection.StyleSelectorButton,
-            960, 640, outDir);
+            960, 640, outDir, ThemePreference.Dark);
         styleMenuPopupCaptures += CaptureStyleMenuExpanded(
-            "translation_panel",
+            "translation_panel_dark",
             () => new TranslationPanelWindow(new Rect(40, 40, 20, 20), history, () => ShellSettings.Default, null, null, vocab),
             window => ((TranslationPanelWindow)window).StyleSelectorButton,
-            420, 520, outDir);
+            460, 380, outDir, ThemePreference.Dark);
         styleMenuPopupCaptures += CaptureStyleMenuExpanded(
-            "quick_search",
+            "translation_panel_light",
+            () => new TranslationPanelWindow(new Rect(40, 40, 20, 20), history, () => ShellSettings.Default, null, null, vocab),
+            window => ((TranslationPanelWindow)window).StyleSelectorButton,
+            460, 380, outDir, ThemePreference.Light);
+        styleMenuPopupCaptures += CaptureStyleMenuExpanded(
+            "quick_search_dark",
             () => new QuickSearchWindow(history, vocab),
             window => ((QuickSearchWindow)window).StyleSelectorButton,
-            560, 360, outDir);
+            560, 360, outDir, ThemePreference.Dark);
         True(styleMenuPopupCaptures > 0,
             "PrintWindow could not capture the expanded style menu from ANY viewport " +
             "(popup hwnd / layered-window limitation) — reported honestly, no composite faked. " +
             "See the [style menu] lines above for the per-viewport attempts.");
+        True(File.Exists(Path.Combine(outDir, "translation_panel_dark_style_menu_popup.png")) ||
+             File.Exists(Path.Combine(outDir, "translation_panel_light_style_menu_popup.png")),
+            "the floating-panel style menu must carry expanded-menu evidence for at least one theme");
+        True(File.Exists(Path.Combine(outDir, "translation_panel_light_style_menu_popup.png")),
+            "the floating-panel style menu must carry LIGHT-theme expanded-menu evidence (translation_panel_light_style_menu_popup.png)");
 
         // Visual regression matrix: every core surface rendered at 125/150/200%
         // DPI in both themes, so clipping or scaling regressions show up as
@@ -6889,7 +8178,7 @@ internal static class Program
                 var outputs = new List<(Window Window, int Width, int Height, string Name)>
                 {
                     (new MainWindow(ShellSettings.Default, history, vocab), 960, 640, $"main_window_{suffix}.png"),
-                    (new TranslationPanelWindow(new Rect(100, 100, 20, 20), history, () => ShellSettings.Default, null, null, vocab), 420, 520, $"translation_panel_{suffix}.png"),
+                    (new TranslationPanelWindow(new Rect(100, 100, 20, 20), history, () => ShellSettings.Default, null, null, vocab), 540, 380, $"translation_panel_{suffix}.png"),
                     (new QuickSearchWindow(history, vocab), 560, 360, $"quick_search_{suffix}.png"),
                     (new SettingsWindow(ShellSettings.Default, history, vocab), 960, 680, $"settings_{suffix}.png"),
                     (CreateServiceEditorPreview(), 760, 620, $"service_editor_{suffix}.png"),
@@ -6912,14 +8201,23 @@ internal static class Program
         True(File.Exists(Path.Combine(outDir, "service_editor_advanced_light.png")), "advanced service editor must be created");
         True(File.Exists(Path.Combine(outDir, "quick_search_dark.png")), "quick_search_dark.png must be created");
         True(File.Exists(Path.Combine(outDir, "translation_panel_dark.png")), "translation_panel_dark.png must be created");
+        True(File.Exists(Path.Combine(outDir, "translation_panel_error_dark.png")), "translation_panel_error_dark.png must be created");
+        True(File.Exists(Path.Combine(outDir, "translation_panel_error_light.png")), "translation_panel_error_light.png must be created");
+        True(File.Exists(Path.Combine(outDir, "translation_panel_min_dark.png")), "the 460x380 minimum-footprint panel evidence must be created (dark)");
+        True(File.Exists(Path.Combine(outDir, "translation_panel_min_light.png")), "the 460x380 minimum-footprint panel evidence must be created (light)");
+        True(File.Exists(Path.Combine(outDir, "service_editor_long_model_light.png")), "service_editor_long_model_light.png must be created");
         True(File.Exists(Path.Combine(outDir, "settings_prompt_dark.png")), "settings_prompt_dark.png must be created");
         True(File.Exists(Path.Combine(outDir, "settings_prompt_light.png")), "settings_prompt_light.png must be created");
+        True(File.Exists(Path.Combine(outDir, "settings_privacy_dark.png")), "settings_privacy_dark.png must be created");
+        True(File.Exists(Path.Combine(outDir, "settings_privacy_light.png")), "settings_privacy_light.png must be created");
         True(File.Exists(Path.Combine(outDir, "settings_compact_provider_dark.png")), "settings_compact_provider_dark.png must be created");
         True(File.Exists(Path.Combine(outDir, "settings_compact_provider_light.png")), "settings_compact_provider_light.png must be created");
-        True(File.Exists(Path.Combine(outDir, "main_workbench_style_menu_popup.png")) ||
-             File.Exists(Path.Combine(outDir, "translation_panel_style_menu_popup.png")) ||
-             File.Exists(Path.Combine(outDir, "quick_search_style_menu_popup.png")),
-            "at least one viewport must carry a real PrintWindow capture of the expanded style-menu popup");
+        True(File.Exists(Path.Combine(outDir, "main_workbench_dark_style_menu_popup.png")) ||
+             File.Exists(Path.Combine(outDir, "translation_panel_dark_style_menu_popup.png")) ||
+             File.Exists(Path.Combine(outDir, "quick_search_dark_style_menu_popup.png")),
+            "at least one dark viewport must carry a real capture of the expanded style-menu popup");
+        True(File.Exists(Path.Combine(outDir, "translation_panel_light_style_menu_popup.png")),
+            "the floating panel must carry a light-theme capture of the expanded style-menu popup");
         True(File.Exists(Path.Combine(outDir, "main_window_light_200pct.png")), "the 200% DPI matrix must be produced");
         // The 200% main window must be a TRUE 1920×1280 canvas — logical
         // 960×640 × scale 2 — not a half-blank artifact of the old producer.
@@ -7068,6 +8366,54 @@ internal static class Program
         panel.UpdateLayout();
     }
 
+    /// <summary>
+    /// Creates a panel and drives it into the given terminal session state so
+    /// error/partial screenshots show real production failure rendering.
+    /// </summary>
+    private static TranslationPanelWindow CreatePanelInSession(
+        HistoryStore history,
+        VocabularyStore vocab,
+        TranslationSession session,
+        out TranslationPanelWindow panel)
+    {
+        panel = new TranslationPanelWindow(new Rect(100, 100, 20, 20), history, () => ShellSettings.Default, null, null, vocab);
+        DrivePanelSession(panel, "demo source for the error state", session);
+        return panel;
+    }
+
+    /// <summary>
+    /// No-clip guard for the panel evidence: the footer status row (the last
+    /// fixed row) must be fully inside the rendered canvas. This is what makes
+    /// the 380-height captures meaningful — a taller-than-window layout would
+    /// silently push the footer out of the bitmap.
+    /// </summary>
+    private static void AssertPanelContentWithinBounds(TranslationPanelWindow panel, double heightDip, string label)
+    {
+        var visual = panel.Content as FrameworkElement ?? (FrameworkElement)panel;
+        True(visual.ActualHeight > 0, $"{label}: the panel content must be arranged before the bounds assertion");
+        var footer = panel.StatusTextBlock;
+        var footerBottom = footer.TransformToVisual(visual).Transform(new Point(0, footer.ActualHeight)).Y;
+        True(footerBottom <= heightDip + 0.5,
+            $"{label}: the footer status row bottom ({footerBottom:F1}) exceeds the {heightDip} DIP window — real layout clips at this size");
+    }
+
+    /// <summary>
+    /// The long-model evidence is only judgeable when the model area is inside
+    /// the editor's scroll viewport and still carries the full long name.
+    /// </summary>
+    private static void AssertModelCardVisibleInEditorViewport(ServicesSection section, string expectedModel)
+    {
+        var scroll = section.EditorScroll;
+        var combo = section.TextModelCombo;
+        True(scroll.ActualHeight > 0 && combo.ActualHeight > 0,
+            "the editor scroll viewport and the model combo must be laid out");
+        Equal(expectedModel, combo.Text, "the model combo must still carry the full long model name");
+        var comboTop = combo.TransformToVisual(scroll).Transform(new Point(0, 0)).Y;
+        var comboBottom = combo.TransformToVisual(scroll).Transform(new Point(0, combo.ActualHeight)).Y;
+        True(comboTop >= 0 && comboBottom <= scroll.ActualHeight + 0.5,
+            $"the model combo ({comboTop:F1}..{comboBottom:F1}) must sit fully inside the scroll viewport (0..{scroll.ActualHeight:F1}) — the long-model evidence must show the model area");
+    }
+
     /// <summary>Library page preview fed by the synthetic history/vocabulary fixtures.</summary>
     private static Window CreateLibraryPreview(HistoryStore history, VocabularyStore vocab)
     {
@@ -7084,7 +8430,11 @@ internal static class Program
         return new Window { Content = host };
     }
 
-    private static Window CreateServiceEditorPreview(string? textModel = null)
+    private static Window CreateServiceEditorPreview(
+        string? textModel = null,
+        double previewWidth = 760,
+        double previewHeight = 620,
+        Action<ServicesSection>? afterEditorShown = null)
     {
         var section = new ServicesSection();
         section.LoadProfileIntoForm(DemoProfile(textModel: textModel));
@@ -7097,6 +8447,12 @@ internal static class Program
             Padding = new Thickness(24),
         };
         host.SetResourceReference(System.Windows.Controls.Border.BackgroundProperty, "CanvasBrush");
+        // One real layout pass BEFORE the caller's post-edit hook, so
+        // BringIntoView/scroll positioning sees actual viewport sizes.
+        host.Measure(new Size(previewWidth, previewHeight));
+        host.Arrange(new Rect(0, 0, previewWidth, previewHeight));
+        host.UpdateLayout();
+        afterEditorShown?.Invoke(section);
         return new Window
         {
             Content = host,
@@ -7258,13 +8614,14 @@ internal static class Program
         Func<Window, Button> anchorOf,
         int width,
         int height,
-        string outDir)
+        string outDir,
+        ThemePreference theme)
     {
         Window? window = null;
         ContextMenu? menu = null;
         try
         {
-            ThemeService.Apply(ThemePreference.Dark);
+            ThemeService.Apply(theme);
             window = createWindow();
             window.ShowActivated = false;
             window.ShowInTaskbar = false;
@@ -8206,11 +9563,23 @@ internal static class Program
         public bool SimulateUserWriteOnRead { get; init; }
         public Action? OnCopy { get; init; }
         public bool Restored { get; private set; }
+        /// <summary>Test hook: stalls the capture so callers' bounded budgets
+        /// can be observed against a genuinely slow read.</summary>
+        public TimeSpan? CaptureDelay { get; init; }
+        public int CopyCalls { get; private set; }
 
-        public Task<IClipboardSnapshot> CaptureAsync() => Task.FromResult<IClipboardSnapshot>(Snapshot);
-
-        public async Task SendCopyAsync()
+        public async Task<IClipboardSnapshot> CaptureAsync()
         {
+            if (CaptureDelay is { } delay)
+            {
+                await Task.Delay(delay);
+            }
+            return Snapshot;
+        }
+
+        public async Task SendCopyAsync(CancellationToken cancellationToken)
+        {
+            CopyCalls++;
             if (CopyThrows)
             {
                 throw new InvalidOperationException("copy failed");
@@ -9854,12 +11223,13 @@ internal static class Program
         True(!acceptedMismatch, "Mismatched query update must be rejected");
         Equal(string.Empty, state.AccumulatedText);
 
-        // Valid update should be accepted
+        // Valid update should be accepted (0.1.6: TTFT is no longer display
+        // copy — the streaming status stays the plain "正在生成…" line).
         var validUpdate = new TranslationStreamUpdate("s1", 1, TranslationStreamUpdateKind.Delta, "苹", "苹", 1, TimeSpan.FromMilliseconds(50));
         var acceptedValid = state.OnStreamUpdate(validUpdate, "apple");
         True(acceptedValid, "Valid matching stream update must be accepted");
         Equal("苹", state.AccumulatedText);
-        True(state.StatusText.Contains("TTFT 50 ms"), "Status should show TTFT metric");
+        Equal("正在生成…", state.StatusText);
 
         // Subsequent valid update
         var validUpdate2 = new TranslationStreamUpdate("s1", 1, TranslationStreamUpdateKind.Delta, "果", "苹果", 2);
@@ -9883,6 +11253,69 @@ internal static class Program
         Equal(3, state.CurrentEpoch);
         Equal("banana", state.CurrentQuery);
         Equal(string.Empty, state.AccumulatedText);
+    }
+
+    /// <summary>
+    /// 0.1.6 copy slim-down: the streaming status shows only "正在生成…" (the
+    /// TTFT metric never reaches the UI), and a Completed session with a null
+    /// pipeline label falls back to the neutral "翻译完成" — never the old
+    /// "大模型" claim — while keeping the elapsed time as user-facing seconds
+    /// from the shared pure formatter.
+    /// </summary>
+    private static void QuickSearchStatusCopyIsNeutralAndTtftFree()
+    {
+        var state = new QuickSearchState();
+        state.StartNewSearch("hello");
+        var epoch = state.CurrentEpoch;
+
+        // A TTFT-bearing stream update must not leak the metric into the copy.
+        state.OnStreamUpdate(
+            new TranslationStreamUpdate(
+                "s1", epoch, TranslationStreamUpdateKind.Delta, "你", "你", 1,
+                TimeSpan.FromMilliseconds(42)),
+            "hello");
+        Equal("正在生成…", state.StatusText);
+        True(!state.StatusText.Contains("TTFT"),
+            $"the streaming status must not expose the TTFT metric, got: {state.StatusText}");
+
+        // Completed with a pipeline label keeps the label and the seconds text.
+        var labeled = new TranslationSession
+        {
+            Stage = TranslationSessionStage.Completed,
+            TranslatedText = "你好",
+            PipelineLabel = "Demo Text Service",
+            Timing = new TranslationSessionTiming(0, 0, 1200, 1234),
+        };
+        state.OnSessionCompleted(labeled, epoch, "hello");
+        True(state.StatusText.StartsWith("Demo Text Service", StringComparison.Ordinal),
+            $"a present pipeline label must be shown, got: {state.StatusText}");
+        True(state.StatusText.Contains("用时 1.2 秒"),
+            $"the elapsed time must stay, in seconds, got: {state.StatusText}");
+
+        // Completed with a null pipeline label: neutral wording, never 大模型.
+        state.StartNewSearch("world");
+        epoch = state.CurrentEpoch;
+        var unlabeled = new TranslationSession
+        {
+            Stage = TranslationSessionStage.Completed,
+            TranslatedText = "世界",
+            PipelineLabel = null,
+            Timing = new TranslationSessionTiming(0, 0, 205, 205),
+        };
+        state.OnSessionCompleted(unlabeled, epoch, "world");
+        True(state.StatusText.StartsWith("翻译完成", StringComparison.Ordinal),
+            $"a missing pipeline label must fall back to the neutral wording, got: {state.StatusText}");
+        True(!state.StatusText.Contains("大模型"),
+            "the status must never claim 大模型");
+        True(state.StatusText.Contains("用时 0.2 秒"),
+            $"the elapsed time must be preserved, got: {state.StatusText}");
+
+        // The shared user-facing elapsed formatter is pure and second-based.
+        Equal("用时 0.0 秒", TranslationElapsedText.ForMilliseconds(0));
+        Equal("用时 0.2 秒", TranslationElapsedText.ForMilliseconds(205));
+        Equal("用时 1.2 秒", TranslationElapsedText.ForMilliseconds(1234));
+        True(TranslationElapsedText.ForMilliseconds(-5).StartsWith("用时 0.0 秒", StringComparison.Ordinal),
+            "a negative measurement must clamp to zero, not render a negative duration");
     }
 
     private static void QuickSearchPartialActionGate()
@@ -9949,7 +11382,7 @@ internal static class Program
         Equal(QuickSearchUiStage.Partial, state.Stage);
         True(!state.CanStar, "Star MUST be disabled for Partial session");
         True(state.CanCopy, "Copy is available for partial text");
-        True(state.CanSpeak, "Speak is available for partial text");
+        True(!state.CanSpeak, "Speak MUST be disabled for Partial session (G06/N04: partial keeps only manual copy)");
         True(state.IsIncompleteBadgeVisible, "Incomplete badge MUST be visible for Partial session");
         True(state.IsStreamLayerVisible, "Stream layer visible for partial");
         True(!state.IsRichBoxVisible, "RichBox hidden for partial");
@@ -9984,6 +11417,171 @@ internal static class Program
         True(state.IsIncompleteBadgeVisible, "Incomplete badge visible on cancelled with partial");
         Equal("取消前内容", state.AccumulatedText);
         True(state.StatusText.Contains("译文不完整"), "Status text should label incomplete");
+    }
+
+    /// <summary>
+    /// partial+error must read like failed+error: the error line and the
+    /// status line carry BOTH the message and its non-empty actionable
+    /// suggestion, deduplicated when the classifier already embedded the
+    /// suggestion in the message — while the partial gate stays intact
+    /// (manual copy allowed; TTS, starring and every auto side effect
+    /// forbidden).
+    /// </summary>
+    private static void QuickSearchPartialErrorShowsMessageAndSuggestion()
+    {
+        // 1) partial + error with a separate suggestion: BOTH parts visible,
+        //    consistent with the Failed branch.
+        var state = new QuickSearchState();
+        state.StartNewSearch("partial err");
+        var epoch = state.CurrentEpoch;
+        state.OnStreamUpdate(
+            new TranslationStreamUpdate("s9", epoch, TranslationStreamUpdateKind.Delta, "半截", "半截", 2),
+            "partial err");
+        var partialSession = new TranslationSession
+        {
+            Stage = TranslationSessionStage.Partial,
+            TranslatedText = "半截译文",
+            Error = new TranslationError(TranslationErrorKind.ServerError, "模型连接中断", "请检查网络后重试"),
+            Timing = new TranslationSessionTiming(0, 0, 10, 10),
+        };
+        state.OnSessionCompleted(partialSession, epoch, "partial err");
+        Equal(QuickSearchUiStage.Partial, state.Stage);
+        True(state.ErrorMessage is not null && state.ErrorMessage.Contains("模型连接中断", StringComparison.Ordinal),
+            $"the error message must be shown, got: {state.ErrorMessage}");
+        True(state.ErrorMessage is not null && state.ErrorMessage.Contains("请检查网络后重试", StringComparison.Ordinal),
+            $"the actionable suggestion must be shown alongside the message, got: {state.ErrorMessage}");
+        True(state.StatusText.Contains("模型连接中断", StringComparison.Ordinal) &&
+             state.StatusText.Contains("请检查网络后重试", StringComparison.Ordinal),
+            $"the status line must carry message plus suggestion, got: {state.StatusText}");
+        True(state.StatusText.Contains("部分内容已保留"), "the partial retention note must stay");
+
+        // The partial gate must not move: manual copy yes, TTS/star no.
+        True(state.CanCopy, "partial must keep manual copy");
+        True(!state.CanSpeak, "partial must keep TTS forbidden");
+        True(!state.CanStar, "partial must keep starring forbidden");
+        True(state.IsIncompleteBadgeVisible, "the incomplete badge must stay visible");
+
+        // 2) Deduplication: a message that already embeds the suggestion must
+        //    not repeat it.
+        var dedup = new QuickSearchState();
+        dedup.StartNewSearch("dedup err");
+        var dedupSession = new TranslationSession
+        {
+            Stage = TranslationSessionStage.Partial,
+            Error = new TranslationError(TranslationErrorKind.ServerError, "模型连接中断，请检查网络后重试", "请检查网络后重试"),
+        };
+        dedup.OnSessionCompleted(dedupSession, dedup.CurrentEpoch, "dedup err");
+        const string suggestion = "请检查网络后重试";
+        var occurrences = (dedup.ErrorMessage!.Length -
+            dedup.ErrorMessage.Replace(suggestion, string.Empty, StringComparison.Ordinal).Length) / suggestion.Length;
+        Equal(1, occurrences, $"the suggestion must appear exactly once, got: {dedup.ErrorMessage}");
+
+        // 3) A null suggestion leaves the bare message, no stray separator.
+        var plain = new QuickSearchState();
+        plain.StartNewSearch("plain err");
+        var plainSession = new TranslationSession
+        {
+            Stage = TranslationSessionStage.Partial,
+            Error = new TranslationError(TranslationErrorKind.Unknown, "未知错误"),
+        };
+        plain.OnSessionCompleted(plainSession, plain.CurrentEpoch, "plain err");
+        Equal("未知错误", plain.ErrorMessage);
+
+        // 4) The Failed branch shares the same composition source.
+        var failed = new QuickSearchState();
+        failed.StartNewSearch("failed err");
+        var failedEpoch = failed.CurrentEpoch;
+        failed.OnStreamUpdate(
+            new TranslationStreamUpdate("s10", failedEpoch, TranslationStreamUpdateKind.Delta, "片段", "片段", 2),
+            "failed err");
+        var failedSession = new TranslationSession
+        {
+            Stage = TranslationSessionStage.Failed,
+            Error = new TranslationError(TranslationErrorKind.ServerError, "服务不可用", "可在设置中切换引擎"),
+        };
+        failed.OnSessionCompleted(failedSession, failedEpoch, "failed err");
+        Equal(QuickSearchUiStage.Failed, failed.Stage);
+        True(failed.ErrorMessage is not null &&
+             failed.ErrorMessage.Contains("服务不可用", StringComparison.Ordinal) &&
+             failed.ErrorMessage.Contains("可在设置中切换引擎", StringComparison.Ordinal),
+            $"the failed branch must keep message plus suggestion, got: {failed.ErrorMessage}");
+    }
+
+    /// <summary>
+    /// The pending notice (e.g. the pre-read timeout landing notice) must be
+    /// STATE-driven: armed by <see cref="QuickSearchState.PostPendingNotice"/>,
+    /// cleared by every real state transition (new search, live stream delta,
+    /// finalizing, terminal states, query edits, close) — and left untouched
+    /// by rejected/stale updates that change no state, so it survives until
+    /// the next REAL query or status update and never beyond it.
+    /// </summary>
+    private static void QuickSearchPendingNoticeIsStateDriven()
+    {
+        var state = new QuickSearchState();
+        True(state.PendingNotice is null, "a fresh state must have no pending notice");
+        state.PostPendingNotice("落地提示");
+        Equal("落地提示", state.PendingNotice, "arming must store the notice verbatim");
+
+        // 1. A new search clears the notice.
+        state.StartNewSearch("query");
+        True(state.PendingNotice is null, "StartNewSearch must clear the pending notice");
+
+        // 2. An accepted stream update clears the notice.
+        var epoch = state.CurrentEpoch;
+        state.PostPendingNotice("落地提示");
+        state.OnStreamUpdate(
+            new TranslationStreamUpdate("s1", epoch, TranslationStreamUpdateKind.Delta, "文", "文", 1),
+            "query");
+        True(state.PendingNotice is null, "a live stream update must clear the pending notice");
+
+        // 3. A rejected (stale) update changes no state and must NOT clear it.
+        state.PostPendingNotice("落地提示");
+        True(!state.OnStreamUpdate(
+                new TranslationStreamUpdate("s1", epoch - 1, TranslationStreamUpdateKind.Delta, "x", "x", 1),
+                "query"),
+            "a stale update must be rejected");
+        Equal("落地提示", state.PendingNotice, "a rejected update must not clear the pending notice");
+
+        // 4. A cancellation terminal clears the notice.
+        state.OnCancelled(epoch, "query");
+        True(state.PendingNotice is null, "the cancelled terminal must clear the pending notice");
+
+        // 5. A query edit clears the notice.
+        state.PostPendingNotice("落地提示");
+        state.OnQueryTextChanged("next query");
+        True(state.PendingNotice is null, "a query edit must clear the pending notice");
+
+        // 6. An exception terminal clears the notice.
+        state.StartNewSearch("q2");
+        state.PostPendingNotice("落地提示");
+        state.OnException(new InvalidOperationException("boom"), state.CurrentEpoch, "q2");
+        True(state.PendingNotice is null, "the failed terminal must clear the pending notice");
+
+        // 7. Finalizing clears the notice; a no-op stage report must not.
+        state.StartNewSearch("q3");
+        state.PostPendingNotice("落地提示");
+        True(!state.OnStageChanged(TranslationSessionStage.Translating, state.CurrentEpoch, "q3"),
+            "a non-Finalizing stage report changes no state");
+        Equal("落地提示", state.PendingNotice, "a no-op stage report must not clear the pending notice");
+        True(state.OnStageChanged(TranslationSessionStage.Finalizing, state.CurrentEpoch, "q3"),
+            "finalizing must apply");
+        True(state.PendingNotice is null, "finalizing must clear the pending notice");
+
+        // 8. Completed clears the notice and closing resets everything.
+        state.PostPendingNotice("落地提示");
+        state.OnSessionCompleted(
+            new TranslationSession
+            {
+                Stage = TranslationSessionStage.Completed,
+                TranslatedText = "完整",
+            },
+            state.CurrentEpoch,
+            "q3");
+        True(state.PendingNotice is null, "the completed terminal must clear the pending notice");
+
+        state.PostPendingNotice("落地提示");
+        state.OnClose();
+        True(state.PendingNotice is null, "closing must clear the pending notice");
     }
 
     private static void QuickSearchClosedGuard()
@@ -10101,6 +11699,75 @@ internal static class Program
         Equal(AutomationLiveSetting.Off, AutomationProperties.GetLiveSetting(quickSearch.StreamBox));
     }
 
+    private static void QuickSearchUxDetailsRecenteringColorsSnapshotAndKeycap()
+    {
+        EnsureApplication();
+        var qsHistory = new HistoryStore(TestIsolation.HistoryPath);
+        var qsVocab = new VocabularyStore(TestIsolation.VocabularyPath);
+        var quickSearch = new QuickSearchWindow(qsHistory, qsVocab);
+        try
+        {
+            // 1. Enter keycap is accessible and keyboard operable
+            True(quickSearch.EnterKeycapButton is Button, "Enter keycap must be a Button");
+            Equal(true, quickSearch.EnterKeycapButton.Focusable, "Enter keycap must be focusable");
+            Equal(true, quickSearch.EnterKeycapButton.IsTabStop, "Enter keycap must be a tab stop");
+            var keycapName = AutomationProperties.GetName(quickSearch.EnterKeycapButton);
+            True(!string.IsNullOrWhiteSpace(keycapName) && keycapName.Contains("Enter"),
+                "Enter keycap must have descriptive accessibility name");
+
+            // 2. Runtime colors use dynamic resources (SetResourceReference / ResourceReferenceExpression)
+            quickSearch.Show();
+            var statusFg = quickSearch.FooterStatusBlock.ReadLocalValue(TextBlock.ForegroundProperty);
+            True(statusFg is not Brush, "FooterStatus foreground must be dynamic resource reference");
+            var dotFill = quickSearch.StatusDotShape.ReadLocalValue(System.Windows.Shapes.Shape.FillProperty);
+            True(dotFill is not Brush, "StatusDot fill must be dynamic resource reference");
+
+            // Verify live theme switch
+            ThemeService.Apply(ThemePreference.Light);
+            ThemeService.Apply(ThemePreference.Dark);
+
+            // 3. Secondary show re-centers on monitor and focuses SearchBox
+            quickSearch.Left = -9999;
+            quickSearch.Top = -9999;
+            quickSearch.Hide();
+            quickSearch.Show();
+
+            True(quickSearch.Left > -5000 && quickSearch.Top > -5000,
+                "re-show must re-center on current monitor instead of keeping off-screen coordinates");
+            True(System.Windows.Input.FocusManager.GetFocusedElement(quickSearch) == quickSearch.SearchInputBox,
+                "re-show must focus SearchBox");
+
+            // 4. Hide/Closing saves session snapshot and deduplicates
+            App.SharedSessionStore.Clear();
+            quickSearch.State.StartNewSearch("qs_snapshot_test");
+            quickSearch.State.OnStreamUpdate(new TranslationStreamUpdate(
+                "s_qs", quickSearch.State.CurrentEpoch, TranslationStreamUpdateKind.Delta,
+                "qs_result", "qs_result", 9), "qs_snapshot_test");
+
+            quickSearch.Hide();
+            var recent = App.SharedSessionStore.PeekRecent();
+            True(recent is not null, "Hide must save session snapshot to SharedSessionStore");
+            Equal(SessionOrigin.QuickSearch, recent!.Origin);
+            Equal("qs_snapshot_test", recent.SourceText);
+            Equal("qs_result", recent.ResultText);
+
+            var countBefore = App.SharedSessionStore.GetAll().Count;
+            Equal(1, countBefore, "first save should produce 1 session");
+
+            // Subsequent Hide / Closing must deduplicate
+            quickSearch.Hide();
+            quickSearch.Close();
+            var countAfter = App.SharedSessionStore.GetAll().Count;
+            Equal(1, countAfter, "subsequent Hide/Close must deduplicate identical session snapshot");
+        }
+        finally
+        {
+            quickSearch.ForceClose = true;
+            try { quickSearch.Close(); } catch { }
+            App.SharedSessionStore.Clear();
+        }
+    }
+
     // ================= TranslateSection Streaming & State Machine Tests =================
 
     private static void TranslateSectionEpochFencing()
@@ -10116,7 +11783,7 @@ internal static class Program
         Equal(1L, state.Epoch);
         Equal(TranslateUiPhase.Preparing, state.Phase);
         Equal("连接中", state.StatusText);
-        Equal("连接中", state.BadgeText);
+        Equal("", state.BadgeText);
         True(!state.IsTranslateButtonEnabled, "Translate button disabled during preparing");
         True(state.IsProgressVisible, "Progress visible during preparing");
         True(!state.IsStreamLayerVisible, "Stream layer hidden during preparing");
@@ -10132,14 +11799,14 @@ internal static class Program
         state = TranslateSectionReducer.ApplyStage(state, TranslationSessionStage.Streaming, 1);
         Equal(TranslateUiPhase.Streaming, state.Phase);
         Equal("正在生成…", state.StatusText);
-        Equal("正在生成…", state.BadgeText);
+        Equal("", state.BadgeText);
         True(state.IsStreamIndicatorVisible, "Indicator visible in Streaming stage");
 
         // Stage update to Finalizing
         state = TranslateSectionReducer.ApplyStage(state, TranslationSessionStage.Finalizing, 1);
         Equal(TranslateUiPhase.Finalizing, state.Phase);
         Equal("正在整理", state.StatusText);
-        Equal("正在整理", state.BadgeText);
+        Equal("", state.BadgeText);
         True(state.IsStreamIndicatorVisible, "Indicator visible in Finalizing stage");
 
         // Stream update with stale epoch 0 must be ignored
@@ -10202,7 +11869,7 @@ internal static class Program
         True(!state.IsStreamLayerVisible, "Stream layer hidden on reset");
         True(!state.IsStreamIndicatorVisible, "Stream indicator hidden on reset");
         Equal("连接中", state.StatusText);
-        Equal("连接中", state.BadgeText);
+        Equal("", state.BadgeText);
         True(!state.AreResultActionsEnabled, "Actions remain disabled on reset");
 
         // 3) Delta after reset displays accumulated text directly
@@ -10779,9 +12446,9 @@ internal static class Program
 
             // A normal vision-direct run keeps the notice riding above the
             // preparing stages until real text lands.
-            noticeField.SetValue(panel, TranslationStyleMenu.VisionDirectPreNotice);
+            noticeField.SetValue(panel, TranslationStyleMenu.VisionDirectStyleNotAppliedStatus);
             onStage.Invoke(panel, new object[] { TranslationSessionStage.Routing });
-            Equal(TranslationStyleMenu.VisionDirectPreNotice, panel.StatusTextBlock.Text,
+            Equal(TranslationStyleMenu.VisionDirectStyleNotAppliedStatus, panel.StatusTextBlock.Text,
                 "while vision-direct is on track the pre-notice must keep riding above preparing stages");
 
             // Fallback: the vision call failed and local OCR takes over — the
@@ -11295,6 +12962,480 @@ internal static class Program
         Equal(2, service.RegisteredHotkeys.Count, "successful retry must restore the complete set");
     }
 
+    /// <summary>
+    /// F13/F14 two-service pattern: RegistrationRestored fires EXACTLY once
+    /// per degraded period, probe failures (candidate lost, previous set
+    /// live again) raise nothing, candidate+restore double failures degrade
+    /// honestly, and a recovered service opens a fresh failure cycle when
+    /// the same conflict returns.
+    /// </summary>
+    private static void HotkeyRestoredEventsOncePerCycleBehavior()
+    {
+        EnsureApplication();
+        var targetWindow = new Window();
+        var competitorWindow = new Window();
+        using var service = new HotkeyService(targetWindow);
+        using var competitor = new HotkeyService(competitorWindow);
+
+        var failureDetails = new List<string>();
+        var restoredCount = 0;
+        service.RegistrationFailed += (_, detail) => failureDetails.Add(detail);
+        service.RegistrationRestored += (_, _) => restoredCount++;
+
+        var hotkeys = new Dictionary<HotkeyAction, HotkeyBinding>
+        {
+            [HotkeyAction.TranslateSelection] = new(
+                HotkeyBinding.ModControl | HotkeyBinding.ModAlt | HotkeyBinding.ModShift,
+                0x7C), // F13
+            [HotkeyAction.CaptureScreen] = new(
+                HotkeyBinding.ModControl | HotkeyBinding.ModAlt | HotkeyBinding.ModShift,
+                0x7D), // F14
+        };
+        True(service.TryRegisterAll(hotkeys, out var initialConflict),
+            $"test hotkeys must register: {initialConflict}");
+        Equal(0, restoredCount, "the first successful registration is not a recovery");
+
+        // 1. Probe failure: the candidate (old set + a conflicting F15 row)
+        // loses, but the previous set must come back fully available, with
+        // NO failure or restored event.
+        True(competitor.TryRegisterAll(new Dictionary<HotkeyAction, HotkeyBinding>
+        {
+            [HotkeyAction.ClosePanel] = new(
+                HotkeyBinding.ModControl | HotkeyBinding.ModAlt | HotkeyBinding.ModShift,
+                0x7E), // F15
+        }, out var competitorConflict), $"competitor must register F15: {competitorConflict}");
+        var probeCandidate = new Dictionary<HotkeyAction, HotkeyBinding>(hotkeys)
+        {
+            [HotkeyAction.ClosePanel] = new(
+                HotkeyBinding.ModControl | HotkeyBinding.ModAlt | HotkeyBinding.ModShift,
+                0x7E),
+        };
+        True(!service.TryRegisterAll(probeCandidate, out var probeConflict),
+            "the probe candidate must fail while the competitor holds F15");
+        True(probeConflict?.Contains("关闭浮窗") == true && probeConflict.Contains("F15"),
+            $"the probe conflict must name the offending row: {probeConflict}");
+        True(probeConflict?.Contains("可能已被其他程序占用") == true,
+            $"a real 1409 conflict may name another program: {probeConflict}");
+        True(service.IsFullyAvailable, "a probe failure must leave the previous set fully available");
+        True(!service.IsDegraded, "a probe failure must not degrade the service");
+        Equal(0, failureDetails.Count, "a probe failure must not raise RegistrationFailed");
+        Equal(0, restoredCount, "a probe failure is not a recovery");
+        Equal(2, service.CurrentHotkeys.Count, "the previous set must survive the probe");
+
+        // 2. Real failure: while suspended, the competitor takes F13; the
+        // resume fails and every repeated failure stays visible.
+        service.SetSuspended(true);
+        competitor.SetSuspended(true);
+        True(competitor.TryRegisterAll(new Dictionary<HotkeyAction, HotkeyBinding>
+        {
+            [HotkeyAction.ShowWindow] = hotkeys[HotkeyAction.TranslateSelection],
+        }, out var takeF13Conflict), $"competitor must take F13: {takeF13Conflict}");
+        True(!service.SetSuspended(false, out var resumeConflict),
+            "the resume must report the real OS conflict");
+        Equal(1, failureDetails.Count, "the first real failure must be reported");
+        True(!service.IsFullyAvailable && service.IsDegraded,
+            "a failed resume must degrade the service");
+        True(!service.SetSuspended(false, out _),
+            "a repeated resume must still report failure");
+        Equal(2, failureDetails.Count,
+            "the service may repeat a persistent failure instead of swallowing it");
+        Equal(0, restoredCount, "no recovery happened yet");
+
+        // 3. Double failure: the candidate AND the restore both lose. The
+        // detail must stay honest about the failed restore.
+        True(!service.TryRegisterAll(
+                new Dictionary<HotkeyAction, HotkeyBinding>
+                {
+                    [HotkeyAction.ShowWindow] = hotkeys[HotkeyAction.TranslateSelection],
+                },
+                out var doubleConflict),
+            "the candidate must fail while F13 is held");
+        True(doubleConflict?.Contains("打开主窗口") == true,
+            $"the out param must keep the candidate conflict: {doubleConflict}");
+        Equal(3, failureDetails.Count, "the double failure must be reported");
+        True(failureDetails[^1].Contains("且恢复原快捷键也失败"),
+            $"the double-failure detail must own the failed restore: {failureDetails[^1]}");
+        True(service.IsDegraded && !service.IsFullyAvailable,
+            "a double failure must leave the service degraded");
+        Equal(0, restoredCount, "still no recovery");
+
+        // 4. Recovery: the conflict disappears; the very next success fires
+        // RegistrationRestored exactly once, and later successes stay quiet.
+        competitor.Dispose();
+        True(service.TryRegisterAll(hotkeys, out var recoverConflict),
+            $"registration must succeed after the conflict disappears: {recoverConflict}");
+        Equal(1, restoredCount, "the degraded period must fire RegistrationRestored exactly once");
+        True(service.IsFullyAvailable && !service.IsDegraded,
+            "recovery must restore full availability");
+        True(service.TryRegisterAll(hotkeys, out _),
+            "a later successful re-registration must stay successful");
+        Equal(1, restoredCount, "successes after recovery must not fire the event again");
+
+        // 5. After recovery the SAME conflict opens a NEW failure cycle that
+        // can recover again on its own.
+        var competitor2Window = new Window();
+        using var competitor2 = new HotkeyService(competitor2Window);
+        service.SetSuspended(true); // release F13 first, like a recorder would
+        try
+        {
+            True(competitor2.TryRegisterAll(new Dictionary<HotkeyAction, HotkeyBinding>
+            {
+                [HotkeyAction.ShowWindow] = hotkeys[HotkeyAction.TranslateSelection],
+            }, out var retakeConflict), $"competitor2 must retake F13: {retakeConflict}");
+            True(!service.SetSuspended(false, out _),
+                "the same conflict must fail again after a recovery");
+            Equal(4, failureDetails.Count, "a new cycle must report its failure anew");
+            Equal(1, restoredCount, "a new failure must not fire the restored event");
+        }
+        finally
+        {
+            competitor2.Dispose();
+            competitor2Window.Close();
+        }
+        True(service.SetSuspended(false, out var retryConflict2),
+            $"resume must recover once the conflict disappears again: {retryConflict2}");
+        Equal(2, restoredCount, "the second cycle must fire RegistrationRestored exactly once more");
+        True(service.IsFullyAvailable, "the second recovery must leave the set fully available");
+    }
+
+    /// <summary>
+    /// The footer's Hotkey channel is RESIDENT: it survives config refreshes
+    /// and transient messages until it is explicitly cleared, and clearing
+    /// falls back to the EngineConfig/Ready base without breaking priority.
+    /// </summary>
+    private static void MainWindowHotkeyChannelResidentAndClear()
+    {
+        EnsureApplication();
+        ProfileManager.ResetForTests();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-hotkeychannel-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var window = new MainWindow(
+                ShellSettings.Default, new HistoryStore(Path.Combine(dir, "history.json")), null);
+            try
+            {
+                var status = (TextBlock)window.FindName("StatusTextBlock")!;
+                var detail = "划词翻译：Ctrl+Alt+W 可能已被其他程序占用";
+
+                window.ShowShortcutConflict(detail);
+                True(status.Text.Contains("快捷键注册失败") && status.Text.Contains(detail),
+                    $"the hotkey channel must carry the specific failure detail, got: {status.Text}");
+
+                // A config refresh must NOT displace the resident failure.
+                typeof(MainWindow).GetMethod(
+                        "RefreshShellStatusForConfig",
+                        System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.NonPublic)!
+                    .Invoke(window, null);
+                True(status.Text.Contains(detail),
+                    "the resident hotkey failure must outrank the config channels");
+
+                window.ShowShortcutConflict("截图翻译：Ctrl+Alt+Space 注册被 Windows 拒绝（错误代码 5）");
+                True(status.Text.Contains("错误代码 5"),
+                    "a changed detail must refresh the channel within the same failure");
+
+                window.ClearShortcutConflict();
+                True(!status.Text.Contains("快捷键注册失败") && !status.Text.Contains("错误代码 5"),
+                    $"clearing must remove the failure banner, got: {status.Text}");
+                True(status.Text.Contains("尚未配置翻译引擎") ||
+                        status.Text.Contains("内置免费引擎") ||
+                        status.Text == "就绪",
+                    $"after clearing, the footer must fall back to EngineConfig/Ready, got: {status.Text}");
+
+                // A duplicate clear must be a no-op that never stomps the
+                // freshly painted base state.
+                window.ClearShortcutConflict();
+                True(!status.Text.Contains("快捷键注册失败"),
+                    "a duplicate clear must keep the fallback state intact");
+            }
+            finally
+            {
+                window.Close();
+            }
+        }
+        finally
+        {
+            ProfileManager.ResetForTests();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// A settings PROBE failure (candidate conflict, old set live) is
+    /// reported inline by the settings window only, stays retryable, and
+    /// persists nothing — while the global-failure shape is equally honest
+    /// about the broken restore. Neither shape may fake success.
+    /// </summary>
+    private static void SettingsProbeConflictStaysInlineAndRetryable()
+    {
+        ProfileManager.ResetForTests();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-hotkeyprobe-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        ProfileManager.ConfigPathOverride = Path.Combine(dir, "product-config.json");
+        CoreBridge.Initialize();
+        EnsureApplication();
+        try
+        {
+            // The stub outcome is captured BY VARIABLE so both failure shapes
+            // ride one window; neither shape ever reaches a write.
+            var outcome = ShellApplyOutcome.Failed(
+                ShellApplyFailureKind.HotkeyConflictRestored,
+                "划词翻译：Ctrl+Alt+W 可能已被其他程序占用");
+            var window = new SettingsWindow(
+                ShellSettings.Default, new HistoryStore(Path.Combine(dir, "history.json")))
+            {
+                ApplyShellSettings = _ => outcome,
+            };
+
+            var network = window.CaptureSection.NetworkEnabled;
+            var networkOriginal = network.IsChecked == true;
+            network.IsChecked = !networkOriginal;
+            Equal(SettingsEditState.Dirty, window.EditState, "fixture: edits must mark the form Dirty");
+
+            typeof(SettingsWindow).GetMethod("Save_Click",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(window, new object[] { window, new RoutedEventArgs() });
+
+            True(window.StatusTextBlock.Text.Contains("可能已被其他程序占用") &&
+                    window.StatusTextBlock.Text.Contains("原快捷键仍正常生效"),
+                $"the probe conflict must be reported inline with the honest rollback statement, got: {window.StatusTextBlock.Text}");
+            True(window.StatusTextBlock.Text.Contains("未保存任何修改"),
+                "the probe failure must state that nothing was persisted");
+            Equal(SettingsEditState.Dirty, window.EditState,
+                "a probe failure must stay retryable (Dirty), never stick in Saving");
+            True(window.SaveButton.IsEnabled, "the save bar must return for a retry");
+
+            // Second shape: candidate AND old set both dead — the inline
+            // status must not pretend the old hotkeys still work.
+            outcome = ShellApplyOutcome.Failed(
+                ShellApplyFailureKind.HotkeyUnavailable,
+                "划词翻译：Ctrl+Alt+W 注册被 Windows 拒绝（错误代码 5）");
+            typeof(SettingsWindow).GetMethod("Save_Click",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(window, new object[] { window, new RoutedEventArgs() });
+
+            True(window.StatusTextBlock.Text.Contains("错误代码 5") &&
+                    window.StatusTextBlock.Text.Contains("也未能保持可用"),
+                $"the global-failure shape must stay honest about the restore, got: {window.StatusTextBlock.Text}");
+            Equal(SettingsEditState.Dirty, window.EditState,
+                "the double failure must stay retryable too");
+
+            window.ForceClose = true; // Dirty 窗口的关闭守卫会取消 Close
+            window.Close();
+        }
+        finally
+        {
+            ProfileManager.ResetForTests();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// The failure coordinator is the pure dedup brain: one balloon per
+    /// failure cycle, detail changes refresh without re-ballooning, and
+    /// recovery re-arms notification so the same conflict can balloon again.
+    /// </summary>
+    private static void HotkeyFailureCoordinatorDedupesAndReopensCycles()
+    {
+        var coordinator = new HotkeyFailureCoordinator();
+        True(!coordinator.FailureActive, "a fresh coordinator must have no active failure");
+
+        Equal(HotkeyFailureDecision.Balloon,
+            coordinator.ReportFailure("划词翻译：Ctrl+Alt+W 可能已被其他程序占用"),
+            "the first failure of a cycle must balloon once");
+        True(coordinator.FailureActive && coordinator.BalloonShownThisCycle,
+            "the cycle must record its balloon");
+
+        Equal(HotkeyFailureDecision.None,
+            coordinator.ReportFailure("划词翻译：Ctrl+Alt+W 可能已被其他程序占用"),
+            "the same persistent failure must not balloon again");
+        Equal(HotkeyFailureDecision.UpdateStatusOnly,
+            coordinator.ReportFailure("截图翻译：Ctrl+Alt+Space 注册被 Windows 拒绝（错误代码 5）"),
+            "a changed detail within one cycle must refresh status without a new balloon");
+        True(coordinator.ActiveDetail?.Contains("错误代码 5") == true,
+            "the changed detail must be retained for the status surfaces");
+
+        True(coordinator.ReportRecovery(), "recovery must close the active cycle");
+        True(!coordinator.FailureActive && !coordinator.BalloonShownThisCycle,
+            "a closed cycle must be fully cleared");
+        True(!coordinator.ReportRecovery(), "recovery without an active failure is a no-op");
+
+        Equal(HotkeyFailureDecision.Balloon,
+            coordinator.ReportFailure("划词翻译：Ctrl+Alt+W 可能已被其他程序占用"),
+            "after recovery the SAME conflict opens a new cycle and may balloon again");
+        True(coordinator.ReportRecovery(), "the second cycle must close cleanly");
+    }
+
+    /// <summary>
+    /// The service classifies the real Win32 error: 1409 may say "possibly
+    /// taken by another program"; ANY other code says Windows refused with
+    /// its code and never claims an owner.
+    /// </summary>
+    private static void HotkeyFailureCopyClassifiesWin32Error()
+    {
+        var taken = HotkeyService.DescribeRegistrationFailure(
+            HotkeyAction.TranslateSelection,
+            new HotkeyBinding(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x57),
+            HotkeyService.ErrorHotkeyAlreadyRegistered);
+        True(taken.Contains("划词翻译") && taken.Contains("Ctrl+Alt+W"),
+            $"the conflict must name the offending row and combination: {taken}");
+        True(taken.Contains("可能已被其他程序占用"),
+            $"1409 may name another program: {taken}");
+
+        var refused = HotkeyService.DescribeRegistrationFailure(
+            HotkeyAction.CaptureScreen,
+            new HotkeyBinding(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x20),
+            5);
+        True(refused.Contains("Windows 拒绝注册（错误代码 5）"),
+            $"any other error must report the real Win32 code: {refused}");
+        True(!refused.Contains("其他程序占用"),
+            $"non-1409 errors must NOT claim an owner unconditionally: {refused}");
+    }
+
+    /// <summary>
+    /// Regression for the stale-detail defect: with failure C1's cycle
+    /// already open, a SECOND, different conflict C2 must still reach the
+    /// coordinator. The balloon count stays at exactly 1, but the cycle's
+    /// ActiveDetail — what MainWindow's resident Hotkey channel and the
+    /// tray state are painted from — must move to C2; repeating the same C2
+    /// must not even refresh the surfaces. This is App.OnHotkeyFailure's
+    /// classification contract, exercised through the pure coordinator.
+    /// </summary>
+    private static void HotkeyFailureDetailChangeInsideOpenCycleUpdatesWithoutReballooning()
+    {
+        var coordinator = new HotkeyFailureCoordinator();
+        const string c1 = "划词翻译：Ctrl+Alt+W 可能已被其他程序占用";
+        const string c2 = "截图翻译：Ctrl+Alt+Space 注册被 Windows 拒绝（错误代码 5）";
+        var balloons = 0;
+        var statusRefreshes = 0;
+
+        // Mirrors App.OnHotkeyFailure exactly: Balloon notifies AND
+        // refreshes the surfaces, UpdateStatusOnly refreshes without
+        // notifying, None does nothing at all.
+        void Surface(string detail)
+        {
+            switch (coordinator.ReportFailure(detail))
+            {
+                case HotkeyFailureDecision.Balloon:
+                    balloons++;
+                    statusRefreshes++;
+                    break;
+                case HotkeyFailureDecision.UpdateStatusOnly:
+                    statusRefreshes++;
+                    break;
+            }
+        }
+
+        Surface(c1);
+        Equal(1, balloons, "the first failure of the cycle must balloon exactly once");
+        Equal(1, statusRefreshes, "fixture sanity: one surfacing so far");
+
+        // The pre-fix defect dropped this report entirely when a cycle was
+        // already open, leaving C1 on MainWindow/tray for the whole cycle.
+        Surface(c2);
+        Equal(1, balloons, "a changed detail inside one cycle must NOT balloon again");
+        Equal(2, statusRefreshes, "the changed detail must refresh the status surfaces");
+        Equal(c2, coordinator.ActiveDetail,
+            "the open cycle must carry the CURRENT failure, not the stale first one");
+        True(coordinator.BalloonShownThisCycle,
+            "the cycle keeps its single balloon — only the detail moved");
+
+        Surface(c2);
+        Equal(1, balloons, "the same detail repeated must never balloon again");
+        Equal(2, statusRefreshes,
+            "an identical detail must not trigger a pointless surface refresh");
+        Equal(c2, coordinator.ActiveDetail, "the active detail must stay C2");
+
+        True(coordinator.ReportRecovery(), "recovery must still close the cycle");
+        Surface(c1);
+        Equal(2, balloons, "after recovery the same conflict opens a fresh, notifying cycle");
+    }
+
+    /// <summary>
+    /// The settings-apply failure routing must be evidence-based: a probe
+    /// failure with a healthy previous set stays settings-inline; a global
+    /// failure the service already reported is never re-reported by the App
+    /// (that would downgrade the combined detail); and — the pre-fix
+    /// defect — an App-side report must happen even when a failure cycle is
+    /// ALREADY open, because dedup belongs to the coordinator alone.
+    /// </summary>
+    private static void ShellApplyFailureRoutingFollowsEvidenceNotCycleState()
+    {
+        Equal(ShellApplyFailureRoute.ProbeInlineOnly,
+            ShellApplyFailureRouting.Classify(
+                previousSetFullyAvailable: true, serviceAlreadyReportedThisAttempt: false),
+            "a healthy previous set means a probe failure: settings-inline only, no global state");
+        Equal(ShellApplyFailureRoute.ProbeInlineOnly,
+            ShellApplyFailureRouting.Classify(
+                previousSetFullyAvailable: true, serviceAlreadyReportedThisAttempt: true),
+            "a healthy previous set wins over any report bookkeeping");
+        Equal(ShellApplyFailureRoute.ServiceReported,
+            ShellApplyFailureRouting.Classify(
+                previousSetFullyAvailable: false, serviceAlreadyReportedThisAttempt: true),
+            "the service event already carried the combined detail; a re-report would downgrade it");
+
+        // The old code keyed this branch on "no cycle is active" and
+        // silently dropped the report otherwise — the stale-detail defect.
+        Equal(ShellApplyFailureRoute.AppMustReport,
+            ShellApplyFailureRouting.Classify(
+                previousSetFullyAvailable: false, serviceAlreadyReportedThisAttempt: false),
+            "an unreported global failure must be reported even inside an open cycle");
+    }
+
+    /// <summary>
+    /// The dedup/probe behavior must live in the real production wiring:
+    /// App routes failures through the coordinator, repaints retained
+    /// detail after MainWindow creation, distinguishes probe outcomes from
+    /// evidence, and no surface claims an owner unconditionally.
+    /// </summary>
+    private static void HotkeyFailureDedupWiringIsReal()
+    {
+        var root = FindProjectRoot();
+        var appCode = File.ReadAllText(Path.Combine(root, "apps", "PopGlot.Windows", "App.xaml.cs"));
+        var serviceCode = File.ReadAllText(Path.Combine(root, "apps", "PopGlot.Windows", "HotkeyService.cs"));
+        var mainWindowCode = File.ReadAllText(Path.Combine(root, "apps", "PopGlot.Windows", "MainWindow.xaml.cs"));
+        var settingsCode = File.ReadAllText(Path.Combine(root, "apps", "PopGlot.Windows", "SettingsWindow.xaml.cs"));
+
+        True(serviceCode.Contains("RegistrationRestored"),
+            "the service must expose the restored event");
+        True(serviceCode.Contains("GetLastWin32Error"),
+            "the service must read the real Win32 error code");
+        True(serviceCode.Contains("ErrorHotkeyAlreadyRegistered"),
+            "the service must classify 1409 explicitly");
+
+        True(appCode.Contains("RegistrationFailed +="), "App must subscribe to RegistrationFailed");
+        True(appCode.Contains("RegistrationRestored"), "App must subscribe to the restored event");
+        True(appCode.Contains("HotkeyFailureCoordinator"),
+            "App must own the pure failure coordinator");
+        True(appCode.Contains("ReportRecovery"),
+            "App must close the failure cycle on recovery");
+        True(appCode.Contains("IsFullyAvailable"),
+            "the probe-vs-global distinction must come from service evidence");
+        True(appCode.Contains("ShellApplyFailureRouting.Classify"),
+            "the settings-apply failure branch must route through the pure evidence classifier");
+        True(appCode.Contains("_hotkeyFailureReportedThisAttempt"),
+            "the service event must mark its attempt so the App never double-reports a failure");
+        True(appCode.Contains("ShellApplyFailureKind.HotkeyConflictRestored"),
+            "probe failures must be a typed outcome, not a boolean");
+        True(appCode.Contains("_hotkeyFailure.ActiveDetail"),
+            "a startup failure before MainWindow creation must be retained and repainted");
+        True(!appCode.Contains("快捷键被其他程序占用"),
+            "the shell must never claim an owner unconditionally — copy follows the error class");
+        True(!appCode.Contains("HotkeyRetryTimer"),
+            "no timed background hotkey retry may be added");
+
+        True(mainWindowCode.Contains("StatusChannel.Hotkey"),
+            "the footer must carry a resident Hotkey channel");
+        True(mainWindowCode.Contains("ClearResidentStatus"),
+            "the footer must have a typed clear path back to EngineConfig/Ready");
+
+        True(settingsCode.Contains("ShellApplyFailureKind.HotkeyConflictRestored"),
+            "the settings window must report the probe conflict inline");
+        True(settingsCode.Contains("ApplyShellSettings(_shellSettings).Applied"),
+            "rollback honesty must follow the typed outcome");
+    }
+
     private static async Task ClipboardSnapshotFailClosedBehaviorAsync()
     {
         // 1. If adapter capture fails, ReadSelectionAsync must fail-closed before sending Ctrl+C
@@ -11312,7 +13453,7 @@ internal static class Program
         public uint SequenceNumber => 10;
         public Task<IClipboardSnapshot> CaptureAsync() =>
             throw new InvalidOperationException("Failed to access clipboard");
-        public Task SendCopyAsync()
+        public Task SendCopyAsync(CancellationToken cancellationToken)
         {
             SendCopyCalled = true;
             return Task.CompletedTask;

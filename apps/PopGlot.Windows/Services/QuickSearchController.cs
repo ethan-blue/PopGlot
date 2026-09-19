@@ -39,6 +39,18 @@ internal sealed class QuickSearchState
     public bool CanSpeak { get; private set; }
     public bool CanStar { get; private set; }
 
+    /// <summary>
+    /// One-shot footer notice (e.g. the hotkey pre-read timeout landing
+    /// notice). State-driven: <see cref="PostPendingNotice"/> arms it, every
+    /// sync consults it, and ANY real state transition below clears it — so
+    /// the next query/status update replaces it naturally and it can never
+    /// permanently occupy the footer.
+    /// </summary>
+    public string? PendingNotice { get; private set; }
+
+    /// <summary>Arms the one-shot footer notice (null clears it).</summary>
+    public void PostPendingNotice(string? notice) => PendingNotice = notice;
+
     // 页脚右侧的动态快捷键提示：随阶段刷新，只承诺当前真正可用的操作。
     public string HintsText { get; private set; } = IdleHintsText;
 
@@ -77,6 +89,7 @@ internal sealed class QuickSearchState
         Phonetic = null;
         Explanation = null;
         ErrorMessage = null;
+        PendingNotice = null;
         IsResultVisible = true;
         IsStreamLayerVisible = true;
         IsRichBoxVisible = false;
@@ -97,6 +110,9 @@ internal sealed class QuickSearchState
             return false;
         }
 
+        // A live stream update is a real state update: any pending notice
+        // yields to the progress copy.
+        PendingNotice = null;
         Stage = QuickSearchUiStage.Streaming;
         IsProgressVisible = true;
 
@@ -126,9 +142,9 @@ internal sealed class QuickSearchState
         CanCopy = false;
         CanSpeak = false;
         CanStar = false;
-        StatusText = update.Ttft.HasValue
-            ? $"正在生成… · TTFT {update.Ttft.Value.TotalMilliseconds:F0} ms"
-            : "正在生成…";
+        // 0.1.6 文案减法：流式状态只说"正在生成…"，不向用户暴露 TTFT 这类
+        // 内部测量（update.Ttft 仍是数据字段，仅不再进入显示文案）。
+        StatusText = "正在生成…";
         RefreshHints();
         return true;
     }
@@ -142,6 +158,7 @@ internal sealed class QuickSearchState
 
         if (stage == TranslationSessionStage.Finalizing)
         {
+            PendingNotice = null;
             Stage = QuickSearchUiStage.Finalizing;
             IsStreamIndicatorVisible = false;
             StatusText = "正在整理结果…";
@@ -161,6 +178,9 @@ internal sealed class QuickSearchState
 
         IsProgressVisible = false;
         IsStreamIndicatorVisible = false;
+        // A terminal state always rewrites the status copy: any pending
+        // notice is superseded here.
+        PendingNotice = null;
 
         if (session.Stage == TranslationSessionStage.Completed)
         {
@@ -177,8 +197,10 @@ internal sealed class QuickSearchState
             CanCopy = !string.IsNullOrWhiteSpace(session.TranslatedText);
             CanSpeak = !string.IsNullOrWhiteSpace(session.TranslatedText);
             CanStar = true;
-            var engine = session.PipelineLabel ?? "大模型";
-            StatusText = $"{engine} · {session.Timing.TotalElapsedMs} ms";
+            // 0.1.6 文案减法：PipelineLabel 缺失时用中性的「翻译完成」兜底，
+            // 绝不再声称"大模型"；耗时保留为面向用户的秒级文案。
+            var engine = session.PipelineLabel ?? "翻译完成";
+            StatusText = $"{engine} · {TranslationElapsedText.ForMilliseconds(session.Timing.TotalElapsedMs)}";
             RefreshHints();
             return true;
         }
@@ -193,9 +215,10 @@ internal sealed class QuickSearchState
             }
             Phonetic = session.Phonetic;
             Explanation = session.Explanation;
-            ErrorMessage = session.Error != null
-                ? $"{session.Error.Message} {session.Error.ActionableSuggestion}".Trim()
-                : null;
+            // 与 Failed 分支一致：partial+error 的状态行同时给出 Message 与
+            // 非空 ActionableSuggestion（已含建议时去重），而不是只报 Message。
+            var partialError = session.Error is not null ? ComposeErrorText(session.Error) : null;
+            ErrorMessage = partialError;
             IsResultVisible = !string.IsNullOrEmpty(AccumulatedText);
             IsStreamLayerVisible = !string.IsNullOrEmpty(AccumulatedText);
             IsRichBoxVisible = false;
@@ -205,9 +228,9 @@ internal sealed class QuickSearchState
             CanCopy = !string.IsNullOrWhiteSpace(AccumulatedText);
             CanSpeak = false;
             CanStar = false;
-            StatusText = session.Error != null
-                ? $"{session.Error.Message}（部分内容已保留）"
-                : $"部分完成 · {session.Timing.TotalElapsedMs} ms · 译文不完整";
+            StatusText = partialError is not null
+                ? $"{partialError}（部分内容已保留）"
+                : $"部分完成 · {TranslationElapsedText.ForMilliseconds(session.Timing.TotalElapsedMs)} · 译文不完整";
             RefreshHints();
             return true;
         }
@@ -234,13 +257,32 @@ internal sealed class QuickSearchState
         CanCopy = hasPartial;
         CanSpeak = false;
         CanStar = false;
-        var err = session.Error != null
-            ? $"{session.Error.Message} {session.Error.ActionableSuggestion}".Trim()
-            : "翻译失败";
+        var err = session.Error is not null ? ComposeErrorText(session.Error) : "翻译失败";
         ErrorMessage = err;
         StatusText = hasPartial ? $"{err}（已保留部分内容）" : err;
         RefreshHints();
         return true;
+    }
+
+    /// <summary>
+    /// One error-composition source for the Partial and Failed branches: the
+    /// message plus a NON-EMPTY actionable suggestion, deduplicated when the
+    /// classifier already embedded the suggestion in the message — the same
+    /// failure must never read differently (or doubled) across the two stages.
+    /// </summary>
+    private static string ComposeErrorText(TranslationError error)
+    {
+        var message = error.Message.Trim();
+        var suggestion = error.ActionableSuggestion?.Trim();
+        if (string.IsNullOrEmpty(suggestion))
+        {
+            return message;
+        }
+        if (message.Contains(suggestion, StringComparison.Ordinal))
+        {
+            return message;
+        }
+        return string.IsNullOrEmpty(message) ? suggestion : $"{message} {suggestion}";
     }
 
     public bool OnCancelled(long epoch, string currentInputQuery)
@@ -250,6 +292,7 @@ internal sealed class QuickSearchState
             return false;
         }
 
+        PendingNotice = null;
         Stage = QuickSearchUiStage.Cancelled;
         IsProgressVisible = false;
         IsStreamIndicatorVisible = false;
@@ -276,6 +319,7 @@ internal sealed class QuickSearchState
             return false;
         }
 
+        PendingNotice = null;
         Stage = QuickSearchUiStage.Failed;
         IsProgressVisible = false;
         IsStreamIndicatorVisible = false;
@@ -306,8 +350,10 @@ internal sealed class QuickSearchState
 
         // Epoch 自增即把在途请求的一切后续回调（流式、阶段、终态） fenced
         // 掉：旧的会话不再能写进新查询的界面，不留 Streaming 孤儿。
+        // The pending notice (if any) is superseded by every branch below.
         CurrentEpoch++;
         CurrentQuery = trimmed;
+        PendingNotice = null;
         IsProgressVisible = false;
         IsStreamIndicatorVisible = false;
 
@@ -375,6 +421,7 @@ internal sealed class QuickSearchState
         AccumulatedText = string.Empty;
         FinalRenderedText = string.Empty;
         ErrorMessage = null;
+        PendingNotice = null;
         IsResultVisible = false;
         IsStreamLayerVisible = false;
         IsRichBoxVisible = false;

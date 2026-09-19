@@ -12,7 +12,7 @@ internal interface ISelectionClipboardAdapter
 {
     uint SequenceNumber { get; }
     Task<IClipboardSnapshot> CaptureAsync();
-    Task SendCopyAsync();
+    Task SendCopyAsync(CancellationToken cancellationToken);
     Task<string?> ReadTextAsync();
     Task RestoreAsync(IClipboardSnapshot snapshot);
 }
@@ -36,12 +36,17 @@ internal sealed class ClipboardSelectionService
             winAdapter.TargetWindow = targetWindow;
         }
         using var snapshot = await _clipboard.CaptureAsync();
+        // Checkpoint AFTER the (potentially retried) capture and BEFORE the
+        // synthetic Ctrl+C: once the caller's budget has expired, the attempt
+        // must abort here so a late, unobserved read can never send a copy
+        // keystroke to the user's previous foreground window.
+        cancellationToken.ThrowIfCancellationRequested();
         var sequenceBeforeCopy = _clipboard.SequenceNumber;
         uint? copiedSequence = null;
         var cancellationRequested = false;
         try
         {
-            await _clipboard.SendCopyAsync();
+            await _clipboard.SendCopyAsync(cancellationToken);
             var deadline = DateTime.UtcNow + CopyTimeout;
             while (DateTime.UtcNow < deadline)
             {
@@ -149,40 +154,85 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
     public Task<IClipboardSnapshot> CaptureAsync() => RetryClipboardAsync(() =>
         RunInStaAsync<IClipboardSnapshot>(ClipboardSnapshot.Capture, ClipboardOperationTimeout));
 
-    public async Task SendCopyAsync()
+    public Task SendCopyAsync(CancellationToken cancellationToken) => SendCopyCoreAsync(
+        TargetWindow,
+        cancellationToken,
+        NativeMethods.GetForegroundWindow,
+        static target => NativeMethods.SetForegroundWindow(target),
+        IsAnyModifierPhysicallyDown,
+        CaptureModifiersToRelease,
+        SendViaSendInput,
+        ForegroundSettleDelay,
+        ModifierPollDelay);
+
+    private static readonly TimeSpan ForegroundSettleDelay = TimeSpan.FromMilliseconds(15);
+    private static readonly TimeSpan ModifierPollDelay = TimeSpan.FromMilliseconds(10);
+    private const int ModifierWaitBudgetMilliseconds = 500;
+
+    /// <summary>
+    /// Deterministic core of the synthetic Ctrl+C. EVERY wait and decision
+    /// checkpoint honours <paramref name="cancellationToken"/>: once the
+    /// pre-read budget has expired, the attempt aborts before the target
+    /// application receives any keystroke — and the keystrokes are sent at
+    /// most once per attempt, never retried. The environment primitives are
+    /// injected so the checkpoint ladder is testable without a real keyboard,
+    /// window station or clipboard.
+    /// </summary>
+    internal static async Task SendCopyCoreAsync(
+        nint targetWindow,
+        CancellationToken cancellationToken,
+        Func<nint> getForegroundWindow,
+        Action<nint> setForegroundWindow,
+        Func<bool> anyModifierDown,
+        Func<IReadOnlyList<ushort>> captureModifiersToRelease,
+        Func<List<NativeInput>, uint> sendInputs,
+        TimeSpan foregroundSettleDelay,
+        TimeSpan modifierPollDelay)
     {
-        if (TargetWindow != 0)
+        // Checkpoint 1: entry — before any activation attempt.
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (targetWindow != 0)
         {
-            var currentForeground = NativeMethods.GetForegroundWindow();
-            if (currentForeground != 0 && currentForeground != TargetWindow)
+            var currentForeground = getForegroundWindow();
+            if (currentForeground != 0 && currentForeground != targetWindow)
             {
-                NativeMethods.SetForegroundWindow(TargetWindow);
-                await Task.Delay(15);
+                setForegroundWindow(targetWindow);
+                // Checkpoint 2: after activation, before settling.
+                cancellationToken.ThrowIfCancellationRequested();
+                await Task.Delay(foregroundSettleDelay, cancellationToken);
             }
         }
 
-        await WaitForModifiersReleasedAsync();
+        // The user may still be physically holding Ctrl/Alt from the hotkey
+        // that triggered this copy: sending C while they are held produces
+        // Ctrl+Alt+C, which most applications ignore. Wait briefly for the
+        // modifiers to come up; every poll is a cancellation checkpoint so a
+        // budget expiring mid-wait still stops before the keystrokes.
+        var deadline = Environment.TickCount64 + ModifierWaitBudgetMilliseconds;
+        while (Environment.TickCount64 < deadline)
+        {
+            // Checkpoint 3: each modifier-release poll.
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!anyModifierDown())
+            {
+                break;
+            }
+            await Task.Delay(modifierPollDelay, cancellationToken);
+        }
+
+        // Checkpoint 4: immediately before the keystrokes leave the process.
+        cancellationToken.ThrowIfCancellationRequested();
 
         var inputs = new List<NativeInput>(8);
-
-        // Synthesize KeyUp for any modifier keys that are still physically held down
-        // (especially Alt from Ctrl+Alt+W, or Shift/Win), so the target application
-        // receives a pure Ctrl+C rather than Ctrl+Alt+C or Ctrl+Shift+C.
-        if ((NativeMethods.GetAsyncKeyState(VkMenu) & 0x8000) != 0)
+        // Synthesize KeyUp for any modifier keys still physically held down
+        // (especially Alt from Ctrl+Alt+W, or Shift/Win), so the target
+        // application receives a pure Ctrl+C rather than Ctrl+Alt+C or
+        // Ctrl+Shift+C. Ctrl itself is deliberately absent: it is re-sent
+        // fresh as part of the combo below.
+        foreach (var modifier in captureModifiersToRelease())
         {
-            inputs.Add(KeyboardInput(VkMenu, KeyeventfKeyup));
-        }
-        if ((NativeMethods.GetAsyncKeyState(VkShift) & 0x8000) != 0)
-        {
-            inputs.Add(KeyboardInput(VkShift, KeyeventfKeyup));
-        }
-        if ((NativeMethods.GetAsyncKeyState(VkLWin) & 0x8000) != 0)
-        {
-            inputs.Add(KeyboardInput(VkLWin, KeyeventfKeyup));
-        }
-        if ((NativeMethods.GetAsyncKeyState(VkRWin) & 0x8000) != 0)
-        {
-            inputs.Add(KeyboardInput(VkRWin, KeyeventfKeyup));
+            inputs.Add(KeyboardInput(modifier, KeyeventfKeyup));
         }
 
         inputs.Add(KeyboardInput(VkControl, 0));
@@ -190,6 +240,40 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
         inputs.Add(KeyboardInput(VkC, KeyeventfKeyup));
         inputs.Add(KeyboardInput(VkControl, KeyeventfKeyup));
 
+        _ = sendInputs(inputs);
+    }
+
+    private static bool IsAnyModifierPhysicallyDown() =>
+        (NativeMethods.GetAsyncKeyState(VkShift) & 0x8000) != 0 ||
+        (NativeMethods.GetAsyncKeyState(VkControl) & 0x8000) != 0 ||
+        (NativeMethods.GetAsyncKeyState(VkMenu) & 0x8000) != 0 ||
+        (NativeMethods.GetAsyncKeyState(VkLWin) & 0x8000) != 0 ||
+        (NativeMethods.GetAsyncKeyState(VkRWin) & 0x8000) != 0;
+
+    private static IReadOnlyList<ushort> CaptureModifiersToRelease()
+    {
+        var held = new List<ushort>(4);
+        if ((NativeMethods.GetAsyncKeyState(VkMenu) & 0x8000) != 0)
+        {
+            held.Add(VkMenu);
+        }
+        if ((NativeMethods.GetAsyncKeyState(VkShift) & 0x8000) != 0)
+        {
+            held.Add(VkShift);
+        }
+        if ((NativeMethods.GetAsyncKeyState(VkLWin) & 0x8000) != 0)
+        {
+            held.Add(VkLWin);
+        }
+        if ((NativeMethods.GetAsyncKeyState(VkRWin) & 0x8000) != 0)
+        {
+            held.Add(VkRWin);
+        }
+        return held;
+    }
+
+    private static uint SendViaSendInput(List<NativeInput> inputs)
+    {
         var inputArray = inputs.ToArray();
         var sent = NativeMethods.SendInput(
             (uint)inputArray.Length,
@@ -205,32 +289,7 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
             }
             throw new Win32Exception(error, "无法向当前应用发送复制快捷键。");
         }
-    }
-
-    /// <summary>
-    /// The user may still be physically holding Ctrl/Alt from the hotkey that
-    /// triggered this copy. Sending C while they are held produces Ctrl+Alt+C,
-    /// which most applications ignore, so wait briefly for the modifiers to
-    /// come up before synthesizing Ctrl+C. Awaits instead of sleeping so the
-    /// UI thread stays responsive during the wait.
-    /// </summary>
-    private static async Task WaitForModifiersReleasedAsync()
-    {
-        var deadline = Environment.TickCount64 + 500;
-        while (Environment.TickCount64 < deadline)
-        {
-            var pressed =
-                (NativeMethods.GetAsyncKeyState(VkShift) & 0x8000) != 0 ||
-                (NativeMethods.GetAsyncKeyState(VkControl) & 0x8000) != 0 ||
-                (NativeMethods.GetAsyncKeyState(VkMenu) & 0x8000) != 0 ||
-                (NativeMethods.GetAsyncKeyState(VkLWin) & 0x8000) != 0 ||
-                (NativeMethods.GetAsyncKeyState(VkRWin) & 0x8000) != 0;
-            if (!pressed)
-            {
-                return;
-            }
-            await Task.Delay(10);
-        }
+        return sent;
     }
 
     public Task<string?> ReadTextAsync() => RetryClipboardAsync(() =>
@@ -385,15 +444,17 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
         },
     };
 
+    // Structs are internal (not private) so the isolated LogicTests can drive
+    // SendCopyCoreAsync's injected send seam and assert on the keystrokes.
     [StructLayout(LayoutKind.Sequential)]
-    private struct NativeInput
+    internal struct NativeInput
     {
         public uint Type;
         public NativeInputUnion Union;
     }
 
     [StructLayout(LayoutKind.Explicit)]
-    private struct NativeInputUnion
+    internal struct NativeInputUnion
     {
         [FieldOffset(0)] public NativeKeyboardInput Keyboard;
         [FieldOffset(0)] public NativeMouseInput Mouse;
@@ -401,7 +462,7 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct NativeKeyboardInput
+    internal struct NativeKeyboardInput
     {
         public ushort VirtualKey;
         public ushort ScanCode;
@@ -411,7 +472,7 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct NativeMouseInput
+    internal struct NativeMouseInput
     {
         public int X;
         public int Y;
@@ -422,7 +483,7 @@ internal sealed partial class WindowsSelectionClipboardAdapter : ISelectionClipb
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct NativeHardwareInput
+    internal struct NativeHardwareInput
     {
         public uint Message;
         public ushort ParameterLow;

@@ -19,6 +19,13 @@ internal static partial class ThemeService
     private static bool _watchingSystem;
     private static UserPreferenceChangedEventHandler? _systemPreferenceHandler;
 
+    /// <summary>
+    /// Testable seam: when non-null it replaces <see cref="SystemParameters.HighContrast"/>
+    /// as the HC source so tests can drive ApplyResolved through the HC on/off
+    /// cycle without flipping a real system setting. Null in production.
+    /// </summary>
+    internal static bool? HighContrastTestOverride;
+
     /// <summary>Raised after the effective (resolved) theme changes.</summary>
     public static event EventHandler? ThemeChanged;
 
@@ -27,6 +34,9 @@ internal static partial class ThemeService
 
     /// <summary>True when Windows high contrast mode is currently active.</summary>
     public static bool IsHighContrast => SystemParameters.HighContrast;
+
+    /// <summary>HC source of truth with the test seam applied.</summary>
+    private static bool IsHighContrastEffective => HighContrastTestOverride ?? SystemParameters.HighContrast;
 
     public static void Apply(ThemePreference preference)
     {
@@ -40,14 +50,14 @@ internal static partial class ThemeService
         EnsureSystemWatcher();
     }
 
-    private static void ApplyResolved()
+    internal static void ApplyResolved()
     {
         if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
         {
             dispatcher.BeginInvoke(new Action(ApplyResolved));
             return;
         }
-        var isHighContrast = SystemParameters.HighContrast;
+        var isHighContrast = IsHighContrastEffective;
         var dark = _preference switch
         {
             ThemePreference.Light => false,
@@ -89,61 +99,119 @@ internal static partial class ThemeService
         ThemeChanged?.Invoke(null, EventArgs.Empty);
     }
 
+    /// <summary>
+    /// Tokens deliberately NOT remapped by the high-contrast palette. Every
+    /// one of them is an explicit, audited decision — never a silent miss:
+    /// <list type="bullet">
+    /// <item><c>OverlayScrimBrush</c>: the capture overlay must dim the desktop
+    /// behind the selection rectangle in every theme; collapsing it to a solid
+    /// system colour would either blind the screen or remove the dimming.</item>
+    /// <item><c>ShadowColor</c> / <c>ShadowBrush</c>: shadows are a depth cue
+    /// with no meaning in high contrast — they are forced transparent instead
+    /// of inheriting any theme colour.</item>
+    /// </list>
+    /// The LogicTests audit asserts every token of Dark/Light/seed is either in
+    /// the HC palette or in this list, so a future token cannot leak past HC.
+    /// </summary>
+    internal static readonly string[] HighContrastExplicitWhitelist =
+    [
+        "OverlayScrimBrush",
+        "ShadowColor",
+        "ShadowBrush",
+    ];
+
+    /// <summary>
+    /// The COMPLETE high-contrast palette as pure data: every token that must
+    /// follow system colours under HC, derived only from the role colours
+    /// passed in. Pure and parameterised so tests can exercise it without
+    /// switching a real system high-contrast setting; production values come
+    /// from <see cref="System.Windows.SystemColors"/>.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, Color> HighContrastPalette(
+        Color window,
+        Color windowText,
+        Color highlight,
+        Color highlightText,
+        Color grayText,
+        Color hotTrack)
+    {
+        var palette = new Dictionary<string, Color>(StringComparer.Ordinal)
+        {
+            // Boundaries: a crisp window edge is THE HC affordance for floating
+            // windows that would otherwise blend into a matching system theme.
+            ["WindowEdgeBrush"] = windowText,
+
+            // Surfaces collapse to the system window colour.
+            ["CanvasBrush"] = window,
+            ["SidebarBrush"] = window,
+            ["SurfaceBrush"] = window,
+            ["SurfaceMutedBrush"] = window,
+            ["SurfaceRaisedBrush"] = window,
+            ["InputBrush"] = window,
+            ["ResultSurfaceBrush"] = window,
+
+            // Text follows the system text colour; dimmed text uses the
+            // system disabled colour.
+            ["TextPrimaryBrush"] = windowText,
+            ["TextSecondaryBrush"] = windowText,
+            ["TextTertiaryBrush"] = grayText,
+            ["TextDisabledBrush"] = grayText,
+
+            // Accent/primary/selection states ride the system highlight pair.
+            ["AccentBrush"] = highlight,
+            ["AccentHoverBrush"] = highlight,
+            ["AccentPressedBrush"] = highlight,
+            ["AccentTextBrush"] = highlightText,
+            ["AccentSoftBrush"] = window,
+            ["AccentBorderBrush"] = highlight,
+            ["FocusBrush"] = highlight,
+            ["PrimaryBrush"] = highlight,
+            ["PrimaryHoverBrush"] = highlight,
+            ["PrimaryPressedBrush"] = highlight,
+            ["PrimaryTextBrush"] = highlightText,
+
+            ["SurfaceHoverBrush"] = window,
+            ["SurfacePressedBrush"] = highlight,
+
+            // Semantic status colours (C18 / A10): alert hues ride highlight /
+            // hot track, soft fills collapse to the window colour.
+            ["DangerBrush"] = hotTrack,
+            ["DangerSoftBrush"] = window,
+            ["DangerHoverBrush"] = highlight,
+            ["DangerHoverTextBrush"] = highlightText,
+            ["DangerPressedBrush"] = highlight,
+            ["DangerPressedTextBrush"] = highlightText,
+            ["WarningBrush"] = hotTrack,
+            ["WarningSoftBrush"] = window,
+            ["SuccessBrush"] = highlight,
+            ["SuccessSoftBrush"] = window,
+
+            ["BorderSubtleBrush"] = windowText,
+            ["BorderStrongBrush"] = windowText,
+        };
+        return palette;
+    }
+
     internal static void ApplyHighContrastOverrides(ResourceDictionary resources)
     {
-        var windowColor = System.Windows.SystemColors.WindowColor;
-        var windowTextColor = System.Windows.SystemColors.WindowTextColor;
-        var highlightColor = System.Windows.SystemColors.HighlightColor;
-        var highlightTextColor = System.Windows.SystemColors.HighlightTextColor;
-        var grayTextColor = System.Windows.SystemColors.GrayTextColor;
-        var hotTrackColor = System.Windows.SystemColors.HotTrackColor;
+        var palette = HighContrastPalette(
+            System.Windows.SystemColors.WindowColor,
+            System.Windows.SystemColors.WindowTextColor,
+            System.Windows.SystemColors.HighlightColor,
+            System.Windows.SystemColors.HighlightTextColor,
+            System.Windows.SystemColors.GrayTextColor,
+            System.Windows.SystemColors.HotTrackColor);
 
-        SetTokenBrush(resources, "CanvasBrush", windowColor);
-        SetTokenBrush(resources, "SidebarBrush", windowColor);
-        SetTokenBrush(resources, "SurfaceBrush", windowColor);
-        SetTokenBrush(resources, "SurfaceMutedBrush", windowColor);
-        SetTokenBrush(resources, "SurfaceRaisedBrush", windowColor);
-        SetTokenBrush(resources, "InputBrush", windowColor);
-        SetTokenBrush(resources, "ResultSurfaceBrush", windowColor);
+        foreach (var (key, color) in palette)
+        {
+            SetTokenBrush(resources, key, color);
+        }
 
-        SetTokenBrush(resources, "TextPrimaryBrush", windowTextColor);
-        SetTokenBrush(resources, "TextSecondaryBrush", windowTextColor);
-        SetTokenBrush(resources, "TextTertiaryBrush", grayTextColor);
-        SetTokenBrush(resources, "TextDisabledBrush", grayTextColor);
-
-        SetTokenBrush(resources, "AccentBrush", highlightColor);
-        SetTokenBrush(resources, "AccentTextBrush", highlightTextColor);
-        SetTokenBrush(resources, "AccentBorderBrush", highlightColor);
-        SetTokenBrush(resources, "AccentSoftBrush", windowColor);
-        SetTokenBrush(resources, "FocusBrush", highlightColor);
-        SetTokenBrush(resources, "PrimaryBrush", highlightColor);
-        SetTokenBrush(resources, "PrimaryHoverBrush", highlightColor);
-        SetTokenBrush(resources, "PrimaryPressedBrush", highlightColor);
-        SetTokenBrush(resources, "PrimaryTextBrush", highlightTextColor);
-
-        SetTokenBrush(resources, "SurfaceHoverBrush", windowColor);
-        SetTokenBrush(resources, "SurfacePressedBrush", highlightColor);
-
-        // Semantic status colors in high contrast (C18 / A10):
-        // Danger/Warning/Success mapped to system alert & highlight hues,
-        // while all soft background fills collapse to window background to prevent low-contrast halos.
-        SetTokenBrush(resources, "DangerBrush", hotTrackColor);
-        SetTokenBrush(resources, "DangerSoftBrush", windowColor);
-        SetTokenBrush(resources, "DangerHoverBrush", highlightColor);
-        SetTokenBrush(resources, "DangerHoverTextBrush", highlightTextColor);
-        SetTokenBrush(resources, "DangerPressedBrush", highlightColor);
-        SetTokenBrush(resources, "DangerPressedTextBrush", highlightTextColor);
-
-        SetTokenBrush(resources, "WarningBrush", hotTrackColor);
-        SetTokenBrush(resources, "WarningSoftBrush", windowColor);
-
-        SetTokenBrush(resources, "SuccessBrush", highlightColor);
-        SetTokenBrush(resources, "SuccessSoftBrush", windowColor);
-
-        SetTokenBrush(resources, "BorderSubtleBrush", windowTextColor);
-        SetTokenBrush(resources, "BorderStrongBrush", windowTextColor);
-
+        // Explicit whitelist handling (see HighContrastExplicitWhitelist):
+        // effects never inherit theme colours under HC.
         resources["ShadowColor"] = Colors.Transparent;
+        resources["ShadowBrush"] = Brushes.Transparent;
+        // OverlayScrimBrush stays at its translucent palette value on purpose.
     }
 
     private static void SetTokenBrush(ResourceDictionary resources, string key, Color color)
@@ -286,7 +354,9 @@ internal static partial class ThemeService
         ("AccentPressedBrush", "#6976C4"),
         ("AccentTextBrush", "#071224"),
         ("AccentSoftBrush", "#20243A"),
-        ("AccentBorderBrush", "#59649D"),
+        // 必须 ≥3:1 于 AccentSoft 软底与 Input 输入底（WCAG 非文本对比）。
+        // 旧值 #59649D 在 AccentSoft #20243A 上仅 2.72:1。
+        ("AccentBorderBrush", "#6B77B5"),
         // Focus ring: strong enough to clear 3:1 against every resting
         // surface, unlike the soft AccentBorder it replaces.
         ("FocusBrush", "#7C89D9"),
@@ -314,6 +384,10 @@ internal static partial class ThemeService
         ("SuccessBrush", "#3DD68C"),
         ("SuccessSoftBrush", "#143826"),
         ("OverlayScrimBrush", "#C8101216"),
+        // Window edge boundary: transparent in the normal themes (the windows
+        // carry their own subtle borders), remapped to WindowText under system
+        // high contrast so floating windows get a crisp visible boundary.
+        ("WindowEdgeBrush", "#00FFFFFF"),
         ("ShadowColor", "#000000"),
     ];
 
@@ -361,6 +435,10 @@ internal static partial class ThemeService
         ("SuccessBrush", "#0B7350"),
         ("SuccessSoftBrush", "#E3F6EF"),
         ("OverlayScrimBrush", "#A615171C"),
+        // Window edge boundary: transparent in the normal themes (the windows
+        // carry their own subtle borders), remapped to WindowText under system
+        // high contrast so floating windows get a crisp visible boundary.
+        ("WindowEdgeBrush", "#00FFFFFF"),
         ("ShadowColor", "#000000"),
     ];
 

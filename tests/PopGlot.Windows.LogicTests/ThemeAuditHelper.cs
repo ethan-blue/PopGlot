@@ -1,3 +1,6 @@
+using System.IO;
+using System.Text.RegularExpressions;
+using System.Windows.Media;
 using PopGlot.Windows;
 
 namespace PopGlot.Windows.LogicTests;
@@ -37,7 +40,113 @@ public static class ThemeAuditHelper
         // 2. Token audits
         AuditPalette("Dark", ThemeService.DarkTokens);
         AuditPalette("Light", ThemeService.LightTokens);
+
+        // 3. High-contrast seam audits (pure — no system HC switch needed).
+        AuditHighContrastSeam();
     }
+
+    /// <summary>
+    /// E3-D3 follow-up: the high-contrast palette must be COMPLETE and
+    /// testable without flipping a real system setting. Every token declared
+    /// anywhere (Dark, Light, App.xaml seeds) must be either mapped by the HC
+    /// palette or explicitly whitelisted; the window edge must be transparent
+    /// in the normal themes and WindowText under HC; and a representative
+    /// High Contrast Black scheme must clear reasonable WCAG thresholds.
+    /// </summary>
+    private static void AuditHighContrastSeam()
+    {
+        var window = ParseHex("#000000");
+        var windowText = ParseHex("#FFFFFF");
+        var highlight = ParseHex("#CCCCFF");
+        var highlightText = ParseHex("#000000");
+        var grayText = ParseHex("#7F7F7F");
+        var hotTrack = ParseHex("#1F5CC5");
+        var palette = ThemeService.HighContrastPalette(
+            window, windowText, highlight, highlightText, grayText, hotTrack);
+
+        // 1. Completeness: HC maps every token or the token is whitelisted.
+        var whitelisted = ThemeService.HighContrastExplicitWhitelist;
+        var seedKeys = AppXamlBrushKeys();
+        foreach (var key in ThemeService.DarkTokens.Select(t => t.Key)
+                     .Concat(ThemeService.LightTokens.Select(t => t.Key))
+                     .Concat(seedKeys)
+                     .Distinct())
+        {
+            True(palette.ContainsKey(key) || whitelisted.Contains(key),
+                $"token {key} must be mapped in the high-contrast palette or explicitly whitelisted");
+        }
+
+        // 2. Window edge: transparent in normal themes, WindowText under HC.
+        var edgeHc = palette["WindowEdgeBrush"];
+        True(edgeHc == windowText,
+            $"WindowEdgeBrush must map to WindowText in high contrast, got {edgeHc}");
+        foreach (var (name, tokens) in new[] { ("Dark", ThemeService.DarkTokens), ("Light", ThemeService.LightTokens) })
+        {
+            var edge = tokens.Single(t => t.Key == "WindowEdgeBrush").Value;
+            var color = (Color)ColorConverter.ConvertFromString(edge);
+            True(color.A == 0,
+                $"[{name}] WindowEdgeBrush must be fully transparent in normal themes, got {edge}");
+        }
+
+        // 3. Contrast on a representative High Contrast Black scheme.
+        AssertHcRatio(palette, "TextPrimaryBrush", "CanvasBrush", 7.0);
+        AssertHcRatio(palette, "TextPrimaryBrush", "SurfaceBrush", 7.0);
+        AssertHcRatio(palette, "TextSecondaryBrush", "CanvasBrush", 7.0);
+        AssertHcRatio(palette, "TextTertiaryBrush", "SurfaceBrush", 2.5);
+        AssertHcRatio(palette, "BorderStrongBrush", "InputBrush", 3.0);
+        AssertHcRatio(palette, "WindowEdgeBrush", "CanvasBrush", 3.0);
+        AssertHcRatio(palette, "PrimaryTextBrush", "PrimaryBrush", 4.5);
+        AssertHcRatio(palette, "AccentTextBrush", "AccentBrush", 4.5);
+        AssertHcRatio(palette, "DangerHoverTextBrush", "DangerHoverBrush", 4.5);
+    }
+
+    private static void AssertHcRatio(
+        IReadOnlyDictionary<string, Color> palette,
+        string foregroundKey,
+        string backgroundKey,
+        double minRatio)
+    {
+        var ratio = ThemeContrast.Ratio(ToHex(palette[foregroundKey]), ToHex(palette[backgroundKey]));
+        if (ratio < minRatio)
+        {
+            throw new InvalidOperationException(
+                $"[HC] {foregroundKey} on {backgroundKey} ratio is {ratio:F2}, expected >= {minRatio:F1}");
+        }
+    }
+
+    /// <summary>Every brush/color token key seeded by App.xaml.</summary>
+    private static IEnumerable<string> AppXamlBrushKeys()
+    {
+        var appXaml = File.ReadAllText(Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows", "App.xaml"));
+        foreach (Match match in Regex.Matches(appXaml, @"x:Key=""(\w+)"""))
+        {
+            yield return match.Groups[1].Value;
+        }
+    }
+
+    private static Color ParseHex(string hex) => (Color)ColorConverter.ConvertFromString(hex);
+
+    private static string ToHex(Color color) =>
+        $"#{color.R:X2}{color.G:X2}{color.B:X2}";
+
+    private static string FindProjectRoot()
+    {
+        var dir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Cargo.toml")))
+        {
+            dir = dir.Parent;
+        }
+        return dir?.FullName ?? AppDomain.CurrentDomain.BaseDirectory;
+    }
+
+    private static void True(bool condition, string message)
+    {
+        if (!condition)
+        {
+            throw new InvalidOperationException(message);
+        }
+    }
+
 
     private static void AuditPalette(string name, (string Key, string Value)[] tokens)
     {

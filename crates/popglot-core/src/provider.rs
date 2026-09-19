@@ -544,7 +544,15 @@ impl std::error::Error for ProviderError {}
 #[derive(Debug, Clone)]
 pub struct TransportLimits {
     pub connect_timeout: Duration,
+    /// Non-streaming request budget. Generous enough for reasoning models
+    /// that answer in one shot after a long thinking phase.
     pub total_timeout: Duration,
+    /// Streaming liveness bound: how long the stream may stay SILENT between
+    /// chunks. Long, slow generations stay alive as long as tokens keep
+    /// arriving; only a genuinely stalled connection is cut.
+    pub stream_idle_timeout: Duration,
+    /// Streaming hard ceiling for the whole generation.
+    pub stream_total_timeout: Duration,
     pub max_response_bytes: usize,
     pub max_retries: u8,
     pub retry_delay: Duration,
@@ -555,7 +563,9 @@ impl Default for TransportLimits {
     fn default() -> Self {
         Self {
             connect_timeout: Duration::from_secs(5),
-            total_timeout: Duration::from_secs(45),
+            total_timeout: Duration::from_secs(120),
+            stream_idle_timeout: Duration::from_secs(120),
+            stream_total_timeout: Duration::from_secs(600),
             max_response_bytes: MAX_RESPONSE_BYTES,
             max_retries: 1,
             retry_delay: Duration::from_millis(250),
@@ -870,7 +880,7 @@ impl ProviderClient {
         };
         tokio::select! {
             () = cancellation.cancelled() => Err(cancelled_error()),
-            result = tokio::time::timeout(self.limits.total_timeout, operation) => result.unwrap_or_else(|_| Err(ProviderError::new(ProviderErrorKind::Timeout, format!("Provider 流式请求超过 {} 秒总超时。", self.limits.total_timeout.as_secs())))),
+            result = tokio::time::timeout(self.limits.stream_total_timeout, operation) => result.unwrap_or_else(|_| Err(ProviderError::new(ProviderErrorKind::Timeout, format!("Provider 流式请求超过 {} 秒总超时。", self.limits.stream_total_timeout.as_secs())))),
         }
     }
 
@@ -936,7 +946,19 @@ impl ProviderClient {
         let mut total_bytes = 0_usize;
         let mut stream = response.bytes_stream();
         loop {
-            let next = tokio::select! { () = cancellation.cancelled() => return Err(cancelled_error()), next = stream.next() => next };
+            let next = tokio::select! {
+                () = cancellation.cancelled() => return Err(cancelled_error()),
+                next = tokio::time::timeout(self.limits.stream_idle_timeout, stream.next()) => match next {
+                    Ok(polled) => polled,
+                    Err(_) => return Err(ProviderError::new(
+                        ProviderErrorKind::Timeout,
+                        format!(
+                            "流式响应超过 {} 秒未收到新数据，已中断。",
+                            self.limits.stream_idle_timeout.as_secs()
+                        ),
+                    )),
+                },
+            };
             let Some(chunk) = next else { break };
             let chunk = chunk.map_err(|_| {
                 ProviderError::new(ProviderErrorKind::Transport, "流式 Provider 响应中断。")

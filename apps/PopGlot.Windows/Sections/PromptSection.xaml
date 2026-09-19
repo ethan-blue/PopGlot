@@ -17,8 +17,7 @@
             <Setter Property="Margin" Value="0,0,0,14" />
             <Setter Property="CornerRadius" Value="{DynamicResource CardRadius}" />
             <Setter Property="Background" Value="{DynamicResource SurfaceMutedBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderThickness" Value="0" />
         </Style>
         <Style x:Key="PromptTextField" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
             <Setter Property="Height" Value="40" />
@@ -45,8 +44,6 @@
 
         <StackPanel Grid.Row="0" Margin="0,0,0,14">
             <TextBlock Text="翻译与提示词" Style="{StaticResource PageTitle}" />
-            <TextBlock Text="选择翻译风格或创建自定义提示词模板；模板只保存在本机，编译预览不发送任何网络请求。"
-                       Style="{StaticResource PageSubtitle}" />
         </StackPanel>
 
         <Grid Grid.Row="1">
@@ -87,9 +84,7 @@
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="0,0,8,8">
                         <StackPanel>
                             <!-- 内置模板（只读） -->
-                            <TextBlock Text="内置模板" Style="{StaticResource PromptSectionTitle}" />
-                            <TextBlock Text="内置风格受系统保护：不可修改或删除，可查看或复制为自定义模板。"
-                                       Style="{StaticResource Caption}" Margin="0,3,0,10" />
+                            <TextBlock Text="内置模板" Style="{StaticResource PromptSectionTitle}" Margin="0,0,0,10" />
                             <ItemsControl x:Name="BuiltinsList" IsTabStop="False" Focusable="False">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
@@ -128,13 +123,11 @@
                                                     <Button Content="查看" Padding="10,5" Tag="{Binding Id}"
                                                             Style="{StaticResource GhostButton}"
                                                             AutomationProperties.Name="查看内置模板详情"
-                                                            ToolTip="打开只读详情，可复制为自定义模板"
                                                             Visibility="{Binding ViewButtonVisibility}"
                                                             Click="ViewTemplate_Click" />
                                                     <Button Content="复制为自定义" Padding="10,5" Tag="{Binding Id}"
                                                             Style="{StaticResource GhostButton}" Margin="8,0,0,0"
                                                             AutomationProperties.Name="复制为自定义模板"
-                                                            ToolTip="以这个内置风格为底稿新建自定义模板"
                                                             Click="CopyTemplate_Click" />
                                                     <Button Content="设为默认" Padding="10,5" Tag="{Binding Id}"
                                                             Style="{StaticResource GhostButton}" Margin="8,0,0,0"
@@ -158,11 +151,8 @@
                                 </StackPanel>
                                 <Button x:Name="AddTemplateButton" Content="新建自定义模板" HorizontalAlignment="Right"
                                         VerticalAlignment="Top" Style="{StaticResource PrimaryButton}" Padding="14,6"
-                                        AutomationProperties.Name="新建自定义模板"
-                                        ToolTip="创建一个自定义提示词模板" Click="AddTemplate_Click" />
+                                        AutomationProperties.Name="新建自定义模板" Click="AddTemplate_Click" />
                             </Grid>
-                            <TextBlock Text="自定义模板保存后可设为默认翻译风格；删除模板不会影响已有翻译记录。"
-                                       Style="{StaticResource Caption}" Margin="0,3,0,10" />
 
                             <ItemsControl x:Name="CustomsList" IsTabStop="False" Focusable="False"
                                           Visibility="Collapsed">
@@ -213,7 +203,7 @@
                                                             Tag="{Binding Id}" Style="{StaticResource GhostButton}"
                                                             Margin="8,0,0,0"
                                                             AutomationProperties.Name="删除自定义模板"
-                                                            ToolTip="删除需要二次确认"
+                                                            ToolTip="点击两次确认"
                                                             Click="DeleteTemplate_Click" />
                                                 </StackPanel>
                                             </Grid>
@@ -230,9 +220,7 @@
                                           VerticalAlignment="Center" />
                                 </Border>
                                 <TextBlock Text="还没有自定义模板" FontSize="13" FontWeight="SemiBold"
-                                           HorizontalAlignment="Center" />
-                                <TextBlock Text="从空白开始，或复制一个内置风格作为底稿。" Style="{StaticResource Caption}"
-                                           Margin="0,6,0,14" HorizontalAlignment="Center" />
+                                           HorizontalAlignment="Center" Margin="0,0,0,14" />
                                 <Button Content="新建第一个模板" Style="{StaticResource PrimaryButton}" Padding="16,7"
                                         AutomationProperties.Name="新建第一个自定义模板" Click="AddTemplate_Click" />
                             </StackPanel>
@@ -258,7 +246,6 @@
                     <Button x:Name="RetryLoadButton" Content="重试" Style="{StaticResource PrimaryButton}"
                             Padding="16,7" Margin="0,14,0,0" HorizontalAlignment="Center"
                             AutomationProperties.Name="重新读取提示词模板"
-                            ToolTip="重新从本机核心读取模板列表"
                             Click="RetryLoad_Click" />
                 </StackPanel>
             </Border>
@@ -302,9 +289,7 @@
                                 <!-- 模板信息 -->
                                 <Border Style="{StaticResource PromptSectionCard}">
                                     <StackPanel>
-                                        <TextBlock Text="模板信息" Style="{StaticResource PromptSectionTitle}" />
-                                        <TextBlock Text="名称和说明只用于识别模板，不会进入翻译请求。"
-                                                   Style="{StaticResource Caption}" Margin="0,4,0,12" />
+                                        <TextBlock Text="模板信息" Style="{StaticResource PromptSectionTitle}" Margin="0,0,0,12" />
                                         <Grid x:Name="NameDescriptionGrid">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*" MinWidth="0" />
@@ -331,7 +316,7 @@
                                                 <TextBox x:Name="DescriptionTextBox"
                                                          Style="{StaticResource PromptTextField}"
                                                          MaxLength="256" MaxLines="1"
-                                                         local:Ui.Placeholder="一句话描述这个模板的用途"
+                                                         local:Ui.Placeholder="描述模板用途"
                                                          AutomationProperties.Name="模板说明"
                                                          TextChanged="EditorField_Changed" />
                                                 <TextBlock x:Name="DescriptionCounterText" Style="{StaticResource CounterText}"
@@ -344,15 +329,11 @@
                                             <ToggleButton x:Name="EnabledToggle" VerticalAlignment="Center"
                                                           Style="{StaticResource ToggleSwitch}"
                                                           AutomationProperties.Name="启用此模板"
-                                                          ToolTip="停用的模板不会参与翻译；与「设为当前翻译风格」互相独立"
                                                           Checked="EnabledToggle_Changed"
                                                           Unchecked="EnabledToggle_Changed" />
                                             <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
                                                 <TextBlock Text="启用此模板" Style="{StaticResource FieldLabel}" />
-                                                <TextBlock x:Name="EnabledHintText" Style="{StaticResource RowHint}"
-                                                           TextWrapping="Wrap" MaxWidth="420"
-                                                           HorizontalAlignment="Left"
-                                                           Text="停用后此模板不参与翻译；设为当前风格是另一回事，互不影响。" />
+                                                <TextBlock x:Name="EnabledHintText" Style="{StaticResource RowHint}" />
                                             </StackPanel>
                                         </StackPanel>
                                     </StackPanel>
@@ -362,7 +343,7 @@
                                 <Border Style="{StaticResource PromptSectionCard}">
                                     <StackPanel>
                                         <TextBlock Text="指令正文" Style="{StaticResource PromptSectionTitle}" />
-                                        <TextBlock Text="告诉模型如何翻译；占位符在发送前由 PopGlot 本地展开。写入 \{{ 可表示字面 {{ 。"
+                                        <TextBlock Text="占位符发送前由本机展开；\{{ 表示字面 {{"
                                                    Style="{StaticResource Caption}" Margin="0,4,0,10" />
                                         <TextBox x:Name="InstructionTextBox" MinHeight="150"
                                                  AcceptsReturn="True" TextWrapping="Wrap"
@@ -377,30 +358,30 @@
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
                                             <TextBlock Style="{StaticResource Caption}"
-                                                       Text="正文按 UTF-8 计入 8192 字节上限；超限时保存会被拒绝，不会静默截断。" />
+                                                       Text="上限 8192 字节（UTF-8）" />
                                             <TextBlock x:Name="InstructionCounterText" Grid.Column="1"
                                                        Style="{StaticResource CounterText}" Margin="0"
                                                        AutomationProperties.Name="指令正文用量计数"
                                                        Text="0 字符 · 0/8192 字节" />
                                         </Grid>
-                                        <TextBlock Text="点击变量插入到光标位置：" Style="{StaticResource FieldLabel}"
+                                        <TextBlock Text="插入变量：" Style="{StaticResource FieldLabel}"
                                                    Margin="0,12,0,0" />
                                         <WrapPanel x:Name="VariableChipsPanel" Margin="0,2,0,0">
                                             <Button Style="{StaticResource TokenChipButton}" Content="{}{{source_language}}"
                                                     AutomationProperties.Name="插入变量 source_language"
-                                                    ToolTip="点击插入到指令正文光标位置（源语言，自动识别时显示“自动识别”）"
+                                                    ToolTip="插入源语言变量（自动识别时展开为“自动识别”）"
                                                     Click="VariableChip_Click" />
                                             <Button Style="{StaticResource TokenChipButton}" Content="{}{{target_language}}"
                                                     AutomationProperties.Name="插入变量 target_language"
-                                                    ToolTip="点击插入到指令正文光标位置（目标语言，必填）"
+                                                    ToolTip="插入目标语言变量"
                                                     Click="VariableChip_Click" />
                                             <Button Style="{StaticResource TokenChipButton}" Content="{}{{domain}}"
                                                     AutomationProperties.Name="插入变量 domain"
-                                                    ToolTip="点击插入到指令正文光标位置（领域；留空时使用下方默认值）"
+                                                    ToolTip="插入领域变量（留空时使用默认值）"
                                                     Click="VariableChip_Click" />
                                             <Button Style="{StaticResource TokenChipButton}" Content="{}{{audience}}"
                                                     AutomationProperties.Name="插入变量 audience"
-                                                    ToolTip="点击插入到指令正文光标位置（受众；留空时使用下方默认值）"
+                                                    ToolTip="插入受众变量（留空时使用默认值）"
                                                     Click="VariableChip_Click" />
                                         </WrapPanel>
                                     </StackPanel>
@@ -410,7 +391,7 @@
                                 <Border Style="{StaticResource PromptSectionCard}">
                                     <StackPanel>
                                         <TextBlock Text="默认领域与受众" Style="{StaticResource PromptSectionTitle}" />
-                                        <TextBlock Text="翻译请求没有提供领域或受众时，使用这里的默认值；各不超过 256 字符且 1024 字节。"
+                                        <TextBlock Text="模板留空时使用；上限 256 字符"
                                                    Style="{StaticResource Caption}" Margin="0,4,0,12" />
                                         <Grid x:Name="DomainAudienceGrid">
                                             <Grid.ColumnDefinitions>
@@ -453,24 +434,24 @@
                                     <StackPanel>
                                         <Grid>
                                             <StackPanel>
-                                                <TextBlock Text="编译预览" Style="{StaticResource PromptSectionTitle}" />
+                                                <TextBlock Text="效果预览" Style="{StaticResource PromptSectionTitle}" />
                                                 <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0"
-                                                           Text="本地展开占位符，零网络请求、不发送翻译。预览使用 源语言=自动识别、目标语言=zh-CN；领域与受众留空时取上方默认值。" />
+                                                           Text="本地展开占位符，不联网；目标语言默认 zh-CN" />
                                             </StackPanel>
                                             <Button x:Name="CopyPreviewButton" Content="复制" HorizontalAlignment="Right"
                                                     VerticalAlignment="Top" Style="{StaticResource GhostButton}"
-                                                    Padding="10,5" AutomationProperties.Name="复制编译预览结果"
-                                                    ToolTip="把编译预览文本复制到剪贴板" Click="CopyPreview_Click" />
+                                                    Padding="10,5" AutomationProperties.Name="复制效果预览结果"
+                                                    Click="CopyPreview_Click" />
                                         </Grid>
                                         <TextBox x:Name="PreviewTextBox" Height="132" Margin="0,12,0,0"
                                                  IsReadOnly="True" IsReadOnlyCaretVisible="False"
                                                  TextWrapping="Wrap" VerticalContentAlignment="Top"
                                                  VerticalScrollBarVisibility="Auto" FontSize="12.5"
-                                                 AutomationProperties.Name="编译预览结果" />
+                                                 AutomationProperties.Name="效果预览结果" />
                                         <TextBlock x:Name="PreviewStatusText" Style="{StaticResource Caption}"
                                                    Margin="2,8,0,0" TextWrapping="Wrap"
                                                    AutomationProperties.LiveSetting="Polite"
-                                                   AutomationProperties.Name="编译预览状态" />
+                                                   AutomationProperties.Name="效果预览状态" />
                                     </StackPanel>
                                 </Border>
                             </StackPanel>
@@ -505,13 +486,12 @@
                             <Button x:Name="DeleteTemplateButton" Content="删除模板" HorizontalAlignment="Left"
                                     Style="{StaticResource DangerButton}" Padding="12,6"
                                     AutomationProperties.Name="删除自定义模板"
-                                    ToolTip="删除需要二次确认；该模板的历史版本会一并删除，已有翻译记录仍保留"
+                                    ToolTip="点击两次确认"
                                     Click="DeleteTemplate_Click" />
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                 <Button x:Name="CopyBuiltinButton" Content="复制为自定义" Style="{StaticResource PrimaryButton}"
                                         Padding="14,6" Margin="0,0,8,0" Visibility="Collapsed"
-                                        AutomationProperties.Name="复制为自定义模板"
-                                        ToolTip="以这个内置风格为底稿新建自定义模板" Click="CopyBuiltinEditor_Click" />
+                                        AutomationProperties.Name="复制为自定义模板" Click="CopyBuiltinEditor_Click" />
                                 <Border x:Name="EditorDirtyBadge" Visibility="Collapsed" Style="{StaticResource StatusPill}"
                                         Background="{DynamicResource WarningSoftBrush}"
                                         BorderBrush="{DynamicResource WarningBrush}" Padding="8,3"
@@ -525,7 +505,6 @@
                                 <Button x:Name="SaveTemplateButton" Content="保存" Margin="8,0,0,0"
                                         Style="{StaticResource PrimaryButton}" Padding="16,6"
                                         AutomationProperties.Name="保存模板"
-                                        ToolTip="保存到本机 prompt-templates；进行中的翻译不受影响"
                                         Click="SaveTemplate_Click" />
                             </StackPanel>
                         </Grid>

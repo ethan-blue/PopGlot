@@ -50,10 +50,9 @@
         <Style x:Key="EditorSectionCard" TargetType="Border">
             <Setter Property="Padding" Value="16" />
             <Setter Property="Margin" Value="0,0,0,14" />
-            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="CornerRadius" Value="{StaticResource CardRadius}" />
             <Setter Property="Background" Value="{DynamicResource SurfaceMutedBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderThickness" Value="0" />
         </Style>
         <Style x:Key="EditorTextField" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
             <Setter Property="Height" Value="40" />
@@ -127,9 +126,7 @@
 
         <Grid Grid.Row="0">
             <StackPanel>
-                <TextBlock Text="翻译引擎" Style="{StaticResource PageTitle}" />
-                <TextBlock Text="接入模型或中转接口，保存即时生效。"
-                           Style="{StaticResource PageSubtitle}" />
+                <TextBlock Text="翻译引擎" Style="{StaticResource PageTitle}" Margin="0,0,0,14" />
             </StackPanel>
             <Button x:Name="AddEngineHeaderButton" Content="添加引擎" HorizontalAlignment="Right" VerticalAlignment="Top"
                     Style="{StaticResource PrimaryButton}" Padding="16,8" Click="AddProfile_Click" />
@@ -143,8 +140,6 @@
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <StackPanel Margin="2,0,0,12">
                         <TextBlock Text="已配置引擎" Style="{StaticResource SectionTitle}" />
-                        <TextBlock Text="点击编辑修改连接；切换引擎请在主窗口底部操作。"
-                                   Style="{StaticResource Caption}" Margin="0,3,0,0" />
                     </StackPanel>
                     <Grid Grid.Row="1">
                         <StackPanel x:Name="ProfilesEmptyText" Visibility="Collapsed" Panel.ZIndex="1"
@@ -154,9 +149,8 @@
                                 <Path Data="{StaticResource IconProvider}" Width="20" Height="20" Stretch="Uniform"
                                       Fill="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Border>
-                            <TextBlock Text="未配置翻译引擎" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center" />
-                            <TextBlock Text="添加接口并设为默认即可开始翻译。" Style="{StaticResource Caption}"
-                                       Margin="0,6,0,14" HorizontalAlignment="Center" />
+                            <TextBlock Text="未配置翻译引擎" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center"
+                                       Margin="0,0,0,14" />
                             <Button x:Name="AddFirstEngineButton" Content="添加第一个引擎"
                                     Style="{StaticResource PrimaryButton}" Padding="16,7"
                                     AutomationProperties.Name="添加第一个引擎"
@@ -232,9 +226,7 @@
                     <ScrollViewer x:Name="EditorScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="0,0,8,18">
                         <StackPanel>
                             <StackPanel x:Name="PresetsPanel" Visibility="Collapsed">
-                                <TextBlock Text="选择服务商" FontSize="20" FontWeight="SemiBold" />
-                                <TextBlock Text="选择服务商后，只需填写 API Key 即可开始使用。"
-                                           Style="{StaticResource Caption}" Margin="0,5,0,16" />
+                                <TextBlock Text="选择服务商" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,16" />
 
                                 <!-- Prominent Custom / Relay preset card -->
                                 <Button Style="{StaticResource ProviderPresetButton}" Tag="custom" Click="Preset_Click"
@@ -254,8 +246,6 @@
                                                     <TextBlock Text="自建或第三方引擎" FontSize="11" Foreground="{DynamicResource AccentTextBrush}" FontWeight="SemiBold" />
                                                 </Border>
                                             </StackPanel>
-                                            <TextBlock Text="适用于 OpenAI 兼容接口、自建服务和第三方平台"
-                                                       Style="{StaticResource Caption}" Margin="0,4,0,0" />
                                         </StackPanel>
                                         <TextBlock Grid.Column="1" Text="接入 →" VerticalAlignment="Center" FontWeight="SemiBold"
                                                    Foreground="{DynamicResource AccentBrush}" Margin="8,0,4,0" />
@@ -297,9 +287,7 @@
 
                                 <Border x:Name="ConnectionCard" Style="{StaticResource EditorSectionCard}">
                                     <StackPanel>
-                                        <TextBlock Text="连接信息" Style="{StaticResource EditorSectionTitle}" />
-                                        <TextBlock x:Name="ConnectionCardHint" Text="名称只用于本机识别；内置服务已预设协议和接口地址。"
-                                                   Style="{StaticResource Caption}" Margin="0,4,0,14" />
+                                        <TextBlock Text="连接信息" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,14" />
                                         <Grid x:Name="IdentityFieldsGrid" Margin="0,0,0,14">
                                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
@@ -324,7 +312,7 @@
                                         <Grid x:Name="ApiKeyInputGrid">
                                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                                            <PasswordBox x:Name="ApiKeyPasswordBox" Style="{StaticResource EditorPasswordField}" local:Ui.Placeholder="留空表示保持现有密钥" />
+                                            <PasswordBox x:Name="ApiKeyPasswordBox" Style="{StaticResource EditorPasswordField}" local:Ui.Placeholder="留空保持现有密钥" />
                                             <StackPanel x:Name="KeyActionsPanel" Grid.Column="2" Orientation="Horizontal">
                                                 <Button x:Name="ClearKeyButton" Content="清除" Style="{StaticResource GhostButton}" Height="40" Padding="12,6" Click="ClearApiKey_Click" />
                                                 <Button x:Name="TestConnectionButton" Content="验证连接" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Height="40" Padding="16,6" Click="TestConnection_Click" />
@@ -344,8 +332,6 @@
                                         <Grid>
                                             <StackPanel>
                                                 <TextBlock Text="使用模型" Style="{StaticResource EditorSectionTitle}" />
-                                                <TextBlock Text="文字模型用于划词、输入翻译；图片模型用于视觉直译。"
-                                                           Style="{StaticResource Caption}" Margin="0,4,0,0" />
                                             </StackPanel>
                                             <Button x:Name="FetchModelsButton" Content="获取模型" HorizontalAlignment="Right" VerticalAlignment="Top"
                                                     Style="{StaticResource GhostButton}" Height="34" Padding="12,6" Click="FetchModels_Click" />
@@ -418,8 +404,6 @@
                                                   Style="{StaticResource SwitchCheckBox}"
                                                   Checked="UseTextModelForVision_Changed"
                                                   Unchecked="UseTextModelForVision_Changed" />
-                                        <TextBlock Text="填入模型即启用对应功能，无需手动开启。"
-                                                   Style="{StaticResource Caption}" Margin="26,4,0,0" TextWrapping="Wrap" />
                                         <TextBlock x:Name="ModelCatalogStatusText" Visibility="Collapsed" Style="{StaticResource Caption}"
                                                    Margin="2,9,0,0" TextWrapping="Wrap" />
                                     </StackPanel>
@@ -429,9 +413,7 @@
 
                                     <Expander x:Name="AdvancedExpander" Header="高级设置">
                                         <StackPanel Margin="0,14,0,0">
-                                            <TextBlock Text="接口与网络" Style="{StaticResource EditorSectionTitle}" />
-                                            <TextBlock Text="官方预设无需修改；仅自建或第三方服务需要调整。"
-                                                       Style="{StaticResource Caption}" Margin="0,4,0,12" />
+                                            <TextBlock Text="接口与网络" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,12" />
                                             <Grid x:Name="EndpointFieldsGrid">
                                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
@@ -446,9 +428,7 @@
                                             </Grid>
 
                                             <Border Height="1" Margin="0,16,0,16" Background="{DynamicResource BorderSubtleBrush}" />
-                                            <TextBlock Text="请求定制" Style="{StaticResource EditorSectionTitle}" />
-                                            <TextBlock Text="仅在服务商明确要求额外请求头时填写。"
-                                                       Style="{StaticResource Caption}" Margin="0,4,0,12" />
+                                            <TextBlock Text="请求定制" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,12" />
                                             <Grid x:Name="AdvancedDetailsGrid">
                                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
@@ -461,15 +441,12 @@
                                                 <StackPanel x:Name="CapabilitiesPanel" Grid.Column="2">
                                                     <TextBlock Text="Anthropic API 版本" Style="{StaticResource FieldLabel}"/>
                                                     <TextBox x:Name="AnthropicVersionTextBox" Style="{StaticResource EditorTextField}" FontFamily="{StaticResource MonoFontFamily}"/>
-                                                    <TextBlock Text="引擎用途" Style="{StaticResource FieldLabel}" Margin="0,15,0,8"/>
-                                                    <TextBlock Text="由上方文字与图片模型自动决定。"
-                                                               Style="{StaticResource Caption}" TextWrapping="Wrap"/>
                                                     <!-- Kept hidden for schema/editor compatibility; runtime roles are derived from model fields. -->
                                                     <CheckBox x:Name="SupportsTextCheckBox" Visibility="Collapsed"/>
                                                     <CheckBox x:Name="SupportsVisionCheckBox" Visibility="Collapsed"/>
-                                                    <CheckBox x:Name="AllowInsecureTlsCheckBox" Content="允许自签名 HTTPS 证书" Margin="0,4,0,0"
+                                                    <CheckBox x:Name="AllowInsecureTlsCheckBox" Content="允许自签名 HTTPS 证书" Margin="0,10,0,0"
                                                   Style="{StaticResource SwitchCheckBox}"/>
-                                                    <TextBlock Text="仅连接你信任的本地或内网服务时开启。" Style="{StaticResource Caption}" Margin="24,4,0,0"/>
+                                                    <TextBlock Text="仅用于受信任的本地或内网服务" Style="{StaticResource Caption}" Margin="24,4,0,0"/>
                                                 </StackPanel>
                                             </Grid>
                                         </StackPanel>

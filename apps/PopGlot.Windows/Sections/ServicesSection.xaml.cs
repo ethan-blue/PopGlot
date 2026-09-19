@@ -160,7 +160,6 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         EditorHeaderGrid.Margin = compact ? new Thickness(2, 0, 2, 10) : new Thickness(2, 0, 2, 18);
         EditorBackRow.Margin = new Thickness(0, 0, 0, compact ? 8 : 12);
         ConnectionCard.Margin = new Thickness(0, 0, 0, compact ? 10 : 14);
-        ConnectionCardHint.Margin = new Thickness(0, 4, 0, compact ? 10 : 14);
         ModelCard.Margin = new Thickness(0, 0, 0, compact ? 10 : 14);
         PreferenceRowHost.Margin = new Thickness(0, compact ? 8 : 12, 0, 0);
         IdentityFieldsGrid.Margin = new Thickness(0, 0, 0, compact ? 10 : 14);
@@ -530,8 +529,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             var target = CurrentCredentialTarget();
             ApiKeyStateText.Text = CredentialStore.HasApiKey(target)
-                ? "密钥已保存在 Windows 凭据管理器。输入框留空即保持不变。"
-                : "尚未配置密钥。本地模型（Ollama 等）无需密钥；未配置且未允许免费引擎时不会出网。";
+                ? "密钥已存入 Windows 凭据管理器；留空保持不变"
+                : "尚未配置密钥；本地模型无需密钥";
         }
         catch (Exception exception)
         {
@@ -570,7 +569,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
         FetchModelsButton.IsEnabled = allowed;
         FetchModelsButton.ToolTip = allowed
-            ? "从服务商获取可用模型列表"
+            ? "获取服务商可用模型"
             : "请先填写 API Key（本地服务除外）";
 
         TestConnectionButton.IsEnabled = allowed;
@@ -933,19 +932,19 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         var (type, baseUrl, endpoint, note) = preset switch
         {
             "openai" => (ProviderType.OpenAiCompatible, "https://api.openai.com/v1",
-                "/chat/completions", "已填入 OpenAI 推荐配置，填写 API Key 后即可验证。"),
+                "/chat/completions", "已填入 OpenAI 接入地址，填 Key 后点「获取模型」。"),
             "deepseek" => (ProviderType.OpenAiCompatible, "https://api.deepseek.com/v1",
-                "/chat/completions", "已填入 DeepSeek 推荐配置，填写 API Key 后即可验证。"),
+                "/chat/completions", "已填入 DeepSeek 接入地址，填 Key 后点「获取模型」。"),
             "gemini" => (ProviderType.GeminiGenerateContent, "https://generativelanguage.googleapis.com",
-                "/v1beta/models/{model}:generateContent", "已填入 Gemini 推荐配置，填写 API Key 后即可验证。"),
+                "/v1beta/models/{model}:generateContent", "已填入 Gemini 接入地址，填 Key 后点「获取模型」。"),
             "claude" => (ProviderType.AnthropicMessages, "https://api.anthropic.com",
-                "/v1/messages", "已填入 Claude 推荐配置，填写 API Key 后即可验证。"),
+                "/v1/messages", "已填入 Claude 接入地址，填 Key 后点「获取模型」。"),
             "zhipu" => (ProviderType.OpenAiCompatible, "https://open.bigmodel.cn/api/paas/v4",
-                "/chat/completions", "已填入 GLM 推荐配置，填写 API Key 后即可验证。"),
+                "/chat/completions", "已填入 GLM 接入地址，填 Key 后点「获取模型」。"),
             "ollama" => (ProviderType.OpenAiCompatible, "http://localhost:11434/v1",
-                "/chat/completions", "已应用本地 Ollama 预设，无需 API Key：可直接输入或拉取本地模型。"),
+                "/chat/completions", "已应用 Ollama 预设，点「获取模型」拉取本地模型。"),
             _ => (ProviderType.OpenAiCompatible, string.Empty,
-                "/chat/completions", "自定义引擎：请填写协议、Base URL，然后获取或输入模型。"),
+                "/chat/completions", "填写协议、Base URL，再获取或输入模型。"),
         };
 
         _loading = true;
@@ -974,24 +973,16 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             TextEndpointTextBox.Text = endpoint;
             VisionEndpointTextBox.Text = endpoint;
             UpdateModelSuggestions(type);
-            var (defaultTextModel, defaultVisionModel) = preset switch
-            {
-                "openai" => ("gpt-4o-mini", "gpt-4o-mini"),
-                "deepseek" => ("deepseek-chat", string.Empty),
-                "gemini" => ("gemini-3.6-flash", "gemini-3.6-flash"),
-                "claude" => ("claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest"),
-                "zhipu" => ("glm-4-flash", "glm-4v-flash"),
-                "ollama" => ("qwen2.5:7b", string.Empty),
-                _ => (string.Empty, string.Empty),
-            };
-            TextModelCombo.Text = defaultTextModel;
-            VisionModelCombo.Text = defaultVisionModel;
+            // 预设只填协议与接入地址；模型名一律不发明——预设写死的模型
+            // ID 会随服务商目录过期（接入即 404 的根源），一律改为拉取
+            // 真实目录（「获取模型」）或由用户手填。
+            TextModelCombo.Text = string.Empty;
+            VisionModelCombo.Text = string.Empty;
             AnthropicVersionTextBox.Text = "2023-06-01";
-            SupportsTextCheckBox.IsChecked = !string.IsNullOrWhiteSpace(defaultTextModel);
-            SupportsVisionCheckBox.IsChecked = !string.IsNullOrWhiteSpace(defaultVisionModel);
+            SupportsTextCheckBox.IsChecked = true;
+            SupportsVisionCheckBox.IsChecked = false;
             _visionTracker.Reset();
-            UseTextModelForVisionCheckBox.IsChecked = !string.IsNullOrWhiteSpace(defaultTextModel) &&
-                string.Equals(defaultTextModel, defaultVisionModel, StringComparison.Ordinal);
+            UseTextModelForVisionCheckBox.IsChecked = false;
             VisionModelCombo.IsEnabled = true;
             CustomProtocolGroup.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
             BaseUrlPanel.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
@@ -1557,6 +1548,12 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 SetTestResult(StatusTone.Warning, "请先填写 API Key", "填写 API Key 后即可验证连接（本地服务无需密钥）。");
                 return;
             }
+            if (string.IsNullOrWhiteSpace(draft.TextModel))
+            {
+                TextModelCombo.Focus();
+                SetTestResult(StatusTone.Warning, "先选择文字模型", "点「获取模型」拉取列表，或手动输入模型名。");
+                return;
+            }
             var response = await CoreBridge.TestConnectionDraftAsync(
                 draft, string.IsNullOrWhiteSpace(typedKey) ? "local" : typedKey);
             var host = Uri.TryCreate(draft.ApiBaseUrl, UriKind.Absolute, out var endpointUri)
@@ -1567,7 +1564,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 $"连接成功 · {host} · HTTP {response.Diagnostics.StatusCode} · {response.Diagnostics.ElapsedMs} ms" +
                 (string.IsNullOrWhiteSpace(draft.TextModel) ? "" : $" · {draft.TextModel}") +
                 $" · {timestamp}",
-                "草稿未保存；保存并设为默认后才用于后续翻译。连接测试只报告健康状态，不是使用前提。");
+                "草稿未保存，保存并设为默认后才用于翻译。");
             if (_editingProfileId is not null)
             {
                 _testOutcomes[_editingProfileId] = "ok";
@@ -1658,6 +1655,14 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             message.Contains("getaddrinfo", StringComparison.OrdinalIgnoreCase))
         {
             return "无法解析服务域名。请检查 Base URL 拼写与网络连接。";
+        }
+        if (message.Contains("模型", StringComparison.Ordinal) ||
+            message.Contains("Base URL", StringComparison.Ordinal) ||
+            message.Contains("至少需要", StringComparison.Ordinal))
+        {
+            // 配置类错误（缺模型/地址非法）与网络无关，原样返回，
+            // 不再追加“请检查网络连接”的误导性建议。
+            return message.TrimEnd('。') + "。";
         }
         return $"{message}。请检查网络连接与服务地址。";
     }

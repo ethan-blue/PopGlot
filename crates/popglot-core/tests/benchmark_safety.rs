@@ -485,6 +485,8 @@ async fn test_real_provider_client_executor_with_local_mock() {
     let client = ProviderClient::new(TransportLimits {
         connect_timeout: Duration::from_secs(2),
         total_timeout: Duration::from_secs(5),
+        stream_idle_timeout: Duration::from_secs(10),
+        stream_total_timeout: Duration::from_secs(30),
         max_response_bytes: 1024 * 1024,
         max_retries: 0,
         retry_delay: Duration::from_millis(1),

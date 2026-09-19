@@ -2,6 +2,7 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Security.Cryptography;
 using System.Windows.Input;
 using PopGlot.Windows.Services;
 
@@ -13,6 +14,7 @@ internal enum HotkeyAction
     CaptureScreen,
     ClosePanel,
     ShowWindow,
+    QuickSearch,
 }
 
 internal enum ThemePreference
@@ -41,6 +43,7 @@ internal sealed record HotkeyBinding(uint Modifiers, uint VirtualKey)
     public static HotkeyBinding ScreenshotDefault => new(ModControl | ModAlt, 0x20); // Ctrl+Alt+Space
     public static HotkeyBinding CloseDefault => new(ModControl | ModAlt, 0x58); // Ctrl+Alt+X
     public static HotkeyBinding ShowWindowDefault => new(ModControl | ModAlt, 0x4F); // Ctrl+Alt+O
+    public static HotkeyBinding QuickSearchDefault => new(ModControl | ModAlt, 0x51); // Ctrl+Alt+Q
 
     public string DisplayName
     {
@@ -204,6 +207,8 @@ internal sealed record HotkeyBinding(uint Modifiers, uint VirtualKey)
         "ctrl-alt-w" => SelectionDefault,
         "ctrl-alt-space" => ScreenshotDefault,
         "ctrl-alt-x" => CloseDefault,
+        "ctrl-alt-o" => ShowWindowDefault,
+        "ctrl-alt-q" => QuickSearchDefault,
         "ctrl-shift-f" => new(ModControl | ModShift, 0x46),
         "ctrl-shift-t" => new(ModControl | ModShift, 0x54),
         "ctrl-shift-x" => new(ModControl | ModShift, 0x58),
@@ -232,8 +237,12 @@ internal sealed record ShellSettings(
     bool CloseMainWindowToTray = true,
     // 首次引导闸门：只有全新安装（从未有过设置文件）才是 false。升级与
     // 一键同意一样活在表单之外，任何设置保存都不得把老用户拉回引导。
-    bool HasCompletedOnboarding = false)
+    bool HasCompletedOnboarding = false,
+    HotkeyBinding? QuickSearchHotkey = null)
 {
+    public HotkeyBinding QuickSearchHotkey { get; init; } =
+        QuickSearchHotkey ?? HotkeyBinding.QuickSearchDefault;
+
     public const int CurrentSchemaVersion = 3;
 
     public static ShellSettings Default => new(
@@ -251,7 +260,8 @@ internal sealed record ShellSettings(
         CloseHintShown: false,
         CloudSpeechEnabled: false,
         CloseMainWindowToTray: true,
-        HasCompletedOnboarding: false);
+        HasCompletedOnboarding: false,
+        QuickSearchHotkey: HotkeyBinding.QuickSearchDefault);
 
     public IReadOnlyDictionary<HotkeyAction, HotkeyBinding> Hotkeys
     {
@@ -262,6 +272,7 @@ internal sealed record ShellSettings(
                 [HotkeyAction.TranslateSelection] = SelectionHotkey,
                 [HotkeyAction.CaptureScreen] = ScreenshotHotkey,
                 [HotkeyAction.ClosePanel] = CloseHotkey,
+                [HotkeyAction.QuickSearch] = QuickSearchHotkey,
             };
             if (ShowWindowHotkey is not null && ShowWindowHotkey.IsValid)
             {
@@ -296,6 +307,7 @@ internal sealed record ShellSettings(
         HotkeyAction.CaptureScreen => "截图翻译",
         HotkeyAction.ClosePanel => "关闭浮窗",
         HotkeyAction.ShowWindow => "打开主窗口",
+        HotkeyAction.QuickSearch => "极速查词",
         _ => action.ToString(),
     };
 }
@@ -310,6 +322,19 @@ internal static class ShellSettingsStore
     private static ShellSettings? _cachedSettings;
     private static string? _cachedSettingsPath;
     private static DateTime _cachedLastWriteUtc;
+    private static long _cachedLength = -1;
+    private static byte[]? _cachedHash;
+
+    internal static ShellSettings? CurrentCachedSettings
+    {
+        get
+        {
+            lock (CacheLock)
+            {
+                return _cachedSettings;
+            }
+        }
+    }
 
     /// <summary>Test seam: clears cached settings snapshot.</summary>
     internal static void InvalidateCache()
@@ -319,6 +344,8 @@ internal static class ShellSettingsStore
             _cachedSettings = null;
             _cachedSettingsPath = null;
             _cachedLastWriteUtc = default;
+            _cachedLength = -1;
+            _cachedHash = null;
         }
     }
 
@@ -350,8 +377,10 @@ internal static class ShellSettingsStore
         Converters = { new JsonStringEnumConverter() },
     };
 
-    // Settings bytes are plain UTF-8 with no BOM; combined with the
+    // PopGlot writes plain UTF-8 with no BOM; combined with the
     // flush-to-disk + atomic move below, every persisted file is complete.
+    // Files written by other editors may still carry a UTF-8 BOM, which
+    // Load tolerates (see the deserialization input there).
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     public static ShellSettings Load(string? settingsPath = null)
@@ -367,23 +396,40 @@ internal static class ShellSettingsStore
                     _cachedSettings = def;
                     _cachedSettingsPath = path;
                     _cachedLastWriteUtc = default;
+                    _cachedLength = -1;
+                    _cachedHash = null;
                 }
                 return def;
             }
 
-            var lastWrite = File.GetLastWriteTimeUtc(path);
+            var fileInfo = new FileInfo(path);
+            var lastWrite = fileInfo.LastWriteTimeUtc;
+            var bytes = File.ReadAllBytes(path);
+            var length = bytes.LongLength;
+            var hash = SHA256.HashData(bytes);
             lock (CacheLock)
             {
                 if (_cachedSettings is not null &&
                     string.Equals(_cachedSettingsPath, path, StringComparison.OrdinalIgnoreCase) &&
-                    _cachedLastWriteUtc == lastWrite)
+                    _cachedLastWriteUtc == lastWrite &&
+                    _cachedLength == length &&
+                    _cachedHash is not null &&
+                    hash.AsSpan().SequenceEqual(_cachedHash))
                 {
                     return _cachedSettings;
                 }
             }
 
-            var persisted = JsonSerializer.Deserialize<PersistedShellSettings>(
-                File.ReadAllText(path), JsonOptions);
+            // JsonSerializer rejects a BOM and only reads UTF-8, but the old
+            // File.ReadAllText pipeline autodetected UTF-8/UTF-16 BOMs written
+            // by external editors. An exotic prefix used to fail the whole Load
+            // into the fallback and silently reset the user's hotkeys/theme.
+            // The decoding below shapes the deserialization input ONLY: length
+            // + hash above are computed over the full original bytes, so cache
+            // identity is unchanged. Malformed payloads still throw inside the
+            // deserializer and fail closed through the same catch.
+            var jsonBytes = DecodeJsonPayloadForDeserialization(bytes);
+            var persisted = JsonSerializer.Deserialize<PersistedShellSettings>(jsonBytes, JsonOptions);
             if (persisted is null)
             {
                 var def = ShellSettings.Default;
@@ -392,6 +438,8 @@ internal static class ShellSettingsStore
                     _cachedSettings = def;
                     _cachedSettingsPath = path;
                     _cachedLastWriteUtc = lastWrite;
+                    _cachedLength = length;
+                    _cachedHash = hash;
                 }
                 return def;
             }
@@ -431,13 +479,18 @@ internal static class ShellSettingsStore
                 // 旧配置兼容：该字段出现之前的既有配置文件一律视为已完成引导，
                 // 升级路径永远不会给老用户弹首次引导；只有 Default（无文件）
                 // 才是 false，全新安装才进入引导。
-                persisted.HasCompletedOnboarding ?? true);
+                persisted.HasCompletedOnboarding ?? true,
+                persisted.QuickSearchHotkey is not null
+                    ? HotkeyBinding.Parse(persisted.QuickSearchHotkey, defaults.QuickSearchHotkey)
+                    : defaults.QuickSearchHotkey);
 
             lock (CacheLock)
             {
                 _cachedSettings = result;
                 _cachedSettingsPath = path;
                 _cachedLastWriteUtc = lastWrite;
+                _cachedLength = length;
+                _cachedHash = hash;
             }
             return result;
         }
@@ -455,6 +508,32 @@ internal static class ShellSettingsStore
             // the file provably does not exist yet.)
             return ShellSettings.Default;
         }
+    }
+
+    /// <summary>
+    /// Maps the raw file bytes to the UTF-8 payload the JSON deserializer
+    /// consumes. Supported: UTF-8 without BOM (what PopGlot writes), UTF-8
+    /// BOM, UTF-16 LE (FF FE) and UTF-16 BE (FE FF) — the encodings the
+    /// previous <c>File.ReadAllText</c> pipeline autodetected. The UTF-16
+    /// forms are decoded and re-encoded as UTF-8 for the deserializer only;
+    /// cache timestamp/length/SHA-256 always stay computed over the FULL
+    /// original bytes by the caller.
+    /// </summary>
+    private static byte[] DecodeJsonPayloadForDeserialization(byte[] bytes)
+    {
+        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+        {
+            return bytes[3..]; // UTF-8 BOM: the payload itself is already UTF-8.
+        }
+        if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE)
+        {
+            return Encoding.UTF8.GetBytes(Encoding.Unicode.GetString(bytes, 2, bytes.Length - 2));
+        }
+        if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
+        {
+            return Encoding.UTF8.GetBytes(Encoding.BigEndianUnicode.GetString(bytes, 2, bytes.Length - 2));
+        }
+        return bytes;
     }
 
     public static void Save(ShellSettings settings, string? settingsPath = null)
@@ -490,7 +569,8 @@ internal static class ShellSettingsStore
             settings.CloseHintShown,
             settings.CloudSpeechEnabled,
             settings.CloseMainWindowToTray,
-            settings.HasCompletedOnboarding);
+            settings.HasCompletedOnboarding,
+            settings.QuickSearchHotkey.Serialize());
 
         // Write through a temporary file so a crash mid-write cannot leave the
         // user without settings on the next launch: exclusive-access write,
@@ -506,11 +586,14 @@ internal static class ShellSettingsStore
         File.Move(temporaryPath, path, overwrite: true);
 
         var lastWrite = File.GetLastWriteTimeUtc(path);
+        var hash = SHA256.HashData(payload);
         lock (CacheLock)
         {
             _cachedSettings = settings;
             _cachedSettingsPath = path;
             _cachedLastWriteUtc = lastWrite;
+            _cachedLength = payload.LongLength;
+            _cachedHash = hash;
         }
     }
 
@@ -533,5 +616,6 @@ internal static class ShellSettingsStore
         bool? CloseHintShown = null,
         bool? CloudSpeechEnabled = null,
         bool? CloseMainWindowToTray = null,
-        bool? HasCompletedOnboarding = null);
+        bool? HasCompletedOnboarding = null,
+        string? QuickSearchHotkey = null);
 }

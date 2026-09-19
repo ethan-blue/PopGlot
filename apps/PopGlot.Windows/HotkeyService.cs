@@ -13,12 +13,25 @@ internal sealed partial class HotkeyService : IDisposable
 {
     private const int FirstHotkeyId = 0x5047;
     private const int WmHotkey = 0x0312;
+
+    /// <summary>Win32 ERROR_HOTKEY_ALREADY_REGISTERED: another window owns the combination.</summary>
+    internal const int ErrorHotkeyAlreadyRegistered = 1409;
+
     private readonly HwndSource _source;
     private readonly Dictionary<int, HotkeyAction> _registered = [];
     private IReadOnlyDictionary<HotkeyAction, HotkeyBinding> _current =
         new Dictionary<HotkeyAction, HotkeyBinding>();
     private bool _suspended;
     private bool _disposed;
+
+    /// <summary>
+    /// True from the moment a registration attempt leaves the process
+    /// WITHOUT its desired hotkey set (the rollback restore failed, or a
+    /// resume after suspension failed) until the full set is live again.
+    /// A settings probe whose previous set restored cleanly never enters
+    /// this state.
+    /// </summary>
+    private bool _degraded;
 
     public HotkeyService(Window owner)
     {
@@ -32,8 +45,29 @@ internal sealed partial class HotkeyService : IDisposable
     public event EventHandler<HotkeyAction>? Pressed;
     public event EventHandler<string>? RegistrationFailed;
 
+    /// <summary>
+    /// Fires exactly once when a previously failed/degraded state (failed
+    /// restore, failed resume) reaches a FULL recovery — the complete
+    /// desired set is registered and dispatchable again. Never fires for
+    /// ordinary re-registrations that never lost availability.
+    /// </summary>
+    public event EventHandler? RegistrationRestored;
+
     public IReadOnlyDictionary<HotkeyAction, HotkeyBinding> CurrentHotkeys => _current;
     public bool IsSuspended => _suspended;
+
+    /// <summary>True while a registration failure left the process without its hotkeys.</summary>
+    public bool IsDegraded => _degraded;
+
+    /// <summary>
+    /// True only when the full desired set is registered and dispatchable
+    /// right now. False while deliberately suspended, degraded after a
+    /// failed registration/restore, or before the first success. Callers
+    /// use this to tell a settings PROBE failure (candidate lost, previous
+    /// set live again → true) apart from a real global failure (→ false).
+    /// </summary>
+    public bool IsFullyAvailable => !_suspended && !_degraded && _registered.Count > 0;
+
     public IReadOnlyDictionary<int, HotkeyAction> RegisteredHotkeys => _registered;
 
     /// <summary>
@@ -53,6 +87,7 @@ internal sealed partial class HotkeyService : IDisposable
         {
             _current = new Dictionary<HotkeyAction, HotkeyBinding>(hotkeys);
             _suspended = false;
+            ExitDegradedState();
             return true;
         }
 
@@ -61,11 +96,17 @@ internal sealed partial class HotkeyService : IDisposable
         if (!RegisterSet(previous, out var restoreConflict))
         {
             _suspended = true;
+            _degraded = true;
             var detail = $"{conflict}。且恢复原快捷键也失败（{restoreConflict}）";
             RegistrationFailed?.Invoke(this, detail);
             return false;
         }
         _suspended = false;
+        // The candidate lost, but the previous desired set is fully live
+        // again — a probe failure, not a global one. If the service WAS
+        // degraded before this call (e.g. a failed resume), the successful
+        // restore of the desired set IS the full recovery.
+        ExitDegradedState();
         return false;
     }
 
@@ -96,12 +137,14 @@ internal sealed partial class HotkeyService : IDisposable
         if (!RegisterSet(_current, out conflict))
         {
             _suspended = true;
+            _degraded = true;
             RegistrationFailed?.Invoke(this, conflict ?? "快捷键恢复失败");
             return false;
         }
 
         _suspended = false;
         conflict = null;
+        ExitDegradedState();
         return true;
     }
 
@@ -121,14 +164,16 @@ internal sealed partial class HotkeyService : IDisposable
                     binding.Modifiers | NativeMethods.ModNoRepeat,
                     binding.VirtualKey))
             {
+                // Read the failure reason BEFORE any other native call can
+                // clobber the thread's last-error value.
+                var win32Error = Marshal.GetLastWin32Error();
                 // Roll back any partially registered hotkeys from this attempt
                 foreach (var regId in newlyRegistered)
                 {
                     NativeMethods.UnregisterHotKey(_source.Handle, regId);
                     _registered.Remove(regId);
                 }
-                conflict =
-                    $"{ShellSettings.ActionName(action)}：{binding.DisplayName} 已被其他程序占用";
+                conflict = DescribeRegistrationFailure(action, binding, win32Error);
                 return false;
             }
             _registered[id] = action;
@@ -137,6 +182,33 @@ internal sealed partial class HotkeyService : IDisposable
         }
         conflict = null;
         return true;
+    }
+
+    /// <summary>
+    /// Human-facing registration failure, classified by the real Win32
+    /// error code. 1409 (ERROR_HOTKEY_ALREADY_REGISTERED) may name another
+    /// program; anything else is reported as Windows refusing the
+    /// registration with its code — never a guessed owner, and never any
+    /// exception/system text that could carry unrelated content.
+    /// </summary>
+    internal static string DescribeRegistrationFailure(
+        HotkeyAction action, HotkeyBinding binding, int win32Error) =>
+        win32Error == ErrorHotkeyAlreadyRegistered
+            ? $"{ShellSettings.ActionName(action)}：{binding.DisplayName} 可能已被其他程序占用"
+            : $"{ShellSettings.ActionName(action)}：{binding.DisplayName} — Windows 拒绝注册（错误代码 {win32Error}）";
+
+    /// <summary>
+    /// Leaves the degraded state when a full set is live again, firing
+    /// <see cref="RegistrationRestored"/> exactly once per degraded period.
+    /// </summary>
+    private void ExitDegradedState()
+    {
+        if (!_degraded)
+        {
+            return;
+        }
+        _degraded = false;
+        RegistrationRestored?.Invoke(this, EventArgs.Empty);
     }
 
     private nint WindowMessageHook(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)

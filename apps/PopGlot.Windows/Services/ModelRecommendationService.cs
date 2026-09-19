@@ -339,7 +339,7 @@ internal static class ModelRecommendationService
             else
             {
                 // CapabilityState.Unknown
-                warnings.Add("视觉支持状态未知（目录未声明）；未做强推荐，建议验证后使用");
+                warnings.Add("视觉支持未知，建议验证后使用");
             }
         }
         else if (model.TextGeneration == CapabilityState.Unsupported)
@@ -355,7 +355,7 @@ internal static class ModelRecommendationService
 
         if (isReasoner)
         {
-            warnings.Add("深度思考/推理模型（首字延迟高且带有思考过程，高频快翻已降权）");
+            warnings.Add("深度思考模型，首字延迟高，已降权");
             evidence |= RecommendationEvidenceSource.FamilyHeuristics;
         }
 
@@ -665,28 +665,28 @@ internal static class ModelRecommendationService
             // n < 5 is a trial, not a stable measurement; the wording must
             // never oversell it.
             parts.Add(benchmark.TtftMs > 0
-                ? $"本机实测响应（TTFT 中位 ~{benchmark.TtftMs:F0}ms，试测样本，仅供参考）"
-                : $"本机实测样本（仅供参考）");
+                ? $"本机实测 ~{benchmark.TtftMs:F0}ms（试测，仅供参考）"
+                : "本机实测（试测）");
         }
         else if (isReasoner)
         {
-            parts.Add("深度思考模型（延迟高，不建议即时快翻）");
+            parts.Add("深度思考模型，响应慢");
         }
         else if (tier == ModelTier.Speed)
         {
             parts.Add(paramSize.HasValue
-                ? $"轻量小参数族系（~{paramSize.Value:G}B），通常响应延迟低"
-                : "轻量快速族系（如 mini/flash/haiku），通常响应速度快");
+                ? $"轻量模型（~{paramSize.Value:G}B），响应快"
+                : "轻量快速模型（mini/flash/haiku）");
         }
         else if (tier == ModelTier.Quality)
         {
             parts.Add(paramSize.HasValue
-                ? $"高参数量族系（~{paramSize.Value:G}B），语言理解与翻译表达更精细"
-                : "高性能旗舰族系（如 pro/sonnet/opus），翻译质量通常更精准");
+                ? $"高参数模型（~{paramSize.Value:G}B），表达更细"
+                : "高性能旗舰模型（pro/sonnet/opus）");
         }
         else if (tier == ModelTier.Balanced)
         {
-            parts.Add("标准均衡族系，兼顾响应与翻译表达");
+            parts.Add("均衡模型");
         }
         else
         {
@@ -697,7 +697,7 @@ internal static class ModelRecommendationService
         {
             if (visionInput == CapabilityState.Supported)
             {
-                parts.Add("具备目录验证的视觉支持");
+                parts.Add("视觉支持（目录验证）");
             }
             else if (visionInput == CapabilityState.Unknown)
             {
@@ -720,7 +720,7 @@ internal static class ModelRecommendationService
     {
         if (recommended is null)
         {
-            return "未在候选列表中找到适用的生成模型。";
+            return "未找到适用的生成模型。";
         }
 
         var prefLabel = request.Preference switch
@@ -733,6 +733,6 @@ internal static class ModelRecommendationService
 
         var usageLabel = request.TargetUsage == ModelTargetUsage.Vision ? "视觉翻译" : "文本翻译";
 
-        return $"{prefLabel}（{usageLabel}，共 {eligibleCount} 个可用候选）：首选推荐 {recommended.Model.Id}，{recommended.PrimaryReason}。用户可随时手动覆盖切换。";
+        return $"{prefLabel} · {usageLabel} · 推荐 {recommended.Model.Id} — {recommended.PrimaryReason}（可手动覆盖）";
     }
 }

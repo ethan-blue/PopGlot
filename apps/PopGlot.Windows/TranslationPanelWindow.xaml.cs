@@ -53,6 +53,16 @@ public partial class TranslationPanelWindow : Window
     private readonly TranslationCoordinator _coordinator;
     private readonly TranslationPanelStreamGate _gate = new();
     private readonly EventHandler _themeChangedHandler;
+    // The XAML binds both speak icons' Fill to the button Foreground.
+    // Speaking replaces those expressions with dynamic AccentBrush
+    // references, so the original bindings are captured here for the stop
+    // path: ClearValue would erase the expressions for good and leave the
+    // idle icons with no fill (the expression itself is the local value).
+    private readonly System.Windows.Data.Binding? _sourceSpeakIconFillBinding;
+    private readonly System.Windows.Data.Binding? _resultSpeakIconFillBinding;
+    // Same contract for the copy-success feedback on both copy icons.
+    private readonly System.Windows.Data.Binding? _sourceCopyIconFillBinding;
+    private readonly System.Windows.Data.Binding? _resultCopyIconFillBinding;
 
     private CancellationTokenSource? _operation;
     private Func<CancellationToken, long, Task>? _retry;
@@ -61,6 +71,9 @@ public partial class TranslationPanelWindow : Window
     private string _sourceKind = "划词";
     private bool _userMoved;
     private Point? _lockedTopLeftPixels;
+    // DPI transitions reposition exactly once, at ApplicationIdle: during the
+    // WM_DPICHANGED transition itself the window's own scale is stale.
+    private bool _dpiRepositionPending;
     private bool _languageChangeSuspended = true;
     private bool _readyForKeyboard;
     private bool _closing;
@@ -90,6 +103,10 @@ public partial class TranslationPanelWindow : Window
 
         InitializeComponent();
         Ui.AttachCompositionTracker(SourceInputBox);
+        _sourceSpeakIconFillBinding = SourceSpeakIcon.GetBindingExpression(System.Windows.Shapes.Shape.FillProperty)?.ParentBinding;
+        _resultSpeakIconFillBinding = ResultSpeakIcon.GetBindingExpression(System.Windows.Shapes.Shape.FillProperty)?.ParentBinding;
+        _sourceCopyIconFillBinding = SourceCopyIcon.GetBindingExpression(System.Windows.Shapes.Shape.FillProperty)?.ParentBinding;
+        _resultCopyIconFillBinding = ResultCopyIcon.GetBindingExpression(System.Windows.Shapes.Shape.FillProperty)?.ParentBinding;
 
         SourceLangCombo.ItemsSource = LanguageCatalog.Sources;
         TargetLangCombo.ItemsSource = LanguageCatalog.Targets;
@@ -163,17 +180,31 @@ public partial class TranslationPanelWindow : Window
         {
             if (isSpeaking)
             {
-                var brush = (Brush)FindResource("AccentBrush");
-                SourceSpeakIcon.Fill = brush;
-                ResultSpeakIcon.Fill = brush;
+                // Dynamic reference: a static FindResource brush goes stale
+                // when the theme flips while speech is running.
+                SourceSpeakIcon.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "AccentBrush");
+                ResultSpeakIcon.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "AccentBrush");
             }
             else
             {
-                SourceSpeakIcon.ClearValue(System.Windows.Shapes.Shape.FillProperty);
-                ResultSpeakIcon.ClearValue(System.Windows.Shapes.Shape.FillProperty);
+                // Re-apply the captured Foreground bindings instead of
+                // ClearValue: the binding expressions ARE the local values,
+                // so clearing them would leave the idle icons with no fill.
+                if (_sourceSpeakIconFillBinding is not null)
+                {
+                    SourceSpeakIcon.SetBinding(System.Windows.Shapes.Shape.FillProperty, _sourceSpeakIconFillBinding);
+                }
+                if (_resultSpeakIconFillBinding is not null)
+                {
+                    ResultSpeakIcon.SetBinding(System.Windows.Shapes.Shape.FillProperty, _resultSpeakIconFillBinding);
+                }
             }
             SourceSpeakBtn.ToolTip = isSpeaking ? "停止朗读" : "朗读原文";
             ResultSpeakBtn.ToolTip = isSpeaking ? "停止朗读" : "朗读译文";
+            // The accessibility name follows the ToolTip so screen readers
+            // announce the action the click will actually perform right now.
+            System.Windows.Automation.AutomationProperties.SetName(SourceSpeakBtn, (string)SourceSpeakBtn.ToolTip);
+            System.Windows.Automation.AutomationProperties.SetName(ResultSpeakBtn, (string)ResultSpeakBtn.ToolTip);
         });
     }
 
@@ -268,7 +299,7 @@ public partial class TranslationPanelWindow : Window
         RenderState(TranslationSessionState.Completed);
         EngineBadge.Text = "离线 OCR 取字";
         SetBadgeTone(failed: false);
-        StatusText.Text = "已提取画面文字并自动复制到剪贴板";
+        StatusText.Text = "已提取文字并复制";
         SetRouteText($"{recognized.Length} 字符");
     }
 
@@ -620,7 +651,7 @@ public partial class TranslationPanelWindow : Window
         StatusText.Text = _pendingStyleNotice ?? status;
         Progress.Visibility = Visibility.Visible;
         ResultSkeleton.Visibility = Visibility.Visible;
-        TranslationTextBox.Foreground = (Brush)FindResource("TextPrimaryBrush");
+        TranslationTextBox.SetResourceReference(Control.ForegroundProperty, "TextPrimaryBrush");
         TranslationTextBox.Visibility = Visibility.Collapsed;
         TranslationRichBox.Visibility = Visibility.Collapsed;
         StreamIndicator.Visibility = Visibility.Collapsed;
@@ -630,7 +661,7 @@ public partial class TranslationPanelWindow : Window
         PhoneticText.Visibility = Visibility.Collapsed;
         EngineBadge.Text = "翻译中";
         SetBadgeTone(failed: false);
-        StatusDot.Background = (Brush)FindResource("AccentBrush");
+        StatusDot.SetResourceReference(Border.BackgroundProperty, "AccentBrush");
         SetResultActionsEnabled(false);
         // 准备态开始：空闲快捷键提示立即让位给真实状态。
         SetRouteText(string.Empty);
@@ -643,7 +674,7 @@ public partial class TranslationPanelWindow : Window
         ResultSkeleton.Visibility = Visibility.Collapsed;
         TranslationRichBox.Visibility = Visibility.Collapsed;
         TranslationTextBox.Visibility = Visibility.Visible;
-        TranslationTextBox.Foreground = (Brush)FindResource("TextPrimaryBrush");
+        TranslationTextBox.SetResourceReference(Control.ForegroundProperty, "TextPrimaryBrush");
         TranslationTextBox.Text = partialText;
         StreamIndicator.Visibility = Visibility.Collapsed;
         SetResultActionsEnabled(false);
@@ -652,8 +683,8 @@ public partial class TranslationPanelWindow : Window
         WarningText.Text = "已取消，内容不完整";
         WarningBox.Visibility = Visibility.Visible;
         EngineBadge.Text = "已取消";
-        EngineBadge.Foreground = (Brush)FindResource("WarningBrush");
-        StatusDot.Background = (Brush)FindResource("WarningBrush");
+        EngineBadge.SetResourceReference(TextBlock.ForegroundProperty, "WarningBrush");
+        StatusDot.SetResourceReference(Border.BackgroundProperty, "WarningBrush");
         StatusText.Text = "翻译已取消 · 内容不完整";
         SetRouteText("已中断");
         ExplanationBox.Visibility = Visibility.Collapsed;
@@ -676,8 +707,8 @@ public partial class TranslationPanelWindow : Window
 
         WarningBox.Visibility = Visibility.Collapsed;
         EngineBadge.Text = "已取消";
-        EngineBadge.Foreground = (Brush)FindResource("TextTertiaryBrush");
-        StatusDot.Background = (Brush)FindResource("TextTertiaryBrush");
+        EngineBadge.SetResourceReference(TextBlock.ForegroundProperty, "TextTertiaryBrush");
+        StatusDot.SetResourceReference(Border.BackgroundProperty, "TextTertiaryBrush");
         StatusText.Text = "翻译已取消";
         SetRouteText(string.Empty);
         ExplanationBox.Visibility = Visibility.Collapsed;
@@ -692,7 +723,7 @@ public partial class TranslationPanelWindow : Window
         ResultSkeleton.Visibility = Visibility.Collapsed;
         TranslationRichBox.Visibility = Visibility.Collapsed;
         TranslationTextBox.Visibility = Visibility.Visible;
-        TranslationTextBox.Foreground = (Brush)FindResource("TextPrimaryBrush");
+        TranslationTextBox.SetResourceReference(Control.ForegroundProperty, "TextPrimaryBrush");
         TranslationTextBox.Text = partialText;
         StreamIndicator.Visibility = Visibility.Collapsed;
         SetResultActionsEnabled(false);
@@ -701,13 +732,13 @@ public partial class TranslationPanelWindow : Window
         WarningText.Text = "生成中断，内容不完整";
         WarningBox.Visibility = Visibility.Visible;
         ExplanationText.Text = errorMessage;
-        ExplanationText.Foreground = (Brush)FindResource("TextSecondaryBrush");
+        ExplanationText.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
         ExplanationText.Visibility = Visibility.Visible;
         ExplanationBox.Visibility = Visibility.Visible;
         ErrorSettingsButton.Visibility = Visibility.Visible;
         EngineBadge.Text = "生成中断";
-        EngineBadge.Foreground = (Brush)FindResource("DangerBrush");
-        StatusDot.Background = (Brush)FindResource("DangerBrush");
+        EngineBadge.SetResourceReference(TextBlock.ForegroundProperty, "DangerBrush");
+        StatusDot.SetResourceReference(Border.BackgroundProperty, "DangerBrush");
         StatusText.Text = "生成中断 · 内容不完整";
         SetRouteText("可检查网络或设置后重试");
         TermsList.Visibility = Visibility.Collapsed;
@@ -720,10 +751,10 @@ public partial class TranslationPanelWindow : Window
         Progress.Visibility = Visibility.Collapsed;
         // 空闲态的低对比一次性快捷键提示：进入准备/流式后立即让位给真实状态。
         SetRouteText("Enter 翻译 · Shift+Enter 换行 · Ctrl+R 重试 · Esc 关闭", idleHint: true);
-        StatusDot.Background = (Brush)FindResource("TextTertiaryBrush");
+        StatusDot.SetResourceReference(Border.BackgroundProperty, "TextTertiaryBrush");
         ResultSkeleton.Visibility = Visibility.Collapsed;
         TranslationRichBox.Visibility = Visibility.Collapsed;
-        TranslationTextBox.Foreground = (Brush)FindResource("TextPrimaryBrush");
+        TranslationTextBox.SetResourceReference(Control.ForegroundProperty, "TextPrimaryBrush");
         TranslationTextBox.Visibility = Visibility.Visible;
         TranslationTextBox.Text = string.Empty;
         StreamIndicator.Visibility = Visibility.Collapsed;
@@ -754,12 +785,17 @@ public partial class TranslationPanelWindow : Window
             SetRouteText(string.Empty);
         }
 
-        StatusDot.Background = state switch
-        {
-            TranslationSessionState.Failed => (Brush)FindResource("DangerBrush"),
-            TranslationSessionState.Cancelled => (Brush)FindResource("TextTertiaryBrush"),
-            _ => (Brush)FindResource("AccentBrush"),
-        };
+        // Dynamic references: the dot's tone must follow the live theme — a
+        // static FindResource brush keeps the color of whatever theme was
+        // active when the state rendered.
+        StatusDot.SetResourceReference(
+            Border.BackgroundProperty,
+            state switch
+            {
+                TranslationSessionState.Failed => "DangerBrush",
+                TranslationSessionState.Cancelled => "TextTertiaryBrush",
+                _ => "AccentBrush",
+            });
     }
 
     private void SetTranslationContent(string text, bool isMarkdown = true)
@@ -802,8 +838,8 @@ public partial class TranslationPanelWindow : Window
         Progress.Visibility = Visibility.Collapsed;
         ResultSkeleton.Visibility = Visibility.Collapsed;
         StreamIndicator.Visibility = Visibility.Collapsed;
-        TranslationTextBox.Foreground = (Brush)FindResource("TextPrimaryBrush");
-        ExplanationText.Foreground = (Brush)FindResource("TextSecondaryBrush");
+        TranslationTextBox.SetResourceReference(Control.ForegroundProperty, "TextPrimaryBrush");
+        ExplanationText.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
         ErrorSettingsButton.Visibility = Visibility.Collapsed;
 
         try
@@ -837,27 +873,20 @@ public partial class TranslationPanelWindow : Window
         WarningBox.Visibility = warnings.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
 
         EngineBadge.Text = session.PipelineLabel ?? "翻译完成";
-        EngineBadge.Foreground = (Brush)FindResource("AccentBrush");
-        StatusDot.Background = (Brush)FindResource("AccentBrush");
+        EngineBadge.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
+        StatusDot.SetResourceReference(Border.BackgroundProperty, "AccentBrush");
 
+        // 0.1.6 页脚减法：只保留用户需要的事实——管线名、截图是否上传
+        // （隐私事实）与总用时（秒级）。取词/OCR/路由/网络等内部毫秒拆分
+        // 不再展示；Timing 数据结构本身保持不变。
         var totalMs = session.Timing.TotalElapsedMs + (ulong)Math.Max(0, _inputAcquisitionMs);
-        var timingParts = new List<string> { session.PipelineLabel ?? "翻译" };
-        if (_inputAcquisitionMs > 0)
-        {
-            timingParts.Add($"取词 {_inputAcquisitionMs} ms");
-        }
-        if (session.Timing.OcrElapsedMs > 0)
-        {
-            timingParts.Add($"OCR {session.Timing.OcrElapsedMs} ms");
-        }
+        var footerParts = new List<string> { session.PipelineLabel ?? "翻译" };
         if (session.InputSource == TranslationInputSource.Screenshot)
         {
-            timingParts.Add(session.ImageUploaded ? "图片已进入视觉请求" : "图片未上传");
+            footerParts.Add(session.ImageUploaded ? "图片已进入视觉请求" : "图片未上传");
         }
-        timingParts.Add($"路由 {session.Timing.RoutingElapsedMs} ms");
-        timingParts.Add($"网络/模型 {session.Timing.NetworkElapsedMs} ms");
-        timingParts.Add($"总计 {totalMs} ms");
-        SetRouteText(string.Join(" · ", timingParts));
+        footerParts.Add(TranslationElapsedText.ForMilliseconds(totalMs));
+        SetRouteText(string.Join(" · ", footerParts));
         StatusText.Text = string.IsNullOrWhiteSpace(pipelineNote)
             ? TranslationSessionStateText.Describe(TranslationSessionState.Completed)
             : pipelineNote;
@@ -882,35 +911,19 @@ public partial class TranslationPanelWindow : Window
             }
         }
 
-        // Honest provenance: when the free engine actually ran the text stage
-        // (plain text or OCR + free text), the selected style did not apply —
-        // decided by the TYPED executor, never by matching the Chinese
-        // PipelineLabel.
-        if (session.TextExecutor == TranslationTextExecutor.FreeEngine &&
+        // Honest provenance, typed not string-matched: the free engine (plain
+        // text or OCR + free text → PromptSupport.NotSupported) and the
+        // vision-direct route (no text stage → NotApplicable) never received
+        // the active TEXT style. 0.1.6 states both with one shared short
+        // status per kind, decided by the TYPED support fact — never by
+        // matching the PipelineLabel display string.
+        if (session.PromptSupport is TranslationPromptSupport.NotSupported or TranslationPromptSupport.NotApplicable &&
             TranslationStyleMenu.TryGetActiveTemplate() is { } activeStyle &&
             activeStyle.Id != TranslationStyleMenu.FaithfulTemplateId)
         {
             var copied = StatusText.Text.Contains("已自动复制", StringComparison.Ordinal);
-            StatusText.Text =
-                $"已由{EngineWording.FreeEngineName}完成：{TranslationStyleMenu.FreeEngineToolTip}，所选文字翻译风格未应用" +
+            StatusText.Text = TranslationStyleMenu.StyleStatusFor(session.PromptSupport) +
                 (copied ? " · 已自动复制译文" : "。");
-        }
-
-        // Honest provenance for the vision-direct screenshot route: the image
-        // went straight to the vision model, so the active TEXT style was never
-        // part of that request (0.1.6 has no vision prompt support). Decided
-        // by the TYPED pipeline kind — OCR-based pipelines translate through
-        // the text provider, applied the style and never land here. A vision
-        // failure that fell back to local OCR is likewise excluded — no false
-        // "style not applied" claim for a request the style did shape.
-        if (session.PipelineKind == TranslationPipelineKind.VisionDirect &&
-            TranslationStyleMenu.TryGetActiveTemplate() is { } visionStyle &&
-            visionStyle.Id != TranslationStyleMenu.FaithfulTemplateId)
-        {
-            var visionCopied = StatusText.Text.Contains("已自动复制", StringComparison.Ordinal);
-            StatusText.Text =
-                $"{TranslationStyleMenu.VisionDirectCompletedNotice}" +
-                (visionCopied ? " · 已自动复制译文" : "。");
         }
     }
 
@@ -938,11 +951,11 @@ public partial class TranslationPanelWindow : Window
     {
         RenderState(TranslationSessionState.Failed);
         SetTranslationContent(FriendlyError(message), isMarkdown: false);
-        TranslationTextBox.Foreground = (Brush)FindResource("TextPrimaryBrush");
+        TranslationTextBox.SetResourceReference(Control.ForegroundProperty, "TextPrimaryBrush");
         // The headline is deliberately short; the raw provider message stays
         // available underneath because it is what makes the problem fixable.
         ExplanationText.Text = message;
-        ExplanationText.Foreground = (Brush)FindResource("TextSecondaryBrush");
+        ExplanationText.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
         ExplanationText.Visibility = Visibility.Visible;
         ExplanationBox.Visibility = Visibility.Visible;
         ErrorSettingsButton.Visibility = Visibility.Visible;
@@ -962,7 +975,11 @@ public partial class TranslationPanelWindow : Window
         StarToggle.IsEnabled = enabled;
     }
 
-    /// <summary>Keeps the result badge from claiming success in red-dot states.</summary>
+    /// <summary>
+    /// Keeps the result badge from claiming success in red-dot states. The
+    /// tone is a dynamic resource reference, so the badge also follows a
+    /// theme switch after the state has rendered.
+    /// </summary>
     private void SetBadgeTone(bool failed) => SetResultTone(failed, partial: false);
 
     /// <summary>
@@ -972,7 +989,7 @@ public partial class TranslationPanelWindow : Window
     private void SetResultTone(bool failed, bool partial)
     {
         var strong = failed ? "DangerBrush" : partial ? "WarningBrush" : "TextTertiaryBrush";
-        EngineBadge.Foreground = (Brush)FindResource(strong);
+        EngineBadge.SetResourceReference(TextBlock.ForegroundProperty, strong);
     }
 
     internal static string FriendlyError(string message)
@@ -1066,6 +1083,35 @@ public partial class TranslationPanelWindow : Window
         await RunOperationAsync(retry);
     }
 
+    /// <summary>
+    /// Begins the copy-success feedback: check glyph on the live accent.
+    /// </summary>
+    private void ShowCopyFeedback(System.Windows.Shapes.Path icon)
+    {
+        icon.Data = (Geometry)FindResource("IconCheck");
+        icon.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "AccentBrush");
+    }
+
+    /// <summary>
+    /// Ends the copy-success feedback: restores the icon's XAML Foreground
+    /// binding. The binding expression IS the local value, so ClearValue
+    /// would erase it for good and leave the idle icon with no fill. A null
+    /// capture (abnormal XAML) falls back to the theme-following
+    /// TextSecondaryBrush instead of silently leaving the accent stuck on.
+    /// </summary>
+    private void EndCopyFeedback(System.Windows.Shapes.Path icon, System.Windows.Data.Binding? originalFillBinding)
+    {
+        icon.Data = (Geometry)FindResource("IconCopy");
+        if (originalFillBinding is not null)
+        {
+            icon.SetBinding(System.Windows.Shapes.Shape.FillProperty, originalFillBinding);
+        }
+        else
+        {
+            icon.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "TextSecondaryBrush");
+        }
+    }
+
     private async void ResultCopy_Click(object sender, RoutedEventArgs e)
     {
         if (!_gate.CanCopy || string.IsNullOrWhiteSpace(_translation))
@@ -1076,11 +1122,9 @@ public partial class TranslationPanelWindow : Window
         if (await TrySetClipboardAsync(clean))
         {
             StatusText.Text = "已复制译文到剪贴板";
-            ResultCopyIcon.Data = (Geometry)FindResource("IconCheck");
-            ResultCopyIcon.Fill = (Brush)FindResource("AccentBrush");
+            ShowCopyFeedback(ResultCopyIcon);
             await Task.Delay(1400);
-            ResultCopyIcon.Data = (Geometry)FindResource("IconCopy");
-            ResultCopyIcon.ClearValue(System.Windows.Shapes.Shape.FillProperty);
+            EndCopyFeedback(ResultCopyIcon, _resultCopyIconFillBinding);
         }
         else
         {
@@ -1098,11 +1142,9 @@ public partial class TranslationPanelWindow : Window
         if (await TrySetClipboardAsync(text))
         {
             StatusText.Text = "已复制原文到剪贴板";
-            SourceCopyIcon.Data = (Geometry)FindResource("IconCheck");
-            SourceCopyIcon.Fill = (Brush)FindResource("AccentBrush");
+            ShowCopyFeedback(SourceCopyIcon);
             await Task.Delay(1400);
-            SourceCopyIcon.Data = (Geometry)FindResource("IconCopy");
-            SourceCopyIcon.ClearValue(System.Windows.Shapes.Shape.FillProperty);
+            EndCopyFeedback(SourceCopyIcon, _sourceCopyIconFillBinding);
         }
         else
         {
@@ -1189,7 +1231,7 @@ public partial class TranslationPanelWindow : Window
             return;
         }
         SourceInputBox.Text = merged;
-        StatusText.Text = "已合并断行，按 Enter 重新翻译";
+        StatusText.Text = "已合并断行，Enter 重译";
         SourceInputBox.CaretIndex = merged.Length;
         SourceInputBox.Focus();
     }
@@ -1315,6 +1357,9 @@ public partial class TranslationPanelWindow : Window
     {
         StarToggle.IsChecked = starred;
         StarToggle.ToolTip = starred ? "从生词本移除" : "收藏到生词本";
+        // The accessibility name must follow the dynamic state so screen
+        // readers announce the action the click will actually perform.
+        System.Windows.Automation.AutomationProperties.SetName(StarToggle, (string)StarToggle.ToolTip);
     }
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e)
@@ -1333,7 +1378,7 @@ public partial class TranslationPanelWindow : Window
     {
         try
         {
-            TranslationStyleMenu.ApplyTo(StyleSelectorButton, TranslationStyleMenu.SupportedToolTip);
+            TranslationStyleMenu.ApplyTo(StyleSelectorButton);
             StyleSelectorLabel.Text = TranslationStyleMenu.ActiveLabel();
         }
         catch (Exception)
@@ -1744,6 +1789,30 @@ public partial class TranslationPanelWindow : Window
         return 0;
     }
 
+    /// <summary>
+    /// E3 DPI: one re-clamp at ApplicationIdle after a WM_DPICHANGED — never a
+    /// mid-transition reposition (the window's own scale is stale there), and
+    /// the same single MoveToPixels writer as every other landing.
+    /// </summary>
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+        if (_closing || _userMoved || _dpiRepositionPending)
+        {
+            return;
+        }
+        _dpiRepositionPending = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
+        {
+            _dpiRepositionPending = false;
+            if (_closing || _userMoved)
+            {
+                return;
+            }
+            PositionNearAnchor();
+        }));
+    }
+
     private void PinToggle_Changed(object sender, RoutedEventArgs e)
     {
         var pinned = PinToggle.IsChecked == true;
@@ -1771,7 +1840,11 @@ public partial class TranslationPanelWindow : Window
         {
             return;
         }
-        var scale = ScreenGeometry.ScaleOf(this);
+        // Target-monitor scale from the anchor point — the window's own DPI is
+        // mid-transition stale right after a WM_DPICHANGED.
+        var scale = ScreenGeometry.ScaleOfMonitorAtPixel(new Point(
+            _anchorPixels.Left + (_anchorPixels.Width / 2),
+            _anchorPixels.Top + (_anchorPixels.Height / 2)));
         var widthDip = ActualWidth > 0 ? ActualWidth : (Width > 0 ? Width : 540);
         // Fallback matches the XAML Height/MinHeight (380): the old 360
         // fallback disagreed with the real minimum and clipped the footer.
@@ -1858,6 +1931,25 @@ public partial class TranslationPanelWindow : Window
         var resultText = _translation ?? string.Empty;
         var hasResult = !string.IsNullOrWhiteSpace(resultText);
         var state = CurrentSessionState;
+        if (state != TranslationSessionState.Completed)
+        {
+            // 流式/整理中关闭时，异步取消回调还没机会把 gate 推进到
+            // CancelledWithPartial：快照不能依赖它先完成。gate 是唯一权威，
+            // 只要它握有真实流式文本，就必须立即按「已取消 · 不完整」保留。
+            if (!string.IsNullOrWhiteSpace(_gate.StreamedText))
+            {
+                resultText = _gate.StreamedText;
+                hasResult = true;
+            }
+            // 一次失败的新尝试会把「友好的失败标题」渲染进结果框（便于阅读），
+            // 但那不是译文：会话库存必须只认真实的部分译文存粮，否则失败文案
+            // 会在恢复/下一次快照里冒充本次尝试的翻译结果。
+            else if (!_gate.HasPartialText)
+            {
+                resultText = string.Empty;
+                hasResult = false;
+            }
+        }
         var isPartial = state != TranslationSessionState.Completed && hasResult;
 
         return StoredSession.Create(

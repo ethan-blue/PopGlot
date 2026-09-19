@@ -43,6 +43,22 @@ public partial class App : Application
 
     private MainWindow? _mainWindow;
 
+    /// <summary>
+    /// Dedup state for hotkey-failure surfacing: one failure cycle (first
+    /// failure until recovery) balloons at most once, a changed detail only
+    /// refreshes the status surfaces, and recovery re-arms notification.
+    /// </summary>
+    private readonly HotkeyFailureCoordinator _hotkeyFailure = new();
+
+    /// <summary>
+    /// Set by the RegistrationFailed handler for the duration of the CURRENT
+    /// registration attempt, so <see cref="TryApplyShellSettings"/> can tell
+    /// a service-reported failure (the event already carried the honest
+    /// combined detail) from one only the App can report. UI-thread only:
+    /// two attempts can never interleave.
+    /// </summary>
+    private bool _hotkeyFailureReportedThisAttempt;
+
     private SettingsWindow? _settingsWindow;
 
     private TranslationPanelWindow? _activePanel;
@@ -251,12 +267,15 @@ public partial class App : Application
             _hotkeys.Pressed += (_, action) => HandleHotkey(action);
             _hotkeys.RegistrationFailed += (_, conflict) =>
             {
-                Notify(
-                    "快捷键恢复失败",
-                    conflict ?? "快捷键被其他程序占用。请在「设置 → 快捷键」中更换组合。",
-                    Forms.ToolTipIcon.Warning);
-                _mainWindow?.ShowShortcutConflict(conflict ?? "未知快捷键");
+                // Mark the attempt BEFORE surfacing: TryApplyShellSettings
+                // continues synchronously below this event on the same
+                // thread and must not re-report what the event already
+                // carried (a shorter re-report would only downgrade the
+                // combined detail on the status surfaces).
+                _hotkeyFailureReportedThisAttempt = true;
+                OnHotkeyFailure(conflict ?? "未知快捷键");
             };
+            _hotkeys.RegistrationRestored += (_, _) => OnHotkeyRestored();
 
             CreateTrayIcon();
             // A02: the failure marker is consumed only after the tray exists,
@@ -264,15 +283,20 @@ public partial class App : Application
             AnnounceBackgroundStartupFailureIfAny();
             StartShowWindowListener();
 
-            var shellApplied = TryApplyShellSettings(_shellSettings);
-            if (!shellApplied)
+            var shellOutcome = TryApplyShellSettings(_shellSettings);
+            if (!shellOutcome.Applied)
             {
-                // Surface it where the user can actually see it — the settings
-                // window is hidden at this point.
-                Notify(
-                    "快捷键注册失败",
-                    "快捷键被其他程序占用。请在「设置 → 快捷键」中更换组合。",
-                    Forms.ToolTipIcon.Warning);
+                // Hotkey failures were already surfaced inside
+                // TryApplyShellSettings through the failure coordinator —
+                // with the specific conflict detail and the once-per-cycle
+                // dedup. Only a failure shape that never reached the
+                // coordinator (the persisted set itself being invalid) is
+                // reported here; the old unconditional generic balloon would
+                // have doubled every startup conflict.
+                if (shellOutcome.Failure == ShellApplyFailureKind.InvalidHotkeys)
+                {
+                    OnHotkeyFailure(shellOutcome.ConflictDetail ?? "快捷键配置无效");
+                }
                 if (!backgroundStart)
                 {
                     ShowMainWindow();
@@ -283,7 +307,7 @@ public partial class App : Application
             // it is signalled only after the hotkeys actually registered and
             // the tray/listener are live — the real production boundary.
             var readyEventName = Environment.GetEnvironmentVariable("POPGLOT_READY_EVENT");
-            if (shellApplied && !string.IsNullOrEmpty(readyEventName))
+            if (shellOutcome.Applied && !string.IsNullOrEmpty(readyEventName))
             {
                 try
                 {
@@ -730,6 +754,13 @@ public partial class App : Application
             NotifyTray = (title, message) => Notify(title, message, Forms.ToolTipIcon.Info),
             RequestExit = () => ExitApplication(),
         };
+        // A startup hotkey failure happens before this window exists. The
+        // coordinator kept the specific detail; paint it into the resident
+        // Hotkey channel now that the status line can actually hold it.
+        if (_hotkeyFailure.FailureActive)
+        {
+            _mainWindow.ShowShortcutConflict(_hotkeyFailure.ActiveDetail!);
+        }
         return _mainWindow;
     }
 
@@ -884,19 +915,154 @@ public partial class App : Application
             case HotkeyAction.ShowWindow:
                 ShowMainWindow();
                 break;
+            case HotkeyAction.QuickSearch:
+                ShowQuickSearch();
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(action));
+        }
+    }
+
+    /// <summary>
+    /// Bounded budget for the hotkey selection pre-read. ClipboardSelectionService
+    /// already self-bounds the copy observation and every clipboard STA call at
+    /// 1s, so this outer net adds NO wait on any healthy path (the worst normal
+    /// case, modifier release + capture + observation, stays under ~1.6s). It
+    /// only stops a pathological COM-retry storm from leaving the hotkey
+    /// silently dead, while still letting the service's own 1s "no selection"
+    /// verdict win so an empty selection degrades quietly as before.
+    /// </summary>
+    internal static readonly TimeSpan SelectionPrereadTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// The honest notice shown when the pre-read budget expires: the user gets
+    /// the recoverable 极速查词 surface with an explanation instead of a
+    /// hotkey that appears to do nothing.
+    /// </summary>
+    internal const string SelectionPrereadTimeoutNotice =
+        "未能及时读取选区（目标应用或剪贴板未响应）；已切换到极速查词，可直接粘贴或输入后按 Enter 翻译。";
+
+    /// <summary>Outcome of the bounded hotkey pre-read.</summary>
+    internal sealed record SelectionPrereadResult(string? Text, Exception? Failure, bool TimedOut)
+    {
+        public bool Succeeded => !TimedOut && Failure is null && !string.IsNullOrWhiteSpace(Text);
+    }
+
+    /// <summary>
+    /// Races the selection read against a bounded budget. The token also rides
+    /// INTO the read, so a timed-out attempt aborts at its next checkpoint —
+    /// before the synthetic Ctrl+C when the capture is still pending — while
+    /// its own finally still restores the clipboard. The attempt is never
+    /// retried here, so the target application never receives a second
+    /// synthetic copy keystroke.
+    /// </summary>
+    internal static async Task<SelectionPrereadResult> ReadSelectionPrereadAsync(
+        ClipboardSelectionService selectionService,
+        nint targetWindow,
+        TimeSpan? timeoutOverride = null)
+    {
+        using var bounded = new CancellationTokenSource(timeoutOverride ?? SelectionPrereadTimeout);
+        var readTask = selectionService.ReadSelectionAsync(bounded.Token, targetWindow);
+        var completed = await Task.WhenAny(readTask, Task.Delay(Timeout.InfiniteTimeSpan, bounded.Token));
+        if (completed != readTask)
+        {
+            // Budget exhausted: take the recoverable path immediately. The
+            // abandoned attempt concludes on its own internal bounds; observe
+            // it so no late failure can escape as unobserved.
+            _ = readTask.ContinueWith(
+                static finished => _ = finished.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return new SelectionPrereadResult(null, null, TimedOut: true);
+        }
+        try
+        {
+            return new SelectionPrereadResult(await readTask, null, TimedOut: false);
+        }
+        catch (Exception exception)
+        {
+            return new SelectionPrereadResult(null, exception, TimedOut: false);
         }
     }
 
     private async Task BeginSelectionTranslationAsync()
     {
         var targetWindow = NativeMethods.GetForegroundWindow();
+        var outcome = await ReadSelectionPrereadAsync(_selectionService, targetWindow);
+        if (outcome.TimedOut)
+        {
+            // Bounded pre-read: recoverable — land in quick search with an
+            // understandable notice instead of a silently dead hotkey. The
+            // notice is STATE-DRIVEN (QuickSearchState.PendingNotice): the
+            // first-show's queued Loaded sync re-applies it, and the next
+            // real query clears it — a raw footer write here would lose the
+            // race against Loaded on a freshly created window.
+            ShowQuickSearch();
+            _activeQuickSearch?.PostPendingNotice(SelectionPrereadTimeoutNotice);
+            return;
+        }
+        if (outcome.Failure is InvalidOperationException noSelection && IsNoSelectionException(noSelection))
+        {
+            // 空选区：静默降级极速查词，不加打扰。
+            ShowQuickSearch();
+            return;
+        }
+        if (outcome.Failure is OperationCanceledException)
+        {
+            return;
+        }
+        if (outcome.Failure is not null)
+        {
+            var errorPanel = CreatePanel(CursorAnchorPixels());
+            errorPanel.Show();
+            errorPanel.ShowImmediateFailure(outcome.Failure.Message);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(outcome.Text))
+        {
+            ShowQuickSearch();
+            return;
+        }
+
         var panel = CreatePanel(CursorAnchorPixels());
-        // Shown without activation so the synthesized Ctrl+C still reaches the
-        // app the user was reading; the panel takes focus once the text is in.
         panel.Show();
-        await panel.StartSelectionAsync(_selectionService, targetWindow);
+        await panel.StartSelectionAsync(
+            new ClipboardSelectionService(new PreloadedSelectionClipboardAdapter(outcome.Text)),
+            targetWindow);
+    }
+
+    internal static bool IsNoSelectionException(InvalidOperationException? ex) =>
+        ex?.Message is { } msg &&
+        (msg.Contains("未检测到可复制的选中文本", StringComparison.Ordinal) ||
+         msg.Contains("选区没有可用文本", StringComparison.Ordinal));
+
+    private sealed class PreloadedSelectionClipboardAdapter : ISelectionClipboardAdapter
+    {
+        private readonly string _text;
+        private uint _seq = 1;
+
+        public PreloadedSelectionClipboardAdapter(string text) => _text = text;
+
+        public uint SequenceNumber => _seq;
+
+        public Task<IClipboardSnapshot> CaptureAsync() =>
+            Task.FromResult<IClipboardSnapshot>(new NoopSnapshot());
+
+        public Task SendCopyAsync(CancellationToken cancellationToken)
+        {
+            _seq++;
+            return Task.CompletedTask;
+        }
+
+        public Task<string?> ReadTextAsync() => Task.FromResult<string?>(_text);
+
+        public Task RestoreAsync(IClipboardSnapshot snapshot) => Task.CompletedTask;
+
+        private sealed class NoopSnapshot : IClipboardSnapshot
+        {
+            public void Dispose() { }
+        }
     }
 
     private void BeginCapture(bool ocrOnly = false)
@@ -1064,6 +1230,7 @@ public partial class App : Application
                 _activeQuickSearch.Show();
 
                 _activeQuickSearch.Activate();
+                _activeQuickSearch.Focus();
                 _quickSearchLastUsedUtc = DateTime.UtcNow;
 
                 return;
@@ -1078,6 +1245,7 @@ public partial class App : Application
             _activeQuickSearch.Show();
 
             _activeQuickSearch.Activate();
+            _activeQuickSearch.Focus();
 
         });
 
@@ -1163,7 +1331,7 @@ public partial class App : Application
 
         Notify(
             "暂无可恢复的翻译",
-            "最近的浮窗会话已结束或被新会话替换；按划词/截图快捷键即可开始新翻译。",
+            "会话已结束；按划词/截图快捷键开始新翻译。",
             Forms.ToolTipIcon.Info);
     }
 
@@ -1226,26 +1394,115 @@ public partial class App : Application
             : null;
     }
 
-    private bool TryApplyShellSettings(ShellSettings settings)
+    /// <summary>
+    /// Applies a settings snapshot: registers the hotkey set atomically and,
+    /// on success, adopts theme/tray/engine surfaces. Returns a typed
+    /// outcome so callers (settings save, startup) can tell a settings
+    /// PROBE failure (candidate lost, previous set live again) apart from a
+    /// real global failure — by evidence, not by guessing.
+    /// </summary>
+    private ShellApplyOutcome TryApplyShellSettings(ShellSettings settings)
     {
-        if (settings.ValidateHotkeys() is not null || _hotkeys is null)
+        var validationError = settings.ValidateHotkeys();
+        if (validationError is not null)
         {
-            return false;
+            return ShellApplyOutcome.Failed(ShellApplyFailureKind.InvalidHotkeys, validationError);
         }
+        if (_hotkeys is null)
+        {
+            return ShellApplyOutcome.Failed(ShellApplyFailureKind.HotkeyUnavailable, "快捷键服务未就绪");
+        }
+
+        _hotkeyFailureReportedThisAttempt = false;
         if (!_hotkeys.TryRegisterAll(settings.Hotkeys, out var conflict))
         {
-            _mainWindow?.ShowShortcutConflict(conflict ?? "未知快捷键");
-            return false;
+            // Route by evidence, never by cycle state: a probe failure with
+            // a healthy previous set stays settings-inline only, and a
+            // global failure is reported exactly ONCE per attempt — by the
+            // service event when the restore failed too, otherwise here.
+            // Even inside an ALREADY OPEN failure cycle the App must report:
+            // the coordinator keeps the single balloon per cycle, collapses
+            // an identical detail to a silent no-op, and turns a CHANGED
+            // detail into a status-only refresh — without this report the
+            // second conflict would leave the stale first detail on the
+            // workbench footer and in the tray for the whole cycle.
+            var route = ShellApplyFailureRouting.Classify(
+                _hotkeys.IsFullyAvailable, _hotkeyFailureReportedThisAttempt);
+            if (route == ShellApplyFailureRoute.ProbeInlineOnly)
+            {
+                // Probe failure: the candidate lost, but the previous set is
+                // fully live again. The settings window reports this inline;
+                // NO global unavailable state, NO balloon and NO workbench
+                // transient may be raised for it.
+                return ShellApplyOutcome.Failed(
+                    ShellApplyFailureKind.HotkeyConflictRestored, conflict);
+            }
+            if (route == ShellApplyFailureRoute.AppMustReport)
+            {
+                // Real global failure nobody reported yet. The service event
+                // could not have fired — e.g. the previous set is empty, so
+                // its restore trivially "succeeded" (startup, or a set that
+                // was already fully dead).
+                OnHotkeyFailure(conflict ?? "未知快捷键");
+            }
+            return ShellApplyOutcome.Failed(ShellApplyFailureKind.HotkeyUnavailable, conflict);
         }
+
         _shellSettings = settings;
         ThemeService.Apply(settings.Theme);
+        // Full success closes any active failure cycle: surfaces clear and a
+        // future failure may notify again. Idempotent when nothing failed.
+        OnHotkeyRestored();
         UpdateTrayTooltip();
         // The workbench footer always shows what actually runs right now.
         _mainWindow?.RefreshEngineStatus();
         // Settings saved → the main window's close button must re-decide
         // between 关闭到托盘 / 退出 PopGlot from the persisted preference.
         _mainWindow?.RefreshCloseButtonForTraySetting();
-        return true;
+        return ShellApplyOutcome.Ok();
+    }
+
+    /// <summary>
+    /// A global hotkey failure was observed (service event, a startup
+    /// registration that left zero live hotkeys, or a settings save that
+    /// failed with nobody else reporting — open cycle or not). Balloons once
+    /// per failure cycle, keeps the workbench footer's resident Hotkey
+    /// channel current and stops the tray from claiming shortcuts that are
+    /// dead; repeats of the same detail are collapsed by the coordinator.
+    /// </summary>
+    private void OnHotkeyFailure(string detail)
+    {
+        var decision = _hotkeyFailure.ReportFailure(detail);
+        if (decision == HotkeyFailureDecision.None)
+        {
+            return;
+        }
+        if (decision == HotkeyFailureDecision.Balloon)
+        {
+            Notify(
+                "快捷键注册失败",
+                $"{detail}。请在「设置 → 快捷键」中更换组合。",
+                Forms.ToolTipIcon.Warning);
+        }
+        // Same cycle with a changed detail: no new balloon, but every
+        // surface must describe the CURRENT failure, not the stale one.
+        _mainWindow?.ShowShortcutConflict(detail);
+        UpdateTrayTooltip();
+    }
+
+    /// <summary>
+    /// The hotkey set is fully live again. Closes the failure cycle exactly
+    /// once, clears the resident footer channel (falling back to
+    /// EngineConfig/Ready) and restores the tray's shortcut claims.
+    /// </summary>
+    private void OnHotkeyRestored()
+    {
+        if (!_hotkeyFailure.ReportRecovery())
+        {
+            return;
+        }
+        _mainWindow?.ClearShortcutConflict();
+        UpdateTrayTooltip();
     }
 
     // ================= Tray =================
@@ -1266,11 +1523,11 @@ public partial class App : Application
 
         _trayMenu.Items.Add("打开 PopGlot", null, (_, _) => ShowMainWindow());
 
-        _trayMenu.Items.Add("极速查词", null, (_, _) => ShowQuickSearch());
+        var quickSearchItem = _trayMenu.Items.Add("极速查词", null, (_, _) => ShowQuickSearch());
 
         _trayMenu.Items.Add("恢复最近翻译", null, (_, _) => RestoreRecentSurface());
 
-        var sessionsSubMenu = new Forms.ToolStripMenuItem("暂存会话仓 (最多5条)");
+        var sessionsSubMenu = new Forms.ToolStripMenuItem("暂存的翻译（最多5条）");
         _trayMenu.Items.Add(sessionsSubMenu);
 
         _trayMenu.Items.Add(new Forms.ToolStripSeparator());
@@ -1293,9 +1550,26 @@ public partial class App : Application
 
         {
 
-            selectionItem.Text = $"翻译选中文字\t{_shellSettings.SelectionHotkey.DisplayName}";
+            // A live hotkey failure must stop the menu from advertising
+            // shortcuts that will not fire; the actions themselves stay
+            // usable (they run from the click, not the hotkey).
+            var hotkeysUnavailable = _hotkeyFailure.FailureActive;
 
-            captureItem.Text = $"截图翻译\t{_shellSettings.ScreenshotHotkey.DisplayName}";
+            quickSearchItem.Text = hotkeysUnavailable
+                ? "极速查词（快捷键不可用）"
+                : $"极速查词\t{_shellSettings.QuickSearchHotkey.DisplayName}";
+
+            selectionItem.Text = hotkeysUnavailable
+
+                ? "翻译选中文字（快捷键不可用）"
+
+                : $"翻译选中文字\t{_shellSettings.SelectionHotkey.DisplayName}";
+
+            captureItem.Text = hotkeysUnavailable
+
+                ? "截图翻译（快捷键不可用）"
+
+                : $"截图翻译\t{_shellSettings.ScreenshotHotkey.DisplayName}";
 
             ocrItem.Text = $"截图提取文本 (OCR)\tShift + 截图";
 
@@ -1318,11 +1592,11 @@ public partial class App : Application
                     sessionsSubMenu.DropDownItems.Add(item);
                 }
                 sessionsSubMenu.DropDownItems.Add(new Forms.ToolStripSeparator());
-                var clearItem = new Forms.ToolStripMenuItem("清空会话仓");
+                var clearItem = new Forms.ToolStripMenuItem("清空暂存的翻译");
                 clearItem.Click += (_, _) =>
                 {
                     SharedSessionStore.Clear();
-                    Notify("会话仓已清空", "所有内存暂存会话已清除。", Forms.ToolTipIcon.Info);
+                    Notify("暂存的翻译已清空", "所有内存暂存会话已清除。", Forms.ToolTipIcon.Info);
                 };
                 sessionsSubMenu.DropDownItems.Add(clearItem);
             }
@@ -1384,8 +1658,12 @@ public partial class App : Application
             return;
         }
         // NotifyIcon.Text is capped at 63 characters; longer text throws.
-        var text = $"PopGlot · {_shellSettings.SelectionHotkey.DisplayName} 划词 · " +
-            $"{_shellSettings.ScreenshotHotkey.DisplayName} 截图";
+        // While a hotkey failure is active the tooltip must NOT claim
+        // shortcuts that are dead; the menu text below follows the same rule.
+        var text = _hotkeyFailure.FailureActive
+            ? "PopGlot · 全局快捷键不可用 — 在「设置 → 快捷键」更换组合"
+            : $"PopGlot · {_shellSettings.SelectionHotkey.DisplayName} 划词 · " +
+              $"{_shellSettings.ScreenshotHotkey.DisplayName} 截图";
         _trayIcon.Text = text.Length > 63 ? text[..63] : text;
     }
 

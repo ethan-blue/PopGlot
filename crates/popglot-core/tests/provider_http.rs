@@ -149,6 +149,8 @@ fn client() -> ProviderClient {
     ProviderClient::new(TransportLimits {
         connect_timeout: Duration::from_secs(1),
         total_timeout: Duration::from_secs(2),
+        stream_idle_timeout: Duration::from_secs(2),
+        stream_total_timeout: Duration::from_secs(5),
         max_response_bytes: 64 * 1024,
         max_retries: 0,
         retry_delay: Duration::from_millis(1),
@@ -630,6 +632,114 @@ fn sse_settings(provider_type: ProviderType, server: &SseServer) -> ProviderSett
         safe_dev_mode: false,
         ..ProviderSettings::default()
     }
+}
+
+#[tokio::test]
+async fn long_slow_stream_survives_beyond_nonstream_total_timeout() {
+    // 老bug回归：整条流曾被套在"非流式总预算"（线上 45 秒）里，慢而活的
+    // 长生成到点即被腰斩——这正是「生成中断，内容不完整」的根源。存活
+    // 判定必须看字块间空闲，而不是总时长。
+    let delimiter = "PGMETA_slow_stream_0123456789";
+    let payload = format!("你好
+{delimiter}
+{{\"explanation\":\"ok\"}}");
+    let pieces: Vec<String> = payload
+        .chars()
+        .collect::<Vec<_>>()
+        .chunks(4)
+        .map(|chars| chars.iter().collect())
+        .collect();
+    let mut frames: Vec<(Vec<u8>, Duration)> = pieces
+        .iter()
+        .map(|piece| {
+            (
+                format!(
+                    "data: {{\"choices\":[{{\"delta\":{{\"content\":{}}}}}]}}
+
+",
+                    serde_json::to_string(piece).expect("json piece")
+                )
+                .into_bytes(),
+                Duration::from_millis(80),
+            )
+        })
+        .collect();
+    frames.push((b"data: [DONE]
+
+".to_vec(), Duration::from_millis(80)));
+    // 总时长约 pieces*80ms（>500ms 非流式预算），字块间隔 80ms（<3s 空闲预算）。
+    let server = SseServer::start(frames);
+    let config = sse_settings(ProviderType::OpenAiCompatible, &server);
+    let slow_client = ProviderClient::new(TransportLimits {
+        total_timeout: Duration::from_millis(500),
+        stream_idle_timeout: Duration::from_secs(3),
+        stream_total_timeout: Duration::from_secs(15),
+        max_retries: 0,
+        ..TransportLimits::default()
+    })
+    .expect("create slow-stream client");
+    let mut deltas = Vec::new();
+    let response = slow_client
+        .execute_stream(
+            provider_for(ProviderType::OpenAiCompatible).as_ref(),
+            &config,
+            "stream-key",
+            "slow-stream-test",
+            &TranslationRequest::text("hello", LanguagePair::new("auto", "zh-CN")),
+            Some(delimiter),
+            &CancellationToken::new(),
+            |delta| deltas.push(delta.to_owned()),
+        )
+        .await
+        .expect("a slow but alive stream must complete, never hit the non-stream budget");
+    assert_eq!(response.result.translated_text, "你好");
+    assert_eq!(response.result.explanation, "ok");
+}
+
+#[tokio::test]
+async fn silent_stream_is_cut_by_idle_timeout() {
+    // 存活判定的另一半：彻底静默的流必须在空闲超时处被明确掐断，
+    // 而不是挂到总上限才失败。
+    let delimiter = "PGMETA_stall_stream_0123456789";
+    let payload = format!("卡住
+{delimiter}
+{{\"explanation\":\"ok\"}}");
+    let first = format!(
+        "data: {{\"choices\":[{{\"delta\":{{\"content\":{}}}}}]}}
+
+",
+        serde_json::to_string(&payload).expect("json string")
+    )
+    .into_bytes();
+    let server = SseServer::start(vec![
+        (first, Duration::ZERO),
+        (b"data: [DONE]
+
+".to_vec(), Duration::from_secs(10)),
+    ]);
+    let config = sse_settings(ProviderType::OpenAiCompatible, &server);
+    let stall_client = ProviderClient::new(TransportLimits {
+        stream_idle_timeout: Duration::from_millis(300),
+        stream_total_timeout: Duration::from_secs(20),
+        max_retries: 0,
+        ..TransportLimits::default()
+    })
+    .expect("create stall client");
+    let error = stall_client
+        .execute_stream(
+            provider_for(ProviderType::OpenAiCompatible).as_ref(),
+            &config,
+            "stream-key",
+            "stall-stream-test",
+            &TranslationRequest::text("hello", LanguagePair::new("auto", "zh-CN")),
+            Some(delimiter),
+            &CancellationToken::new(),
+            |_delta| {},
+        )
+        .await
+        .expect_err("a silent stream must be cut by the idle timeout");
+    assert_eq!(error.kind, ProviderErrorKind::Timeout);
+    assert!(error.message.contains("未收到新数据"));
 }
 
 #[tokio::test]

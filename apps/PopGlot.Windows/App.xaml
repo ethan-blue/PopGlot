@@ -29,7 +29,7 @@
             <SolidColorBrush x:Key="AccentPressedBrush" Color="#6976C4" />
             <SolidColorBrush x:Key="AccentTextBrush" Color="#071224" />
             <SolidColorBrush x:Key="AccentSoftBrush" Color="#20243A" />
-            <SolidColorBrush x:Key="AccentBorderBrush" Color="#59649D" />
+            <SolidColorBrush x:Key="AccentBorderBrush" Color="#6B77B5" />
             <SolidColorBrush x:Key="FocusBrush" Color="#7C89D9" />
             <SolidColorBrush x:Key="PrimaryBrush" Color="#5562B3" />
             <SolidColorBrush x:Key="PrimaryHoverBrush" Color="#5B69BE" />
@@ -50,6 +50,7 @@
             <SolidColorBrush x:Key="SuccessBrush" Color="#3DD68C" />
             <SolidColorBrush x:Key="SuccessSoftBrush" Color="#143826" />
             <SolidColorBrush x:Key="OverlayScrimBrush" Color="#C8101216" />
+            <SolidColorBrush x:Key="WindowEdgeBrush" Color="#00FFFFFF" />
             <Color x:Key="ShadowColor">#000000</Color>
             <SolidColorBrush x:Key="ShadowBrush" Color="#000000" />
 

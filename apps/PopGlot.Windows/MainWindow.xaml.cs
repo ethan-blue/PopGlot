@@ -59,6 +59,12 @@ public partial class MainWindow : Window
         ThemeService.ApplyWindowChrome(this);
         ThemeService.ThemeChanged += (_, _) => ThemeService.ApplyWindowChrome(this);
         StateChanged += (_, _) => UpdateMaximizeButtonGlyph();
+        // E3-F12/F14: one stable Normal-state DIP size, seeded from the XAML
+        // Width/Height. PerMonitorV2 round trips used to leave the window at
+        // 747x560 (1120x760 shrank by 1/1.5) because nothing remembered the
+        // DIP size the user actually had.
+        _normalSizeTracker = new StableNormalSizeTracker(new Size(Width, Height));
+        SizeChanged += (_, _) => ObserveResizeForStableSize();
         Loaded += (_, _) =>
         {
             ApplyResponsiveBreakpoints(RootGrid.ActualWidth > 0 ? RootGrid.ActualWidth : Width);
@@ -69,6 +75,107 @@ public partial class MainWindow : Window
 
     /// <summary>Entry point into SettingsWindow, wired by App.</summary>
     internal Action? OpenSettings { get; set; }
+
+    // ================= Stable Normal size across DPI changes =================
+
+    private StableNormalSizeTracker? _normalSizeTracker;
+    private int _dpiGeneration;
+
+    /// <summary>
+    /// E3-F13/F14: a WM_DPICHANGED transition must never decide the window's
+    /// size. WPF resizes per the OS-suggested rect, and the diagnostic evidence
+    /// showed a 1120x760 window landing at 747x560 after a 150%→100% round
+    /// trip. We therefore remember ONE stable Normal-state DIP size and, after
+    /// the transition settles (Dispatcher ApplicationIdle), restore it and
+    /// re-clamp into the target monitor's work area. Maximized/minimized
+    /// states are never touched, and resizes that happen inside a transition
+    /// can never pollute the stable value (see
+    /// <see cref="StableNormalSizeTracker"/>). No size is ever persisted.
+    /// </summary>
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+        _normalSizeTracker?.BeginDpiTransition();
+        var generation = ++_dpiGeneration;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, new Action(() =>
+        {
+            if (generation != _dpiGeneration || _normalSizeTracker is null)
+            {
+                return; // a newer DPI change owns the restore now
+            }
+            RestoreStableNormalSizeAfterDpiChange();
+        }));
+    }
+
+    private void RestoreStableNormalSizeAfterDpiChange()
+    {
+        var tracker = _normalSizeTracker;
+        if (tracker is null)
+        {
+            return;
+        }
+        var stable = tracker.EndDpiTransition();
+        // Maximized/minimized: never rewrite the window, the stable DIP size
+        // stays ready for when the user returns to Normal.
+        if (WindowState != WindowState.Normal)
+        {
+            return;
+        }
+        var restored = RestoredNormalRect(
+            new Rect(Left, Top, ActualWidth, ActualHeight),
+            stable,
+            CurrentMonitorWorkAreaDip(),
+            new Size(MinWidth, MinHeight));
+        Width = restored.Width;
+        Height = restored.Height;
+        Left = restored.Left;
+        Top = restored.Top;
+        // The transition closed at the top, so the restore's own SizeChanged
+        // events land after it — but they only ever restate the values written
+        // here. This explicit observation covers the one real change: a
+        // work-area clamp that had to shrink the window becomes the new stable
+        // normal size (the monitor cannot fit more).
+        _ = tracker.TryObserveResize(new Size(restored.Width, restored.Height), isNormalState: true);
+    }
+
+    private void ObserveResizeForStableSize()
+    {
+        if (ActualWidth <= 0 || ActualHeight <= 0)
+        {
+            return;
+        }
+        _ = _normalSizeTracker?.TryObserveResize(
+            new Size(ActualWidth, ActualHeight),
+            isNormalState: WindowState == WindowState.Normal);
+    }
+
+    private Rect CurrentMonitorWorkAreaDip()
+    {
+        var windowScale = ScreenGeometry.ScaleOf(this);
+        var scaleX = windowScale.X > 0 ? windowScale.X : 1.0;
+        var scaleY = windowScale.Y > 0 ? windowScale.Y : 1.0;
+        var topLeftPixels = new Point(
+            (double.IsFinite(Left) ? Left : 0) * scaleX,
+            (double.IsFinite(Top) ? Top : 0) * scaleY);
+        // Target-monitor scale — never a transitioning window's stale DPI.
+        var scale = ScreenGeometry.ScaleOfMonitorAtPixel(topLeftPixels);
+        var targetScaleX = scale.X > 0 ? scale.X : scaleX;
+        var targetScaleY = scale.Y > 0 ? scale.Y : scaleY;
+        var workPixels = ScreenGeometry.WorkAreaForPixel(topLeftPixels);
+        return new Rect(
+            ScreenGeometry.PixelToDip(workPixels.Left, targetScaleX),
+            ScreenGeometry.PixelToDip(workPixels.Top, targetScaleY),
+            ScreenGeometry.PixelToDip(workPixels.Width, targetScaleX),
+            ScreenGeometry.PixelToDip(workPixels.Height, targetScaleY));
+    }
+
+    /// <summary>
+    /// Pure F14 fix: the restored Normal rect keeps the stable DIP size at the
+    /// current position, clamped into the target monitor's work area.
+    /// </summary>
+    internal static Rect RestoredNormalRect(Rect currentDip, Size stableDip, Rect workAreaDip, Size minSize) =>
+        WindowPositioner.ClampToWorkArea(
+            new Rect(currentDip.Location, stableDip), workAreaDip, minSize);
 
     /// <summary>
     /// Direct route from the 添加翻译引擎 call to action: opens settings
@@ -217,14 +324,17 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// 状态行的常驻通道（类型化来源 + 优先级）。EngineConfig 承载配置与
-    /// 隐私事实（未配置引擎 / 当前使用内置公共翻译），优先级高于 Ready。
-    /// 瞬时消息（复制成功、已载入记录、切换完成等）有自己的展示窗口，
-    /// 到期后回到这里——因此永远不会永久覆盖配置/隐私警告。
+    /// 隐私事实（未配置引擎 / 当前使用内置免费引擎），优先级高于 Ready。
+    /// Hotkey 承载全局快捷键真实失效的事实，优先级最高——它是用户最需要
+    /// 解释的「为什么快捷键没反应」。瞬时消息（复制成功、已载入记录、切
+    /// 换完成等）有自己的展示窗口，到期后回到这里——因此永远不会永久覆
+    /// 盖配置/隐私/快捷键警告。
     /// </summary>
     private enum StatusChannel
     {
         Ready = 0,
         EngineConfig = 1,
+        Hotkey = 2,
     }
 
     private sealed record StatusEntry(string Message, StatusTone Tone);
@@ -273,10 +383,15 @@ public partial class MainWindow : Window
         PaintResidentStatus();
     }
 
-    /// <summary>Paints the highest-priority resident channel (EngineConfig
-    /// over Ready), falling back to the neutral ready state.</summary>
+    /// <summary>Paints the highest-priority resident channel (Hotkey over
+    /// EngineConfig over Ready), falling back to the neutral ready state.</summary>
     private void PaintResidentStatus()
     {
+        if (_residentStatuses.TryGetValue(StatusChannel.Hotkey, out var hotkey))
+        {
+            PaintStatus(hotkey.Message, hotkey.Tone);
+            return;
+        }
         if (_residentStatuses.TryGetValue(StatusChannel.EngineConfig, out var config))
         {
             PaintStatus(config.Message, config.Tone);
@@ -286,6 +401,20 @@ public partial class MainWindow : Window
             ? r
             : new StatusEntry("就绪", StatusTone.Success);
         PaintStatus(ready.Message, ready.Tone);
+    }
+
+    /// <summary>
+    /// Removes a resident channel and repaints the next-highest priority
+    /// one immediately (e.g. Hotkey cleared → back to EngineConfig/Ready).
+    /// No-op when the channel was not set, so a duplicate clear can never
+    /// stomp an unrelated status that was set in between.
+    /// </summary>
+    private void ClearResidentStatus(StatusChannel channel)
+    {
+        if (_residentStatuses.Remove(channel))
+        {
+            PaintResidentStatus();
+        }
     }
 
     private void PaintStatus(string message, StatusTone tone)
@@ -549,7 +678,7 @@ public partial class MainWindow : Window
             var isActive = profile.Id == activeId;
             var item = new MenuItem
             {
-                Header = $"{profile.Name} · {profile.TextModel}" + (isActive ? "（当前）" : string.Empty),
+                Header = $"{profile.Name} · {profile.TextModel}",
                 FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
                 Icon = isActive ? MakeActiveCheck() : null,
             };
@@ -567,7 +696,7 @@ public partial class MainWindow : Window
                 : "当前不可用";
         var freeItem = new MenuItem
         {
-            Header = $"{EngineWording.FreeEngineName} · {freeState} · 仅文字" + (freeActive ? "（当前）" : string.Empty),
+            Header = $"{EngineWording.FreeEngineName} · {freeState} · 仅文字",
             FontWeight = freeActive ? FontWeights.SemiBold : FontWeights.Normal,
             Icon = freeActive ? MakeActiveCheck() : null,
         };
@@ -579,7 +708,7 @@ public partial class MainWindow : Window
         var followActive = string.IsNullOrEmpty(currentVisionId);
         var visionFollow = new MenuItem
         {
-            Header = "跟随文字引擎" + (followActive ? "（当前）" : string.Empty),
+            Header = "跟随文字引擎",
             FontWeight = followActive ? FontWeights.SemiBold : FontWeights.Normal,
             Icon = followActive ? MakeActiveCheck() : null,
         };
@@ -592,7 +721,7 @@ public partial class MainWindow : Window
             var isActive = profile.Id == currentVisionId;
             var item = new MenuItem
             {
-                Header = $"{profile.Name} · {profile.VisionModel}" + (isActive ? "（当前）" : string.Empty),
+                Header = $"{profile.Name} · {profile.VisionModel}",
                 FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
                 Icon = isActive ? MakeActiveCheck() : null,
             };
@@ -889,8 +1018,23 @@ public partial class MainWindow : Window
 
     internal void ReloadHistory() => LibrarySection.ReloadHistory();
 
+    /// <summary>
+    /// 常驻 Hotkey 通道（Set）：全局快捷键真实失效时，状态行持续解释具体
+    /// 原因；瞬时消息可以临时占用展示权，但到期后仍回到这条故障提示，直
+    /// 到恢复后被 <see cref="ClearShortcutConflict"/> 清除。同一失效周期内
+    /// 详情变化时重复调用只会刷新文案。
+    /// </summary>
     internal void ShowShortcutConflict(string conflict) =>
-        SetStatus($"快捷键注册失败 — {conflict}。请换一个组合后重试。", StatusTone.Error);
+        SetResidentStatus(
+            StatusChannel.Hotkey,
+            $"快捷键注册失败 — {conflict}。可在「设置 → 快捷键」更换组合。",
+            StatusTone.Error);
+
+    /// <summary>
+    /// 常驻 Hotkey 通道（Clear）：快捷键恢复后清除故障提示，状态行立即回
+    /// 落到 EngineConfig/Ready，且不影响其他通道的优先级。
+    /// </summary>
+    internal void ClearShortcutConflict() => ClearResidentStatus(StatusChannel.Hotkey);
 
     // ================= First-run onboarding =================
     //
@@ -955,7 +1099,7 @@ public partial class MainWindow : Window
         NavTranslate.IsChecked = true;
         ShowSection("Translate");
         TranslateSection.BeginOnboarding();
-        SetStatus("已重新显示新手引导；完成或点「跳过引导」即可关闭。", StatusTone.Info);
+        SetStatus("已重新显示新手引导", StatusTone.Info);
     }
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
@@ -981,7 +1125,7 @@ public partial class MainWindow : Window
                 _closeHintShown = true;
                 NotifyTray?.Invoke(
                     "PopGlot 还在运行",
-                    "窗口已最小化到托盘；划词、截图翻译与快捷键仍然可用。托盘图标右键退出。");
+                    "已最小化到托盘；划词与截图翻译仍可用，托盘右键退出。");
                 try
                 {
                     var settings = ShellSettingsStore.Load();
@@ -994,6 +1138,53 @@ public partial class MainWindow : Window
             }
         }
         base.OnClosing(e);
+    }
+}
+
+/// <summary>
+/// The ONE stable Normal-state DIP size of the main window (E3-F12/F14), pure
+/// logic so the generation/flag rules are unit-testable without a second
+/// monitor: a WM_DPICHANGED transition opens; only a user resize in Normal
+/// state outside any transition may rewrite the stable value; closing the
+/// transition happens when the idle restore actually applied. Maximized and
+/// minimized phases are never observations.
+/// </summary>
+internal sealed class StableNormalSizeTracker(Size initialSize)
+{
+    public Size StableSize { get; private set; } = initialSize;
+
+    public bool InDpiTransition { get; private set; }
+
+    public void BeginDpiTransition() => InDpiTransition = true;
+
+    /// <summary>
+    /// SizeChanged observation. Returns false (stable size untouched) when the
+    /// resize happened inside a DPI transition — WPF's OS-suggested-rect resize
+    /// and the restore's own writes must never be mistaken for user intent —
+    /// or when the window is not in the Normal state (maximize/minimize).
+    /// </summary>
+    public bool TryObserveResize(Size newSize, bool isNormalState)
+    {
+        if (InDpiTransition || !isNormalState ||
+            !double.IsFinite(newSize.Width) || !double.IsFinite(newSize.Height) ||
+            newSize.Width <= 0 || newSize.Height <= 0)
+        {
+            return false;
+        }
+        StableSize = newSize;
+        return true;
+    }
+
+    /// <summary>
+    /// Called from the ApplicationIdle restore: closes the transition and
+    /// yields the stable DIP size to apply. Restore writes fired while the
+    /// transition was still open are therefore not observations; after this
+    /// call user resizes update the stable size again.
+    /// </summary>
+    public Size EndDpiTransition()
+    {
+        InDpiTransition = false;
+        return StableSize;
     }
 }
 
@@ -1041,9 +1232,11 @@ internal static class TranslationStyleMenu
     /// <summary>
     /// Selector wording while the NEXT text translation is proven to honour
     /// the active style: names the feature 文字翻译风格 and states the one
-    /// exception (vision-direct screenshots) so it never over-claims.
+    /// exception (vision-direct screenshots) so it never over-claims. Single
+    /// source: <see cref="ApplyTo"/> always uses this constant, surfaces no
+    /// longer pass their own copy.
     /// </summary>
-    internal const string SupportedToolTip = "文字翻译风格（仅影响下一次文字翻译；截图视觉直译不应用）";
+    internal const string SupportedToolTip = "文字翻译风格（下一次文字翻译生效）";
 
     /// <summary>The exact wording required when the free engine cannot personalize.</summary>
     internal const string FreeEngineToolTip = "此引擎不支持文字翻译风格个性化";
@@ -1052,26 +1245,16 @@ internal static class TranslationStyleMenu
         "暂时无法确认当前引擎是否支持文字翻译风格；若由内置免费引擎完成，所选风格不会应用";
 
     /// <summary>
-    /// Honest wording for the vision-direct screenshot route: the image and
-    /// its instruction go straight to the vision model, so the active TEXT
-    /// style is never part of that request (0.1.6 has no vision prompt
-    /// support, and the shell never splices style text client-side).
+    /// 0.1.6 文案减法：免费引擎的事前/事后提示统一为这一行诚实短状态，
+    /// 三个表面（工作台/浮窗/极速查词）共用，不再各写一句长解释。
     /// </summary>
-    internal const string VisionDirectStyleNotApplied = "截图由视觉模型直接翻译，所选文字翻译风格不参与";
+    internal const string FreeEngineStyleNotAppliedStatus = "内置免费引擎不支持所选风格，本次未应用";
 
     /// <summary>
-    /// Stated BEFORE a vision-direct screenshot translation goes out. Never
-    /// blocks or reroutes the request; silence means the resolved route was
-    /// not vision-direct (or the faithful default is active, nothing at stake).
+    /// 0.1.6 文案减法：视觉直译的事前/事后提示统一为这一行诚实短状态，
+    /// 三个表面共用；只陈述事实，不附带长解释。
     /// </summary>
-    internal const string VisionDirectPreNotice =
-        $"当前截图线路为视觉模型直译：{VisionDirectStyleNotApplied}，本次不会应用所选风格。";
-
-    /// <summary>
-    /// Stated AFTER a vision-direct screenshot translation completed. The
-    /// caller may append " · 已自动复制译文" exactly like the free-engine notice.
-    /// </summary>
-    internal const string VisionDirectCompletedNotice = "截图已由视觉模型直接翻译：所选文字翻译风格未应用";
+    internal const string VisionDirectStyleNotAppliedStatus = "截图由视觉模型直译，所选风格未应用";
 
     /// <summary>
     /// Compact label for the selector and menu items: short names for the
@@ -1169,7 +1352,7 @@ internal static class TranslationStyleMenu
         {
             return null;
         }
-        return VisionDirectPreNotice;
+        return VisionDirectStyleNotAppliedStatus;
     }
 
     /// <summary>
@@ -1273,8 +1456,9 @@ internal static class TranslationStyleMenu
     /// Honest notice for the moment a translation is triggered. Null when the
     /// route is proven to honour the active template, or when the default
     /// faithful style is active so nothing is at stake. FreeEngine states the
-    /// fact plainly; Unknown says exactly what cannot be promised. The notice
-    /// never blocks the translation and never cancels anything.
+    /// shared one-line short status; Unknown says exactly what cannot be
+    /// promised. The notice never blocks the translation and never cancels
+    /// anything.
     /// </summary>
     internal static string? PreTranslateNotice()
     {
@@ -1289,26 +1473,45 @@ internal static class TranslationStyleMenu
             return null;
         }
         return probe == TranslationStyleSupport.FreeEngine
-            ? $"当前线路为{EngineWording.FreeEngineName}：{FreeEngineToolTip}，本次文字翻译未应用所选风格。"
+            ? FreeEngineStyleNotAppliedStatus
             : $"{UnknownToolTip}。";
     }
 
     /// <summary>
+    /// Pure typed mapping from a session's <see cref="TranslationPromptSupport"/>
+    /// fact to the shared short status line — the display counterpart of the
+    /// coordinator's own route marking. Empty string means there is nothing to
+    /// claim. Callers must branch on the typed support (executor/pipeline
+    /// kind), never on display strings, and use this only to render.
+    /// </summary>
+    internal static string StyleStatusFor(TranslationPromptSupport support) => support switch
+    {
+        TranslationPromptSupport.NotSupported => FreeEngineStyleNotAppliedStatus,
+        TranslationPromptSupport.NotApplicable => VisionDirectStyleNotAppliedStatus,
+        TranslationPromptSupport.Unknown => $"{UnknownToolTip}。",
+        // Applied: the style took part — no disclaimer. Pending: no text stage
+        // resolved yet — no claim either way.
+        _ => string.Empty,
+    };
+
+    /// <summary>
     /// Applies the probed capability to a surface's selector button: grayed
     /// with the exact honest wording on the free engine, visible with an
-    /// honest caveat when unreadable, normal otherwise. The tooltip is also
-    /// mirrored into automation HelpText so screen readers get the same
-    /// truth; buttons set ToolTipService.ShowOnDisabled so the grayed state
-    /// still explains itself. Returns the probe.
+    /// honest caveat when unreadable, normal otherwise. The tooltip comes
+    /// from the single <see cref="SupportedToolTip"/> source — surfaces can
+    /// no longer pass drifting copies. The tooltip is also mirrored into
+    /// automation HelpText so screen readers get the same truth; buttons set
+    /// ToolTipService.ShowOnDisabled so the grayed state still explains
+    /// itself. Returns the probe.
     /// </summary>
-    internal static TranslationStyleSupport ApplyTo(Button selectorButton, string supportedToolTip)
+    internal static TranslationStyleSupport ApplyTo(Button selectorButton)
     {
         var probe = ProbeNextTextRoute();
         var message = probe switch
         {
             TranslationStyleSupport.FreeEngine => FreeEngineToolTip,
             TranslationStyleSupport.Unknown => UnknownToolTip,
-            _ => supportedToolTip,
+            _ => SupportedToolTip,
         };
         selectorButton.IsEnabled = probe != TranslationStyleSupport.FreeEngine;
         selectorButton.ToolTip = message;
@@ -1332,7 +1535,7 @@ internal static class TranslationStyleMenu
         var isActive = string.Equals(id, activeId, StringComparison.Ordinal);
         var item = new MenuItem
         {
-            Header = $"{ShortLabel(template)}{(isActive ? "（当前）" : string.Empty)}",
+            Header = ShortLabel(template),
             ToolTip = string.IsNullOrWhiteSpace(template.Description) ? null : template.Description,
             FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
             Icon = isActive ? MakeActiveCheck() : null,

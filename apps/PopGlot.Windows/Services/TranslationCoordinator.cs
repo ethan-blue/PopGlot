@@ -1508,9 +1508,44 @@ internal sealed class TranslationCoordinator
         _ => providerType.ToString(),
     };
 
-    private static TranslationError ClassifyException(Exception ex)
+    internal static TranslationError ClassifyException(Exception ex)
     {
         var msg = ex.Message;
+        // The free engine fails TYPED: classification must not guess from the
+        // message. A free-endpoint 401/403 has no API key to check, and a
+        // transport timeout/DNS miss is not the "网络翻译已关闭" setting —
+        // both used to be misclassified by the string rules below.
+        if (ex is FreeTranslateException freeFailure)
+        {
+            return freeFailure.Kind switch
+            {
+                FreeTranslateFailureKind.RateLimited => new TranslationError(
+                    TranslationErrorKind.RateLimited,
+                    msg,
+                    "请稍候重试，或在设置中配置自己的模型服务。",
+                    IsTransient: true),
+                FreeTranslateFailureKind.Unauthorized => new TranslationError(
+                    TranslationErrorKind.Unknown,
+                    msg,
+                    "内置免费引擎无需 API Key；请稍后重试，或在设置中配置自己的模型服务。"),
+                FreeTranslateFailureKind.NetworkOrTimeout => new TranslationError(
+                    TranslationErrorKind.Unknown,
+                    msg,
+                    "请检查本机网络连接后重试。"),
+                FreeTranslateFailureKind.LongContent => new TranslationError(
+                    TranslationErrorKind.Unknown,
+                    msg,
+                    "请缩短内容，或在设置中配置自己的模型服务。"),
+                FreeTranslateFailureKind.Unparsable => new TranslationError(
+                    TranslationErrorKind.ParseError,
+                    msg,
+                    "请稍候重试，或在设置中配置自己的模型服务。"),
+                _ => new TranslationError(
+                    TranslationErrorKind.Unknown,
+                    msg,
+                    "请稍后重试，或在设置中配置自己的模型服务。"),
+            };
+        }
         if (msg.Contains("离线") || msg.Contains("SafeDevMode") || msg.Contains("offline", StringComparison.OrdinalIgnoreCase))
         {
             return new TranslationError(

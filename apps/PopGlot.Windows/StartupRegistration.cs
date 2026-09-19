@@ -27,21 +27,21 @@ internal sealed record StartupState(
         : (DesiredEnabled, RunEntryPresent, PathMatches, OsDisabled) switch
         {
             (_, _, _, null) =>
-                "无法读取 Windows 的启用状态；启动项可能未生效，请重新保存设置或点击「重新启用」。",
+                "无法读取启用状态；重新保存设置或点击「重新启用」",
             (_, false, _, _) when DesiredEnabled =>
-                "偏好已开启，但 Windows 启动项缺失；重新保存设置即可重建。",
+                "启动项缺失；重新保存设置可重建",
             (_, _, false, false) when DesiredEnabled =>
-                "偏好已开启，但启动项指向旧路径；已可自动修复。",
+                "启动项指向旧路径；重新保存即可修复",
             (_, _, _, true) when DesiredEnabled =>
-                "偏好已开启，但 Windows 已禁用（可能在任务管理器中关闭）；点击「重新启用」恢复。",
+                "Windows 已禁用（任务管理器）；点击「重新启用」恢复",
             (_, true, true, false) when DesiredEnabled =>
-                "开机自动启动已生效。",
+                "已生效",
             (_, _, _, true) =>
-                "Windows 启动项存在，但已被禁用。",
+                "启动项存在，已被禁用",
             (_, false, _, _) =>
-                "开机自动启动未开启。",
+                "未开启",
             _ =>
-                "Windows 启动项存在但偏好已关闭；保存设置时会移除。",
+                "启动项存在但偏好已关闭，保存时移除",
         };
 }
 

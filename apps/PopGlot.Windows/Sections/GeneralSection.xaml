@@ -3,187 +3,183 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:PopGlot.Windows">
 
-    <!-- Compact desktop property list -->
+    <!-- Card-grouped desktop settings -->
     <StackPanel>
-        <TextBlock Text="通用" Style="{StaticResource PageTitle}" />
-        <TextBlock Text="外观偏好、浮窗交互与基础规则。" Style="{StaticResource PageSubtitle}" Margin="0,5,0,16" />
+        <TextBlock Text="通用" Style="{StaticResource PageTitle}" Margin="0,0,0,14" />
 
-        <TextBlock Text="外观与启动" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
+        <!-- ==================== 外观与启动 ==================== -->
+        <TextBlock Text="外观与启动" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
+        <Border Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
+                CornerRadius="{StaticResource CardRadius}" Padding="16,14" Margin="0,0,0,20">
+            <StackPanel>
+                <Grid x:Name="ThemeRowGrid">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition x:Name="ThemeCol0" Width="*" />
+                        <ColumnDefinition x:Name="ThemeCol1" Width="170" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition x:Name="ThemeRow1" Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <StackPanel x:Name="ThemeTextPanel" VerticalAlignment="Center">
+                        <TextBlock Text="主题" Style="{StaticResource RowTitle}" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <ComboBox x:Name="ThemeComboBox" Grid.Column="1" Grid.Row="0" VerticalAlignment="Center"
+                              AutomationProperties.Name="主题"
+                              SelectionChanged="ThemeComboBox_SelectionChanged">
+                        <ComboBoxItem Tag="System">跟随系统</ComboBoxItem>
+                        <ComboBoxItem Tag="Light">浅色</ComboBoxItem>
+                        <ComboBoxItem Tag="Dark">深色</ComboBoxItem>
+                    </ComboBox>
+                </Grid>
 
-        <Grid x:Name="ThemeRowGrid" Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="ThemeCol0" Width="*" />
-                <ColumnDefinition x:Name="ThemeCol1" Width="170" />
-            </Grid.ColumnDefinitions>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition x:Name="ThemeRow1" Height="Auto" />
-            </Grid.RowDefinitions>
-            <StackPanel x:Name="ThemeTextPanel" VerticalAlignment="Center">
-                <TextBlock Text="主题" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}"
-                           Text="跟随系统外观或固定深浅色（即时预览，保存后持久生效）" />
+                <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" Margin="0,12" SnapsToDevicePixels="True" Opacity="0.7" />
+
+                <Grid x:Name="StartupRowGrid">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition x:Name="StartupCol0" Width="*" />
+                        <ColumnDefinition x:Name="StartupCol1" Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition x:Name="StartupRow1" Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <StackPanel x:Name="StartupTextPanel" VerticalAlignment="Center">
+                        <TextBlock Text="开机自动启动" Style="{StaticResource RowTitle}" />
+                        <TextBlock x:Name="StartupStateHint"
+                                   Style="{StaticResource RowHint}"
+                                   AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                    <StackPanel x:Name="StartupControlsPanel" Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Orientation="Horizontal">
+                        <Button x:Name="StartupRepairButton"
+                                Content="重新启用"
+                                Style="{StaticResource GhostButton}"
+                                Height="26" Padding="10,2"
+                                Cursor="Hand"
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="重新启用开机自动启动"
+                                Visibility="Collapsed"
+                                Margin="0,0,10,0" />
+                        <ToggleButton x:Name="StartWithWindowsToggle"
+                                      AutomationProperties.Name="开机自动启动"
+                                      VerticalAlignment="Center"
+                                      Style="{StaticResource ToggleSwitch}" />
+                    </StackPanel>
+                </Grid>
+
+                <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" Margin="0,12" SnapsToDevicePixels="True" Opacity="0.7" />
+
+                <Grid x:Name="CloseToTrayRowGrid">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="关闭主窗口时最小化到托盘" Style="{StaticResource RowTitle}" />
+                    </StackPanel>
+                    <ToggleButton x:Name="CloseToTrayToggle"
+                                  AutomationProperties.Name="关闭主窗口时最小化到托盘" Grid.Column="1"
+                                  VerticalAlignment="Center"
+                                  Style="{StaticResource ToggleSwitch}" />
+                </Grid>
+
+                <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" Margin="0,12" SnapsToDevicePixels="True" Opacity="0.7" />
+
+                <Grid x:Name="OnboardingRowGrid">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="新手引导" Style="{StaticResource RowTitle}" />
+                    </StackPanel>
+                    <Button x:Name="RestartOnboardingButton" Grid.Column="1"
+                            Content="重新显示引导"
+                            Style="{StaticResource GhostButton}"
+                            Height="26" Padding="10,3"
+                            Cursor="Hand"
+                            VerticalAlignment="Center"
+                            AutomationProperties.Name="重新显示新手引导"
+                            Click="RestartOnboarding_Click" />
+                </Grid>
             </StackPanel>
-            <ComboBox x:Name="ThemeComboBox" Grid.Column="1" Grid.Row="0" VerticalAlignment="Center"
-                      AutomationProperties.Name="主题"
-                      SelectionChanged="ThemeComboBox_SelectionChanged">
-                <ComboBoxItem Tag="System">跟随系统</ComboBoxItem>
-                <ComboBoxItem Tag="Light">浅色</ComboBoxItem>
-                <ComboBoxItem Tag="Dark">深色</ComboBoxItem>
-            </ComboBox>
-        </Grid>
+        </Border>
 
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
+        <!-- ==================== 浮窗行为 ==================== -->
+        <TextBlock Text="浮窗行为" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
+        <Border Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
+                CornerRadius="{StaticResource CardRadius}" Padding="16,14" Margin="0,0,0,20">
+            <StackPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="点击浮窗外部时自动隐藏" Style="{StaticResource RowTitle}" />
+                    </StackPanel>
+                    <ToggleButton x:Name="CloseOnFocusLossToggle"
+                                  AutomationProperties.Name="点击浮窗外部时自动隐藏" Grid.Column="1"
+                                  VerticalAlignment="Center"
+                                  Style="{StaticResource ToggleSwitch}" />
+                </Grid>
 
-        <Grid x:Name="StartupRowGrid" Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="StartupCol0" Width="*" />
-                <ColumnDefinition x:Name="StartupCol1" Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition x:Name="StartupRow1" Height="Auto" />
-            </Grid.RowDefinitions>
-            <StackPanel x:Name="StartupTextPanel" VerticalAlignment="Center">
-                <TextBlock Text="开机自动启动" Style="{StaticResource RowTitle}" />
-                <TextBlock x:Name="StartupStateHint"
-                           Style="{StaticResource RowHint}"
-                           Text="登录系统后自动在托盘常驻"
-                           AutomationProperties.LiveSetting="Polite" />
+                <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" Margin="0,12" SnapsToDevicePixels="True" Opacity="0.7" />
+
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="译后自动复制" Style="{StaticResource RowTitle}" />
+                    </StackPanel>
+                    <ToggleButton x:Name="AutoCopyToggle"
+                                  AutomationProperties.Name="译后自动复制" Grid.Column="1"
+                                  VerticalAlignment="Center"
+                                  Style="{StaticResource ToggleSwitch}" />
+                </Grid>
             </StackPanel>
-            <StackPanel x:Name="StartupControlsPanel" Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Orientation="Horizontal">
-                <Button x:Name="StartupRepairButton"
-                        Content="重新启用"
-                        Style="{StaticResource GhostButton}"
-                        Height="24" Padding="8,2"
-                        Cursor="Hand"
-                        VerticalAlignment="Center"
-                        AutomationProperties.Name="重新启用开机自动启动"
-                        ToolTip="Windows 已禁用此启动项；点击后由 PopGlot 重新启用"
-                        Visibility="Collapsed"
-                        Margin="0,0,10,0" />
-                <ToggleButton x:Name="StartWithWindowsToggle"
-                              AutomationProperties.Name="开机自动启动"
-                              VerticalAlignment="Center"
-                              Style="{StaticResource ToggleSwitch}" />
+        </Border>
+
+        <!-- ==================== 翻译规则 ==================== -->
+        <TextBlock Text="翻译规则" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
+        <Border Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
+                CornerRadius="{StaticResource CardRadius}" Padding="16,14" Margin="0,0,0,20">
+            <StackPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="显示详细解析" Style="{StaticResource RowTitle}" />
+                    </StackPanel>
+                    <ToggleButton x:Name="IncludeExplanationToggle" Grid.Column="1"
+                                  AutomationProperties.Name="显示详细解析"
+                                  VerticalAlignment="Center"
+                                  Style="{StaticResource ToggleSwitch}" />
+                </Grid>
+
+                <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" Margin="0,12" SnapsToDevicePixels="True" Opacity="0.7" />
+
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="保留代码与变量名原文" Style="{StaticResource RowTitle}" />
+                    </StackPanel>
+                    <ToggleButton x:Name="ProtectTokensToggle" Grid.Column="1"
+                            AutomationProperties.Name="保留代码与变量名原文"
+                            VerticalAlignment="Center"
+                            Style="{StaticResource ToggleSwitch}" />
+                </Grid>
             </StackPanel>
-        </Grid>
-
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
-
-        <Grid x:Name="CloseToTrayRowGrid" Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="关闭主窗口时最小化到托盘" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}"
-                           Text="开启时关闭主窗口仅隐藏到托盘常驻；关闭时直接退出应用" />
-            </StackPanel>
-            <ToggleButton x:Name="CloseToTrayToggle"
-                          AutomationProperties.Name="关闭主窗口时最小化到托盘" Grid.Column="1"
-                          VerticalAlignment="Center"
-                          Style="{StaticResource ToggleSwitch}" />
-        </Grid>
-
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,6,0,14" />
-
-        <Grid x:Name="OnboardingRowGrid" Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="新手引导" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}"
-                           Text="在工作台内重新查看三步上手引导（接入引擎、快捷键、第一次翻译）" />
-            </StackPanel>
-            <Button x:Name="RestartOnboardingButton" Grid.Column="1"
-                    Content="重新显示引导"
-                    Style="{StaticResource GhostButton}"
-                    Height="24" Padding="8,2"
-                    Cursor="Hand"
-                    VerticalAlignment="Center"
-                    AutomationProperties.Name="重新显示新手引导"
-                    ToolTip="回到翻译工作台并展开三步引导；完成或「跳过引导」后不再自动出现"
-                    Click="RestartOnboarding_Click" />
-        </Grid>
-
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,6,0,14" />
-
-        <TextBlock Text="浮窗行为" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
-
-        <Grid Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="点击浮窗外部时自动隐藏" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}"
-                           Text="继续操作其他窗口时，自动收起未固定的翻译浮窗" />
-            </StackPanel>
-            <ToggleButton x:Name="CloseOnFocusLossToggle"
-                          AutomationProperties.Name="点击浮窗外部时自动隐藏" Grid.Column="1"
-                          VerticalAlignment="Center"
-                          Style="{StaticResource ToggleSwitch}" />
-        </Grid>
-
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
-
-        <Grid Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="译后自动复制" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}"
-                           Text="翻译完成自动写入剪贴板" />
-            </StackPanel>
-            <ToggleButton x:Name="AutoCopyToggle"
-                          AutomationProperties.Name="译后自动复制" Grid.Column="1"
-                          VerticalAlignment="Center"
-                          Style="{StaticResource ToggleSwitch}" />
-        </Grid>
-
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,6,0,14" />
-
-        <TextBlock Text="翻译规则" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
-
-        <Grid Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="显示详细解析" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}"
-                           Text="需要时补充语气、歧义和专业术语说明" />
-            </StackPanel>
-            <ToggleButton x:Name="IncludeExplanationToggle" Grid.Column="1"
-                          AutomationProperties.Name="显示详细解析"
-                          VerticalAlignment="Center"
-                          Style="{StaticResource ToggleSwitch}" />
-        </Grid>
-
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
-
-        <Grid Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="保留代码与变量名原文" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}"
-                           Text="防止变量、函数名、API 和文件路径被误翻译" />
-            </StackPanel>
-            <ToggleButton x:Name="ProtectTokensToggle" Grid.Column="1"
-                          AutomationProperties.Name="保留代码与变量名原文"
-                          VerticalAlignment="Center"
-                          Style="{StaticResource ToggleSwitch}" />
-        </Grid>
+        </Border>
     </StackPanel>
 </UserControl>

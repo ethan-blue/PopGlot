@@ -6,13 +6,12 @@
 
     <!-- Compact desktop property list -->
     <StackPanel>
-        <TextBlock Text="隐私与数据" Style="{StaticResource PageTitle}" />
-        <TextBlock Text="清楚决定哪些内容可以联网处理，哪些只留在本机。" Style="{StaticResource PageSubtitle}" Margin="0,5,0,16" />
+        <TextBlock Text="隐私与数据" Style="{StaticResource PageTitle}" Margin="0,0,0,14" />
 
         <!-- Plain language privacy commitment card -->
         <Border Style="{StaticResource InlineCard}" Margin="0,0,0,16" Padding="14,12">
             <StackPanel>
-                <TextBlock Text="你的数据如何处理" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
+                <TextBlock Text="数据处理范围" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
                 <Grid Margin="0,2,0,2">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -21,20 +20,20 @@
                     </Grid.ColumnDefinitions>
                     <Border Grid.Column="0" Background="{DynamicResource SurfaceBrush}"
                             BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                            CornerRadius="6" Padding="12,10">
+                            CornerRadius="{StaticResource ControlRadius}" Padding="12,10">
                         <StackPanel>
                             <TextBlock Text="需要联网时" FontWeight="SemiBold" FontSize="12.5" Foreground="{DynamicResource TextPrimaryBrush}" />
                             <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap" LineHeight="17"
-                                        Text="• 划词与文字翻译：仅发送您主动划选或输入的文本到已配置的服务商。&#x0a;• 内置免费引擎：联网的公共翻译服务，只发送待翻译文字。&#x0a;• 截图翻译：默认仅在本机提取文字（图片不上云）；仅当启用视觉直译时，才会上传框选区域的截图。" />
+                                        Text="• 划词 / 输入翻译：仅发送文本&#x0a;• 免费引擎：仅发送待翻译文本&#x0a;• 截图翻译：默认仅本机识别，开启直译才上传截图" />
                         </StackPanel>
                     </Border>
                     <Border Grid.Column="2" Background="{DynamicResource SurfaceBrush}"
                             BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                            CornerRadius="6" Padding="12,10">
+                            CornerRadius="{StaticResource ControlRadius}" Padding="12,10">
                         <StackPanel>
                             <TextBlock Text="始终留在本机" FontWeight="SemiBold" FontSize="12.5" Foreground="{DynamicResource TextPrimaryBrush}" />
                             <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap" LineHeight="17"
-                                       Text="• 绝不收集后台按键、屏幕操作或无关的剪贴板历史。&#x0a;• 您的 API Key 等凭据仅加密保存在 Windows 本地凭据保险箱，绝不上报。&#x0a;• 开启安全离线模式后，切断一切网络请求。" />
+                                       Text="• 不收集按键、屏幕操作与无关剪贴板&#x0a;• API Key 加密存于本机凭据管理器&#x0a;• 离线模式断开全部网络" />
                         </StackPanel>
                     </Border>
                 </Grid>
@@ -51,8 +50,6 @@
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="{x:Static services:EngineWording.SafeOfflineModeName}" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}"
-                           Text="开启后只使用本机识别和本地模型，不连接互联网" />
             </StackPanel>
             <ToggleButton x:Name="SafeModeToggle"
                           AutomationProperties.Name="{x:Static services:EngineWording.SafeOfflineModeName}" Grid.Column="1"
@@ -65,7 +62,7 @@
         <TextBlock x:Name="SafeModeGateNote" Style="{StaticResource Caption}"
                    Foreground="{DynamicResource WarningBrush}"
                    Margin="0,0,0,12" Visibility="Collapsed"
-                   Text="安全离线模式已开启，云端翻译和图片上传均已暂停。" />
+                   Text="安全离线模式已开启，已暂停云端翻译与图片上传。" />
 
         <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
 
@@ -75,12 +72,10 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="允许 AI 读取截图" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}"
-                           Text="默认关闭。开启后，框选的图片会发送给你配置的视觉模型" />
+                <TextBlock Text="允许模型读取截图" Style="{StaticResource RowTitle}" />
             </StackPanel>
             <ToggleButton x:Name="AllowImageUploadToggle"
-                          AutomationProperties.Name="允许 AI 读取截图" Grid.Column="1"
+                          AutomationProperties.Name="允许模型读取截图" Grid.Column="1"
                           VerticalAlignment="Center"
                           Style="{StaticResource ToggleSwitch}"
                           Checked="ProviderGate_Changed" Unchecked="ProviderGate_Changed" />
@@ -94,12 +89,12 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="云端朗读（自然语音）" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap"
-                           Text="默认关闭，朗读使用 Windows 本地语音。开启后，要朗读的文字会发送到 Microsoft 在线语音服务以生成更自然的声音。" />
+                <TextBlock Text="云端在线朗读" Style="{StaticResource RowTitle}" />
+                <TextBlock Style="{StaticResource RowHint}"
+                           Text="默认用 Windows 本地语音；开启后朗读文本发送至 Microsoft 语音服务" />
             </StackPanel>
             <ToggleButton x:Name="CloudSpeechToggle"
-                          AutomationProperties.Name="云端朗读" Grid.Column="1"
+                          AutomationProperties.Name="云端在线朗读" Grid.Column="1"
                           VerticalAlignment="Center"
                           Style="{StaticResource ToggleSwitch}"
                           Checked="CloudSpeech_ToggleChanged" Unchecked="CloudSpeech_ToggleChanged" />
@@ -123,7 +118,7 @@
                            Foreground="{DynamicResource TextSecondaryBrush}" />
                 <TextBlock x:Name="RouteDraftNote" Style="{StaticResource Caption}"
                          Margin="0,4,0,0" Visibility="Collapsed"
-                         Text="有未保存的修改；保存后线路会按新设置重新评估。" />
+                         Text="保存后线路将按新设置重新评估。" />
             </StackPanel>
         </Border>
 
@@ -139,8 +134,6 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="允许连接云端翻译服务" Style="{StaticResource RowTitle}" />
-                        <TextBlock Style="{StaticResource RowHint}"
-                                   Text="关闭后只使用本地模型，例如 Ollama" />
                     </StackPanel>
                     <ToggleButton x:Name="NetworkEnabledToggle"
                                   AutomationProperties.Name="允许连接云端翻译服务" Grid.Column="1"
@@ -184,14 +177,12 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="截图翻译方式" Style="{StaticResource RowTitle}" />
-                        <TextBlock Style="{StaticResource RowHint}"
-                                   Text="选择优先保护隐私，或让视觉模型直接理解图片" />
                     </StackPanel>
                     <ComboBox x:Name="ModeComboBox" Grid.Column="1" VerticalAlignment="Center"
                               AutomationProperties.Name="截图翻译方式"
                               SelectionChanged="ModeComboBox_SelectionChanged">
                         <ComboBoxItem Tag="LocalOcr">本机识别文字（推荐）</ComboBoxItem>
-                        <ComboBoxItem Tag="Auto">自动选择合适方式</ComboBoxItem>
+                        <ComboBoxItem Tag="Auto">自动选择</ComboBoxItem>
                         <ComboBoxItem Tag="VisionOcr">视觉模型识别，文字模型翻译</ComboBoxItem>
                         <ComboBoxItem Tag="VisionDirect">视觉模型直接翻译图片</ComboBoxItem>
                     </ComboBox>
@@ -209,7 +200,7 @@
                              IsHitTestVisible="False" />
                 </Border>
                 <TextBlock Style="{StaticResource Caption}">
-                    <Run Text='缺少语言包时：Windows 设置 → 时间和语言 → 语言和区域 → 对应语言选项 → 添加「光学字符识别」。' />
+                    <Run Text='缺少语言包：Windows 设置 → 时间和语言 → 语言和区域 → 语言选项 → 光学字符识别' />
                 </TextBlock>
             </StackPanel>
         </Expander>

@@ -304,7 +304,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             InlineRetryVocabularyButton.Visibility = Visibility.Collapsed;
             LibraryEmptyTitle.Text = "暂无历史记录";
             LibraryEmptyTitle.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
-            LibraryEmptyHint.Text = "使用划词/截图快捷键，或在翻译工作台输入，记录会自动保存在本机。";
+            LibraryEmptyHint.Text = "划词、截图或工作台输入后自动保存";
         }
         else if (_vocabulary is not null && _vocabulary.LoadState != Services.VocabularyLoadState.Ok)
         {
@@ -324,7 +324,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             InlineRetryVocabularyButton.Visibility = Visibility.Collapsed;
             LibraryEmptyTitle.Text = "生词本还是空的";
             LibraryEmptyTitle.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
-            LibraryEmptyHint.Text = "在翻译浮窗或查词栏点击「收藏」，即可把单词/句子收进生词本。";
+            LibraryEmptyHint.Text = "在浮窗或查词栏点击「收藏」";
         }
     }
 

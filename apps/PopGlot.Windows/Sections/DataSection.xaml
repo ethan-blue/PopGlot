@@ -15,7 +15,7 @@
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="保存本地翻译历史" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}"
-                           Text="最多 200 条，保留 90 天；自动过滤密钥与超长文本" />
+                           Text="最多 200 条 · 保留 90 天" />
             </StackPanel>
             <ToggleButton x:Name="HistoryEnabledToggle"
                           AutomationProperties.Name="保存本地翻译历史" Grid.Column="1"
@@ -33,7 +33,7 @@
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="清空翻译历史" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}"
-                           Text="删除全部本地历史记录，不可恢复" />
+                           Text="不可恢复" />
             </StackPanel>
             <Button x:Name="ClearHistoryButton" Grid.Column="1" Content="清空历史"
                     VerticalAlignment="Center"
@@ -50,7 +50,7 @@
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="清空生词本" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}"
-                           Text="删除全部生词收藏，不可恢复" />
+                           Text="不可恢复" />
             </StackPanel>
             <Button x:Name="ClearVocabularyButton" Grid.Column="1" Content="清空生词本"
                     VerticalAlignment="Center"

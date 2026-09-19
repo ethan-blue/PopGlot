@@ -277,7 +277,8 @@ public sealed record SettingsFormSnapshot(
     bool ProtectTokens,
     string Theme,
     RouteDraftSnapshot Route,
-    bool CloseToTray = true)
+    bool CloseToTray = true,
+    string QuickSearchHotkey = "")
 {
     public static SettingsFormSnapshot Create(
         string? selectionHotkey,
@@ -292,7 +293,8 @@ public sealed record SettingsFormSnapshot(
         bool protectTokens,
         string? theme,
         RouteDraftSnapshot route,
-        bool closeToTray = true)
+        bool closeToTray = true,
+        string? quickSearchHotkey = null)
     {
         return new SettingsFormSnapshot(
             selectionHotkey ?? string.Empty,
@@ -307,7 +309,8 @@ public sealed record SettingsFormSnapshot(
             protectTokens,
             theme ?? "System",
             route,
-            closeToTray);
+            closeToTray,
+            quickSearchHotkey ?? string.Empty);
     }
 
     public string Serialize() => string.Join('\u001f',
@@ -323,5 +326,6 @@ public sealed record SettingsFormSnapshot(
         ProtectTokens ? "1" : "0",
         Theme,
         Route.Serialize(),
-        CloseToTray ? "1" : "0");
+        CloseToTray ? "1" : "0",
+        QuickSearchHotkey);
 }

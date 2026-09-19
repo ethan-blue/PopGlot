@@ -170,6 +170,30 @@ internal sealed partial class HistoryStore : IHistoryRepository
         }
     }
 
+    /// <summary>Returns the most recent history entries up to count.</summary>
+    public IReadOnlyList<TranslationHistoryEntry> GetRecent(int count = 10)
+    {
+        lock (_gate)
+        {
+            return _entries.Take(count).ToList();
+        }
+    }
+
+    /// <summary>Searches recent history entries for source or translation containing query.</summary>
+    public IReadOnlyList<TranslationHistoryEntry> Search(string query, int maxResults = 5)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return [];
+        var q = query.Trim();
+        lock (_gate)
+        {
+            return _entries
+                .Where(e => e.Source.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                            e.Translation.Contains(q, StringComparison.OrdinalIgnoreCase))
+                .Take(maxResults)
+                .ToList();
+        }
+    }
+
     private IReadOnlyList<TranslationHistoryEntry> LoadUnlocked()
     {
         try

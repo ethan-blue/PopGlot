@@ -174,6 +174,55 @@ internal static partial class ScreenGeometry
     }
 
     /// <summary>
+    /// DPI scale of the MONITOR that contains a device pixel — the right scale
+    /// to use when positioning a window onto a target monitor, because the
+    /// window's own <see cref="ScaleOf(Visual)"/> is stale in the middle of a
+    /// WM_DPICHANGED transition (the F10/F13 E3 evidence: placements computed
+    /// from the transitioning window's scale landed 747x560/720px wrong).
+    /// Falls back to 100% only when the OS cannot answer (pre-1607).
+    /// </summary>
+    public static (double X, double Y) ScaleOfMonitorAtPixel(Point devicePoint)
+    {
+        var monitor = NativeMethods.MonitorFromPoint(
+            new NativePointLiteral
+            {
+                X = SafeRound(devicePoint.X),
+                Y = SafeRound(devicePoint.Y),
+            },
+            NativeMethods.MonitorDefaultToNearest);
+        if (monitor != 0 &&
+            NativeMethods.GetDpiForMonitor(monitor, 0, out var dpiX, out var dpiY) == 0 &&
+            dpiX > 0 && dpiY > 0)
+        {
+            return (dpiX / 96.0, dpiY / 96.0);
+        }
+        return (1.0, 1.0);
+    }
+
+    // ---- Pure DIP/pixel conversions (unit-tested, no OS calls) ----
+
+    /// <summary>DIP → physical pixels for a monitor scale (unrounded).</summary>
+    public static double DipToPixel(double dip, double scale) => dip * scale;
+
+    /// <summary>Physical pixels → DIP for a monitor scale. Degenerate scales
+    /// pass the value through so a bad reading can never scale a size to 0.</summary>
+    public static double PixelToDip(double pixel, double scale) =>
+        scale > 0 ? pixel / scale : pixel;
+
+    /// <summary>The rounding SetWindowPos applies to every coordinate.</summary>
+    public static double RoundPixel(double pixel) => Math.Round(pixel);
+
+    /// <summary>
+    /// One full DIP → pixels → DIP hop, read back on the SAME monitor scale,
+    /// exactly as MoveToPixels/SetWindowPos round it. The invariant the DPI
+    /// tests lock: repeated hops drift at most one pixel from the origin —
+    /// so a position/size that keeps being expressed in the monitor it is on
+    /// can never walk across the desktop.
+    /// </summary>
+    public static double RoundtripDip(double dip, double scaleOut, double scaleBack) =>
+        PixelToDip(RoundPixel(DipToPixel(dip, scaleOut)), scaleBack);
+
+    /// <summary>
     /// Moves a window to an exact physical-pixel position.
     /// </summary>
     /// <remarks>
@@ -228,6 +277,20 @@ internal static partial class ScreenGeometry
 
     private static partial class NativeMethods
     {
+        internal const uint MonitorDefaultToNearest = 2;
+
+        [LibraryImport("user32.dll")]
+        internal static partial nint MonitorFromPoint(
+            NativePointLiteral point,
+            uint flags);
+
+        [LibraryImport("shcore.dll")]
+        internal static partial int GetDpiForMonitor(
+            nint monitor,
+            int dpiType,
+            out uint dpiX,
+            out uint dpiY);
+
         [LibraryImport("user32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static partial bool SetWindowPos(
@@ -238,5 +301,12 @@ internal static partial class ScreenGeometry
             int width,
             int height,
             uint flags);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePointLiteral
+    {
+        public int X;
+        public int Y;
     }
 }

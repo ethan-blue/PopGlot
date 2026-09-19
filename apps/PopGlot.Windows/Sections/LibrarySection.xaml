@@ -32,7 +32,7 @@
                 <Button x:Name="RetryVocabularyButton" Style="{StaticResource GhostButton}"
                         Content="重试加载" Padding="10,4" Margin="8,0,0,0"
                         Visibility="Collapsed"
-                        ToolTip="生词本文件上次未能安全读取；重试将重新尝试加载，失败不改动现有内容"
+                        ToolTip="重新读取生词本（读取失败不改动现有内容）"
                         AutomationProperties.Name="重试加载生词本"
                         Click="RetryVocabularyButton_Click" />
                 <Button x:Name="ExportMenuButton" Style="{StaticResource GhostButton}"
@@ -40,14 +40,14 @@
                         Click="ExportMenuButton_Click" />
                 <Button x:Name="ClearCurrentButton" Style="{StaticResource GhostButton}"
                         Margin="8,0,0,0" Content="清空" Padding="10,4"
-                        ToolTip="清空当前数据源的全部记录（点击两次确认）" />
+                        ToolTip="清空当前数据源记录（点击两次确认）" />
             </StackPanel>
         </Grid>
 
         <!-- ==================== Master–Detail Surface ==================== -->
         <Border Grid.Row="1" Background="{DynamicResource SurfaceBrush}"
                 BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                CornerRadius="10">
+                CornerRadius="{StaticResource CardRadius}">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="320" MinWidth="220" MaxWidth="460" />
@@ -74,7 +74,7 @@
                                 Content="重试加载" Padding="14,6" Margin="0,12,0,0"
                                 HorizontalAlignment="Center"
                                 Visibility="Collapsed"
-                                ToolTip="重新尝试安全读取生词本"
+                                ToolTip="重新读取生词本"
                                 AutomationProperties.Name="重试加载生词本"
                                 Click="RetryVocabularyButton_Click" />
                     </StackPanel>
@@ -172,7 +172,7 @@
                                 <!-- Property list header table -->
                                 <Border Background="{DynamicResource SurfaceRaisedBrush}"
                                         BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                                        CornerRadius="6" Padding="12,8" Margin="0,0,0,12">
+                                        CornerRadius="{StaticResource ControlRadius}" Padding="12,8" Margin="0,0,0,12">
                                     <Grid>
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto" />
@@ -206,7 +206,7 @@
                                            Margin="0,0,0,4" />
                                 <Border Background="{DynamicResource InputBrush}"
                                         BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                                        CornerRadius="6" Padding="12,10">
+                                        CornerRadius="{StaticResource ControlRadius}" Padding="12,10">
                                     <TextBlock x:Name="DetailSource" FontSize="13" LineHeight="20"
                                                TextWrapping="Wrap"
                                                Foreground="{DynamicResource TextSecondaryBrush}" />
@@ -218,7 +218,7 @@
                                            Margin="0,12,0,4" />
                                 <Border Background="{DynamicResource InputBrush}"
                                         BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                                        CornerRadius="6" Padding="12,10">
+                                        CornerRadius="{StaticResource ControlRadius}" Padding="12,10">
                                     <TextBlock x:Name="DetailTranslation" FontSize="14.5" LineHeight="22"
                                                TextWrapping="Wrap"
                                                Foreground="{DynamicResource TextPrimaryBrush}" />
@@ -245,7 +245,7 @@
                                         Content="载入工作台" Padding="12,4" Click="CardLoad_Click" />
                                 <Button x:Name="CardDeleteButton" Style="{StaticResource DangerButton}" Margin="6,0,0,0"
                                         Content="删除" Padding="12,4" Click="CardDelete_Click"
-                                        ToolTip="两步确认：第一次点进入确认态，3 秒内再点才删除" />
+                                        ToolTip="删除此条记录（点击两次确认）" />
                             </StackPanel>
                         </Border>
                     </Grid>

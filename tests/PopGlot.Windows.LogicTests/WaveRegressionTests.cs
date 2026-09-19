@@ -4,6 +4,8 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using PopGlot.Windows;
 using PopGlot.Windows.Sections;
@@ -36,6 +38,14 @@ internal static class WaveRegressionTests
         if (!EqualityComparer<T>.Default.Equals(expected, actual))
         {
             throw new InvalidOperationException($"{message}: expected <{expected}>, got <{actual}>.");
+        }
+    }
+
+    private static void Equal<T>(T expected, T actual)
+    {
+        if (!EqualityComparer<T>.Default.Equals(expected, actual))
+        {
+            throw new InvalidOperationException($"Expected <{expected}>, got <{actual}>.");
         }
     }
 
@@ -106,6 +116,17 @@ internal static class WaveRegressionTests
         }
     }
 
+    /// <summary>Flushes queued dispatcher work ONCE: the Background-priority
+    /// marker blocks in a frame, so everything queued above it (Loaded, Input,
+    /// Render…) runs before the marker. Unlike <see cref="PumpUntil"/> with an
+    /// already-completed task, this always really pumps.</summary>
+    private static void PumpOnce()
+    {
+        var dispatcher = Dispatcher.FromThread(Thread.CurrentThread)
+            ?? throw new InvalidOperationException("PumpOnce must run on the STA harness thread");
+        dispatcher.Invoke(() => { }, DispatcherPriority.Background);
+    }
+
     private static HistoryStore IsolatedHistory => new(TestIsolation.HistoryPath);
 
     private static VocabularyStore IsolatedVocabulary => new(TestIsolation.VocabularyPath);
@@ -151,6 +172,13 @@ internal static class WaveRegressionTests
     private static T GetPrivate<T>(object target, string field) =>
         (T)(target.GetType().GetField(field, NonPublicInstance)!.GetValue(target)
             ?? throw new InvalidOperationException($"field {field} was null"));
+
+    private static void SetPrivate(object target, string field, object? value) =>
+        target.GetType().GetField(field, NonPublicInstance)!.SetValue(target, value);
+
+    /// <summary>Null-tolerant field probe (GetPrivate throws on null values).</summary>
+    private static bool PrivateFieldIsNull(object target, string field) =>
+        target.GetType().GetField(field, NonPublicInstance)!.GetValue(target) is null;
 
     // ===================== A: workbench / library honesty =====================
 
@@ -263,6 +291,9 @@ internal static class WaveRegressionTests
     {
         EnsureApp();
         var panel = NewPanel();
+        // The real flow keeps the source inside the input box for the whole
+        // session; without it the panel has no session to snapshot.
+        panel.SourceInputBox.Text = "first source";
 
         // Attempt 1 fails WITH retained partial text.
         DrivePanelSession(panel, "first source", new TranslationSession
@@ -302,6 +333,194 @@ internal static class WaveRegressionTests
         Equal(TranslationSessionState.Failed, freshSnapshot!.State, "the new attempt failed");
         True(string.IsNullOrEmpty(freshSnapshot.ResultText),
             "the stale partial must not be stored as the new attempt's result");
+    }
+
+    /// <summary>
+    /// Old defect this pins: while the gate is still Streaming/Finalizing,
+    /// the async cancellation callback has NOT re-classified it yet, so
+    /// HasPartialText was false and CreateSessionSnapshot (close path
+    /// included) WIPED the real streamed delta — the partial was lost from
+    /// the session store. The snapshot must trust the gate's live
+    /// StreamedText immediately: keep it, mark Cancelled + partial.
+    /// </summary>
+    public static void PanelStreamingSnapshotKeepsRealPartial()
+    {
+        EnsureApp();
+        var store = App.SharedSessionStore;
+        store.Clear();
+        var panel = NewPanel();
+        try
+        {
+            panel.SourceInputBox.Text = "流式中的源文本";
+            var gate = GetPrivate<TranslationPanelStreamGate>(panel, "_gate");
+            var (epoch, _) = gate.BeginNewOperation();
+            // The real production path: a streamed delta lands in the gate
+            // AND the panel's live translation field.
+            InvokePrivate(panel, "OnStreamUpdate", new TranslationStreamUpdate(
+                "s1", epoch, TranslationStreamUpdateKind.Delta, "部分", "部分流式译文", 6));
+            Equal(TranslationPanelStage.Streaming, gate.Stage, "setup: the gate is mid-stream");
+            Equal("部分流式译文", gate.StreamedText, "setup: the gate holds the real delta");
+
+            // The close/snapshot runs BEFORE any async cancellation callback
+            // can re-classify the gate: the stage is still Streaming now.
+            var snapshot = panel.CreateSessionSnapshot();
+            Equal(TranslationPanelStage.Streaming, gate.Stage,
+                "the snapshot must not wait for the async cancel callback to move the gate");
+            True(snapshot is not null, "a mid-stream session still owns a snapshot");
+            Equal("部分流式译文", snapshot!.ResultText, "the real streamed delta must be kept, never wiped");
+            Equal(TranslationSessionState.Cancelled, snapshot.State,
+                "an interrupted stream is cancelled, never completed");
+            True(snapshot.IsPartial, "the kept delta is flagged partial");
+
+            // The real close path (close hotkey / CloseActivePanel) stores
+            // the same partial.
+            panel.CloseAsUserIntent();
+            var stored = store.PeekRecent();
+            True(stored is not null, "CloseAsUserIntent must store the session");
+            Equal("部分流式译文", stored!.ResultText, "the close path keeps the real streamed delta");
+            Equal(TranslationSessionState.Cancelled, stored.State, "the stored session stays cancelled");
+            True(stored.IsPartial, "the stored session stays flagged partial");
+        }
+        finally
+        {
+            store.Clear();
+            panel.ForceClose = true;
+            try { panel.Close(); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// The store only ever accepts real streamed grain: a failed attempt's
+    /// friendly headline (FailedWithoutPartial) is cleared, and a new attempt
+    /// that reached Finalizing with ZERO deltas stores no text at all — even
+    /// if a stale headline still sits in the live result field.
+    /// </summary>
+    public static void PanelWithoutPartialStoresNoFakeText()
+    {
+        EnsureApp();
+        var panel = NewPanel();
+        try
+        {
+            panel.SourceInputBox.Text = "没有结果的源文本";
+
+            // A failed attempt renders its friendly headline into the result
+            // field for reading — but it is not a translation.
+            DrivePanelSession(panel, "没有结果的源文本", new TranslationSession
+            {
+                Stage = TranslationSessionStage.Failed,
+                Error = new TranslationError(TranslationErrorKind.ServerError, "连接超时（120 秒无响应）"),
+            });
+            var gate = GetPrivate<TranslationPanelStreamGate>(panel, "_gate");
+            Equal(TranslationPanelStage.FailedWithoutPartial, gate.Stage, "setup: the failure kept no partial");
+            True(!string.IsNullOrWhiteSpace(GetPrivate<string>(panel, "_translation")),
+                "setup: the friendly failure headline is rendered for reading");
+
+            var failedSnapshot = panel.CreateSessionSnapshot();
+            True(failedSnapshot is not null, "the failed attempt still owns a session");
+            Equal(TranslationSessionState.Failed, failedSnapshot!.State, "the attempt failed");
+            True(string.IsNullOrWhiteSpace(failedSnapshot.ResultText),
+                $"the friendly failure headline must never be stored as a translation, got '{failedSnapshot.ResultText}'");
+            True(!failedSnapshot.IsPartial, "a failure without partial is not partial");
+
+            // The next attempt reaches Finalizing with zero streamed deltas:
+            // nothing may materialise in the store.
+            gate.BeginNewOperation();
+            gate.OnStageChanged(TranslationSessionStage.Finalizing);
+            var emptySnapshot = panel.CreateSessionSnapshot();
+            True(emptySnapshot is not null, "the in-flight attempt still owns a session");
+            True(string.IsNullOrWhiteSpace(emptySnapshot!.ResultText),
+                "a stream without deltas must not save any text");
+            True(!emptySnapshot.IsPartial, "no delta means no partial");
+            Equal(TranslationSessionState.Cancelled, emptySnapshot.State,
+                "an in-flight attempt with nothing streamed is only ever cancelled-and-empty");
+        }
+        finally
+        {
+            panel.ForceClose = true;
+            try { panel.Close(); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Old defect this pins: the draft-guard bounce-back set
+    /// NavProvider/NavPrompt.IsChecked WITHOUT the _syncingNav guard, so the
+    /// rebound radio re-entered ShowPage synchronously (a full page switch
+    /// with list refreshes) while the guard branch was still deciding. The
+    /// rebound must be wrapped in _syncingNav and the guard flow must hold.
+    /// </summary>
+    public static void SettingsDraftGuardNavBounceStaysSynced()
+    {
+        EnsureApp();
+        var window = new SettingsWindow(ShellSettings.Default, IsolatedHistory, IsolatedVocabulary);
+        try
+        {
+            window.Show();
+            PumpUntil(Task.CompletedTask);
+            window.ShowPage("Provider");
+            var profile = ProfileManager.Load().TryGetActiveProfile() ?? EditorProfile();
+            window.ProviderSection.LoadProfileIntoForm(profile);
+            InvokePrivate(window.ProviderSection, "ShowEditorForm", false);
+            True(window.ProviderSection.IsEditorOpen, "setup: the engine editor is open");
+            window.ProviderSection.ServiceNameTextBox.Text = "改名后的引擎";
+            True(window.ProviderSection.IsEditorDirty, "setup: the editor holds an unsaved draft");
+
+            // The user clicks another page in the rail.
+            window.NavGeneral.IsChecked = true;
+
+            // The draft guard keeps the window on the engine page, with the
+            // rail bounced back and the requested page withheld.
+            Equal(Visibility.Visible, window.ProviderSection.Visibility,
+                "the draft guard keeps the engine page up");
+            Equal(Visibility.Collapsed, window.GeneralSection.Visibility,
+                "the requested page stays withheld until the draft is settled");
+            True(window.NavProvider.IsChecked == true, "the rail bounces back to the guarded page");
+            True(window.NavGeneral.IsChecked == false, "the requested nav item does not stay lit");
+            Equal(Visibility.Visible, window.ProviderSection.DraftGuardBar.Visibility,
+                "the draft guard bar is visible");
+            True(window.ProviderSection.IsEditorOpen && window.ProviderSection.IsEditorDirty,
+                "the bounce must not clobber the unsaved draft");
+
+            // Wiring: the rebound IsChecked must sit inside the _syncingNav
+            // guard so SubNav_Checked cannot re-enter ShowPage.
+            var source = File.ReadAllText(Path.Combine(
+                FindProjectRoot(), "apps", "PopGlot.Windows", "SettingsWindow.xaml.cs"));
+            var providerGuard = source.IndexOf("ProviderSection.BeginDraftGuard(", StringComparison.Ordinal);
+            var promptGuard = source.IndexOf("PromptSectionHost.BeginDraftGuard(", StringComparison.Ordinal);
+            True(providerGuard > 0 && promptGuard > providerGuard,
+                "both draft guards must stay in ShowPage");
+            var providerRebind = source.LastIndexOf("NavProvider.IsChecked = true", providerGuard, StringComparison.Ordinal);
+            True(providerRebind > 0 &&
+                 source.LastIndexOf("_syncingNav = true", providerRebind, StringComparison.Ordinal) > 0,
+                "the provider draft-guard nav rebound must be preceded by _syncingNav = true");
+            True(source[providerRebind..providerGuard].Contains("_syncingNav = false", StringComparison.Ordinal),
+                "the provider draft-guard nav rebound must be followed by _syncingNav = false");
+            var promptRebind = source.LastIndexOf("NavPrompt.IsChecked = true", promptGuard, StringComparison.Ordinal);
+            True(promptRebind > 0 &&
+                 source.LastIndexOf("_syncingNav = true", promptRebind, StringComparison.Ordinal) > 0,
+                "the prompt draft-guard nav rebound must be preceded by _syncingNav = true");
+            True(source[promptRebind..promptGuard].Contains("_syncingNav = false", StringComparison.Ordinal),
+                "the prompt draft-guard nav rebound must be followed by _syncingNav = false");
+
+            // Discarding the draft resolves the guard; the deferred
+            // navigation (BeginInvoke) then opens the requested page.
+            InvokePrivate(window.ProviderSection, "DraftDiscard_Click",
+                window.ProviderSection, new RoutedEventArgs());
+            True(window.ProviderSection.DraftGuardBar.Visibility == Visibility.Collapsed,
+                "discarding dismisses the guard bar");
+            for (var attempt = 0; attempt < 200 && window.GeneralSection.Visibility != Visibility.Visible; attempt++)
+            {
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
+                Thread.Sleep(5);
+            }
+            Equal(Visibility.Visible, window.GeneralSection.Visibility,
+                "the deferred navigation opens the requested page after the draft is settled");
+            True(window.NavGeneral.IsChecked == true, "the rail follows the opened page");
+        }
+        finally
+        {
+            window.ForceClose = true;
+            try { window.Close(); } catch { }
+        }
     }
 
     /// <summary>
@@ -429,6 +648,271 @@ internal static class WaveRegressionTests
     }
 
     /// <summary>
+    /// The pre-read timeout posts its landing notice into a QuickSearchWindow
+    /// that may have JUST been created. The old raw footer write lost the race
+    /// against the first-show's queued Loaded sync and the Idle copy swallowed
+    /// the notice. The notice is STATE-driven now
+    /// (<see cref="QuickSearchState.PendingNotice"/>): every SyncUiWithState
+    /// re-applies it, so the first Show→Loaded keeps it. The USER hide
+    /// lifecycle (Esc/focus-loss/X close-as-hide) is the truth that ends it:
+    /// an ordinary re-show must greet with the idle copy again — never a stale
+    /// timeout notice. An already-loaded visible window shows a fresh post
+    /// immediately, and the next real query clears it.
+    /// </summary>
+    public static void QuickSearchPendingNoticeSurvivesFirstShowLoaded()
+    {
+        EnsureApp();
+        var quickSearch = new QuickSearchWindow(IsolatedHistory, IsolatedVocabulary);
+        try
+        {
+            // 1. FIRST CREATION: Show() queues the Loaded broadcast; the
+            //    notice is posted right after (the production timeout path's
+            //    exact Show-then-Post ordering). The Loaded sync must
+            //    re-apply the pending notice, not swallow it.
+            quickSearch.Show();
+            quickSearch.PostPendingNotice("未能及时读取选区（测试落地提示）");
+            PumpOnce(); // let the queued Loaded → SyncUiWithState run
+            PumpOnce();
+
+            True(quickSearch.FooterStatusBlock.Text.Contains("测试落地提示", StringComparison.Ordinal),
+                $"the first-show Loaded sync must re-apply the pending notice, not swallow it, got '{quickSearch.FooterStatusBlock.Text}'");
+
+            // 2. USER HIDE ends the notice lifecycle: the window itself (not
+            //    the caller) clears it, and an ordinary re-show returns to the
+            //    idle copy — a stale timeout notice must not greet the user.
+            quickSearch.Hide();
+            Equal("输入后按 Enter 翻译", quickSearch.FooterStatusBlock.Text,
+                $"the user hide must clear the pending notice immediately, got '{quickSearch.FooterStatusBlock.Text}'");
+            quickSearch.Show();
+            PumpOnce();
+            PumpOnce();
+            Equal("输入后按 Enter 翻译", quickSearch.FooterStatusBlock.Text,
+                $"an ordinary re-show must show the idle copy, not a resurrected notice, got '{quickSearch.FooterStatusBlock.Text}'");
+
+            // 3. ALREADY LOADED AND VISIBLE: a fresh post shows immediately.
+            quickSearch.PostPendingNotice("可见窗口提示");
+            True(quickSearch.FooterStatusBlock.Text.Contains("可见窗口提示", StringComparison.Ordinal),
+                $"a loaded, visible window must show the notice immediately, got '{quickSearch.FooterStatusBlock.Text}'");
+
+            // 4. THE NEXT REAL QUERY clears it (TextChanged → debounce →
+            //    OnQueryTextChanged); pump frames while the debounce elapses.
+            quickSearch.SearchBox.Text = "真正的查询词";
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (DateTime.UtcNow < deadline &&
+                   quickSearch.FooterStatusBlock.Text.Contains("可见窗口提示", StringComparison.Ordinal))
+            {
+                Thread.Sleep(25);
+                PumpOnce();
+            }
+
+            True(!quickSearch.FooterStatusBlock.Text.Contains("可见窗口提示", StringComparison.Ordinal),
+                $"the next real query must clear the pending notice, got '{quickSearch.FooterStatusBlock.Text}'");
+            Equal("按 Enter 立即翻译 · Shift+Enter 换行", quickSearch.FooterStatusBlock.Text,
+                "after the notice clears, the footer must return to the idle copy");
+        }
+        finally
+        {
+            quickSearch.ForceClose = true;
+            quickSearch.Close();
+        }
+    }
+
+    /// <summary>
+    /// The pending notice is ONE-SHOT: the next real query (TextChanged →
+    /// debounce → OnQueryTextChanged) must clear it and return the footer to
+    /// the idle copy — the notice can never permanently occupy the footer.
+    /// </summary>
+    public static void QuickSearchPendingNoticeClearsOnNextQuery()
+    {
+        EnsureApp();
+        var quickSearch = new QuickSearchWindow(IsolatedHistory, IsolatedVocabulary);
+        try
+        {
+            quickSearch.Show();
+            quickSearch.PostPendingNotice("未能及时读取选区（测试落地提示）");
+            PumpOnce();
+            True(quickSearch.FooterStatusBlock.Text.Contains("测试落地提示", StringComparison.Ordinal),
+                "setup: the notice must be visible before the query");
+
+            // A real query flows through TextChanged → 150 ms debounce →
+            // OnQueryTextChanged → SyncUiWithState; pump frames while the
+            // debounce elapses.
+            quickSearch.SearchBox.Text = "真正的查询词";
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (DateTime.UtcNow < deadline &&
+                   quickSearch.FooterStatusBlock.Text.Contains("测试落地提示", StringComparison.Ordinal))
+            {
+                Thread.Sleep(25);
+                PumpOnce();
+            }
+
+            True(!quickSearch.FooterStatusBlock.Text.Contains("测试落地提示", StringComparison.Ordinal),
+                $"the next real query must clear the pending notice, got '{quickSearch.FooterStatusBlock.Text}'");
+            Equal("按 Enter 立即翻译 · Shift+Enter 换行", quickSearch.FooterStatusBlock.Text,
+                "after the notice clears, the footer must return to the idle copy");
+        }
+        finally
+        {
+            quickSearch.ForceClose = true;
+            quickSearch.Close();
+        }
+    }
+
+    /// <summary>
+    /// Explicit priority and consumption rules between the two footer
+    /// notices: the error/timeout-class <see cref="QuickSearchState.PendingNotice"/>
+    /// OUTRANKS the style-only pre-flight explanation, and taking over
+    /// CONSUMES the style notice on the spot — it is neither swallowed by the
+    /// style retirement branch nor revived by a later sync. The style notice
+    /// alone still follows its original rule: shown while a query is
+    /// preparing (streaming/finalizing with no text), retired by the FIRST
+    /// real delta.
+    /// </summary>
+    public static void QuickSearchPendingNoticeOutranksStyleNotice()
+    {
+        EnsureApp();
+        var quickSearch = new QuickSearchWindow(IsolatedHistory, IsolatedVocabulary);
+        try
+        {
+            quickSearch.Show();
+            PumpOnce();
+
+            // Arm the style pre-flight notice exactly like the production
+            // pre-translate path: a real query preparing, no text yet.
+            quickSearch.State.StartNewSearch("style race");
+            SetPrivate(quickSearch, "_pendingStyleNotice", "风格提示：当前引擎不支持自定义样式");
+            InvokePrivate(quickSearch, "SyncUiWithState");
+            True(quickSearch.FooterStatusBlock.Text.Contains("风格提示", StringComparison.Ordinal),
+                $"setup: the style notice must show while preparing, got '{quickSearch.FooterStatusBlock.Text}'");
+
+            // 1. Both exist: the timeout-class notice WINS and consumes the
+            //    style notice immediately.
+            quickSearch.PostPendingNotice("未能及时读取选区（测试落地提示）");
+            True(quickSearch.FooterStatusBlock.Text.Contains("测试落地提示", StringComparison.Ordinal) &&
+                 !quickSearch.FooterStatusBlock.Text.Contains("风格提示", StringComparison.Ordinal),
+                $"the pending notice must outrank the style notice, got '{quickSearch.FooterStatusBlock.Text}'");
+            True(PrivateFieldIsNull(quickSearch, "_pendingStyleNotice"),
+                "the style notice must be consumed the moment the pending notice takes over");
+
+            // 2. Later syncs must not revive the style notice nor drop the
+            //    pending notice.
+            InvokePrivate(quickSearch, "SyncUiWithState");
+            True(quickSearch.FooterStatusBlock.Text.Contains("测试落地提示", StringComparison.Ordinal) &&
+                 !quickSearch.FooterStatusBlock.Text.Contains("风格提示", StringComparison.Ordinal),
+                $"a later sync must keep the pending notice and never revive the style notice, got '{quickSearch.FooterStatusBlock.Text}'");
+
+            // 3. The next real query clears the pending notice; the consumed
+            //    style notice must not reappear either.
+            quickSearch.State.OnQueryTextChanged("真实查询");
+            InvokePrivate(quickSearch, "SyncUiWithState");
+            Equal("按 Enter 立即翻译 · Shift+Enter 换行", quickSearch.FooterStatusBlock.Text,
+                $"after the query clears the notice, only the idle copy remains, got '{quickSearch.FooterStatusBlock.Text}'");
+        }
+        finally
+        {
+            quickSearch.ForceClose = true;
+            quickSearch.Close();
+        }
+
+        // 4. Style notice ALONE (no pending notice): unchanged expiry rule —
+        //    the first real delta retires it permanently.
+        var expiring = new QuickSearchWindow(IsolatedHistory, IsolatedVocabulary);
+        try
+        {
+            expiring.Show();
+            PumpOnce();
+            expiring.State.StartNewSearch("delta expiry");
+            SetPrivate(expiring, "_pendingStyleNotice", "风格提示：独立存在时正常展示");
+            InvokePrivate(expiring, "SyncUiWithState");
+            True(expiring.FooterStatusBlock.Text.Contains("风格提示", StringComparison.Ordinal),
+                "setup: the style notice shows while the query is preparing");
+
+            expiring.State.OnStreamUpdate(
+                new TranslationStreamUpdate(
+                    "s1", expiring.State.CurrentEpoch, TranslationStreamUpdateKind.Delta, "首", "首字", 2),
+                "delta expiry");
+            InvokePrivate(expiring, "SyncUiWithState");
+            Equal("正在生成…", expiring.FooterStatusBlock.Text,
+                $"the first real delta must retire the style notice, got '{expiring.FooterStatusBlock.Text}'");
+            True(PrivateFieldIsNull(expiring, "_pendingStyleNotice"),
+                "the style notice must stay consumed after the first delta");
+        }
+        finally
+        {
+            expiring.ForceClose = true;
+            expiring.Close();
+        }
+    }
+
+    /// <summary>
+    /// Hiding during the PREPARING phase (streaming, no text yet, style-only
+    /// explanation showing) is a view-lifecycle end for BOTH footer notices:
+    /// a stale style explanation must not greet the user on re-show. The C05
+    /// session semantics stay untouched — query and in-flight stage survive
+    /// the hide, and the snapshot stored on hide follows the SAME contract as
+    /// before: a preparing session snapshots as Cancelled with NO fabricated
+    /// result text.
+    /// </summary>
+    public static void QuickSearchHideDuringPreparationClearsStyleNotice()
+    {
+        EnsureApp();
+        var quickSearch = new QuickSearchWindow(IsolatedHistory, IsolatedVocabulary);
+        try
+        {
+            quickSearch.Show();
+            PumpOnce();
+
+            // Real preparing phase: streaming with no accumulated text, style
+            // pre-flight notice armed exactly like production.
+            quickSearch.State.StartNewSearch("style hide query");
+            SetPrivate(quickSearch, "_pendingStyleNotice", "风格提示：准备期说明");
+            InvokePrivate(quickSearch, "SyncUiWithState");
+            True(quickSearch.FooterStatusBlock.Text.Contains("风格提示", StringComparison.Ordinal),
+                "setup: the style notice must show while preparing");
+
+            // USER HIDE clears BOTH one-shot notices; the session survives.
+            quickSearch.Hide();
+            True(PrivateFieldIsNull(quickSearch, "_pendingStyleNotice"),
+                "the hide must clear the style notice");
+            True(quickSearch.State.PendingNotice is null,
+                "the hide must clear the pending notice");
+            True(!quickSearch.FooterStatusBlock.Text.Contains("风格提示", StringComparison.Ordinal),
+                $"the footer must not keep the stale style notice after hide, got '{quickSearch.FooterStatusBlock.Text}'");
+
+            // Re-show: no stale style explanation greets the user, while the
+            // kept session state is untouched (C05).
+            quickSearch.Show();
+            PumpOnce();
+            PumpOnce();
+            True(!quickSearch.FooterStatusBlock.Text.Contains("风格提示", StringComparison.Ordinal),
+                $"the re-show must not resurrect the stale style notice, got '{quickSearch.FooterStatusBlock.Text}'");
+            Equal("style hide query", quickSearch.State.CurrentQuery,
+                "C05: the kept session's query must survive the hide");
+            Equal(QuickSearchUiStage.Streaming, quickSearch.State.Stage,
+                "C05: the in-flight stage must survive the hide");
+
+            // Snapshot semantics: the hide still stores the session with the
+            // same contract as before — preparing snapshots as Cancelled with
+            // no fabricated result text.
+            var recent = App.SharedSessionStore.PeekRecent();
+            True(recent is not null, "the hide must still store the session snapshot");
+            Equal(SessionOrigin.QuickSearch, recent!.Origin,
+                "the snapshot must come from quick search");
+            Equal("style hide query", recent.SourceText,
+                "the snapshot must carry the kept query");
+            Equal(TranslationSessionState.Cancelled, recent.State,
+                "a preparing session must snapshot as cancelled");
+            True(recent.ResultText is null,
+                "a snapshot must never fabricate result text for an empty stream");
+        }
+        finally
+        {
+            quickSearch.ForceClose = true;
+            quickSearch.Close();
+        }
+    }
+
+    /// <summary>
     /// The star button's accessibility name must follow the dynamic starred
     /// state, so screen readers announce the action the click will actually
     /// perform.
@@ -437,23 +921,39 @@ internal static class WaveRegressionTests
     {
         EnsureApp();
         var vocab = IsolatedVocabulary;
-        var quickSearch = new QuickSearchWindow(IsolatedHistory, vocab);
+        // 生词本身份 = (word, 当前持久化语言对)。与生产一致，先把隔离核心
+        // 的语言对固定为本用例使用的 en→zh-CN，结束后恢复。
+        var original = CoreBridge.GetSettings();
         try
         {
-            quickSearch.SearchBox.Text = "wave_star_word";
-            InvokePrivate(quickSearch, "UpdateStarButton");
-            Equal("收藏到生词本", AutomationProperties.GetName(quickSearch.StarButton),
-                "an unstarred word must announce the star action");
-            Equal(quickSearch.StarButton.ToolTip as string, AutomationProperties.GetName(quickSearch.StarButton),
-                "tooltip and accessibility name must agree");
+            PumpUntil(CoreBridge.SaveSettingsAsync(original with
+            {
+                SourceLanguage = "en",
+                TargetLanguage = "zh-CN",
+            }));
+            var quickSearch = new QuickSearchWindow(IsolatedHistory, vocab);
+            try
+            {
+                quickSearch.SearchBox.Text = "wave_star_word";
+                InvokePrivate(quickSearch, "UpdateStarButton");
+                Equal("收藏到生词本", AutomationProperties.GetName(quickSearch.StarButton),
+                    "an unstarred word must announce the star action");
+                Equal(quickSearch.StarButton.ToolTip as string, AutomationProperties.GetName(quickSearch.StarButton),
+                    "tooltip and accessibility name must agree");
 
-            var result = vocab.ToggleStar("wave_star_word", "wave translation", "", "", "en", "zh-CN");
-            True(result.Persisted && result.Starred, "setup: the word is starred");
-            InvokePrivate(quickSearch, "UpdateStarButton");
-            Equal("从生词本移除", AutomationProperties.GetName(quickSearch.StarButton),
-                "a starred word must announce the remove action");
-            Equal(quickSearch.StarButton.ToolTip as string, AutomationProperties.GetName(quickSearch.StarButton),
-                "tooltip and accessibility name must agree after starring");
+                var result = vocab.ToggleStar("wave_star_word", "wave translation", "", "", "en", "zh-CN");
+                True(result.Persisted && result.Starred, "setup: the word is starred");
+                InvokePrivate(quickSearch, "UpdateStarButton");
+                Equal("从生词本移除", AutomationProperties.GetName(quickSearch.StarButton),
+                    "a starred word must announce the remove action");
+                Equal(quickSearch.StarButton.ToolTip as string, AutomationProperties.GetName(quickSearch.StarButton),
+                    "tooltip and accessibility name must agree after starring");
+            }
+            finally
+            {
+                quickSearch.ForceClose = true;
+                quickSearch.Close();
+            }
         }
         finally
         {
@@ -461,6 +961,7 @@ internal static class WaveRegressionTests
             {
                 vocab.Remove(word.Id);
             }
+            PumpUntil(CoreBridge.SaveSettingsAsync(original));
         }
     }
 
@@ -479,8 +980,13 @@ internal static class WaveRegressionTests
             PumpUntil(Task.CompletedTask);
             var workArea = SystemParameters.WorkArea;
 
-            // Park the window near the bottom edge, then grow it — the
-            // SizeChanged handler runs the production clamp.
+            // Park the window INSIDE the primary work area this assertion
+            // compares against, then near its bottom edge, and grow it — the
+            // HeightChanged/SizeChanged path runs the production clamp. The
+            // window must not be left wherever the shell cascade-placed it:
+            // on a multi-monitor desktop that can be a different monitor with
+            // a different work area, which is not what this test exercises.
+            quickSearch.Left = workArea.Left + 40;
             quickSearch.Top = workArea.Bottom - 120;
             PumpUntil(Task.CompletedTask);
             var topBefore = quickSearch.Top;
@@ -493,6 +999,19 @@ internal static class WaveRegressionTests
                 $"{quickSearch.Top + quickSearch.ActualHeight:F0} vs area bottom {workArea.Bottom:F0}");
             True(quickSearch.Top < topBefore + 1,
                 "the clamp must actually pull the window up when it overflows");
+
+            // Oversized window check: when requested height exceeds the work area,
+            // effective height must be capped first, keeping top on screen and bottom inside work area.
+            quickSearch.Height = workArea.Height + 200;
+            PumpUntil(Task.CompletedTask);
+            PumpUntil(Task.CompletedTask);
+
+            True(quickSearch.ActualHeight <= workArea.Height,
+                $"effective height must be capped to work area: {quickSearch.ActualHeight:F0} vs {workArea.Height:F0}");
+            True(quickSearch.Top + quickSearch.ActualHeight <= workArea.Bottom + 5,
+                $"oversized bottom must stay inside work area: bottom {quickSearch.Top + quickSearch.ActualHeight:F0} vs area bottom {workArea.Bottom:F0}");
+            True(quickSearch.Top >= workArea.Top - 5,
+                $"oversized top must stay on screen: top {quickSearch.Top:F0} vs area top {workArea.Top:F0}");
         }
         finally
         {
@@ -510,23 +1029,33 @@ internal static class WaveRegressionTests
     {
         EnsureApp();
         var window = new SettingsWindow(ShellSettings.Default, IsolatedHistory, IsolatedVocabulary);
-        window.GeneralSection.AutoCopy.IsChecked = !ShellSettings.Default.CopyTranslationAutomatically;
-        True(window.IsDirty, "setup: the form is dirty");
-        True(window.SaveButton.IsEnabled && window.RevertButton.IsEnabled,
-            "a plain dirty form keeps both actions available");
+        try
+        {
+            window.Show();
+            PumpUntil(Task.CompletedTask);
+            window.GeneralSection.AutoCopy.IsChecked = !ShellSettings.Default.CopyTranslationAutomatically;
+            True(window.IsDirty, "setup: the form is dirty");
+            True(window.SaveButton.IsEnabled && window.RevertButton.IsEnabled,
+                "a plain dirty form keeps both actions available");
 
-        GetPrivate<object>(window, "_state"); // field exists probe
-        window.GetType().GetField("_state", NonPublicInstance)!
-            .SetValue(window, SettingsEditState.Saving);
-        InvokePrivate(window, "UpdateSaveBar");
+            GetPrivate<object>(window, "_state"); // field exists probe
+            window.GetType().GetField("_state", NonPublicInstance)!
+                .SetValue(window, SettingsEditState.Saving);
+            InvokePrivate(window, "UpdateSaveBar");
 
-        Equal(Visibility.Visible, window.SaveActionsPanel.Visibility, "the save bar stays visible while saving");
-        Equal("正在保存…", (string)window.SaveButton.Content, "the save button names the in-flight commit");
-        True(!window.SaveButton.IsEnabled, "saving must disable save (no re-entry)");
-        True(!window.RevertButton.IsEnabled, "saving must disable revert");
+            Equal(Visibility.Visible, window.SaveActionsPanel.Visibility, "the save bar stays visible while saving");
+            Equal("正在保存…", (string)window.SaveButton.Content, "the save button names the in-flight commit");
+            True(!window.SaveButton.IsEnabled, "saving must disable save (no re-entry)");
+            True(!window.RevertButton.IsEnabled, "saving must disable revert");
 
-        window.Close();
-        True(window.IsLoaded, "a Saving window must refuse to close");
+            window.Close();
+            True(window.IsLoaded, "a Saving window must refuse to close");
+        }
+        finally
+        {
+            window.ForceClose = true;
+            try { window.Close(); } catch { }
+        }
     }
 
     /// <summary>
@@ -538,18 +1067,28 @@ internal static class WaveRegressionTests
     {
         EnsureApp();
         var window = new SettingsWindow(ShellSettings.Default, IsolatedHistory, IsolatedVocabulary);
-        window.ProviderSection.LoadProfileIntoForm(EditorProfile());
-        InvokePrivate(window.ProviderSection, "ShowEditorForm", false);
-        True(window.ProviderSection.IsEditorOpen, "setup: the engine editor is open and clean");
+        try
+        {
+            window.Show();
+            PumpUntil(Task.CompletedTask);
+            window.ProviderSection.LoadProfileIntoForm(EditorProfile());
+            InvokePrivate(window.ProviderSection, "ShowEditorForm", false);
+            True(window.ProviderSection.IsEditorOpen, "setup: the engine editor is open and clean");
 
-        window.GeneralSection.AutoCopy.IsChecked = !ShellSettings.Default.CopyTranslationAutomatically;
-        True(window.IsDirty, "setup: the main form is dirty");
+            window.GeneralSection.AutoCopy.IsChecked = !ShellSettings.Default.CopyTranslationAutomatically;
+            True(window.IsDirty, "setup: the main form is dirty");
 
-        window.Close();
-        True(window.IsLoaded, "a dirty form must refuse to close");
-        True(!window.ProviderSection.IsEditorOpen, "the clean editor folds away first");
-        Equal(Visibility.Visible, window.SaveActionsPanel.Visibility,
-            "the dirty form must face the user with a visible save bar");
+            window.Close();
+            True(window.IsLoaded, "a dirty form must refuse to close");
+            True(!window.ProviderSection.IsEditorOpen, "the clean editor folds away first");
+            Equal(Visibility.Visible, window.SaveActionsPanel.Visibility,
+                "the dirty form must face the user with a visible save bar");
+        }
+        finally
+        {
+            window.ForceClose = true;
+            try { window.Close(); } catch { }
+        }
     }
 
     /// <summary>
@@ -612,11 +1151,14 @@ internal static class WaveRegressionTests
         True(PromptSection.ValidateDraft("名", new string('x', 257), "", "", "") is not null,
             "a 257-char description is rejected");
 
-        // Domain / audience carry BOTH a char and a byte budget.
-        True(PromptSection.ValidateDraft("名", "", "", new string('汉', 341), "") is null,
-            "341 CJK characters (1023 bytes) fit the 1024-byte domain budget");
-        True(PromptSection.ValidateDraft("名", "", "", new string('汉', 342), "") is not null,
-            "342 CJK characters (1026 bytes) are rejected");
+        // Domain / audience carry BOTH a char and a byte budget — the 256-char
+        // quota mirrors the authoritative Rust MAX_DOMAIN_SCALARS, so the
+        // boundary that binds for CJK input is the char one (any string over
+        // the 1024-byte budget necessarily exceeds 256 chars first).
+        True(PromptSection.ValidateDraft("名", "", "", new string('汉', 256), "") is null,
+            "256 CJK characters (768 bytes) fit both the 256-char and the 1024-byte domain budget");
+        True(PromptSection.ValidateDraft("名", "", "", new string('汉', 257), "") is not null,
+            "a 257-character domain is rejected even though its 771 bytes would fit the 1024-byte budget");
         True(PromptSection.ValidateDraft("名", "", "", "", new string('a', 257)) is not null,
             "the 256-char audience limit holds even when the bytes would fit");
     }
@@ -838,11 +1380,11 @@ internal static class WaveRegressionTests
             "below 720 stacks the workbench panes vertically");
         apply.Invoke(main, new object?[] { 959d });
         Equal(168d, main.SidebarColumn.Width.Value, "720–959 restores the workstation sidebar");
-        Equal(2, main.TranslateSection.PaneGrid.ColumnDefinitions.Count,
-            "720–959 returns the panes side by side");
+        Equal(3, main.TranslateSection.PaneGrid.ColumnDefinitions.Count,
+            "720–959 returns the panes side by side (source | centre axis | target, per the T11 grid)");
         apply.Invoke(main, new object?[] { 960d });
-        Equal(2, main.TranslateSection.PaneGrid.ColumnDefinitions.Count,
-            ">= 960 keeps the wide dual-column workstation layout");
+        Equal(3, main.TranslateSection.PaneGrid.ColumnDefinitions.Count,
+            ">= 960 keeps the wide dual-column workstation layout (source | centre axis | target)");
     }
 
     /// <summary>
@@ -915,13 +1457,18 @@ internal static class WaveRegressionTests
                 $"{Path.GetFileName(file)} must not branch on the PipelineLabel display string");
         }
 
-        // 2) The two post-hoc honesty notices branch on the TYPED executor.
+        // 2) The two post-hoc honesty notices branch on a TYPED route fact —
+        //    the executor or the coordinator's prompt-support marking
+        //    (NotSupported ⇔ the free engine ran the text stage) — never on
+        //    the Chinese PipelineLabel display string.
         var quickSearch = File.ReadAllText(Path.Combine(appDir, "QuickSearchWindow.xaml.cs"));
-        True(quickSearch.Contains("session.TextExecutor == TranslationTextExecutor.FreeEngine", StringComparison.Ordinal),
-            "the quick-search free-engine notice must ride the typed executor");
+        True(quickSearch.Contains("TranslationTextExecutor.FreeEngine", StringComparison.Ordinal) ||
+             quickSearch.Contains("TranslationPromptSupport.NotSupported", StringComparison.Ordinal),
+            "the quick-search free-engine notice must ride the typed executor/prompt-support fact");
         var translate = File.ReadAllText(Path.Combine(appDir, "Sections", "TranslateSection.xaml.cs"));
-        True(translate.Contains("session.TextExecutor == TranslationTextExecutor.FreeEngine", StringComparison.Ordinal),
-            "the workbench free-engine notice must ride the typed executor");
+        True(translate.Contains("TranslationTextExecutor.FreeEngine", StringComparison.Ordinal) ||
+             translate.Contains("TranslationPromptSupport.NotSupported", StringComparison.Ordinal),
+            "the workbench free-engine notice must ride the typed executor/prompt-support fact");
 
         // 3) The coordinator's route matrix sets the typed triple honestly.
         var coordinator = File.ReadAllText(Path.Combine(appDir, "Services", "TranslationCoordinator.cs"));
@@ -940,6 +1487,800 @@ internal static class WaveRegressionTests
         // 4) The display label and the typed engine agree by construction.
         Equal("内置免费引擎", EngineWording.FreeEngineName,
             "the single wording source keeps the free-engine name");
+    }
+
+    // ===================== F2: judged-visual regressions =====================
+
+    /// <summary>
+    /// Old bug this pins: SettingsWindow.ShowPage never moved the nav rail,
+    /// so a programmatic page change (the main-window add-engine flow on an
+    /// already-open window, close-time draft guards) showed the new page with
+    /// the PREVIOUS sidebar item still highlighted. The rail must follow the
+    /// page exactly like a radio click would.
+    /// </summary>
+    public static void SettingsNavRailFollowsProgrammaticShowPage()
+    {
+        EnsureApp();
+        var window = new SettingsWindow(ShellSettings.Default, IsolatedHistory, IsolatedVocabulary);
+        try
+        {
+            window.ShowPage("Privacy");
+            True(window.NavPrivacy.IsChecked == true,
+                "ShowPage(\"Privacy\") must check the 隐私与数据 nav item");
+            True(window.NavProvider.IsChecked == false,
+                "ShowPage(\"Privacy\") must uncheck the 翻译引擎 nav item");
+            True(window.PrivacyPageHost.Visibility == Visibility.Visible,
+                "ShowPage(\"Privacy\") must show the privacy page");
+
+            window.ShowPage("Prompt");
+            True(window.NavPrompt.IsChecked == true,
+                "ShowPage(\"Prompt\") must check the 翻译与提示词 nav item");
+            True(window.NavPrivacy.IsChecked == false,
+                "ShowPage(\"Prompt\") must uncheck the previous nav item");
+            True(window.NavGeneral.IsChecked == false && window.NavShortcuts.IsChecked == false &&
+                 window.NavProvider.IsChecked == false,
+                "exactly one nav item may stay checked");
+
+            // The production trigger: the add-engine CTA on a window parked on
+            // another page must bring the rail back to 翻译引擎.
+            window.ShowPage("Privacy");
+            True(window.NavPrivacy.IsChecked == true, "parking on Privacy must light its nav item");
+            window.ShowProviderAddFlow();
+            True(window.NavProvider.IsChecked == true,
+                "ShowProviderAddFlow must return the rail highlight to 翻译引擎");
+            True(window.ProviderSection.Visibility == Visibility.Visible,
+                "ShowProviderAddFlow must actually show the provider page");
+        }
+        finally
+        {
+            window.ForceClose = true;
+            window.Close();
+        }
+    }
+
+    /// <summary>
+    /// Old bug this pins: the panel's failure path assigned theme brushes via
+    /// (Brush)FindResource — a static reference that keeps the color of the
+    /// theme active AT FAILURE TIME. A dark screenshot rendered with light
+    /// tokens (#4D545F explanation on a #181B22 surface): near-black on black.
+    /// The failure copy must hold dynamic resource references and its RESOLVED
+    /// colors must follow a live theme switch.
+    /// </summary>
+    public static void PanelErrorBrushesTrackLiveTheme()
+    {
+        EnsureApp();
+        ThemeService.Apply(ThemePreference.Dark);
+        var panel = NewPanel();
+        try
+        {
+            DrivePanelSession(panel, "demo source for the error state", new TranslationSession
+            {
+                Stage = TranslationSessionStage.Failed,
+                Error = new TranslationError(
+                    TranslationErrorKind.ServerError,
+                    "连接超时（120 秒无响应）：mock-provider/deployment",
+                    "检查服务地址与网络后重试。"),
+            });
+
+            // 1) The failure-critical visuals must be dynamic resource
+            //    references, never baked brushes.
+            True(panel.TranslationTextBox.ReadLocalValue(Control.ForegroundProperty) is not Brush,
+                "the error headline foreground must be a dynamic resource reference");
+            True(panel.ExplanationText.ReadLocalValue(TextBlock.ForegroundProperty) is not Brush,
+                "the error explanation foreground must be a dynamic resource reference");
+            True(panel.EngineBadge.ReadLocalValue(TextBlock.ForegroundProperty) is not Brush,
+                "the result badge foreground must be a dynamic resource reference");
+            True(panel.StatusDot.ReadLocalValue(Border.BackgroundProperty) is not Brush,
+                "the status dot background must be a dynamic resource reference");
+
+            // 2) The resolved colors must be the DARK palette while dark.
+            var darkSecondary = (Color)ColorConverter.ConvertFromString("#A8B0BD");
+            var darkDanger = (Color)ColorConverter.ConvertFromString("#FF6B7D");
+            Equal(darkSecondary, ((SolidColorBrush)panel.ExplanationText.GetValue(TextBlock.ForegroundProperty)!).Color,
+                "the error explanation must resolve the dark TextSecondaryBrush");
+            Equal(darkDanger, ((SolidColorBrush)panel.EngineBadge.GetValue(TextBlock.ForegroundProperty)!).Color,
+                "the failed badge must resolve the dark DangerBrush");
+            Equal(darkDanger, ((SolidColorBrush)panel.StatusDot.GetValue(Border.BackgroundProperty)!).Color,
+                "the failed status dot must resolve the dark DangerBrush");
+
+            // 3) Switching the theme NOW must repaint the already-rendered
+            //    failure state — this is exactly what went black before.
+            ThemeService.Apply(ThemePreference.Light);
+            var lightSecondary = (Color)ColorConverter.ConvertFromString("#4D545F");
+            var lightDanger = (Color)ColorConverter.ConvertFromString("#C93148");
+            Equal(lightSecondary, ((SolidColorBrush)panel.ExplanationText.GetValue(TextBlock.ForegroundProperty)!).Color,
+                "the error explanation must follow the theme switch to light");
+            Equal(lightDanger, ((SolidColorBrush)panel.EngineBadge.GetValue(TextBlock.ForegroundProperty)!).Color,
+                "the failed badge must follow the theme switch to light");
+            Equal(lightDanger, ((SolidColorBrush)panel.StatusDot.GetValue(Border.BackgroundProperty)!).Color,
+                "the failed status dot must follow the theme switch to light");
+        }
+        finally
+        {
+            ThemeService.Apply(ThemePreference.Dark);
+            panel.ForceClose = true;
+            panel.Close();
+        }
+    }
+
+    /// <summary>
+    /// The floating panel's REAL footprint is 540x380 DIP (opening size and
+    /// the height tier for short sources) with a 460x380 user-resize floor —
+    /// the retired 420x520/560 captures showed windows the product cannot
+    /// open. At every reachable bound the fixed footer must stay inside the
+    /// canvas; if this ever fails, the production layout is clipped, not the
+    /// screenshot producer.
+    /// </summary>
+    public static void PanelFooterStaysInsideRealFootprint()
+    {
+        EnsureApp();
+        var panel = NewPanel();
+        try
+        {
+            DrivePanelSession(panel, "demo source for the error state", new TranslationSession
+            {
+                Stage = TranslationSessionStage.Failed,
+                Error = new TranslationError(
+                    TranslationErrorKind.ServerError,
+                    "连接超时（120 秒无响应）：mock-provider/northcentralus/deployments/very-long-deployment-name-20260905",
+                    "检查服务地址与网络后重试；离线模式会阻止本次请求。"),
+            });
+
+            var content = (FrameworkElement)panel.Content;
+            foreach (var (width, height, label) in new[]
+                     {
+                         (540d, 380d, "default 540x380"),
+                         (460d, 380d, "minimum 460x380"),
+                     })
+            {
+                panel.Width = width;
+                panel.Height = height;
+                content.Width = width;
+                content.Height = height;
+                content.Measure(new Size(width, height));
+                content.Arrange(new Rect(0, 0, width, height));
+                content.UpdateLayout();
+
+                True(panel.StatusTextBlock.ActualHeight > 0,
+                    $"{label}: the footer must be laid out before the bounds check");
+                var footerBottom = panel.StatusTextBlock
+                    .TransformToVisual(content).Transform(new Point(0, panel.StatusTextBlock.ActualHeight)).Y;
+                True(footerBottom <= height + 0.5,
+                    $"{label}: the footer bottom ({footerBottom:F1}) exceeds the {height} DIP window — the real layout clips the status row");
+            }
+        }
+        finally
+        {
+            panel.ForceClose = true;
+            panel.Close();
+        }
+    }
+
+    // ===================== H: accessibility names =====================
+
+    /// <summary>
+    /// Raises the REAL static <see cref="TtsService.SpeakingStateChanged"/>
+    /// event the three surfaces subscribe to. Reflection is only needed
+    /// because C# forbids raising another class's event from outside.
+    /// </summary>
+    private static void FireTtsSpeakingStateChanged(bool isSpeaking)
+    {
+        var field = typeof(TtsService).GetField(
+                nameof(TtsService.SpeakingStateChanged),
+                BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)
+            ?? throw new InvalidOperationException("the TtsService.SpeakingStateChanged event field was not found");
+        (field.GetValue(null) as EventHandler<bool>)?.Invoke(null, isSpeaking);
+    }
+
+    /// <summary>
+    /// All five TTS buttons across the three surfaces must flip their
+    /// accessibility name between「停止朗读」(speaking) and the concrete
+    ///「朗读译文」/「朗读原文」(idle), and the live name must stay consistent
+    /// with the live ToolTip — screen readers announce the action the click
+    /// performs RIGHT NOW, not the idle label.
+    /// </summary>
+    public static void TtsAutomationNamesFollowSpeakingState()
+    {
+        EnsureApp();
+        var quickSearch = new QuickSearchWindow(IsolatedHistory, IsolatedVocabulary);
+        var panel = NewPanel();
+        var section = new TranslateSection();
+        section.Initialize(new TranslationCoordinator(IsolatedHistory, IsolatedVocabulary), null);
+        // The workbench subscribes to the TTS event only from Loaded: host it
+        // in a real window and show it so the production subscription path runs.
+        var host = new Window
+        {
+            Content = section,
+            Width = 1000,
+            Height = 700,
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+        };
+        try
+        {
+            host.Show();
+            PumpUntil(Task.CompletedTask);
+            PumpOnce();
+
+            var buttons = new (System.Windows.Controls.Button Button, string Idle)[]
+            {
+                (quickSearch.SpeakButton, "朗读译文"),
+                (panel.SourceSpeakBtn, "朗读原文"),
+                (panel.ResultSpeakBtn, "朗读译文"),
+                (section.TranslateSourceSpeakButton, "朗读原文"),
+                (section.TranslateResultSpeakButton, "朗读译文"),
+            };
+
+            // Speaking: every button announces the stop action it now performs.
+            FireTtsSpeakingStateChanged(true);
+            PumpOnce();
+            foreach (var (button, _) in buttons)
+            {
+                Equal("停止朗读", AutomationProperties.GetName(button),
+                    $"{button.Name} must announce 停止朗读 while speaking");
+                True((button.ToolTip as string ?? string.Empty)
+                        .StartsWith(AutomationProperties.GetName(button), StringComparison.Ordinal),
+                    $"{button.Name}: the live ToolTip must agree with the live name");
+            }
+
+            // Idle: the concrete reading action returns.
+            FireTtsSpeakingStateChanged(false);
+            PumpOnce();
+            foreach (var (button, idle) in buttons)
+            {
+                Equal(idle, AutomationProperties.GetName(button),
+                    $"{button.Name} must announce {idle} again once speech stopped");
+                True((button.ToolTip as string ?? string.Empty)
+                        .StartsWith(idle, StringComparison.Ordinal),
+                    $"{button.Name}: the live ToolTip must agree with the live name");
+            }
+        }
+        finally
+        {
+            quickSearch.ForceClose = true;
+            quickSearch.Close();
+            panel.ForceClose = true;
+            try { panel.Close(); } catch { }
+            host.Close();
+        }
+    }
+
+    /// <summary>
+    /// The star controls on the workbench and the floating panel must sync
+    /// their accessibility name with the starred state (and the ToolTip) on
+    /// BOTH transitions, so screen readers announce the action the click will
+    /// actually perform.
+    /// </summary>
+    public static void StarAutomationNamesFollowStarredState()
+    {
+        EnsureApp();
+        // Workbench: the shared visual-state writer owns ToolTip + name.
+        var section = new TranslateSection();
+        section.Initialize(new TranslationCoordinator(IsolatedHistory, IsolatedVocabulary), null);
+        InvokePrivate(section, "UpdateStarVisualState", true);
+        Equal("从生词本移除", AutomationProperties.GetName(section.StarButton),
+            "a starred workbench entry must announce the remove action");
+        Equal(section.StarButton.ToolTip as string, AutomationProperties.GetName(section.StarButton),
+            "the workbench tooltip and accessibility name must agree");
+        InvokePrivate(section, "UpdateStarVisualState", false);
+        Equal("收藏到生词本", AutomationProperties.GetName(section.StarButton),
+            "an unstarred workbench entry must announce the star action");
+        Equal(section.StarButton.ToolTip as string, AutomationProperties.GetName(section.StarButton),
+            "the workbench tooltip and accessibility name must agree after unstarring");
+
+        // Floating panel: the same contract on the toggle.
+        var panel = NewPanel();
+        try
+        {
+            InvokePrivate(panel, "UpdateStarIcon", true);
+            Equal("从生词本移除", AutomationProperties.GetName(panel.StarToggle),
+                "a starred panel result must announce the remove action");
+            Equal(panel.StarToggle.ToolTip as string, AutomationProperties.GetName(panel.StarToggle),
+                "the panel tooltip and accessibility name must agree");
+            InvokePrivate(panel, "UpdateStarIcon", false);
+            Equal("收藏到生词本", AutomationProperties.GetName(panel.StarToggle),
+                "an unstarred panel result must announce the star action");
+            Equal(panel.StarToggle.ToolTip as string, AutomationProperties.GetName(panel.StarToggle),
+                "the panel tooltip and accessibility name must agree after unstarring");
+        }
+        finally
+        {
+            panel.ForceClose = true;
+            try { panel.Close(); } catch { }
+        }
+
+        // Quick search: the STATIC first frame must already announce the star
+        // action, agreeing with the first-frame ToolTip before any star
+        // interaction runs (it used to say「加入生词本」while the tooltip said
+        //「收藏到生词本」).
+        var quickSearch = new QuickSearchWindow(IsolatedHistory, IsolatedVocabulary);
+        try
+        {
+            Equal("收藏到生词本", AutomationProperties.GetName(quickSearch.StarButton),
+                "the quick search star must offer the star action on its static first frame");
+            True(((string?)quickSearch.StarButton.ToolTip ?? string.Empty)
+                    .StartsWith(AutomationProperties.GetName(quickSearch.StarButton), StringComparison.Ordinal),
+                "the quick search first-frame tooltip and accessibility name must agree");
+        }
+        finally
+        {
+            quickSearch.ForceClose = true;
+            quickSearch.Close();
+        }
+    }
+
+    /// <summary>
+    /// The settings caption button must announce the state the click will
+    /// switch TO —「向下还原」while maximized,「最大化」while restored — with
+    /// the name riding the same caption as the ToolTip.
+    /// </summary>
+    public static void SettingsMaximizeAutomationNameFollowsWindowState()
+    {
+        EnsureApp();
+        var window = new SettingsWindow(ShellSettings.Default, IsolatedHistory, IsolatedVocabulary);
+        try
+        {
+            window.Show();
+            PumpUntil(Task.CompletedTask);
+            var maximize = window.MaximizeBtn;
+            Equal("最大化", AutomationProperties.GetName(maximize),
+                "a restored window must offer 最大化");
+            Equal(maximize.ToolTip as string, AutomationProperties.GetName(maximize),
+                "tooltip and accessibility name must agree while restored");
+
+            // The real StateChanged hook drives the caption; wait bounded so a
+            // deferred native maximize still settles before the assertion.
+            window.WindowState = WindowState.Maximized;
+            for (var attempt = 0; attempt < 200 && AutomationProperties.GetName(maximize) != "向下还原"; attempt++)
+            {
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
+                Thread.Sleep(5);
+            }
+            Equal("向下还原", AutomationProperties.GetName(maximize),
+                "a maximized window must offer 向下还原");
+            Equal(maximize.ToolTip as string, AutomationProperties.GetName(maximize),
+                "tooltip and accessibility name must agree while maximized");
+
+            window.WindowState = WindowState.Normal;
+            for (var attempt = 0; attempt < 200 && AutomationProperties.GetName(maximize) != "最大化"; attempt++)
+            {
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
+                Thread.Sleep(5);
+            }
+            Equal("最大化", AutomationProperties.GetName(maximize),
+                "restoring must offer 最大化 again");
+            Equal(maximize.ToolTip as string, AutomationProperties.GetName(maximize),
+                "tooltip and accessibility name must agree after restoring");
+        }
+        finally
+        {
+            window.ForceClose = true;
+            try { window.Close(); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// The core reading surfaces' input/output controls and the floating
+    /// panel's window title carry their agreed exact names — assistive tech
+    /// and window enumerators get stable, specific labels, never blanks.
+    /// </summary>
+    public static void CoreReadingControlsCarryExactAutomationNames()
+    {
+        EnsureApp();
+        var quickSearch = new QuickSearchWindow(IsolatedHistory, IsolatedVocabulary);
+        var panel = NewPanel();
+        try
+        {
+            Equal("翻译结果", AutomationProperties.GetName(quickSearch.RichBox),
+                "the quick-search final result box must be named 翻译结果");
+
+            Equal("翻译原文输入框", AutomationProperties.GetName(panel.SourceInputBox),
+                "the panel source input must be named 翻译原文输入框");
+            Equal("翻译结果", AutomationProperties.GetName(panel.StreamTextBox),
+                "the panel plain result box must be named 翻译结果");
+            Equal("格式化翻译结果", AutomationProperties.GetName(panel.FinalRichBox),
+                "the panel markdown result box must be named 格式化翻译结果");
+            Equal("原文语言", AutomationProperties.GetName(panel.SourceLangCombo),
+                "the panel source language picker must be named 原文语言");
+            Equal("译文语言", AutomationProperties.GetName(panel.TargetLangCombo),
+                "the panel target language picker must be named 译文语言");
+            Equal("PopGlot 翻译浮窗", panel.Title,
+                "the floating panel window must carry its agreed title");
+        }
+        finally
+        {
+            quickSearch.ForceClose = true;
+            quickSearch.Close();
+            panel.ForceClose = true;
+            try { panel.Close(); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Each of the five hotkey recorders must announce its ROW's function,
+    /// carry the real recording contract as HelpText, and behave exactly as
+    /// that HelpText promises: clicking starts recording, and a real Escape
+    /// key event cancels it (falling back to the stop path the Esc branch
+    /// calls when no key seam exists).
+    /// </summary>
+    public static void HotkeyRecordersAnnounceRowFunctionAndHowToRecord()
+    {
+        EnsureApp();
+        var section = new ShortcutsSection();
+        var recorders = new (HotkeyRecorder Recorder, string Row)[]
+        {
+            (section.SelectionHotkey, "划词翻译"),
+            (section.ScreenshotHotkey, "截图翻译"),
+            (section.QuickSearchHotkey, "极速查词快捷键"),
+            (section.CloseHotkey, "关闭浮窗"),
+            (section.ShowWindowHotkey, "打开主窗口快捷键"),
+        };
+        // A real window gives the recorders a PresentationSource so the real
+        // Esc key path can be exercised below.
+        var host = new Window
+        {
+            Content = section,
+            Width = 800,
+            Height = 500,
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+        };
+        try
+        {
+            host.Show();
+            PumpUntil(Task.CompletedTask);
+            PumpOnce();
+
+            foreach (var (recorder, row) in recorders)
+            {
+                Equal(row, AutomationProperties.GetName(recorder),
+                    $"{recorder.Name} must announce the function of its row");
+                Equal("点击后按下组合键完成录制，Esc 取消录制", AutomationProperties.GetHelpText(recorder),
+                    $"{recorder.Name} must state the real recording contract");
+
+                // The HelpText must not be a lie: exercise the REAL methods the
+                // click and Esc paths use.
+                InvokePrivate(recorder, "StartRecording");
+                True(recorder.IsRecording, "starting a recording must enter the recording state");
+                Equal("按下组合键…", (string)recorder.Content!, "recording names the wait for the combination");
+
+                var keySource = PresentationSource.FromDependencyObject(recorder);
+                if (keySource is not null)
+                {
+                    // The recorder sits in a shown window, so this hand-built
+                    // KeyEventArgs is a real seam. RoutedEvent must be set: the
+                    // Esc branch marks the args Handled, which validates it.
+                    var escape = new KeyEventArgs(Keyboard.PrimaryDevice!, keySource, 0, Key.Escape)
+                    {
+                        RoutedEvent = Keyboard.PreviewKeyDownEvent,
+                    };
+                    typeof(HotkeyRecorder)
+                        .GetMethod("OnPreviewKeyDown", NonPublicInstance)!
+                        .Invoke(recorder, new object?[] { escape });
+                }
+                else
+                {
+                    // No safe KeyEventArgs seam: fall back to the same stop
+                    // method the Esc branch itself calls.
+                    InvokePrivate(recorder, "StopRecording");
+                }
+                True(!recorder.IsRecording, "Esc during recording must cancel it, as the HelpText promises");
+                Equal(recorder.BindingValue?.DisplayName ?? "未设置", (string)recorder.Content!,
+                    "cancelling restores the binding label");
+            }
+        }
+        finally
+        {
+            host.Close();
+        }
+    }
+
+    /// <summary>
+    /// While SPEAKING, the workbench speak icon's accent must be a live
+    /// dynamic resource reference: switching the theme MID-SPEECH repaints the
+    /// icon (a static FindResource accent used to bake in the start-time
+    /// theme). Stopping restores the XAML's exact idle semantics — the dynamic
+    /// TextSecondaryBrush — which keeps following the theme too.
+    /// </summary>
+    public static void TtsSpeakingIconTracksLiveTheme()
+    {
+        EnsureApp();
+        ThemeService.Apply(ThemePreference.Dark);
+        var section = new TranslateSection();
+        section.Initialize(new TranslationCoordinator(IsolatedHistory, IsolatedVocabulary), null);
+        var host = new Window
+        {
+            Content = section,
+            Width = 1000,
+            Height = 700,
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+        };
+        try
+        {
+            host.Show();
+            PumpUntil(Task.CompletedTask);
+            PumpOnce();
+
+            Color LiveColor(string key) =>
+                ((SolidColorBrush)Application.Current!.Resources[key]).Color;
+            var fill = System.Windows.Shapes.Shape.FillProperty;
+
+            // Speaking: the accent is a dynamic reference resolving the live
+            // accent — never a baked brush.
+            FireTtsSpeakingStateChanged(true);
+            PumpOnce();
+            True(section.TranslateSourceSpeakIcon.ReadLocalValue(fill) is not Brush,
+                "the speaking accent must be a dynamic resource reference, never a baked brush");
+            True(section.TranslateResultSpeakIcon.ReadLocalValue(fill) is not Brush,
+                "the speaking accent must be a dynamic resource reference, never a baked brush");
+            Equal(LiveColor("AccentBrush"),
+                ((SolidColorBrush)section.TranslateSourceSpeakIcon.GetValue(fill)).Color,
+                "while speaking the icon resolves the live accent");
+
+            // The production bug this pins: a theme switch MID-SPEECH.
+            ThemeService.Apply(ThemePreference.Light);
+            PumpOnce();
+            Equal(LiveColor("AccentBrush"),
+                ((SolidColorBrush)section.TranslateResultSpeakIcon.GetValue(fill)).Color,
+                "a theme switch while speaking must repaint the icon accent");
+
+            // Stopping restores the XAML's dynamic TextSecondaryBrush (a
+            // ClearValue would erase the XAML expression, leaving no fill).
+            FireTtsSpeakingStateChanged(false);
+            PumpOnce();
+            True(section.TranslateSourceSpeakIcon.ReadLocalValue(fill) is not Brush,
+                "the idle fill must stay a dynamic resource reference");
+            Equal(LiveColor("TextSecondaryBrush"),
+                ((SolidColorBrush)section.TranslateSourceSpeakIcon.GetValue(fill)).Color,
+                "the idle icon resolves the live TextSecondaryBrush");
+            ThemeService.Apply(ThemePreference.Dark);
+            PumpOnce();
+            Equal(LiveColor("TextSecondaryBrush"),
+                ((SolidColorBrush)section.TranslateResultSpeakIcon.GetValue(fill)).Color,
+                "the idle icon keeps following the theme");
+        }
+        finally
+        {
+            ThemeService.Apply(ThemePreference.Dark);
+            host.Close();
+        }
+    }
+
+    /// <summary>
+    /// The QuickSearch and Panel speak icons' XAML Fill is a RelativeSource
+    /// Button.Foreground binding. While SPEAKING every surface's icon rides
+    /// the dynamic AccentBrush and follows a mid-speech theme switch. Stopping
+    /// must RE-BIND the original Foreground binding — the old ClearValue left
+    /// the local value UnsetValue and the idle icon with no fill — the binding
+    /// must stay live across theme switches, and a second speak/stop cycle
+    /// must behave identically.
+    /// </summary>
+    public static void TtsSpeakIconFillRestoresForegroundBinding()
+    {
+        EnsureApp();
+        ThemeService.Apply(ThemePreference.Dark);
+        var quickSearch = new QuickSearchWindow(IsolatedHistory, IsolatedVocabulary);
+        var panel = NewPanel();
+        var section = new TranslateSection();
+        section.Initialize(new TranslationCoordinator(IsolatedHistory, IsolatedVocabulary), null);
+        var host = new Window
+        {
+            Content = section,
+            Width = 1000,
+            Height = 700,
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+        };
+        try
+        {
+            host.Show();
+            PumpUntil(Task.CompletedTask);
+            PumpOnce();
+
+            var fill = System.Windows.Shapes.Shape.FillProperty;
+            Color LiveColor(string key) => ((SolidColorBrush)Application.Current!.Resources[key]).Color;
+            Color Resolved(System.Windows.Shapes.Path icon) => ((SolidColorBrush)icon.GetValue(fill)).Color;
+            Color ForegroundOf(Button button) => ((SolidColorBrush)button.GetValue(Control.ForegroundProperty)).Color;
+            var icons = new (System.Windows.Shapes.Path Icon, Button Button, bool RestoresBinding)[]
+            {
+                (quickSearch.SpeakIcon, quickSearch.SpeakButton, true),
+                (panel.SourceSpeakIcon, panel.SourceSpeakBtn, true),
+                (panel.ResultSpeakIcon, panel.ResultSpeakBtn, true),
+                (section.TranslateSourceSpeakIcon, section.TranslateSourceSpeakButton, false),
+                (section.TranslateResultSpeakIcon, section.TranslateResultSpeakButton, false),
+            };
+
+            // Speaking: the dynamic accent on all three surfaces, live across
+            // a mid-speech theme switch.
+            FireTtsSpeakingStateChanged(true);
+            PumpOnce();
+            foreach (var (icon, _, _) in icons)
+            {
+                True(icon.ReadLocalValue(fill) is not Brush,
+                    "the speaking accent must be a dynamic reference, never a baked brush");
+                Equal(LiveColor("AccentBrush"), Resolved(icon), "speaking resolves the live accent");
+            }
+            ThemeService.Apply(ThemePreference.Light);
+            PumpOnce();
+            foreach (var (icon, _, _) in icons)
+            {
+                Equal(LiveColor("AccentBrush"), Resolved(icon),
+                    "a mid-speech theme switch must repaint every speaking icon");
+            }
+
+            // Stop: QuickSearch and Panel restore the original Foreground
+            // binding — never UnsetValue, never a dead fill. The binding is
+            // LIVE: a resting speak button is DISABLED (idle gating), so its
+            // Foreground legitimately reads TextDisabledBrush — the icon must
+            // follow whatever the button Foreground actually is.
+            FireTtsSpeakingStateChanged(false);
+            PumpOnce();
+            foreach (var (icon, button, restoresBinding) in icons)
+            {
+                True(!ReferenceEquals(icon.ReadLocalValue(fill), DependencyProperty.UnsetValue),
+                    "stopping must not leave the fill UnsetValue");
+                if (restoresBinding)
+                {
+                    True(icon.GetBindingExpression(fill) is not null,
+                        "the idle icon must carry the restored Foreground binding");
+                    Equal(ForegroundOf(button), Resolved(icon),
+                        "the restored binding keeps the icon on the live button Foreground (enabled or disabled)");
+                }
+                else
+                {
+                    Equal(LiveColor("TextSecondaryBrush"), Resolved(icon),
+                        "the workbench idle icon resolves the dynamic TextSecondaryBrush reference");
+                }
+            }
+
+            // The restored binding is LIVE: repaint the tokens via the theme.
+            ThemeService.Apply(ThemePreference.Dark);
+            PumpOnce();
+            foreach (var (icon, button, restoresBinding) in icons)
+            {
+                if (restoresBinding)
+                {
+                    Equal(ForegroundOf(button), Resolved(icon),
+                        "the idle icon must follow the button Foreground across a theme switch");
+                }
+                else
+                {
+                    Equal(LiveColor("TextSecondaryBrush"), Resolved(icon),
+                        "the workbench idle icon keeps following the theme");
+                }
+            }
+
+            // A second speak/stop cycle must behave identically.
+            FireTtsSpeakingStateChanged(true);
+            PumpOnce();
+            foreach (var (icon, _, _) in icons)
+            {
+                Equal(LiveColor("AccentBrush"), Resolved(icon),
+                    "the second speaking phase resolves the live accent again");
+            }
+            FireTtsSpeakingStateChanged(false);
+            PumpOnce();
+            foreach (var (icon, button, restoresBinding) in icons)
+            {
+                True(!ReferenceEquals(icon.ReadLocalValue(fill), DependencyProperty.UnsetValue),
+                    "the second stop must not leave the fill UnsetValue");
+                if (restoresBinding)
+                {
+                    True(icon.GetBindingExpression(fill) is not null,
+                        "the second stop must restore the Foreground binding again");
+                    Equal(ForegroundOf(button), Resolved(icon),
+                        "the second stop must leave the icon on the live button Foreground");
+                }
+                else
+                {
+                    Equal(LiveColor("TextSecondaryBrush"), Resolved(icon),
+                        "the second stop must restore the dynamic TextSecondaryBrush");
+                }
+            }
+        }
+        finally
+        {
+            quickSearch.ForceClose = true;
+            quickSearch.Close();
+            panel.ForceClose = true;
+            try { panel.Close(); } catch { }
+            host.Close();
+            ThemeService.Apply(ThemePreference.Dark);
+        }
+    }
+
+    /// <summary>
+    /// The panel copy icons' XAML Fill is a RelativeSource Button.Foreground
+    /// binding. The copy-success feedback must ride the dynamic accent
+    /// (following a mid-feedback theme switch) and its reset must RE-BIND the
+    /// original Foreground binding — the old ClearValue left the local value
+    /// UnsetValue and the idle icon with no fill. The restored binding must
+    /// follow the button Foreground (enabled TextSecondaryBrush or the
+    /// disabled trigger's TextDisabledBrush) across theme switches, and a
+    /// second feedback cycle must behave identically. Driven through the REAL
+    /// ShowCopyFeedback/EndCopyFeedback methods the click handlers call — the
+    /// clipboard is never touched.
+    /// </summary>
+    public static void CopyFeedbackIconsRestoreForegroundBinding()
+    {
+        EnsureApp();
+        ThemeService.Apply(ThemePreference.Dark);
+        var panel = NewPanel();
+        try
+        {
+            var fill = System.Windows.Shapes.Shape.FillProperty;
+            Color LiveColor(string key) => ((SolidColorBrush)Application.Current!.Resources[key]).Color;
+            Color Resolved(System.Windows.Shapes.Path icon) => ((SolidColorBrush)icon.GetValue(fill)).Color;
+            Color ForegroundOf(Button button) => ((SolidColorBrush)button.GetValue(Control.ForegroundProperty)).Color;
+            var icons = new (System.Windows.Shapes.Path Icon, Button Button, string BindingField)[]
+            {
+                (panel.SourceCopyIcon, panel.SourceCopyBtn, "_sourceCopyIconFillBinding"),
+                (panel.ResultCopyIcon, panel.ResultCopyBtn, "_resultCopyIconFillBinding"),
+            };
+
+            for (var cycle = 1; cycle <= 2; cycle++)
+            {
+                // Feedback begins on both icons: live accent, check glyph.
+                foreach (var (icon, _, _) in icons)
+                {
+                    InvokePrivate(panel, "ShowCopyFeedback", icon);
+                    True(icon.ReadLocalValue(fill) is not Brush,
+                        "the feedback accent must be a dynamic reference, never a baked brush");
+                    Equal(LiveColor("AccentBrush"), Resolved(icon),
+                        $"cycle {cycle}: the feedback resolves the live accent");
+                    True(ReferenceEquals(icon.Data, panel.FindResource("IconCheck")),
+                        $"cycle {cycle}: the feedback swaps the glyph to the check mark");
+                }
+
+                // A theme switch MID-FEEDBACK must repaint the accent.
+                ThemeService.Apply(ThemePreference.Light);
+                PumpOnce();
+                foreach (var (icon, _, _) in icons)
+                {
+                    Equal(LiveColor("AccentBrush"), Resolved(icon),
+                        $"cycle {cycle}: a mid-feedback theme switch must repaint the accent");
+                }
+
+                // Feedback ends: the original Foreground binding is restored —
+                // never UnsetValue, following the button Foreground whatever
+                // its enabled state resolves to. FindAncestor bindings queue
+                // their initial ancestor walk on the Dispatcher, so pump once
+                // before reading the resolved fill.
+                foreach (var (icon, button, bindingField) in icons)
+                {
+                    InvokePrivate(panel, "EndCopyFeedback", icon, GetPrivate<System.Windows.Data.Binding>(panel, bindingField));
+                    PumpOnce();
+                    True(!ReferenceEquals(icon.ReadLocalValue(fill), DependencyProperty.UnsetValue),
+                        $"cycle {cycle}: the reset must not leave the fill UnsetValue");
+                    True(icon.GetBindingExpression(fill) is not null,
+                        $"cycle {cycle}: the reset must restore the Foreground binding");
+                    Equal(ForegroundOf(button), Resolved(icon),
+                        $"cycle {cycle}: the restored binding keeps the icon on the live button Foreground (enabled or disabled)");
+                    True(ReferenceEquals(icon.Data, panel.FindResource("IconCopy")),
+                        $"cycle {cycle}: the reset swaps the glyph back to the copy mark");
+                }
+
+                // The restored binding is LIVE: repaint the tokens via theme.
+                ThemeService.Apply(ThemePreference.Dark);
+                PumpOnce();
+                foreach (var (icon, button, _) in icons)
+                {
+                    Equal(ForegroundOf(button), Resolved(icon),
+                        $"cycle {cycle}: the idle icon follows the button Foreground across a theme switch");
+                }
+            }
+        }
+        finally
+        {
+            panel.ForceClose = true;
+            try { panel.Close(); } catch { }
+            ThemeService.Apply(ThemePreference.Dark);
+        }
     }
 
     // ===================== G: screenshot helper =====================
@@ -971,5 +2312,266 @@ internal static class WaveRegressionTests
         };
         host.SetResourceReference(System.Windows.Controls.Border.BackgroundProperty, "CanvasBrush");
         return new Window { Content = host };
+    }
+
+    // ===================== H: E3 follow-ups — high contrast + PerMonitorV2 DPI =====================
+
+    /// <summary>Flushes everything up to and including idle priority, so a
+    /// production DispatcherPriority.ApplicationIdle continuation (the DPI
+    /// settle path) really runs. PumpOnce's Background marker is NOT enough:
+    /// ApplicationIdle sits below it.</summary>
+    private static void PumpIdle()
+    {
+        var dispatcher = Dispatcher.FromThread(Thread.CurrentThread)
+            ?? throw new InvalidOperationException("PumpIdle must run on the STA harness thread");
+        dispatcher.Invoke(() => { }, DispatcherPriority.SystemIdle);
+        dispatcher.Invoke(() => { }, DispatcherPriority.SystemIdle);
+    }
+
+    /// <summary>
+    /// E3-D3: driving the runtime ApplyResolved through HC on → off via the
+    /// internal test seam must map the system colours AND fully restore the
+    /// normal theme afterwards — without ever touching a real system setting.
+    /// Real-HC behaviour stays an explicit E3 machine verification TODO.
+    /// </summary>
+    public static void HighContrastApplyResolvedRoundTripRestoresNormalTheme()
+    {
+        EnsureApp();
+        try
+        {
+            ThemeService.Apply(ThemePreference.Dark);
+            var darkCanvas = ((SolidColorBrush)Application.Current.Resources["CanvasBrush"]).Color;
+            var darkAccent = ((SolidColorBrush)Application.Current.Resources["AccentBrush"]).Color;
+
+            ThemeService.HighContrastTestOverride = true;
+            ThemeService.ApplyResolved();
+
+            Equal(SystemColors.WindowTextColor, ((SolidColorBrush)Application.Current.Resources["WindowEdgeBrush"]).Color,
+                "HC must map WindowEdgeBrush to WindowText for a crisp window boundary");
+            Equal(SystemColors.HighlightColor, ((SolidColorBrush)Application.Current.Resources["AccentBrush"]).Color,
+                "HC must map AccentBrush to Highlight");
+            Equal(SystemColors.HighlightColor, ((SolidColorBrush)Application.Current.Resources["AccentHoverBrush"]).Color,
+                "HC must map AccentHoverBrush to Highlight");
+            Equal(SystemColors.HighlightColor, ((SolidColorBrush)Application.Current.Resources["AccentPressedBrush"]).Color,
+                "HC must map AccentPressedBrush to Highlight");
+            Equal(SystemColors.WindowColor, ((SolidColorBrush)Application.Current.Resources["CanvasBrush"]).Color,
+                "HC must map CanvasBrush to Window");
+            Equal(Colors.Transparent, (Color)Application.Current.Resources["ShadowColor"],
+                "HC must force ShadowColor transparent");
+            True(((SolidColorBrush)Application.Current.Resources["OverlayScrimBrush"]).Color.A < 255,
+                "the capture scrim stays translucent in HC (explicit whitelist), never a solid fill");
+
+            ThemeService.HighContrastTestOverride = false;
+            ThemeService.ApplyResolved();
+
+            Equal(darkCanvas, ((SolidColorBrush)Application.Current.Resources["CanvasBrush"]).Color,
+                "closing HC must restore the normal dark canvas");
+            Equal(darkAccent, ((SolidColorBrush)Application.Current.Resources["AccentBrush"]).Color,
+                "closing HC must restore the normal accent");
+            Equal(Colors.Transparent, ((SolidColorBrush)Application.Current.Resources["WindowEdgeBrush"]).Color,
+                "closing HC must make the window edge transparent again");
+            Equal(Colors.Black, (Color)Application.Current.Resources["ShadowColor"],
+                "closing HC must restore the shadow colour");
+        }
+        finally
+        {
+            ThemeService.HighContrastTestOverride = null;
+            ThemeService.ApplyResolved();
+        }
+    }
+
+    /// <summary>
+    /// Pure DIP↔pixel geometry: at 100/125/150/200% reading a physical size
+    /// back on the monitor it is on is lossless within one pixel even after
+    /// 10 hops, and the F10 anchor holds — a 480 DIP quick search renders
+    /// exactly 720 px at 150% and exactly 480 px back at 100% (the DIP value
+    /// itself must be preserved across monitors; deriving it from another
+    /// monitor's pixels is exactly the 480→720 pollution E3 recorded).
+    /// </summary>
+    public static void DpiGeometryRoundtripsAreIdentity()
+    {
+        foreach (var scale in new[] { 1.0, 1.25, 1.5, 2.0 })
+        {
+            foreach (var dip in new[] { 480.0, 540.0, 760.0, 1120.0 })
+            {
+                var pixel = ScreenGeometry.RoundPixel(ScreenGeometry.DipToPixel(dip, scale));
+                var back = ScreenGeometry.PixelToDip(pixel, scale);
+                True(Math.Abs(back - dip) <= 0.5 / scale + 1e-9,
+                    $"{dip} DIP must survive one {scale:P0} hop within half a pixel, got {back}");
+
+                // 10 hops, always read back on the monitor the window is on.
+                var value = dip;
+                for (var hop = 0; hop < 10; hop++)
+                {
+                    value = ScreenGeometry.RoundtripDip(value, scale, scale);
+                }
+                True(Math.Abs(ScreenGeometry.RoundPixel(ScreenGeometry.DipToPixel(value, scale)) - pixel) <= 1,
+                    $"10 {scale:P0} hops must drift at most 1 px, {dip} became {value}");
+
+                // The DIP value is monitor-independent: preserving it means the
+                // physical size at 100% stays the original value.
+                var preserved = ScreenGeometry.RoundPixel(ScreenGeometry.DipToPixel(dip, 1.0));
+                True(Math.Abs(preserved - dip) <= 1,
+                    $"a preserved {dip} DIP size must render as {dip} px at 100%, got {preserved}");
+            }
+        }
+        Equal(720.0, ScreenGeometry.RoundPixel(ScreenGeometry.DipToPixel(480.0, 1.5)),
+            "480 DIP at 150% must be exactly 720 px");
+        Equal(480.0, ScreenGeometry.RoundPixel(ScreenGeometry.DipToPixel(480.0, 1.0)),
+            "back at 100% the preserved 480 DIP minimum width must be exactly 480 px");
+    }
+
+    /// <summary>
+    /// Pure replay of the E3-F14 evidence: the main window came home from the
+    /// 150% monitor as 747x560 (1120x760 shrunk by 1/1.5). The restored Normal
+    /// rect must be the STABLE DIP size at the current position, clamped into
+    /// the target monitor's work area — never the polluted transition size.
+    /// </summary>
+    public static void MainWindowF14StableSizeSurvivesDpiRoundtrip()
+    {
+        var stable = new Size(1120, 760);
+        var minSize = new Size(560, 560);
+        var workArea = new Rect(0, 0, 1920, 1040);
+
+        // F14 exactly: window returns at (200,200) polluted to 747x560.
+        var restored = MainWindow.RestoredNormalRect(
+            new Rect(200, 200, 747, 560), stable, workArea, minSize);
+        Equal(200.0, restored.Left);
+        Equal(200.0, restored.Top);
+        Equal(1120.0, restored.Width, "the stable DIP width must win over the polluted 747");
+        Equal(760.0, restored.Height, "the stable DIP height must win over the polluted 560");
+
+        // A window parked off-screen is pulled back inside the target work area.
+        var pulledBack = MainWindow.RestoredNormalRect(
+            new Rect(-5000, -5000, 747, 560), stable, workArea, minSize);
+        True(pulledBack.Left >= workArea.Left && pulledBack.Top >= workArea.Top,
+            "the restore must re-clamp into the target monitor's work area");
+        Equal(1120.0, pulledBack.Width);
+        Equal(760.0, pulledBack.Height);
+
+        // A monitor that cannot fit the stable size caps it (visibility wins).
+        var capped = MainWindow.RestoredNormalRect(
+            new Rect(0, 0, 747, 560), stable, new Rect(0, 0, 800, 600), minSize);
+        True(capped.Width <= 800 && capped.Height <= 600,
+            "a smaller work area must cap the restored size instead of hiding the edges");
+    }
+
+    /// <summary>Pure generation/flag rules of the stable-size tracker.</summary>
+    public static void StableNormalSizeTrackerRejectsPollution()
+    {
+        var tracker = new StableNormalSizeTracker(new Size(1120, 760));
+
+        // Maximized/minimized phases are never observations.
+        True(!tracker.TryObserveResize(new Size(800, 600), isNormalState: false),
+            "a maximized/minimized resize must never rewrite the stable normal size");
+        Equal(1120.0, tracker.StableSize.Width);
+
+        // While a DPI transition is open, its resizes are ignored.
+        tracker.BeginDpiTransition();
+        True(tracker.InDpiTransition, "BeginDpiTransition must open the transition");
+        True(!tracker.TryObserveResize(new Size(747, 560), isNormalState: true),
+            "a transition-driven resize must never pollute the stable size");
+        Equal(760.0, tracker.StableSize.Height);
+
+        // Closing the transition yields the stable size for the restore.
+        Equal(760.0, tracker.EndDpiTransition().Height);
+        True(!tracker.InDpiTransition, "EndDpiTransition must close the transition");
+
+        // After the settle, real user resizes are honoured again.
+        True(tracker.TryObserveResize(new Size(900, 650), isNormalState: true),
+            "a settled Normal-state resize must be observed");
+        Equal(900.0, tracker.StableSize.Width);
+    }
+
+    /// <summary>
+    /// STA replay against the real MainWindow (no second monitor needed):
+    /// OnDpiChanged opens the transition, transition-driven SizeChanged events
+    /// cannot pollute the stable DIP size, the ApplicationIdle restore puts
+    /// the stable size back, and only post-settle resizes update it.
+    /// </summary>
+    public static void MainWindowDpiTransitionGuardsStableSize()
+    {
+        EnsureApp();
+        var main = new MainWindow(ShellSettings.Default, IsolatedHistory, IsolatedVocabulary);
+        try
+        {
+            main.Show();
+            PumpUntil(Task.CompletedTask);
+            var tracker = GetPrivate<StableNormalSizeTracker>(main, "_normalSizeTracker");
+            Equal(1120.0, tracker.StableSize.Width, "the stable size seeds from the XAML width");
+            Equal(760.0, tracker.StableSize.Height, "the stable size seeds from the XAML height");
+
+            // A settled user resize outside any transition updates the stable size.
+            main.Width = 747;
+            PumpUntil(Task.CompletedTask);
+            PumpUntil(Task.CompletedTask);
+            Equal(747.0, tracker.StableSize.Width, "a settled Normal-state resize must be observed");
+
+            // WM_DPICHANGED: the transition opens.
+            InvokePrivate(main, "OnDpiChanged",
+                new System.Windows.DpiScale(1.0, 1.0), new System.Windows.DpiScale(1.5, 1.5));
+            True(tracker.InDpiTransition, "OnDpiChanged must open the stable-size transition");
+
+            // Transition-driven resize: must NOT become the new stable size.
+            main.Width = 1120;
+            PumpUntil(Task.CompletedTask);
+            True(tracker.InDpiTransition, "the transition stays open until the idle restore");
+            Equal(747.0, tracker.StableSize.Width, "the polluted transition size must not win");
+
+            // Idle restore: the stable DIP size is applied, transition closes.
+            PumpIdle();
+            True(!tracker.InDpiTransition, "the idle restore must close the transition");
+            Equal(747.0, tracker.StableSize.Width);
+            True(Math.Abs(main.Width - 747) <= 0.5,
+                $"the restore must put the stable DIP width back, got {main.Width:F1}");
+
+            // Post-settle user resizes are observations again.
+            main.Width = 1120;
+            PumpUntil(Task.CompletedTask);
+            PumpUntil(Task.CompletedTask);
+            Equal(1120.0, tracker.StableSize.Width, "after the settle a user resize is honoured again");
+        }
+        finally
+        {
+            main.AllowClose = true;
+            try { main.Close(); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// STA replay against the real quick search window: OnDpiChanged must
+    /// settle EXACTLY ONCE via the ApplicationIdle fence (no mid-transition
+    /// repositioning), and the settle must keep the 480 DIP minimum width.
+    /// </summary>
+    public static void QuickSearchDpiTransitionSettlesOnceAtMinWidth()
+    {
+        EnsureApp();
+        var quickSearch = new QuickSearchWindow(IsolatedHistory, IsolatedVocabulary);
+        try
+        {
+            quickSearch.Show();
+            PumpUntil(Task.CompletedTask);
+            Equal(480.0, quickSearch.MinWidth, "the 480 DIP minimum width contract must hold");
+            True(quickSearch.ActualWidth >= 480 - 0.5,
+                $"the window must start at or above the minimum width, got {quickSearch.ActualWidth:F1}");
+            var widthBefore = quickSearch.ActualWidth;
+
+            InvokePrivate(quickSearch, "OnDpiChanged",
+                new System.Windows.DpiScale(1.0, 1.0), new System.Windows.DpiScale(1.5, 1.5));
+            var generation = GetPrivate<long>(quickSearch, "_dpiGeneration");
+            True(generation != GetPrivate<long>(quickSearch, "_settledDpiGeneration"),
+                "right after OnDpiChanged the transition must be open (idle reposition pending)");
+
+            PumpIdle();
+            Equal(generation, GetPrivate<long>(quickSearch, "_settledDpiGeneration"),
+                "the idle reposition must settle the transition exactly once");
+            True(quickSearch.ActualWidth >= widthBefore - 0.5,
+                $"the settle must keep the window width (no 480→720 DIP pollution), got {quickSearch.ActualWidth:F1}");
+        }
+        finally
+        {
+            quickSearch.ForceClose = true;
+            try { quickSearch.Close(); } catch { }
+        }
     }
 }

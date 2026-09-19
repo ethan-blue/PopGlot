@@ -1,29 +1,53 @@
 <Window x:Class="PopGlot.Windows.FloatingTriggerWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Width="46" Height="46"
+        Width="48" Height="48"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         Topmost="True" ShowActivated="False" ShowInTaskbar="False" ResizeMode="NoResize"
-        WindowStartupLocation="Manual" Opacity="0" UseLayoutRounding="True"
+        Focusable="False"
+        WindowStartupLocation="Manual" Opacity="0" UseLayoutRounding="True" SnapsToDevicePixels="True"
         MouseLeftButtonDown="Window_MouseLeftButtonDown"
+        MouseRightButtonDown="Window_MouseRightButtonDown"
         MouseEnter="Window_MouseEnter" MouseLeave="Window_MouseLeave"
         AutomationProperties.Name="翻译选中内容">
 
-    <Grid Margin="6">
-        <Border x:Name="ButtonSurface" Width="32" Height="32" CornerRadius="16"
+    <Grid Margin="6" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <Border x:Name="ButtonSurface" Width="34" Height="34" CornerRadius="17"
                 Background="{DynamicResource SurfaceRaisedBrush}"
                 BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1.2"
-                Cursor="Hand" ToolTip="PopGlot 翻译 (点击翻译选中内容)">
+                Cursor="Hand" ToolTip="翻译选中内容"
+                RenderTransformOrigin="0.5,0.5"
+                AutomationProperties.Name="翻译选中内容">
             <Border.Effect>
-                <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.25" Color="{DynamicResource ShadowColor}" />
+                <DropShadowEffect BlurRadius="12" ShadowDepth="2" Opacity="0.28" Color="{DynamicResource ShadowColor}" />
             </Border.Effect>
 
             <Grid>
-                <Path Width="15" Height="15" Stretch="Uniform"
+                <!-- Quartz inner specular highlight bevel -->
+                <Border CornerRadius="16" BorderThickness="1" BorderBrush="#25FFFFFF" Margin="0.5" />
+
+                <!-- Subtle quartz jewel halo behind the translation icon -->
+                <Ellipse x:Name="GlowHalo" Width="20" Height="20" HorizontalAlignment="Center" VerticalAlignment="Center"
+                         Fill="{DynamicResource AccentSoftBrush}" Opacity="0.45" />
+
+                <!-- Refined vector translation icon -->
+                <Path x:Name="TranslateIcon" Width="15" Height="15" Stretch="Uniform"
                       Fill="{DynamicResource AccentBrush}"
                       Data="{StaticResource IconTranslate}"
                       HorizontalAlignment="Center" VerticalAlignment="Center" />
             </Grid>
         </Border>
+
+        <!-- High-contrast boundary (the trigger's outermost visible root —
+             the button circle itself): transparent in the normal themes so
+             nothing changes visually, a crisp WindowText ring under system
+             high contrast where a small floating button would otherwise
+             vanish against the theme. Overlay-only: sits on the button rim,
+             no layout footprint, no hit testing. -->
+        <Border Width="34" Height="34" CornerRadius="17"
+                Background="Transparent"
+                BorderBrush="{DynamicResource WindowEdgeBrush}" BorderThickness="1"
+                HorizontalAlignment="Center" VerticalAlignment="Center"
+                IsHitTestVisible="False" />
     </Grid>
 </Window>

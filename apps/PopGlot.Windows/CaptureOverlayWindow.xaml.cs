@@ -40,10 +40,15 @@ public partial class CaptureOverlayWindow : Window
     internal void SetOcrOnlyMode(bool ocrOnly)
     {
         _forceOcrMode = ocrOnly;
-        if (ocrOnly)
+        if (HintTitle is not null)
         {
-            HintDetail.Text = "框选文本区域 · Esc 取消";
+            HintTitle.Text = ocrOnly ? "框选文本区域" : "框选翻译区域";
         }
+        if (ShiftHintGroup is not null)
+        {
+            ShiftHintGroup.Visibility = ocrOnly ? Visibility.Collapsed : Visibility.Visible;
+        }
+        HintDetail.Text = "取消";
     }
 
     /// <summary>Raised once a region has been captured successfully.</summary>
@@ -79,6 +84,8 @@ public partial class CaptureOverlayWindow : Window
         HintChip.Visibility = Visibility.Collapsed;
         CrossHorizontal.Visibility = Visibility.Collapsed;
         CrossVertical.Visibility = Visibility.Collapsed;
+        if (CrosshairReticle is not null) CrosshairReticle.Visibility = Visibility.Collapsed;
+        if (CrosshairDot is not null) CrosshairDot.Visibility = Visibility.Collapsed;
         SetShadeVisibility(Visibility.Visible);
         SelectionBorder.Visibility = Visibility.Visible;
         SizeBadge.Visibility = Visibility.Visible;
@@ -216,6 +223,17 @@ public partial class CaptureOverlayWindow : Window
         CrossVertical.Y2 = ActualHeight;
         CrossVertical.X1 = position.X;
         CrossVertical.X2 = position.X;
+
+        if (CrosshairReticle is not null)
+        {
+            Canvas.SetLeft(CrosshairReticle, position.X - 13);
+            Canvas.SetTop(CrosshairReticle, position.Y - 13);
+        }
+        if (CrosshairDot is not null)
+        {
+            Canvas.SetLeft(CrosshairDot, position.X - 2);
+            Canvas.SetTop(CrosshairDot, position.Y - 2);
+        }
     }
 
     private void UpdateSelection(Point current)
@@ -279,14 +297,27 @@ public partial class CaptureOverlayWindow : Window
         DragHintText.Text = ocr
             ? "松开将提取文字（OCR）· Esc 取消"
             : "松开开始翻译 · 按住 Shift 仅提取文字（OCR）";
-        // 文本变化会改变气泡宽度，量一次后重新在工作区水平居中。
-        DragHintChip.UpdateLayout();
-        CenterChipOnWorkArea(DragHintChip);
+        UpdateHudMode(ocr);
+        // 文本变化会改变气泡宽度：把量宽+居中推迟到布局完成之后的空闲档，
+        // 指针移动热路径绝不强制同步布局（框选延迟的旧病根）。
+        Dispatcher.BeginInvoke(
+            DispatcherPriority.Background,
+            new Action(() => CenterChipOnWorkArea(DragHintChip)));
+    }
+
+    private void UpdateHudMode(bool isOcr)
+    {
+        if (HudModeBadge is not null && HudModeBadge.Visibility == Visibility.Visible && HudModeText is not null)
+        {
+            HudModeText.Text = isOcr ? "提取文本 (OCR)" : "翻译";
+        }
     }
 
     /// <summary>选区过小：就地强调 1.6 秒，然后恢复常规尺寸徽标。</summary>
     private void ShowTinySelectionWarning()
     {
+        if (HudDivider is not null) HudDivider.Visibility = Visibility.Collapsed;
+        if (HudModeBadge is not null) HudModeBadge.Visibility = Visibility.Collapsed;
         SizeText.Text = "选区太小，请框选文字区域";
         SizeBadge.SetResourceReference(Border.BackgroundProperty, "WarningSoftBrush");
         SizeBadge.SetResourceReference(Border.BorderBrushProperty, "WarningBrush");
@@ -311,6 +342,10 @@ public partial class CaptureOverlayWindow : Window
         SizeBadge.SetResourceReference(Border.BackgroundProperty, "SurfaceBrush");
         SizeBadge.SetResourceReference(Border.BorderBrushProperty, "AccentBorderBrush");
         SizeText.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
+        if (HudDivider is not null) HudDivider.Visibility = Visibility.Visible;
+        if (HudModeBadge is not null) HudModeBadge.Visibility = Visibility.Visible;
+        var ocr = _dragHintOcr ?? (_forceOcrMode || Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift));
+        UpdateHudMode(ocr);
         var pixelWidth = _lastPixelWidth;
         var pixelHeight = _lastPixelHeight;
         SizeText.Text = pixelWidth >= 0 ? $"{pixelWidth} × {pixelHeight} px" : string.Empty;

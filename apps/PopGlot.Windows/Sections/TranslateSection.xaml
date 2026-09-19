@@ -39,7 +39,7 @@
                     <Button x:Name="OnboardingSkipButton" Style="{StaticResource GhostButton}"
                             Padding="10,6" Margin="8,0,0,0" Content="跳过引导"
                             AutomationProperties.Name="跳过新手引导"
-                            ToolTip="完成并关闭引导；之后可在「设置 → 通用」重新显示"
+                            ToolTip="可在「设置 → 通用」重新显示"
                             Click="OnboardingSkip_Click" />
                 </StackPanel>
             </Grid>
@@ -61,10 +61,10 @@
                         Padding="10,6" Margin="0,0,8,0"
                         AutomationProperties.Name="翻译风格"
                         ToolTipService.ShowOnDisabled="True"
-                        ToolTip="翻译风格（仅影响下一次翻译，不重译当前内容）"
+                        ToolTip="翻译风格（下一次翻译生效）"
                         Click="StyleSelector_Click">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <Path Width="11" Height="11" Stretch="Uniform"
+                        <Path Width="12" Height="12" Stretch="Uniform"
                               Fill="{DynamicResource AccentBrush}"
                               Data="{StaticResource IconSparkles}" VerticalAlignment="Center" />
                         <TextBlock x:Name="StyleSelectorLabel" Text="风格" Margin="6,0,0,0"
@@ -77,7 +77,7 @@
                 </Button>
                 <Button x:Name="RestoreSessionButton" Style="{StaticResource GhostButton}"
                         Padding="10,6" Margin="0,0,8,0" Content="恢复暂存"
-                        ToolTip="从多会话仓恢复最近未完成或刚关闭的会话（最多暂存5条）"
+                        ToolTip="恢复未完成或最近关闭的会话（最多 5 条）"
                         AutomationProperties.Name="恢复暂存会话"
                         Click="RestoreSession_Click" />
                 <Button x:Name="TranslateButton" Style="{StaticResource PrimaryButton}"
@@ -97,7 +97,7 @@
         -->
         <Border Grid.Row="2" Background="{DynamicResource SurfaceBrush}"
                 BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                CornerRadius="10">
+                CornerRadius="{StaticResource CardRadius}">
             <Grid x:Name="TranslatePaneGrid">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -137,14 +137,6 @@
                                    HorizontalAlignment="Left" />
 
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-
-                            <TextBlock x:Name="TranslateAutoDetectHint" Text="自动识别源语言"
-
-                                       Style="{StaticResource Metadata}"
-
-                                       Foreground="{DynamicResource TextTertiaryBrush}"
-
-                                       VerticalAlignment="Center" Margin="0,0,6,0" />
 
                             <ComboBox x:Name="TranslateSourceLang"
 
@@ -266,7 +258,7 @@
 
                                     Click="TranslateClear_Click">
 
-                                <Path Width="11" Height="11" Stretch="Uniform"
+                                <Path Width="12" Height="12" Stretch="Uniform"
 
                                       Fill="{DynamicResource TextSecondaryBrush}"
 
@@ -306,7 +298,7 @@
 
                         Click="TranslateSwap_Click">
 
-                    <Path Width="13" Height="13" Stretch="Uniform"
+                    <Path Width="12" Height="12" Stretch="Uniform"
 
                           Fill="{DynamicResource TextSecondaryBrush}"
 
@@ -326,7 +318,7 @@
 
                 <!-- Center vertical line: 1px hairline drawn down the center spanning body and footer -->
 
-                <Rectangle x:Name="AxisDividerLine" Grid.Row="1" Grid.RowSpan="2" Grid.Column="1"
+                <Rectangle x:Name="AxisDividerLine" Grid.Row="1" Grid.RowSpan="1" Grid.Column="1"
 
                            Width="1" Fill="{DynamicResource BorderSubtleBrush}"
 
@@ -471,7 +463,6 @@
                                         <Button x:Name="GoToSettingsButton" Content="添加翻译引擎" Style="{StaticResource PrimaryButton}"
                                                 Padding="16,6" HorizontalAlignment="Center" Cursor="Hand"
                                                 AutomationProperties.Name="添加翻译引擎"
-                                                ToolTip="打开设置并进入添加引擎流程"
                                                 Click="OpenAddEngine_Click" />
                                         <Button x:Name="EnableFreeEngineButton" Content="允许联网免费引擎"
 
@@ -481,36 +472,27 @@
 
                                                 AutomationProperties.Name="允许联网免费引擎"
 
-                                                ToolTip="内置公共翻译把待翻译文字发送到 translate.googleapis.com 与 clients5.google.com；不发送截图、历史记录或密钥。"
+                                                ToolTip="仅发送待翻译文本至 translate.googleapis.com；不发送截图、历史或密钥"
 
                                                 Click="EnableFreeEngine_Click" />
                                     </StackPanel>
 
                                     <!-- Normal idle guidance: one title, one hint, one primary CTA. -->
                                     <StackPanel x:Name="NormalGuidePanel" HorizontalAlignment="Center">
-                                        <TextBlock x:Name="EmptyStateHint" Text="在左侧输入或粘贴文本，按 Enter 翻译"
-
-                                                   FontSize="13.5" FontWeight="SemiBold" HorizontalAlignment="Center"
-
-                                               Foreground="{DynamicResource TextSecondaryBrush}" />
-
-                                        <TextBlock x:Name="ShortcutEntriesHint" Text="快捷键：划词翻译 (Ctrl+Alt+W) · 截图翻译 (Ctrl+Alt+Space)"
+                                        <TextBlock x:Name="ShortcutEntriesHint" Text="划词 Ctrl+Alt+W · 截图 Ctrl+Alt+Space"
 
                                                    Style="{StaticResource Caption}" HorizontalAlignment="Center"
 
-                                                   Margin="0,5,0,12" Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                   Margin="0,0,0,12" Foreground="{DynamicResource TextTertiaryBrush}" />
 
                                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                                             <Button Content="填入示例" Style="{StaticResource GhostButton}" Padding="10,6"
 
                                                     AutomationProperties.Name="填入示例报错文本"
 
-                                                    ToolTip="填入一段演示报错文本（纯本地示例，不会联网）"
+                                                    ToolTip="填入演示报错文本（不联网）"
 
                                                     Click="FillExample_Click" />
-                                            <TextBlock Text="演示 · 未联网" Style="{StaticResource Metadata}"
-                                                       Margin="8,0,0,0" VerticalAlignment="Center"
-                                                       Foreground="{DynamicResource TextTertiaryBrush}" />
                                         </StackPanel>
                                     </StackPanel>
 

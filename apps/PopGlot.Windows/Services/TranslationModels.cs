@@ -142,6 +142,17 @@ internal sealed record TranslationSessionTiming(
     ulong TotalElapsedMs = 0);
 
 /// <summary>
+/// 面向用户的秒级耗时文案（0.1.6 文案减法）：状态行只说"用时 X.X 秒"，
+/// 不再暴露取词/OCR/路由/网络等内部毫秒拆分。纯函数、无状态，供极速查词
+/// 状态行与浮窗页脚等表面共用，保证三表面措辞一致。
+/// </summary>
+internal static class TranslationElapsedText
+{
+    public static string ForMilliseconds(double totalMilliseconds) =>
+        $"用时 {Math.Max(0, totalMilliseconds) / 1000.0:F1} 秒";
+}
+
+/// <summary>
 /// Identity + revision of a prompt template, snapshotted once at request
 /// start. Deliberately carries NO instruction body: sessions and history
 /// record WHICH style produced a result — never a copy of the prompt text —

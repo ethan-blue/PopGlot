@@ -38,7 +38,23 @@ public partial class SettingsWindow : Window
 {
     private readonly HistoryStore _history;
     private readonly VocabularyStore? _vocabulary;
-    private ShellSettings _shellSettings;
+    private ShellSettings _savedShellSettings = null!;
+    private ShellSettings _shellSettings
+    {
+        get
+        {
+            if (_loading || _savedShellSettings is null)
+            {
+                return _savedShellSettings!;
+            }
+            if (ShortcutsSection?.QuickSearchHotkey?.BindingValue is { } binding)
+            {
+                return _savedShellSettings with { QuickSearchHotkey = binding };
+            }
+            return _savedShellSettings;
+        }
+        set => _savedShellSettings = value;
+    }
     private bool _loading = true;
     private SettingsEditState _state = SettingsEditState.Loading;
     private string _settingsBaseline = string.Empty;
@@ -57,6 +73,9 @@ public partial class SettingsWindow : Window
     private readonly EventHandler _themeChangedHandler;
     private bool _componentInitialized;
     private bool _themeSubscribed;
+    // True while ShowPage syncs the nav rail programmatically, so the
+    // resulting Checked event does not re-enter ShowPage.
+    private bool _syncingNav;
 
     /// <summary>
     /// Fail-closed latch: the last policy read (network/safe-mode/route/rules)
@@ -75,6 +94,7 @@ public partial class SettingsWindow : Window
 
     internal SettingsWindow(ShellSettings shellSettings, HistoryStore history, VocabularyStore? vocabulary = null)
     {
+        _savedShellSettings = shellSettings;
         _shellSettings = shellSettings;
         _history = history;
         _vocabulary = vocabulary;
@@ -121,8 +141,13 @@ public partial class SettingsWindow : Window
         }
     }
 
-    /// <summary>Registers hotkeys and applies theme; returns false on conflict.</summary>
-    internal Func<ShellSettings, bool>? ApplyShellSettings { get; init; }
+    /// <summary>
+    /// Applies shell settings and returns a TYPED outcome: the failure kind
+    /// tells the inline status whether the previous hotkey set stayed live
+    /// (probe conflict) or the process truly lost its hotkeys — no global
+    /// boolean guessing.
+    /// </summary>
+    internal Func<ShellSettings, ShellApplyOutcome>? ApplyShellSettings { get; init; }
 
     /// <summary>Pauses global shortcuts while one shortcut field records.</summary>
     internal Action<bool>? SetHotkeysSuspended { get; init; }
@@ -152,6 +177,7 @@ public partial class SettingsWindow : Window
 
         ShortcutsSection.SelectionHotkey.Recorded += MarkDirtyHandler;
         ShortcutsSection.ScreenshotHotkey.Recorded += MarkDirtyHandler;
+        ShortcutsSection.QuickSearchHotkey.Recorded += MarkDirtyHandler;
         ShortcutsSection.CloseHotkey.Recorded += MarkDirtyHandler;
         ShortcutsSection.ShowWindowHotkey.Recorded += MarkDirtyHandler;
 
@@ -274,6 +300,7 @@ public partial class SettingsWindow : Window
     {
         yield return ShortcutsSection.SelectionHotkey;
         yield return ShortcutsSection.ScreenshotHotkey;
+        yield return ShortcutsSection.QuickSearchHotkey;
         yield return ShortcutsSection.CloseHotkey;
         yield return ShortcutsSection.ShowWindowHotkey;
     }
@@ -298,7 +325,8 @@ public partial class SettingsWindow : Window
             GeneralSection.ProtectTokens.IsChecked == true,
             Helpers.SelectedEnum(GeneralSection.ThemeCombo, ThemePreference.System).ToString(),
             CaptureRouteDraftSnapshot(),
-            GeneralSection.CloseToTray.IsChecked == true);
+            GeneralSection.CloseToTray.IsChecked == true,
+            ShortcutsSection.QuickSearchHotkey.BindingValue?.Serialize());
 
     private RouteDraftSnapshot CaptureRouteDraftSnapshot() =>
         RouteDraftSnapshot.Create(
@@ -376,6 +404,7 @@ public partial class SettingsWindow : Window
     {
         ShortcutsSection.SelectionHotkey.BindingValue = settings.SelectionHotkey;
         ShortcutsSection.ScreenshotHotkey.BindingValue = settings.ScreenshotHotkey;
+        ShortcutsSection.QuickSearchHotkey.BindingValue = settings.QuickSearchHotkey ?? HotkeyBinding.QuickSearchDefault;
         ShortcutsSection.CloseHotkey.BindingValue = settings.CloseHotkey;
         ShortcutsSection.ShowWindowHotkey.BindingValue = settings.ShowWindowHotkey ?? HotkeyBinding.ShowWindowDefault;
         DataSection.HistoryEnabled.IsChecked = settings.HistoryEnabled;
@@ -447,7 +476,9 @@ public partial class SettingsWindow : Window
 
     private void SubNav_Checked(object sender, RoutedEventArgs e)
     {
-        if (!IsLoaded && _loading)
+        // A radio raised by ShowPage's own rail sync must not bounce the
+        // request straight back into ShowPage.
+        if (_syncingNav || (!IsLoaded && _loading))
         {
             return;
         }
@@ -476,7 +507,20 @@ public partial class SettingsWindow : Window
             ProviderSection.Visibility == Visibility.Visible &&
             ProviderSection.IsEditorDirty)
         {
-            NavProvider.IsChecked = true;
+            // The bounce-back must not re-enter ShowPage through
+            // SubNav_Checked: the guard branch below still owns this
+            // navigation, and a reentrant ShowPage("Provider") would run the
+            // page switch (list refreshes included) before the guard bar is
+            // even up.
+            _syncingNav = true;
+            try
+            {
+                NavProvider.IsChecked = true;
+            }
+            finally
+            {
+                _syncingNav = false;
+            }
             ProviderSection.BeginDraftGuard(
                 "切换设置页前，请先保存或放弃这个翻译引擎的未保存修改。",
                 () => Dispatcher.BeginInvoke(() => ShowPage(tag)));
@@ -489,7 +533,15 @@ public partial class SettingsWindow : Window
             PromptSectionHost.Visibility == Visibility.Visible &&
             PromptSectionHost.IsEditorDirty)
         {
-            NavPrompt.IsChecked = true;
+            _syncingNav = true;
+            try
+            {
+                NavPrompt.IsChecked = true;
+            }
+            finally
+            {
+                _syncingNav = false;
+            }
             PromptSectionHost.BeginDraftGuard(
                 "切换设置页前，请先保存或放弃这个提示词模板的未保存修改。",
                 () => Dispatcher.BeginInvoke(() => ShowPage(tag)));
@@ -504,6 +556,31 @@ public partial class SettingsWindow : Window
             "Prompt" => "Prompt",
             _ => "Provider",
         };
+
+        // The sidebar rail must stay in lock-step with the page actually
+        // shown. Programmatic entries (the main-window add-engine flow on an
+        // already-open window, close-time draft guards, tests) can land on a
+        // page without a radio click; leaving the previous item highlighted
+        // desynchronizes the rail from the content. DynamicResource for the
+        // page, DynamicResource-equivalent for the rail: IsChecked drives the
+        // NavButton highlight, so checking the target radio repaints it.
+        _syncingNav = true;
+        try
+        {
+            var nav = page switch
+            {
+                "Prompt" => NavPrompt,
+                "General" => NavGeneral,
+                "Shortcuts" => NavShortcuts,
+                "Privacy" => NavPrivacy,
+                _ => NavProvider,
+            };
+            nav.IsChecked = true;
+        }
+        finally
+        {
+            _syncingNav = false;
+        }
 
         GeneralSection.Visibility = Visibility.Collapsed;
         ShortcutsSection.Visibility = Visibility.Collapsed;
@@ -608,7 +685,11 @@ public partial class SettingsWindow : Window
                 // must never silently reset them to the defaults.
                 CloseHintShown: _shellSettings.CloseHintShown,
                 CloudSpeechEnabled: _shellSettings.CloudSpeechEnabled,
-                CloseMainWindowToTray: GeneralSection.CloseToTray.IsChecked == true);
+                CloseMainWindowToTray: GeneralSection.CloseToTray.IsChecked == true,
+                // 首次引导同样活在表单之外：ShellSettings 的默认值是 false，
+                // 漏传会把每一位已走过引导的用户拉回引导（升级路径除外）。
+                HasCompletedOnboarding: _shellSettings.HasCompletedOnboarding,
+                QuickSearchHotkey: _shellSettings.QuickSearchHotkey);
 
             var validationError = shellSettings.ValidateHotkeys();
             if (validationError is not null)
@@ -617,11 +698,23 @@ public partial class SettingsWindow : Window
             }
             // Registering hotkeys is the last system-level check that can
             // fail; it runs before any write so a conflicting combination
-            // cannot leave a half-saved state behind.
-            if (ApplyShellSettings is not null && !ApplyShellSettings(shellSettings))
+            // cannot leave a half-saved state behind. The typed outcome
+            // keeps this window the ONLY surface for a probe failure (the
+            // candidate lost but the old set is live again): no balloon,
+            // no workbench banner, and an honest inline message either way.
+            var applyOutcome = ApplyShellSettings?.Invoke(shellSettings) ?? ShellApplyOutcome.Ok();
+            if (!applyOutcome.Applied)
             {
-                throw new InvalidOperationException(
-                    "快捷键注册失败，请换一个未被占用的组合。未保存任何修改。");
+                throw new InvalidOperationException(applyOutcome.Failure switch
+                {
+                    ShellApplyFailureKind.InvalidHotkeys =>
+                        $"{applyOutcome.ConflictDetail}未保存任何修改。",
+                    ShellApplyFailureKind.HotkeyConflictRestored =>
+                        $"快捷键注册失败：{applyOutcome.ConflictDetail}。原快捷键仍正常生效，本次未保存任何修改，请更换组合后重试。",
+                    ShellApplyFailureKind.HotkeyUnavailable =>
+                        $"快捷键注册失败：{applyOutcome.ConflictDetail}。且原快捷键也未能保持可用，本次未保存任何修改，请更换组合后重试。",
+                    _ => "设置未能生效。未保存任何修改。",
+                });
             }
 
             // ===== Commit phase =====
@@ -634,7 +727,7 @@ public partial class SettingsWindow : Window
             catch (Exception commitException)
             {
                 // 逐层诚实上报：快捷键恢复本身也可能失败，绝不谎报"已恢复"。
-                var hotkeysRestored = ApplyShellSettings is null || ApplyShellSettings(_shellSettings);
+                var hotkeysRestored = ApplyShellSettings is null || ApplyShellSettings(_shellSettings).Applied;
                 throw new InvalidOperationException(
                     hotkeysRestored
                         ? $"策略设置未能写入（{commitException.Message}）。已恢复原快捷键，其他设置未改动。"
@@ -654,7 +747,7 @@ public partial class SettingsWindow : Window
                 try
                 {
                     await CoreBridge.SaveSettingsAsync(previousCoreSettings);
-                    var hotkeysRestored = ApplyShellSettings is null || ApplyShellSettings(_shellSettings);
+                    var hotkeysRestored = ApplyShellSettings is null || ApplyShellSettings(_shellSettings).Applied;
                     rollbackReport = hotkeysRestored
                         ? "已回滚本次全部修改。"
                         : "已回滚写盘设置，但快捷键恢复失败：当前生效的快捷键可能与界面不一致，请检查快捷键设置。";
@@ -856,7 +949,11 @@ public partial class SettingsWindow : Window
         Ui.SetIcon(
             MaximizeBtn,
             (Geometry)FindResource(WindowState == WindowState.Maximized ? "IconCaptionRestore" : "IconCaptionMax"));
-        MaximizeBtn.ToolTip = WindowState == WindowState.Maximized ? "向下还原" : "最大化";
+        var caption = WindowState == WindowState.Maximized ? "向下还原" : "最大化";
+        MaximizeBtn.ToolTip = caption;
+        // The accessibility name rides the same caption as the ToolTip so
+        // screen readers announce the state the click will actually switch to.
+        System.Windows.Automation.AutomationProperties.SetName(MaximizeBtn, caption);
     }
 
     /// <summary>
