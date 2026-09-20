@@ -2495,17 +2495,24 @@ internal static class WaveRegressionTests
         var main = new MainWindow(ShellSettings.Default, IsolatedHistory, IsolatedVocabulary);
         try
         {
-            main.Show();
-            PumpUntil(Task.CompletedTask);
+            // Seed assertions run on the constructed window, before Show():
+            // on a work area narrower than the 1120 DIP design size the
+            // first-show clamp is a legitimate Normal-state observation, so
+            // the XAML seed is only guaranteed pre-layout.
             var tracker = GetPrivate<StableNormalSizeTracker>(main, "_normalSizeTracker");
             Equal(1120.0, tracker.StableSize.Width, "the stable size seeds from the XAML width");
             Equal(760.0, tracker.StableSize.Height, "the stable size seeds from the XAML height");
 
-            // A settled user resize outside any transition updates the stable size.
-            main.Width = 747;
+            main.Show();
+            PumpUntil(Task.CompletedTask);
+
+            // A settled user resize outside any transition updates the stable
+            // size. 900 DIP stays clear of the minimum width and of every
+            // runner's work area (the 1120 design width would clamp there).
+            main.Width = 900;
             PumpUntil(Task.CompletedTask);
             PumpUntil(Task.CompletedTask);
-            Equal(747.0, tracker.StableSize.Width, "a settled Normal-state resize must be observed");
+            Equal(900.0, tracker.StableSize.Width, "a settled Normal-state resize must be observed");
 
             // WM_DPICHANGED: the transition opens.
             InvokePrivate(main, "OnDpiChanged",
@@ -2516,20 +2523,20 @@ internal static class WaveRegressionTests
             main.Width = 1120;
             PumpUntil(Task.CompletedTask);
             True(tracker.InDpiTransition, "the transition stays open until the idle restore");
-            Equal(747.0, tracker.StableSize.Width, "the polluted transition size must not win");
+            Equal(900.0, tracker.StableSize.Width, "the polluted transition size must not win");
 
             // Idle restore: the stable DIP size is applied, transition closes.
             PumpIdle();
             True(!tracker.InDpiTransition, "the idle restore must close the transition");
-            Equal(747.0, tracker.StableSize.Width);
-            True(Math.Abs(main.Width - 747) <= 0.5,
+            Equal(900.0, tracker.StableSize.Width);
+            True(Math.Abs(main.Width - 900) <= 0.5,
                 $"the restore must put the stable DIP width back, got {main.Width:F1}");
 
             // Post-settle user resizes are observations again.
-            main.Width = 1120;
+            main.Width = 747;
             PumpUntil(Task.CompletedTask);
             PumpUntil(Task.CompletedTask);
-            Equal(1120.0, tracker.StableSize.Width, "after the settle a user resize is honoured again");
+            Equal(747.0, tracker.StableSize.Width, "after the settle a user resize is honoured again");
         }
         finally
         {
