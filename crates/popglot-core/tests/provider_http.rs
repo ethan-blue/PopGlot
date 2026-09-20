@@ -640,9 +640,11 @@ async fn long_slow_stream_survives_beyond_nonstream_total_timeout() {
     // 长生成到点即被腰斩——这正是「生成中断，内容不完整」的根源。存活
     // 判定必须看字块间空闲，而不是总时长。
     let delimiter = "PGMETA_slow_stream_0123456789";
-    let payload = format!("你好
+    let payload = format!(
+        "你好
 {delimiter}
-{{\"explanation\":\"ok\"}}");
+{{\"explanation\":\"ok\"}}"
+    );
     let pieces: Vec<String> = payload
         .chars()
         .collect::<Vec<_>>()
@@ -664,9 +666,13 @@ async fn long_slow_stream_survives_beyond_nonstream_total_timeout() {
             )
         })
         .collect();
-    frames.push((b"data: [DONE]
+    frames.push((
+        b"data: [DONE]
 
-".to_vec(), Duration::from_millis(80)));
+"
+        .to_vec(),
+        Duration::from_millis(80),
+    ));
     // 总时长约 pieces*80ms（>500ms 非流式预算），字块间隔 80ms（<3s 空闲预算）。
     let server = SseServer::start(frames);
     let config = sse_settings(ProviderType::OpenAiCompatible, &server);
@@ -701,9 +707,11 @@ async fn silent_stream_is_cut_by_idle_timeout() {
     // 存活判定的另一半：彻底静默的流必须在空闲超时处被明确掐断，
     // 而不是挂到总上限才失败。
     let delimiter = "PGMETA_stall_stream_0123456789";
-    let payload = format!("卡住
+    let payload = format!(
+        "卡住
 {delimiter}
-{{\"explanation\":\"ok\"}}");
+{{\"explanation\":\"ok\"}}"
+    );
     let first = format!(
         "data: {{\"choices\":[{{\"delta\":{{\"content\":{}}}}}]}}
 
@@ -713,9 +721,13 @@ async fn silent_stream_is_cut_by_idle_timeout() {
     .into_bytes();
     let server = SseServer::start(vec![
         (first, Duration::ZERO),
-        (b"data: [DONE]
+        (
+            b"data: [DONE]
 
-".to_vec(), Duration::from_secs(10)),
+"
+            .to_vec(),
+            Duration::from_secs(10),
+        ),
     ]);
     let config = sse_settings(ProviderType::OpenAiCompatible, &server);
     let stall_client = ProviderClient::new(TransportLimits {
