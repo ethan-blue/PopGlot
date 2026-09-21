@@ -508,6 +508,21 @@
                                            Foreground="{DynamicResource TextSecondaryBrush}"
                                            TextWrapping="Wrap" />
                             </StackPanel>
+                            <ItemsControl x:Name="TranslateTermsList" Margin="0,8,0,0" Visibility="Collapsed">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{DynamicResource SurfacePressedBrush}"
+                                                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
+                                                CornerRadius="8" Padding="8,3" Margin="0,0,6,5">
+                                            <TextBlock Text="{Binding}" Style="{StaticResource Metadata}"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                         </StackPanel>
                     </ScrollViewer>
                 </Border>
@@ -529,6 +544,14 @@
                                        AutomationProperties.Name="翻译状态" />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button x:Name="TranslateSummaryButton" Content="总结"
+                                    Style="{StaticResource GhostButton}" Padding="10,5" Margin="0,0,6,0"
+                                    ToolTip="用当前模型提炼要点" AutomationProperties.Name="总结原文"
+                                    Click="TranslateSummary_Click" />
+                            <Button x:Name="TranslateExplainButton" Content="快速解释"
+                                    Style="{StaticResource GhostButton}" Padding="10,5" Margin="0,0,8,0"
+                                    ToolTip="用简单语言解释原文" AutomationProperties.Name="快速解释原文"
+                                    Click="TranslateExplain_Click" />
                             <Button x:Name="TranslateResultSpeakButton" Style="{StaticResource IconButton}"
                                     Width="32" Height="32"
                                     AutomationProperties.Name="朗读译文" ToolTip="朗读译文"

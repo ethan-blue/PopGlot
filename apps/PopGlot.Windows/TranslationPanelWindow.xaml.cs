@@ -400,6 +400,74 @@ public partial class TranslationPanelWindow : Window
         }
     }
 
+    private async void Summary_Click(object sender, RoutedEventArgs e) =>
+        await RunTextTaskAsync(TextTaskKind.Summarize, "总结");
+
+    private async void Explain_Click(object sender, RoutedEventArgs e) =>
+        await RunTextTaskAsync(TextTaskKind.Explain, "快速解释");
+
+    private async Task RunTextTaskAsync(TextTaskKind task, string label)
+    {
+        var source = SourceInputBox.Text.Trim();
+        if (source.Length == 0)
+        {
+            StatusText.Text = $"请先输入需要{label}的内容";
+            return;
+        }
+        CancelOperation();
+        var operation = new CancellationTokenSource();
+        _operation = operation;
+        SummaryButton.IsEnabled = false;
+        ExplainButton.IsEnabled = false;
+        TranslationTextBox.Clear();
+        TranslationTextBox.SetValue(Ui.PlaceholderProperty, $"正在{label}…");
+        ResultSkeleton.Visibility = Visibility.Visible;
+        Progress.Visibility = Visibility.Visible;
+        ExplanationBox.Visibility = Visibility.Collapsed;
+        TermsList.Visibility = Visibility.Collapsed;
+        WarningBox.Visibility = Visibility.Collapsed;
+        StatusText.Text = $"正在{label}…";
+        try
+        {
+            var response = await _coordinator.RunTextTaskAsync(
+                source, SourceLanguage, TargetLanguage, task, operation.Token);
+            if (operation.IsCancellationRequested || _operation != operation) return;
+            TranslationTextBox.Text = response.Result.TranslatedText;
+            TranslationTextBox.SetValue(Ui.PlaceholderProperty, "结果为空");
+            ExplanationText.Text = response.Result.Explanation;
+            ExplanationBox.Visibility = string.IsNullOrWhiteSpace(response.Result.Explanation)
+                ? Visibility.Collapsed : Visibility.Visible;
+            TermsList.ItemsSource = response.Result.ProtectedTerms.Distinct().ToArray();
+            TermsList.Visibility = response.Result.ProtectedTerms.Count > 0
+                ? Visibility.Visible : Visibility.Collapsed;
+            WarningText.Text = string.Join("\n", response.Result.Warnings);
+            WarningBox.Visibility = response.Result.Warnings.Count > 0
+                ? Visibility.Visible : Visibility.Collapsed;
+            StatusText.Text = $"{label}完成 · {response.Diagnostics.ElapsedMs} ms";
+            RouteText.Text = response.EngineLabel;
+        }
+        catch (OperationCanceledException)
+        {
+            StatusText.Text = $"已取消{label}";
+        }
+        catch (Exception ex)
+        {
+            ExplanationText.Text = ex.Message;
+            ExplanationBox.Visibility = Visibility.Visible;
+            StatusText.Text = $"{label}失败，可重试";
+        }
+        finally
+        {
+            if (_operation == operation)
+            {
+                ResultSkeleton.Visibility = Visibility.Collapsed;
+                Progress.Visibility = Visibility.Collapsed;
+                SummaryButton.IsEnabled = true;
+                ExplainButton.IsEnabled = true;
+            }
+        }
+    }
+
     private async Task TranslateTextAsync(string source, CancellationToken cancellation, long epoch)
     {
         if (string.IsNullOrWhiteSpace(source))

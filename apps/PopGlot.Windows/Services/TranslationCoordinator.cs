@@ -582,6 +582,30 @@ internal sealed class TranslationCoordinator
         }
     }
 
+    public async Task<TranslationResponse> RunTextTaskAsync(
+        string source,
+        string sourceLang,
+        string targetLang,
+        TextTaskKind task,
+        CancellationToken cancellationToken = default)
+    {
+        if (!RuntimeGate.NewWorkAllowed)
+        {
+            throw new InvalidOperationException(RuntimeGate.RefusalZh);
+        }
+        var settings = _executor.GetSettings();
+        var routes = _executor.ResolveRoutes();
+        var textRoute = routes.Text;
+        var apiKey = textRoute is null ? null : _executor.LoadApiKey(textRoute.CredentialTarget);
+        if (textRoute is null && !settings.TargetsLocalRuntime)
+        {
+            throw new InvalidOperationException("请先在设置中配置模型引擎，再使用总结或快速解释。");
+        }
+        var routeSettings = textRoute?.Profile.ToProviderSettings(settings);
+        return await CoreBridge.RunTextTaskAsync(
+            apiKey, source, sourceLang, targetLang, task, cancellationToken, routeSettings);
+    }
+
     public async Task<TranslationSession> TranslateScreenshotAsync(
         byte[] imageBytes,
         string sourceLang,

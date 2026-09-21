@@ -18,7 +18,9 @@ pub use benchmark::{
     run_live_benchmark, sanitize_error_string,
 };
 pub use prompt_store::{PromptConfig, PromptStore, PromptStoreError};
-pub use provider::{STREAM_PROMPT_VERSION, StreamPrompt, StreamPromptBuilder, StreamPromptError};
+pub use provider::{
+    STREAM_PROMPT_VERSION, StreamPrompt, StreamPromptBuilder, StreamPromptError, TextTask,
+};
 pub use streaming::{
     StreamingTokenRestorer, TextFirstAssembler, TextFirstResult, TranslationMetadata,
 };
@@ -491,6 +493,62 @@ impl AppCore {
             on_delta,
         )
         .await
+    }
+
+    /// Runs a lightweight reading action through the same configured provider
+    /// and reusable HTTP client as translation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified provider error for invalid input, configuration,
+    /// cancellation, transport failure, or invalid model output.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_text_task_snapshot(
+        settings: &ProviderSettings,
+        client: &ProviderClient,
+        api_key: &str,
+        source: &str,
+        languages: &LanguagePair,
+        request_id: &str,
+        task: TextTask,
+        cancellation: &CancellationToken,
+    ) -> Result<TranslationResponse, ProviderError> {
+        let source = source.trim();
+        if source.is_empty() || source.len() > MAX_SOURCE_BYTES {
+            return Err(ProviderError::new(
+                ProviderErrorKind::Configuration,
+                format!(
+                    "处理文本必须大于 0 且不超过 {} KiB。",
+                    MAX_SOURCE_BYTES / 1024
+                ),
+            ));
+        }
+        if task == TextTask::Translate {
+            return Self::execute_translate_text_snapshot(
+                settings,
+                client,
+                api_key,
+                source,
+                languages,
+                request_id,
+                cancellation,
+            )
+            .await;
+        }
+        let provider = provider_for(settings.provider_type);
+        let request = TranslationRequest::text(source, languages.clone())
+            .with_task(task)
+            .with_explanation(task == TextTask::Explain);
+        client
+            .execute(
+                provider.as_ref(),
+                settings,
+                api_key,
+                request_id,
+                &request,
+                cancellation,
+            )
+            .await
     }
 
     /// Applies exactly-once restoration to a finished translation: the restored

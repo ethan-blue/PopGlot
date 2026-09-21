@@ -29,6 +29,54 @@ pub enum TranslationInput {
     Vision { image: ImageInput },
 }
 
+/// What the model should DO with the source. `Translate` is the product's
+/// core pipeline; `Summarize` and `Explain` are the panel/workbench
+/// companion actions ("总结" / "快速解释"). They reuse the same providers,
+/// the same text-first stream protocol and the same metadata trailer, so a
+/// task is a prompt variant — never a second transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextTask {
+    #[default]
+    Translate,
+    Summarize,
+    Explain,
+}
+
+impl TextTask {
+    /// Stable wire name used by the FFI boundary.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Translate => "translate",
+            Self::Summarize => "summarize",
+            Self::Explain => "explain",
+        }
+    }
+
+    /// Parses the FFI wire name. Unknown names are configuration errors, not
+    /// silent translations: sending the wrong task would look like a wrong
+    /// answer to the user.
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error when the wire task name is unknown.
+    pub fn parse(value: &str) -> Result<Self, ProviderError> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "translate" | "" => Ok(Self::Translate),
+            "summarize" => Ok(Self::Summarize),
+            "explain" => Ok(Self::Explain),
+            other => Err(ProviderError::new(
+                ProviderErrorKind::Configuration,
+                format!("未知的文字任务类型：{other}。"),
+            )),
+        }
+    }
+
+    fn is_translation(self) -> bool {
+        matches!(self, Self::Translate)
+    }
+}
+
 /// One translation call: what to translate, between which languages, and how
 /// much commentary the user asked for.
 ///
@@ -39,6 +87,7 @@ pub enum TranslationInput {
 pub struct TranslationRequest {
     pub input: TranslationInput,
     pub languages: LanguagePair,
+    pub task: TextTask,
     pub include_explanation: bool,
     pub preference: Option<String>,
     pub template_id: Option<String>,
@@ -118,6 +167,7 @@ impl TranslationRequest {
                 source: source.into(),
             },
             languages,
+            task: TextTask::Translate,
             include_explanation: true,
             preference: None,
             template_id: None,
@@ -130,11 +180,18 @@ impl TranslationRequest {
         Self {
             input: TranslationInput::Vision { image },
             languages,
+            task: TextTask::Translate,
             include_explanation: true,
             preference: None,
             template_id: None,
             template_revision: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_task(mut self, task: TextTask) -> Self {
+        self.task = task;
+        self
     }
 
     #[must_use]
@@ -156,9 +213,28 @@ impl TranslationRequest {
         self
     }
 
+    fn text_task_instruction(&self) -> String {
+        let target = self.languages.target_english_name();
+        match self.task {
+            TextTask::Translate => String::new(),
+            TextTask::Summarize => format!(
+                "Summarize the supplied text concisely in {target}. Preserve the author's key claims, decisions, warnings, numbers, and code identifiers. Prefer 3-6 short bullets for multi-point text and one compact paragraph for simple text. Do not translate line-by-line and do not invent facts."
+            ),
+            TextTask::Explain => format!(
+                "Explain the supplied text clearly in {target} for a busy reader. Start with a one-sentence plain-language meaning, then add only the essential context, terminology, or consequence. Preserve exact numbers, code identifiers, paths, commands, and error messages. Do not invent context."
+            ),
+        }
+    }
+
     /// System prompt describing the JSON contract and the requested languages.
     #[must_use]
     pub fn system_instructions(&self) -> String {
+        if !self.task.is_translation() {
+            let task = self.text_task_instruction();
+            return format!(
+                "You are a precise reading assistant embedded in a desktop tool. {task} Return exactly one JSON object with the keys translated_text, transcription, explanation, protected_terms, and warnings. Put the requested result in translated_text. Leave transcription empty. explanation is optional supporting context and must not repeat translated_text. protected_terms must list useful phrases, technical terms, named entities, code identifiers, commands, paths, or error codes worth retaining from the source; warnings is an array of strings. Use empty strings or arrays where fields do not apply. Do not wrap the JSON in Markdown fences."
+            );
+        }
         let explanation_rule = if self.include_explanation {
             "Use `explanation` for one short note (in the target language) about tone, ambiguity, or a technical term the reader may not know; leave it empty when the translation is self-evident."
         } else {
@@ -310,6 +386,11 @@ fn validate_stream_delimiter(delimiter: &str) -> Result<(), StreamPromptError> {
 /// source-sized bound reduces latency while keeping enough room for the JSON
 /// envelope. Screenshot transcription retains the full ceiling.
 fn output_token_limit(request: &TranslationRequest) -> u32 {
+    match request.task {
+        TextTask::Summarize => return 700,
+        TextTask::Explain => return 900,
+        TextTask::Translate => {}
+    }
     match &request.input {
         TranslationInput::Text { source } => u32::try_from(source.chars().count())
             .unwrap_or(u32::MAX)
@@ -322,10 +403,12 @@ fn output_token_limit(request: &TranslationRequest) -> u32 {
 
 fn gemini_thinking_config(model: &str) -> Option<Value> {
     let normalized = model.to_ascii_lowercase();
-    if normalized.starts_with("gemini-3") {
-        // Translation is direct instruction following. Gemini 3 defaults to
-        // medium/high thinking on several variants, which adds seconds before
-        // the first answer token without improving ordinary translation.
+    if normalized.starts_with("gemini-3") && normalized.contains("flash") {
+        // Flash translation is direct instruction following. Minimal thinking
+        // materially improves time-to-first-token without spending output
+        // budget on reasoning the user never sees.
+        Some(json!({"thinkingLevel": "minimal"}))
+    } else if normalized.starts_with("gemini-3") {
         Some(json!({"thinkingLevel": "low"}))
     } else if normalized.starts_with("gemini-2.5-flash") {
         Some(json!({"thinkingBudget": 0}))
@@ -2457,14 +2540,14 @@ mod tests {
     }
 
     #[test]
-    fn gemini_translation_uses_low_or_disabled_thinking_when_supported() {
+    fn gemini_translation_uses_minimal_or_disabled_thinking_when_supported() {
         assert_eq!(
             gemini_thinking_config("gemini-3-flash-preview"),
-            Some(json!({"thinkingLevel": "low"}))
+            Some(json!({"thinkingLevel": "minimal"}))
         );
         assert_eq!(
             gemini_thinking_config("gemini-3.7-flash-high"),
-            Some(json!({"thinkingLevel": "low"}))
+            Some(json!({"thinkingLevel": "minimal"}))
         );
         assert_eq!(
             gemini_thinking_config("gemini-2.5-flash"),

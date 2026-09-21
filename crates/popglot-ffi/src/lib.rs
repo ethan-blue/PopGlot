@@ -534,6 +534,96 @@ pub unsafe extern "C" fn popglot_translate_text_v3(
     })
 }
 
+/// Runs a summary or quick-explanation task through the active text provider.
+///
+/// # Safety
+/// All pointers must be valid NUL-terminated UTF-8 strings; language pointers may be null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_text_task_v1(
+    api_key: *const c_char,
+    source: *const c_char,
+    source_lang: *const c_char,
+    target_lang: *const c_char,
+    task: *const c_char,
+    request_id: *const c_char,
+) -> *mut c_char {
+    ffi_guard(|| {
+        let api_key = unsafe { read_utf8(api_key) }?;
+        let source = unsafe { read_utf8(source) }?;
+        let source_lang = unsafe { read_optional_utf8(source_lang) }?;
+        let target_lang = unsafe { read_optional_utf8(target_lang) }?;
+        let task = popglot_core::provider::TextTask::parse(unsafe { read_utf8(task) }?)
+            .map_err(|error| error.to_string())?;
+        let custom_id = unsafe { read_optional_utf8(request_id) }?;
+        let (settings, client) = {
+            let core = core_read()?;
+            (core.settings().clone(), core.provider_client().clone())
+        };
+        let languages = resolve_languages(&settings, source_lang, target_lang);
+        let runtime = provider_runtime()?;
+        let ticket = begin_request(custom_id);
+        let response = runtime
+            .block_on(AppCore::execute_text_task_snapshot(
+                &settings,
+                &client,
+                api_key,
+                source,
+                &languages,
+                &ticket.id,
+                task,
+                &ticket.token,
+            ))
+            .map_err(|error| error.to_string());
+        Ok(response.map_or_else(failure, success))
+    })
+}
+
+/// Runs a text task through a complete, non-persisted provider snapshot.
+///
+/// # Safety
+/// All pointers must be valid NUL-terminated UTF-8 strings; language pointers may be null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_text_task_draft_v1(
+    settings_json: *const c_char,
+    api_key: *const c_char,
+    source: *const c_char,
+    source_lang: *const c_char,
+    target_lang: *const c_char,
+    task: *const c_char,
+    request_id: *const c_char,
+) -> *mut c_char {
+    ffi_guard(|| {
+        let settings_json = unsafe { read_utf8(settings_json) }?;
+        let api_key = unsafe { read_utf8(api_key) }?;
+        let source = unsafe { read_utf8(source) }?;
+        let source_lang = unsafe { read_optional_utf8(source_lang) }?;
+        let target_lang = unsafe { read_optional_utf8(target_lang) }?;
+        let task = popglot_core::provider::TextTask::parse(unsafe { read_utf8(task) }?)
+            .map_err(|error| error.to_string())?;
+        let custom_id = unsafe { read_optional_utf8(request_id) }?;
+        let settings = serde_json::from_str::<ProviderSettings>(settings_json)
+            .map_err(|error| format!("文字任务设置无效：{error}"))?;
+        let client = ProviderClient::new(AppCore::limits_for(&settings))
+            .map_err(|error| error.to_string())?;
+        let languages = resolve_languages(&settings, source_lang, target_lang);
+        let runtime = provider_runtime()?;
+        let ticket = begin_request(custom_id);
+        let response = runtime
+            .block_on(AppCore::execute_text_task_snapshot(
+                &settings,
+                &client,
+                api_key,
+                source,
+                &languages,
+                &ticket.id,
+                task,
+                &ticket.token,
+            ))
+            .map_err(|error| error.to_string());
+        Ok(response.map_or_else(failure, success))
+    })
+}
+
 /// Translates text through a complete, non-persisted provider snapshot.
 /// The snapshot and credential are supplied together so OCR output cannot
 /// accidentally use a stale global provider configuration.

@@ -131,14 +131,7 @@ internal static class StartupRegistration
             var pathMatches = false;
             if (runEntryPresent)
             {
-                // A02: the Run value is a COMMAND, not a bare path — parse
-                // the quoted executable and ignore arguments such as
-                // --background instead of comparing the whole string.
-                var registeredPath = ExtractExecutablePath(runValue!);
-                var currentExecutable = Environment.ProcessPath;
-                pathMatches = registeredPath is not null &&
-                    !string.IsNullOrEmpty(currentExecutable) &&
-                    string.Equals(registeredPath, currentExecutable, StringComparison.OrdinalIgnoreCase);
+                pathMatches = RunCommandMatchesCurrent(runValue!);
             }
 
             var (osDisabled, osReadError) = ReadOsDisabled();
@@ -187,6 +180,34 @@ internal static class StartupRegistration
     /// <summary>A02: the single launch-command contract for the Run entry.</summary>
     internal static string BuildRunCommand(string executable) =>
         $"\"{executable}\" --background";
+
+    internal static string? BuildCurrentRunCommand()
+    {
+        var executable = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(executable)) return null;
+
+        // `dotnet run` / framework-dependent launches report dotnet.exe as the
+        // process path. Registering only dotnet.exe silently opens nothing at
+        // sign-in, so include the entry DLL in that case. Installed apphost
+        // builds continue to use the ordinary executable command.
+        if (string.Equals(Path.GetFileNameWithoutExtension(executable), "dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            var entryDll = System.Reflection.Assembly.GetEntryAssembly()?.Location;
+            if (!string.IsNullOrWhiteSpace(entryDll) &&
+                string.Equals(Path.GetExtension(entryDll), ".dll", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"\"{executable}\" \"{entryDll}\" --background";
+            }
+        }
+        return BuildRunCommand(executable);
+    }
+
+    internal static bool RunCommandMatchesCurrent(string runValue)
+    {
+        var expected = BuildCurrentRunCommand();
+        return !string.IsNullOrWhiteSpace(expected) &&
+            string.Equals(runValue.Trim(), expected, StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// A01: the save-time decision, pure and testable. A plain save NEVER
@@ -290,8 +311,8 @@ internal static class StartupRegistration
         }
         try
         {
-            var executable = Environment.ProcessPath;
-            if (string.IsNullOrEmpty(executable))
+            var launchCommand = BuildCurrentRunCommand();
+            if (string.IsNullOrWhiteSpace(launchCommand))
             {
                 return false;
             }
@@ -300,7 +321,7 @@ internal static class StartupRegistration
             {
                 return false;
             }
-            key.SetValue(ValueName, BuildRunCommand(executable), RegistryValueKind.String);
+            key.SetValue(ValueName, launchCommand, RegistryValueKind.String);
             return true;
         }
         catch (Exception exception) when (
@@ -323,8 +344,8 @@ internal static class StartupRegistration
         }
         try
         {
-            var executable = Environment.ProcessPath;
-            if (string.IsNullOrEmpty(executable))
+            var launchCommand = BuildCurrentRunCommand();
+            if (string.IsNullOrWhiteSpace(launchCommand))
             {
                 return false;
             }
@@ -333,7 +354,7 @@ internal static class StartupRegistration
             {
                 return false;
             }
-            key.SetValue(ValueName, BuildRunCommand(executable), RegistryValueKind.String);
+            key.SetValue(ValueName, launchCommand, RegistryValueKind.String);
             return true;
         }
         catch (Exception exception) when (
@@ -432,12 +453,12 @@ internal static class StartupRegistration
             }
             if (enabled)
             {
-                var executable = Environment.ProcessPath;
-                if (string.IsNullOrEmpty(executable))
+                var launchCommand = BuildCurrentRunCommand();
+                if (string.IsNullOrWhiteSpace(launchCommand))
                 {
                     return false;
                 }
-                key.SetValue(ValueName, BuildRunCommand(executable), RegistryValueKind.String);
+                key.SetValue(ValueName, launchCommand, RegistryValueKind.String);
 
                 // Explicit re-enable: clear a Task-Manager disable so the
                 // user's click actually takes effect.

@@ -25,6 +25,7 @@ internal sealed record TranslateUiState(
     string StatusText = "就绪",
     string BadgeText = "",
     string ExplanationText = "",
+    IReadOnlyList<string>? ProtectedTerms = null,
     bool IsStreamLayerVisible = false,
     bool IsFinalLayerVisible = true,
     bool IsStreamIndicatorVisible = false,
@@ -42,6 +43,7 @@ internal sealed record TranslateUiState(
         StatusText: "就绪",
         BadgeText: "",
         ExplanationText: string.Empty,
+        ProtectedTerms: [],
         IsStreamLayerVisible: false,
         IsFinalLayerVisible: true,
         IsStreamIndicatorVisible: false,
@@ -171,6 +173,7 @@ internal static class TranslateSectionReducer
                 BadgeText = session.PipelineLabel ?? "完成",
                 StatusText = $"完成 · {session.Timing.TotalElapsedMs} ms",
                 ExplanationText = explanation,
+                ProtectedTerms = session.ProtectedTerms,
                 IsExplanationVisible = notes.Count > 0,
                 IsPartialIncomplete = false,
             };
@@ -192,6 +195,7 @@ internal static class TranslateSectionReducer
                 BadgeText = "内容不完整",
                 StatusText = $"内容不完整 · {session.Timing.TotalElapsedMs} ms · 见下方说明",
                 ExplanationText = explanation,
+                ProtectedTerms = session.ProtectedTerms,
                 IsExplanationVisible = notes.Count > 0,
                 IsPartialIncomplete = true,
             };
@@ -557,6 +561,80 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
     // ================= Event handlers =================
 
+    private async void TranslateSummary_Click(object sender, RoutedEventArgs e) =>
+        await RunTextTaskAsync(TextTaskKind.Summarize, "总结");
+
+    private async void TranslateExplain_Click(object sender, RoutedEventArgs e) =>
+        await RunTextTaskAsync(TextTaskKind.Explain, "快速解释");
+
+    private async Task RunTextTaskAsync(TextTaskKind task, string label)
+    {
+        if (_coordinator is null) return;
+        var source = TranslateInput.Text.Trim();
+        if (source.Length == 0)
+        {
+            TranslateStatus.Text = $"请先输入需要{label}的内容。";
+            return;
+        }
+        _translateOperation?.Cancel();
+        _translateOperation?.Dispose();
+        var operation = new CancellationTokenSource();
+        _translateOperation = operation;
+        TranslateSummaryButton.IsEnabled = false;
+        TranslateExplainButton.IsEnabled = false;
+        TranslateResult.Visibility = Visibility.Collapsed;
+        TranslateRichResult.Visibility = Visibility.Collapsed;
+        TranslateStreamResult.Visibility = Visibility.Collapsed;
+        TranslateEmptyState.Visibility = Visibility.Collapsed;
+        TranslateProgress.Visibility = Visibility.Visible;
+        TranslateExplanationBox.Visibility = Visibility.Collapsed;
+        TranslateTermsList.Visibility = Visibility.Collapsed;
+        TranslateStatus.Text = $"正在{label}…";
+        try
+        {
+            var response = await _coordinator.RunTextTaskAsync(
+                source,
+                Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto),
+                Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN"),
+                task,
+                operation.Token);
+            if (operation.IsCancellationRequested || _translateOperation != operation) return;
+            TranslateResult.Text = response.Result.TranslatedText;
+            TranslateResult.Visibility = Visibility.Visible;
+            var supporting = new List<string>();
+            if (!string.IsNullOrWhiteSpace(response.Result.Explanation))
+                supporting.Add(response.Result.Explanation.Trim());
+            supporting.AddRange(response.Result.Warnings.Where(x => !string.IsNullOrWhiteSpace(x)));
+            TranslateExplanation.Text = string.Join("\n", supporting);
+            TranslateExplanationBox.Visibility = supporting.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            TranslateTermsList.ItemsSource = response.Result.ProtectedTerms.Distinct().ToArray();
+            TranslateTermsList.Visibility = response.Result.ProtectedTerms.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            TranslateStatus.Text = $"{label}完成 · {response.Diagnostics.ElapsedMs} ms";
+            TranslateEngineBadge.Text = response.EngineLabel;
+            TranslateResultCopyButton.IsEnabled = true;
+            TranslateResultSpeakButton.IsEnabled = true;
+        }
+        catch (OperationCanceledException)
+        {
+            TranslateStatus.Text = $"已取消{label}";
+        }
+        catch (Exception ex)
+        {
+            TranslateExplanation.Text = ex.Message;
+            TranslateExplanationBox.Visibility = Visibility.Visible;
+            TranslateStatus.Text = $"{label}失败，可重试";
+        }
+        finally
+        {
+            if (_translateOperation == operation)
+            {
+                TranslateProgress.Visibility = Visibility.Collapsed;
+                TranslateSummaryButton.IsEnabled = true;
+                TranslateExplainButton.IsEnabled = true;
+            }
+        }
+    }
+
     private async void Translate_Click(object sender, RoutedEventArgs e) => await TranslateAsync();
 
     private async void TranslateInput_KeyDown(object sender, KeyEventArgs e)
@@ -767,6 +845,9 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
         TranslateExplanation.Text = state.ExplanationText;
         TranslateExplanationBox.Visibility = state.IsExplanationVisible ? Visibility.Visible : Visibility.Collapsed;
+        var protectedTerms = state.ProtectedTerms ?? [];
+        TranslateTermsList.ItemsSource = protectedTerms.Distinct().ToArray();
+        TranslateTermsList.Visibility = protectedTerms.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
         // First-use guidance lives only on the empty, idle result plane.
         var showEmptyState = !state.IsProgressVisible &&

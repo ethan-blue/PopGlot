@@ -213,6 +213,12 @@
                                           Data="{StaticResource IconChevronDown}" VerticalAlignment="Center" />
                                 </StackPanel>
                             </Button>
+                            <Button x:Name="SummaryButton" Content="总结" Style="{StaticResource GhostButton}"
+                                    Padding="9,4" Margin="0,0,4,0" ToolTip="提炼选中文本的要点"
+                                    AutomationProperties.Name="总结选中文本" Click="Summary_Click" />
+                            <Button x:Name="ExplainButton" Content="快速解释" Style="{StaticResource GhostButton}"
+                                    Padding="9,4" Margin="0,0,6,0" ToolTip="用简单语言解释选中文本"
+                                    AutomationProperties.Name="快速解释选中文本" Click="Explain_Click" />
                             <Button x:Name="SourceSpeakBtn" Style="{StaticResource IconButton}" Width="32" Height="32" Margin="0,0,2,0"
                                     AutomationProperties.Name="朗读原文"
                                     ToolTip="朗读原文" Click="SourceSpeak_Click">

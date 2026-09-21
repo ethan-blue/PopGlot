@@ -593,6 +593,41 @@ internal static partial class CoreBridge
     /// 起点按 active 模板自行解析编译后的偏好文本。非 null 时（会话起点经
     /// CompilePrompt 编译出的快照）按显式锚点原样发送，多段/重试在途不变。
     /// </remarks>
+    public static async Task<TranslationResponse> RunTextTaskAsync(
+        string? apiKey,
+        string source,
+        string sourceLang,
+        string targetLang,
+        TextTaskKind task,
+        CancellationToken cancellationToken = default,
+        ProviderSettings? routeSettings = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+        var settings = GetSettings();
+        if ((settings.SafeDevMode || !settings.NetworkEnabled) && !settings.TargetsLocalRuntime)
+        {
+            throw new InvalidOperationException(
+                "安全离线模式或网络访问已禁用；总结和快速解释需要已配置的本地或在线模型。");
+        }
+        var usesConfiguredProvider = !string.IsNullOrWhiteSpace(apiKey) || settings.TargetsLocalRuntime;
+        if (!usesConfiguredProvider)
+        {
+            throw new InvalidOperationException("请先配置模型服务，再使用总结或快速解释。");
+        }
+        var effectiveKey = string.IsNullOrWhiteSpace(apiKey) ? "local" : apiKey;
+        var requestId = $"text-task-{Guid.NewGuid():N}";
+        var wireTask = task == TextTaskKind.Summarize ? "summarize" : "explain";
+        return await RunCancellableAsync(
+            () => EnsureSuccess<TranslationResponse>(Invoke(() => routeSettings is null
+                ? NativeMethods.TextTaskV1(
+                    effectiveKey, source, sourceLang, targetLang, wireTask, requestId)
+                : NativeMethods.TextTaskDraftV1(
+                    JsonSerializer.Serialize(routeSettings, JsonOptions), effectiveKey, source,
+                    sourceLang, targetLang, wireTask, requestId))),
+            requestId,
+            cancellationToken);
+    }
+
     public static async Task<TranslationResponse> TranslateTextAsync(
         string? apiKey,
         string source,
@@ -1197,6 +1232,15 @@ internal static partial class CoreBridge
             string targetLang,
             string? requestId);
 
+        [LibraryImport(LibraryName, EntryPoint = "popglot_text_task_v1", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint TextTaskV1(
+            string apiKey, string source, string sourceLang, string targetLang, string task, string requestId);
+
+        [LibraryImport(LibraryName, EntryPoint = "popglot_text_task_draft_v1", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint TextTaskDraftV1(
+            string settingsJson, string apiKey, string source, string sourceLang,
+            string targetLang, string task, string requestId);
+
         [LibraryImport(LibraryName, EntryPoint = "popglot_translate_text_v3", StringMarshalling = StringMarshalling.Utf8)]
         internal static partial nint TranslateTextV3(
             string apiKey,
@@ -1511,6 +1555,12 @@ internal sealed record PromptVariablesDto(
 /// C# 镜像 Rust 域的 <c>CompiledPrompt</c>：模板经变量展开后的编译结果，
 /// 也是翻译请求偏好锚点 (templateId, revision, compiledText) 的形状。
 /// </summary>
+internal enum TextTaskKind
+{
+    Summarize,
+    Explain,
+}
+
 internal sealed record CompiledPromptDto(
     string TemplateId,
     ulong Revision,
