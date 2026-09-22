@@ -231,10 +231,15 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private int _foldPass;
     private bool _foldAlignScheduled;
+    private bool _foldAligned;
 
     private void ScheduleFoldAlign()
     {
-        if (_foldPass > 0 || _foldAlignScheduled || EditorScroll is null)
+        // One measurement per editor open. A second pass zeros the spacer,
+        // measures the same slice and sets it again, and that layout change
+        // keeps posting work ahead of normal dispatcher items such as page
+        // navigation.
+        if (_foldAligned || _foldPass > 0 || _foldAlignScheduled || EditorScroll is null)
         {
             return;
         }
@@ -255,7 +260,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     /// </summary>
     internal void AlignInitialFold()
     {
-        if (_foldPass > 0 || EditorForm.Visibility != Visibility.Visible || ConfigFormPanel.Visibility != Visibility.Visible)
+        if (_foldAligned || _foldPass > 0 || EditorForm.Visibility != Visibility.Visible || ConfigFormPanel.Visibility != Visibility.Visible)
         {
             return;
         }
@@ -275,6 +280,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             {
                 return;
             }
+
+            _foldAligned = true;
 
             Point topLeft;
             try
@@ -587,8 +594,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private void DraftDiscard_Click(object sender, RoutedEventArgs e)
     {
-        ReloadEditorFromSaved();
+        // Capture first. Reloading can close the editor (no saved profile
+        // to return to) and that hides the guard, which would drop the
+        // pending page change.
         var proceed = _pendingAfterDraft;
+        ReloadEditorFromSaved();
         HideDraftGuard();
         proceed?.Invoke();
     }
@@ -993,6 +1003,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         ChooseAnotherProviderButton.Visibility = Visibility.Collapsed;
         DeleteServiceButton.Visibility = addMode ? Visibility.Collapsed : Visibility.Visible;
         _isAdding = addMode;
+        _foldAligned = false;
         // compact 判定只来自 DetailGrid 内容宽度（SizeChanged）或未布局时的
         // 一次性窗口宽度提示；这里不再按 ActualWidth 重新推断第二套判据。
         ApplyEditorLayout();

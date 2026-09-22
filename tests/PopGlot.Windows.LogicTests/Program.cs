@@ -6684,6 +6684,8 @@ internal static class Program
             "advanced settings must stay split into plain-language groups");
         True(xaml.Contains("InitialFoldSpacer") && code.Contains("usefulHeaderHeight = 104"),
             "the initial viewport must not expose a severed model-card header or radio row");
+        True(code.Contains("_foldAligned"),
+            "fold alignment must run once per editor open so it cannot starve later navigation");
         True(xaml.Contains("PresetLeftColumn") && xaml.Contains("PresetRightColumn") &&
              code.Contains("PresetRightColumn.Width = new GridLength(0)"),
             "compact provider choices must release the unused second column");

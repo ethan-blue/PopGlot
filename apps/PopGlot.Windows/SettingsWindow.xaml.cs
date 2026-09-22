@@ -523,7 +523,14 @@ public partial class SettingsWindow : Window
             }
             ProviderSection.BeginDraftGuard(
                 "切换设置页前，请先保存或放弃这个翻译引擎的未保存修改。",
-                () => Dispatcher.BeginInvoke(() => ShowPage(tag)));
+                () =>
+                {
+                    // Open the requested page on this same turn. A posted
+                    // continuation can sit behind layout work already queued
+                    // on the dispatcher and never run before the user looks.
+                    ProviderSection.ClearEditorDirty();
+                    ShowPage(tag);
+                });
             return;
         }
 
@@ -544,7 +551,11 @@ public partial class SettingsWindow : Window
             }
             PromptSectionHost.BeginDraftGuard(
                 "切换设置页前，请先保存或放弃这个提示词模板的未保存修改。",
-                () => Dispatcher.BeginInvoke(() => ShowPage(tag)));
+                () =>
+                {
+                    PromptSectionHost.ClearEditorDirty();
+                    ShowPage(tag);
+                });
             return;
         }
 

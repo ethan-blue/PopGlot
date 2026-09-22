@@ -662,6 +662,8 @@ public partial class PromptSection : System.Windows.Controls.UserControl
         UpdateEditorDirtyBadge();
     }
 
+    internal void ClearEditorDirty() => ResetEditorDirty();
+
     private void UpdateEditorDirtyBadge() =>
         EditorDirtyBadge.Visibility = _editorDirty ? Visibility.Visible : Visibility.Collapsed;
 
@@ -711,6 +713,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
 
     private void DraftDiscard_Click(object sender, RoutedEventArgs e)
     {
+        var proceed = _pendingAfterDraft;
         _loading = true;
         try
         {
@@ -731,7 +734,6 @@ public partial class PromptSection : System.Windows.Controls.UserControl
         ResetEditorDirty();
         UpdateCounters();
         RefreshPreview();
-        var proceed = _pendingAfterDraft;
         HideDraftGuard();
         proceed?.Invoke();
     }
