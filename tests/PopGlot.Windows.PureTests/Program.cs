@@ -302,6 +302,11 @@ internal static class Program
         Equal(ReadingMode.Translation, reading.Mode, "switching back does not drop the summary cache");
         True(reading.HasSummary("hello"), "the summary is still there for the next switch");
         Equal("一条要点", reading.SummaryText, "the cached summary text is unchanged");
+
+        reading.RememberSummary("hello", "更新后的要点", "注", show: false);
+        Equal(ReadingMode.Translation, reading.Mode, "caching a later summary does not cover the translation");
+        Equal("hello 的译文", reading.TranslationText, "the translation text is still the original");
+        Equal("更新后的要点", reading.SummaryText, "the cached summary can update without being shown");
     }
 
     private static void FreeEngineProviderRoundTrip()

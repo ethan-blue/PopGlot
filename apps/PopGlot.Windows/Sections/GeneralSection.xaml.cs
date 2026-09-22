@@ -109,32 +109,58 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
     private void ThemeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         SyncThemeChoices();
+        // Load writes the saved value through the combo. A user click does
+        // not: ChooseTheme previews even when the combo value does not change.
         if (_loading)
         {
             return;
         }
+
+        ApplyThemePreview();
+    }
+
+    private void ThemeChoice_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not RadioButton { Tag: string tag })
+        {
+            return;
+        }
+
+        ChooseTheme(tag);
+    }
+
+    /// <summary>
+    /// The swatch is the control. Preview runs even when the hidden combo
+    /// already has this value, and even while settings are still loading.
+    /// </summary>
+    internal void ChooseTheme(string tag)
+    {
+        if (_syncingTheme || string.IsNullOrEmpty(tag))
+        {
+            return;
+        }
+
+        var selected = (ThemeComboBox.SelectedItem as ComboBoxItem)?.Tag as string;
+        if (!string.Equals(selected, tag, StringComparison.Ordinal))
+        {
+            Helpers.SelectComboByTag(ThemeComboBox, tag);
+        }
+        else
+        {
+            SyncThemeChoices();
+        }
+
+        ApplyThemePreview();
+    }
+
+    private void ApplyThemePreview()
+    {
         ThemeService.Apply(Helpers.SelectedEnum(ThemeComboBox, ThemePreference.System));
         var window = Window.GetWindow(this);
         if (window is not null)
         {
             ThemeService.ApplyWindowChrome(window);
         }
-    }
-
-    private void ThemeChoice_Checked(object sender, RoutedEventArgs e)
-    {
-        if (_syncingTheme || _loading || sender is not RadioButton { Tag: string tag })
-        {
-            return;
-        }
-
-        if (ThemeComboBox.SelectedItem is ComboBoxItem current &&
-            string.Equals(current.Tag as string, tag, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        Helpers.SelectComboByTag(ThemeComboBox, tag);
     }
 
     private void SyncThemeChoices()

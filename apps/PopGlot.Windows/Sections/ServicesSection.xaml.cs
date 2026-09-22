@@ -1,8 +1,10 @@
 using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using PopGlot.Windows.Services;
 
 namespace PopGlot.Windows.Sections;
@@ -93,6 +95,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         };
         _deleteConfirm = ConfirmButton.Attach(DeleteServiceButton, "确认删除？", DeleteSelectedProfile);
         _clearKeyConfirm = ConfirmButton.Attach(ClearKeyButton, "确认清除？", ClearKeyForCurrentProfile);
+        EditorScroll.ScrollChanged += EditorScroll_ScrollChanged;
+        ProviderTypeComboBox.DropDownOpened += EditorCombo_DropDownOpened;
+        TextModelCombo.DropDownOpened += EditorCombo_DropDownOpened;
+        VisionModelCombo.DropDownOpened += EditorCombo_DropDownOpened;
     }
 
     internal bool IsLoading { get => _loading; set => _loading = value; }
@@ -137,6 +143,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
         _detailWidthReported = true;
         SetCompact(e.NewSize.Width < 680);
+        ScheduleFoldAlign();
     }
 
     private void ApplyEditorLayout()
@@ -158,7 +165,6 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         // 部操作栏会压住半行单选内容，看起来像被遮挡。这里只在窄态收紧
         // 间距，宽态布局保持原样。
         EditorHeaderGrid.Margin = compact ? new Thickness(2, 0, 2, 10) : new Thickness(2, 0, 2, 18);
-        EditorBackRow.Margin = new Thickness(0, 0, 0, compact ? 8 : 12);
         ConnectionCard.Margin = new Thickness(0, 0, 0, compact ? 10 : 14);
         ModelCard.Margin = new Thickness(0, 0, 0, compact ? 10 : 14);
         PreferenceRowHost.Margin = new Thickness(0, compact ? 8 : 12, 0, 0);
@@ -183,6 +189,182 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             KeyActionsPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
             KeyActionsPanel.Margin = new Thickness(0);
         }
+
+        PlacePresetColumns(compact);
+        ScheduleFoldAlign();
+    }
+
+    /// <summary>
+    /// Wide catalogues use two columns. Under 680 DIP the right column drops
+    /// under the left one, and the custom-card arrow drops under the title so
+    /// the badge cannot sit on top of 「接入 →」.
+    /// </summary>
+    private void PlacePresetColumns(bool compact)
+    {
+        if (compact)
+        {
+            PresetLeftColumn.Width = new GridLength(1, GridUnitType.Star);
+            PresetGutter.Width = new GridLength(0);
+            PresetRightColumn.Width = new GridLength(0);
+            Grid.SetColumn(PresetColumnRight, 0);
+            Grid.SetRow(PresetColumnRight, 1);
+            PresetColumnRight.Margin = new Thickness(0, 8, 0, 0);
+            Grid.SetColumn(CustomPresetArrow, 0);
+            Grid.SetRow(CustomPresetArrow, 1);
+            CustomPresetArrow.Margin = new Thickness(0, 8, 4, 0);
+            CustomPresetArrow.HorizontalAlignment = HorizontalAlignment.Left;
+        }
+        else
+        {
+            PresetLeftColumn.Width = new GridLength(1, GridUnitType.Star);
+            PresetGutter.Width = new GridLength(16);
+            PresetRightColumn.Width = new GridLength(1, GridUnitType.Star);
+            Grid.SetColumn(PresetColumnRight, 2);
+            Grid.SetRow(PresetColumnRight, 0);
+            PresetColumnRight.Margin = new Thickness(0);
+            Grid.SetColumn(CustomPresetArrow, 1);
+            Grid.SetRow(CustomPresetArrow, 0);
+            CustomPresetArrow.Margin = new Thickness(8, 0, 4, 0);
+            CustomPresetArrow.HorizontalAlignment = HorizontalAlignment.Stretch;
+        }
+    }
+
+    private int _foldPass;
+    private bool _foldAlignScheduled;
+
+    private void ScheduleFoldAlign()
+    {
+        if (_foldPass > 0 || _foldAlignScheduled || EditorScroll is null)
+        {
+            return;
+        }
+
+        _foldAlignScheduled = true;
+        Dispatcher.BeginInvoke(() =>
+        {
+            _foldAlignScheduled = false;
+            AlignInitialFold();
+        }, DispatcherPriority.Loaded);
+    }
+
+    /// <summary>
+    /// Do not tease the next card with a severed title or half a button in the
+    /// initial viewport. When less than one useful header row of the model card
+    /// is visible, a small spacer moves the whole header below the fold. The
+    /// spacer is not used when the card already has enough readable content.
+    /// </summary>
+    internal void AlignInitialFold()
+    {
+        if (_foldPass > 0 || EditorForm.Visibility != Visibility.Visible || ConfigFormPanel.Visibility != Visibility.Visible)
+        {
+            return;
+        }
+
+        _foldPass++;
+        try
+        {
+            InitialFoldSpacer.Height = 0;
+            EditorScroll.UpdateLayout();
+            if (EditorScroll.ViewportHeight <= 1 || EditorScroll.VerticalOffset > 1)
+            {
+                return;
+            }
+
+            var view = EditorScroll.ViewportHeight;
+            if (ModelCard.Visibility != Visibility.Visible || ModelCard.ActualHeight < 1)
+            {
+                return;
+            }
+
+            Point topLeft;
+            try
+            {
+                topLeft = ModelCard.TranslatePoint(new Point(0, 0), EditorScroll);
+            }
+            catch (InvalidOperationException)
+            {
+                return;
+            }
+
+            var visibleSlice = view - topLeft.Y;
+            // Header + action + the preference row must all fit. Showing only
+            // the radio-button caps at the fold looks like an overlay bug.
+            const double usefulHeaderHeight = 104;
+            if (visibleSlice > 1 && visibleSlice < usefulHeaderHeight)
+            {
+                InitialFoldSpacer.Height = Math.Ceiling(visibleSlice + 1);
+                EditorScroll.UpdateLayout();
+            }
+        }
+        finally
+        {
+            _foldPass--;
+        }
+    }
+
+    private void EditorScroll_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (Math.Abs(e.VerticalChange) < 0.5)
+        {
+            return;
+        }
+
+        foreach (var combo in new[] { ProviderTypeComboBox, TextModelCombo, VisionModelCombo })
+        {
+            if (combo.IsDropDownOpen)
+            {
+                combo.IsDropDownOpen = false;
+            }
+        }
+    }
+
+    private void EditorCombo_DropDownOpened(object? sender, EventArgs e)
+    {
+        if (sender is not ComboBox combo || combo.Template?.FindName("PART_Popup", combo) is not Popup popup)
+        {
+            return;
+        }
+
+        if (EditorScroll.ViewportHeight <= 1)
+        {
+            popup.Placement = PlacementMode.Bottom;
+            return;
+        }
+
+        Point below;
+        Point above;
+        try
+        {
+            below = combo.TranslatePoint(new Point(0, combo.ActualHeight), EditorScroll);
+            above = combo.TranslatePoint(new Point(0, 0), EditorScroll);
+        }
+        catch (InvalidOperationException)
+        {
+            popup.Placement = PlacementMode.Bottom;
+            return;
+        }
+
+        var spaceBelow = EditorScroll.ViewportHeight - below.Y;
+        var spaceAbove = above.Y;
+        var want = Math.Min(combo.MaxDropDownHeight, 160);
+        var placement = ResolveEditorPopupPlacement(spaceBelow, spaceAbove, want);
+        var openAbove = placement == PlacementMode.Top;
+        popup.Placement = placement;
+        popup.VerticalOffset = openAbove ? -4 : 4;
+    }
+
+    internal static PlacementMode ResolveEditorPopupPlacement(
+        double spaceBelow, double spaceAbove, double desiredHeight) =>
+        spaceBelow < desiredHeight && spaceAbove > spaceBelow
+            ? PlacementMode.Top
+            : PlacementMode.Bottom;
+
+    private void AdvancedExpander_Expanded(object sender, RoutedEventArgs e)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            TextEndpointPanel.BringIntoView();
+        }, DispatcherPriority.Loaded);
     }
 
     /// <summary>Places a field pair without changing the declared gutter columns.</summary>
@@ -199,7 +381,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             Grid.SetColumn(second, 0);
             Grid.SetColumnSpan(second, 3);
             Grid.SetRow(second, 1);
-            second.Margin = new Thickness(0, 14, 0, 0);
+            second.Margin = new Thickness(0, 16, 0, 0);
         }
         else
         {
@@ -219,13 +401,19 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     /// </summary>
     private void HookEditorDirtyTracking()
     {
-        void WatchText(TextBox box) => box.TextChanged += (_, _) => MarkEditorDirty();
+        void WatchText(TextBox box) => box.TextChanged += (_, _) =>
+        {
+            MarkEditorDirty();
+            box.ToolTip = string.IsNullOrWhiteSpace(box.Text) ? null : box.Text;
+        };
         // Editable ComboBoxes surface their inner TextBox via this routed event.
         void WatchCombo(ComboBox combo) => combo.AddHandler(
             System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
             new TextChangedEventHandler((_, _) =>
             {
                 MarkEditorDirty();
+                var text = combo.Text;
+                combo.ToolTip = string.IsNullOrWhiteSpace(text) ? null : text;
                 if (!_loading)
                 {
                     // 按键级重建推荐 chips 的开销不小，走防抖合并。
@@ -796,6 +984,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             AddEngineHeaderButton.Visibility = Visibility.Collapsed;
         }
+        BackToListHeaderButton.Visibility = Visibility.Visible;
         EditorEmpty.Visibility = Visibility.Collapsed;
         EditorForm.Visibility = Visibility.Visible;
         PresetsPanel.Visibility = addMode ? Visibility.Visible : Visibility.Collapsed;
@@ -820,6 +1009,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             AddEngineHeaderButton.Visibility = Visibility.Visible;
         }
+        BackToListHeaderButton.Visibility = Visibility.Collapsed;
+        ChooseAnotherProviderButton.Visibility = Visibility.Collapsed;
         HideDraftGuard();
         EditorForm.Visibility = Visibility.Collapsed;
         EditorEmpty.Visibility = Visibility.Visible;
@@ -1265,12 +1456,22 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         foreach (var candidate in candidates)
         {
             var modelId = candidate.Model.Id;
+            var chipWidth = panel.ActualWidth > 24 ? panel.ActualWidth - 8 : 220;
             var button = new Button
             {
-                Content = modelId,
+                Content = new TextBlock
+                {
+                    Text = modelId,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    TextWrapping = TextWrapping.NoWrap,
+                    MaxWidth = Math.Max(40, chipWidth - 16),
+                },
+                MaxWidth = chipWidth,
                 Tag = modelId,
                 Style = style,
-                ToolTip = candidate.PrimaryReason,
+                ToolTip = string.IsNullOrWhiteSpace(candidate.PrimaryReason)
+                    ? modelId
+                    : modelId + "\n" + candidate.PrimaryReason,
             };
 
             var label = isVision ? $"推荐图片模型 {modelId}" : $"推荐文字模型 {modelId}";

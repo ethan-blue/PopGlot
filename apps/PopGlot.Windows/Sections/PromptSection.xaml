@@ -211,17 +211,9 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
 
-                            <StackPanel x:Name="CustomsEmptyPanel" Margin="8,16,8,20" HorizontalAlignment="Center">
-                                <Border Width="44" Height="44" CornerRadius="13" Margin="0,0,0,12"
-                                        Background="{DynamicResource AccentSoftBrush}" HorizontalAlignment="Center">
-                                    <Path Data="{StaticResource IconStyle}" Width="20" Height="20" Stretch="Uniform"
-                                          Fill="{DynamicResource AccentBrush}" HorizontalAlignment="Center"
-                                          VerticalAlignment="Center" />
-                                </Border>
-                                <TextBlock Text="还没有自定义模板" FontSize="13" FontWeight="SemiBold"
-                                           HorizontalAlignment="Center" Margin="0,0,0,14" />
-                                <Button Content="新建第一个模板" Style="{StaticResource PrimaryButton}" Padding="16,7"
-                                        AutomationProperties.Name="新建第一个自定义模板" Click="AddTemplate_Click" />
+                            <StackPanel x:Name="CustomsEmptyPanel" Margin="0,8,0,0" HorizontalAlignment="Left">
+                                <TextBlock Text="还没有自定义模板" FontSize="13"
+                                           Foreground="{DynamicResource TextSecondaryBrush}" />
                             </StackPanel>
                         </StackPanel>
                     </ScrollViewer>

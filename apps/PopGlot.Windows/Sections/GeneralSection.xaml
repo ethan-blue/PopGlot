@@ -19,11 +19,21 @@
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                <Setter TargetName="Chrome" Property="BorderThickness" Value="2" />
                                 <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource AccentSoftBrush}" />
                             </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentBorderBrush}" />
                             </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsChecked" Value="True" />
+                                    <Condition Property="IsMouseOver" Value="True" />
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                <Setter TargetName="Chrome" Property="BorderThickness" Value="2" />
+                                <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource AccentSoftBrush}" />
+                            </MultiTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -44,7 +54,7 @@
                 <Grid x:Name="ThemeRowGrid">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition x:Name="ThemeCol0" Width="*" />
-                        <ColumnDefinition x:Name="ThemeCol1" Width="170" />
+                        <ColumnDefinition x:Name="ThemeCol1" Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -52,7 +62,7 @@
                     </Grid.RowDefinitions>
                     <StackPanel x:Name="ThemeTextPanel" VerticalAlignment="Center">
                         <TextBlock Text="主题" Style="{StaticResource RowTitle}" VerticalAlignment="Center" />
-                        <TextBlock Text="点选后立即预览，保存后记住" Style="{StaticResource RowHint}" />
+                        <TextBlock Text="点选即预览，保存后记住" Style="{StaticResource RowHint}" />
                     </StackPanel>
                     <!-- Visible choices. The combo stays as the saved value the
                          settings window already reads; compact layout still moves it. -->
@@ -61,7 +71,7 @@
                         <RadioButton x:Name="ThemeSystemChoice" GroupName="AppTheme" Tag="System"
                                      Style="{StaticResource ThemeSwatch}"
                                      AutomationProperties.Name="主题跟随系统"
-                                     Checked="ThemeChoice_Checked">
+                                     Click="ThemeChoice_Click">
                             <StackPanel Width="52">
                                 <Grid Width="36" Height="22" HorizontalAlignment="Center">
                                     <Grid.ColumnDefinitions>
@@ -77,7 +87,7 @@
                         <RadioButton x:Name="ThemeLightChoice" GroupName="AppTheme" Tag="Light"
                                      Style="{StaticResource ThemeSwatch}"
                                      AutomationProperties.Name="浅色主题"
-                                     Checked="ThemeChoice_Checked">
+                                     Click="ThemeChoice_Click">
                             <StackPanel Width="44">
                                 <Border Width="36" Height="22" CornerRadius="3" Background="#F4F6F8" HorizontalAlignment="Center">
                                     <Border Width="16" Height="3" Background="#5563B8" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="4,5,0,0" />
@@ -88,7 +98,7 @@
                         <RadioButton x:Name="ThemeDarkChoice" GroupName="AppTheme" Tag="Dark"
                                      Style="{StaticResource ThemeSwatch}" Margin="0"
                                      AutomationProperties.Name="深色主题"
-                                     Checked="ThemeChoice_Checked">
+                                     Click="ThemeChoice_Click">
                             <StackPanel Width="44">
                                 <Border Width="36" Height="22" CornerRadius="3" Background="#181B22" HorizontalAlignment="Center">
                                     <Border Width="16" Height="3" Background="#7C89D9" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="4,5,0,0" />

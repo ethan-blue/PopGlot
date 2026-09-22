@@ -877,14 +877,16 @@
         </Setter>
     </Style>
 
-    <!-- Editor fields. Raised fill plus a strong edge, so a custom form sitting
-         on a muted card still reads as an input instead of a blank line. -->
+    <!-- Single-line form field. Vertical padding stays 0: the template already
+         centers PART_ContentHost, and vertical padding inside a 40 DIP field
+         clips the glyphs. Multi-line text uses FormTextArea. -->
     <Style x:Key="FormTextBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
         <Setter Property="Background" Value="{DynamicResource SurfaceRaisedBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="MinHeight" Value="40" />
-        <Setter Property="Padding" Value="12,8" />
+        <Setter Property="Height" Value="40" />
+        <Setter Property="Padding" Value="12,0" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
     <Style x:Key="FormTextArea" TargetType="TextBox" BasedOn="{StaticResource FormTextBox}">
@@ -1086,6 +1088,17 @@
         </Setter>
     </Style>
 
+    <!-- Same single-line metrics as FormTextBox, for credential fields. -->
+    <Style x:Key="FormPasswordBox" TargetType="PasswordBox" BasedOn="{StaticResource {x:Type PasswordBox}}">
+        <Setter Property="Background" Value="{DynamicResource SurfaceRaisedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="MinHeight" Value="40" />
+        <Setter Property="Height" Value="40" />
+        <Setter Property="Padding" Value="12,0" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+
     <!-- ==================== ComboBox ==================== -->
     <Style TargetType="ComboBoxItem">
         <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
@@ -1157,7 +1170,7 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ComboBox">
-                    <Grid x:Name="Root" SnapsToDevicePixels="True">
+                    <Grid x:Name="Root" SnapsToDevicePixels="True" ClipToBounds="True">
                         <ToggleButton x:Name="Toggle" Focusable="False" ClickMode="Press"
                                       Template="{StaticResource ComboToggleTemplate}"
                                       IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}" />

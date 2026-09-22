@@ -40,6 +40,8 @@
                         Click="ExportMenuButton_Click" />
                 <Button x:Name="ClearCurrentButton" Style="{StaticResource GhostButton}"
                         Margin="8,0,0,0" Content="清空" Padding="10,4"
+                        Foreground="{DynamicResource DangerBrush}"
+                        BorderBrush="{DynamicResource DangerBrush}"
                         ToolTip="清空当前数据源记录（点击两次确认）" />
             </StackPanel>
         </Grid>
@@ -90,7 +92,7 @@
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding TitleOneLine}" />
-                                <Setter Property="Padding" Value="10,6" />
+                                <Setter Property="Padding" Value="16,12" />
                             </Style>
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
@@ -123,8 +125,8 @@
                     <!-- Master bottom summary line -->
                     <Border Grid.Row="1" Background="{DynamicResource SurfaceMutedBrush}"
                             BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
-                            Padding="10,5">
-                        <TextBlock x:Name="LibraryCountText" Style="{StaticResource Metadata}"
+                            Padding="16,8">
+                        <TextBlock x:Name="LibraryCountText" FontSize="12" Style="{StaticResource Metadata}"
                                    Foreground="{DynamicResource TextTertiaryBrush}"
                                    VerticalAlignment="Center" />
                     </Border>

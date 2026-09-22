@@ -298,6 +298,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     private TranslationCoordinator? _coordinator;
     private VocabularyStore? _vocabulary;
     private CancellationTokenSource? _translateOperation;
+    private CancellationTokenSource? _summaryOperation;
     private long _currentEpoch;
     private TranslateUiState _currentState = TranslateUiState.Initial;
     private readonly ReadingModeState _reading = new();
@@ -368,6 +369,9 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         _translateOperation?.Cancel();
         _translateOperation?.Dispose();
         _translateOperation = null;
+        _summaryOperation?.Cancel();
+        _summaryOperation?.Dispose();
+        _summaryOperation = null;
     }
 
     internal void Initialize(TranslationCoordinator coordinator, VocabularyStore? vocabulary)
@@ -563,10 +567,13 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
     // ================= Event handlers =================
 
-    private void ShowTranslation_Click(object sender, RoutedEventArgs e)
+    private void ShowTranslation_Click(object sender, RoutedEventArgs e) => ShowTranslationReading();
+
+    internal void ShowTranslationReading()
     {
         _holdingSummary = false;
         _reading.ShowTranslation();
+        ShowTranslationChoice.IsChecked = true;
         ApplyState(_currentState);
     }
 
@@ -580,7 +587,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         var source = TranslateInput.Text.Trim();
         if (source.Length == 0)
         {
-            TranslateStatus.Text = "请先输入原文，再看要点。";
+            TranslateStatus.Text = ReadingRequestCopy.NeedSource;
             ShowTranslationChoice.IsChecked = true;
             return;
         }
@@ -591,16 +598,17 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             return;
         }
 
-        _reading.CaptureTranslation(_currentState.FinalText, _currentState.ExplanationText);
-        _translateOperation?.Cancel();
-        _translateOperation?.Dispose();
+        if (_summaryOperation is { IsCancellationRequested: false })
+        {
+            BeginSummaryReading(source);
+            ShowSummaryChoice.IsEnabled = false;
+            return;
+        }
+
+        BeginSummaryReading(source);
         var operation = new CancellationTokenSource();
-        _translateOperation = operation;
+        _summaryOperation = operation;
         ShowSummaryChoice.IsEnabled = false;
-        ShowTranslationChoice.IsEnabled = false;
-        TranslateEmptyState.Visibility = Visibility.Collapsed;
-        TranslateProgress.Visibility = Visibility.Visible;
-        TranslateStatus.Text = "正在整理要点…";
         try
         {
             var response = await _coordinator.RunTextTaskAsync(
@@ -609,7 +617,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
                 Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN"),
                 TextTaskKind.Summarize,
                 operation.Token);
-            if (operation.IsCancellationRequested || _translateOperation != operation)
+            if (operation.IsCancellationRequested || !ReferenceEquals(_summaryOperation, operation))
             {
                 return;
             }
@@ -620,32 +628,95 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
                     .Concat(response.Result.Warnings)
                     .Where(line => !string.IsNullOrWhiteSpace(line))
                     .Select(line => line.Trim()));
-            _reading.RememberSummary(source, response.Result.TranslatedText, note);
+            var sameSource = string.Equals(TranslateInput.Text.Trim(), source, StringComparison.Ordinal);
+            var show = _holdingSummary && sameSource;
+            _reading.RememberSummary(source, response.Result.TranslatedText, note, show);
+            if (!show)
+            {
+                if (_holdingSummary)
+                {
+                    ShowTranslationReading();
+                }
+                return;
+            }
+
             PaintSummary(response.Result.TranslatedText, note);
-            TranslateStatus.Text = $"要点 · {response.Diagnostics.ElapsedMs} ms · 可切回译文";
+            TranslateStatus.Text = ReadingRequestCopy.Finished(response.Diagnostics.ElapsedMs);
             TranslateEngineBadge.Text = response.EngineLabel;
         }
         catch (OperationCanceledException)
         {
-            TranslateStatus.Text = "已取消要点";
-            ShowTranslationChoice.IsChecked = true;
+            if (_holdingSummary)
+            {
+                ShowTranslationReading();
+                TranslateStatus.Text = ReadingRequestCopy.SummaryCancelled;
+            }
         }
         catch (Exception ex)
         {
-            _holdingSummary = false;
-            ShowTranslationChoice.IsChecked = true;
-            ApplyState(_currentState);
-            TranslateStatus.Text = ex.Message;
+            if (_holdingSummary)
+            {
+                ShowTranslationReading();
+                TranslateStatus.Text = ex.Message;
+            }
         }
         finally
         {
-            if (_translateOperation == operation)
+            var stillCurrent = ReferenceEquals(_summaryOperation, operation);
+            if (stillCurrent)
             {
-                TranslateProgress.Visibility = Visibility.Collapsed;
+                _summaryOperation = null;
+            }
+            if (stillCurrent || _summaryOperation is null)
+            {
+                if (_holdingSummary)
+                {
+                    TranslateProgress.Visibility = Visibility.Collapsed;
+                }
                 ShowSummaryChoice.IsEnabled = true;
-                ShowTranslationChoice.IsEnabled = true;
+            }
+            try
+            {
+                operation.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Unload already disposed this request.
             }
         }
+    }
+
+    /// <summary>
+    /// Puts the summary reading on screen. The translation operation is left
+    /// running; its later updates stay in <see cref="_currentState"/>.
+    /// </summary>
+    internal string BeginSummaryReading(string source)
+    {
+        if (string.IsNullOrEmpty(source))
+        {
+            return ReadingRequestCopy.NeedSource;
+        }
+
+        var translationText = _currentState.Phase is TranslateUiPhase.Streaming
+            ? _currentState.StreamText
+            : _currentState.FinalText;
+        _reading.CaptureTranslation(translationText, _currentState.ExplanationText);
+        _holdingSummary = true;
+        ShowSummaryChoice.IsChecked = true;
+        var status = ReadingRequestCopy.WhileRequesting(
+            _translateOperation is { IsCancellationRequested: false });
+        TranslateStatus.Text = status;
+        TranslateEmptyState.Visibility = Visibility.Collapsed;
+        TranslateProgress.Visibility = Visibility.Visible;
+        return status;
+    }
+
+    internal bool IsHoldingSummary => _holdingSummary;
+
+    internal void AdoptTranslationOperation(CancellationTokenSource operation, TranslateUiState state)
+    {
+        _translateOperation = operation;
+        _currentState = state;
     }
 
     private void PaintSummary(string text, string note)
@@ -653,6 +724,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         _holdingSummary = true;
         ShowSummaryChoice.IsChecked = true;
         TranslateEmptyState.Visibility = Visibility.Collapsed;
+        TranslateProgress.Visibility = Visibility.Collapsed;
         TranslateStreamResult.Visibility = Visibility.Collapsed;
         TranslateStreamIndicator.Visibility = Visibility.Collapsed;
         TranslateRichResult.Visibility = Visibility.Collapsed;
@@ -664,7 +736,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             : Visibility.Visible;
         TranslateTermsList.Visibility = Visibility.Collapsed;
         TranslateEngineBadge.Text = "要点";
-        TranslateStatus.Text = "要点 · 切回「译文」可看翻译";
+        TranslateStatus.Text = ReadingRequestCopy.SummaryReadyHint;
         TranslateResultCopyButton.IsEnabled = !string.IsNullOrWhiteSpace(text);
         TranslateResultSpeakButton.IsEnabled = !string.IsNullOrWhiteSpace(text);
     }
@@ -797,21 +869,29 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         }
     }
 
-    private void ApplyState(TranslateUiState state)
+    internal void ApplyState(TranslateUiState state)
     {
         _currentState = state;
         if (_isUnloaded) return;
-        if (state.Phase is TranslateUiPhase.Preparing or TranslateUiPhase.Streaming or TranslateUiPhase.Finalizing)
-        {
-            _holdingSummary = false;
-        }
-        else if (state.Phase is TranslateUiPhase.Completed or TranslateUiPhase.Partial)
+        if (state.Phase is TranslateUiPhase.Completed or TranslateUiPhase.Partial)
         {
             _reading.CaptureTranslation(state.FinalText, state.ExplanationText);
         }
+        else if (state.Phase is TranslateUiPhase.Streaming && state.StreamText.Length > 0)
+        {
+            _reading.CaptureTranslation(state.StreamText, state.ExplanationText);
+        }
 
+        // A translation that is still arriving must not take the result
+        // surface back from the summary. A new translation clears the flag
+        // itself before it calls ApplyState.
         if (_holdingSummary)
         {
+            if (state.Phase is TranslateUiPhase.Completed or TranslateUiPhase.Partial &&
+                TranslateStatus.Text == ReadingRequestCopy.SummaryWhileTranslating)
+            {
+                TranslateStatus.Text = ReadingRequestCopy.SummaryKeptTranslation;
+            }
             return;
         }
 
@@ -1346,7 +1426,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             return;
         }
         var source = TranslateInput.Text.Trim();
-        var translation = TranslateResult.Text.Trim();
+        var translation = (_holdingSummary ? _reading.TranslationText : TranslateResult.Text).Trim();
         if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(translation))
         {
             TranslateStatus.Text = "先翻译一段内容再收藏。";
@@ -1392,7 +1472,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         var clean = MarkdownPresenter.ToPlainText(TranslateResult.Text);
         if (await Helpers.CopyToClipboardAsync(clean))
         {
-            TranslateStatus.Text = "已复制译文。";
+            TranslateStatus.Text = _holdingSummary ? "已复制要点。" : "已复制译文。";
         }
     }
 
@@ -1401,6 +1481,10 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         _translateOperation?.Cancel();
         _translateOperation?.Dispose();
         _translateOperation = null;
+        _summaryOperation?.Cancel();
+        _summaryOperation?.Dispose();
+        _summaryOperation = null;
+        _holdingSummary = false;
         var epoch = Interlocked.Increment(ref _currentEpoch);
         ApplyState(TranslateUiState.Initial with { Epoch = epoch });
         UpdateStarVisualState(false);

@@ -164,6 +164,7 @@ internal static class Program
         Run("settings closes transient translation surfaces", SettingsClosesTransientSurfaces);
         Run("screenshot draft route is visible", ScreenshotDraftRouteIsVisible);
         Run("service editor fields share a stable responsive grid", ServiceEditorUsesStableResponsiveGrid);
+        Run("provider editor popup placement follows the visible viewport", ProviderEditorPopupPlacementFollowsViewport);
         Run("service draft coordinator pure rules hold", ServiceDraftCoordinatorPureRulesHold);
         Run("model catalog endpoints follow provider protocols", ModelCatalogEndpointsFollowProtocols);
         Run("model catalog parses OpenAI and Gemini responses", ModelCatalogParsesProviderResponses);
@@ -311,7 +312,9 @@ internal static class Program
             ("a configured engine hides the guide and the footer shows its short name", ConfiguredEngineStateIsHonest),
             ("routing entry is unique to the footer switcher", RoutingEntryIsUniqueToFooterSwitcher),
             ("the CTA click lands inside the add-engine flow", CtaClickLandsInsideAddEngineFlow),
-            ("the empty service list cannot cover the add-first-engine button", EmptyServiceListLeavesAddButtonClickable));
+            ("the empty service list cannot cover the add-first-engine button", EmptyServiceListLeavesAddButtonClickable),
+            ("theme swatch previews even when the saved value already matches", ThemeSwatchPreviewsEvenWhenTheSavedValueAlreadyMatches),
+            ("summary reading does not cancel or cover the translation", SummaryReadingDoesNotCancelOrCoverTheTranslation));
         await RunAsync("coordinator refuses new work while the fuse is closed", CoordinatorRefusesWorkWhenFused);
 
         // C09 prompt regressions against the FINAL CoreBridge shape, all on the
@@ -6653,6 +6656,22 @@ internal static class Program
             True(xaml.Contains($"x:Name=\"{grid}\""), $"service editor must define {grid}");
         }
         True(xaml.Contains("x:Key=\"EditorTextField\""), "text fields need a shared editor size");
+        var controls = File.ReadAllText(Path.Combine(appDir, "Themes", "Controls.xaml"));
+        True(Regex.IsMatch(controls,
+                "x:Key=\"FormTextBox\"[\\s\\S]*?Property=\"Padding\" Value=\"12,0\""),
+            "single-line form fields share horizontal padding 12 and no vertical padding");
+        True(Regex.IsMatch(controls,
+                "x:Key=\"FormTextArea\"[\\s\\S]*?Property=\"Padding\" Value=\"12,10\"[\\s\\S]*?Property=\"VerticalContentAlignment\" Value=\"Top\""),
+            "multi-line fields keep their own top padding and top alignment");
+        True(Regex.IsMatch(controls,
+                "x:Key=\"FormPasswordBox\"[\\s\\S]*?Property=\"Padding\" Value=\"12,0\""),
+            "password fields use the same single-line padding");
+        var editorField = Regex.Match(xaml, "x:Key=\"EditorTextField\"[\\s\\S]*?</Style>").Value;
+        True(editorField.Contains("FormTextBox") && !editorField.Contains("Property=\"Padding\""),
+            "the engine editor must inherit the shared single-line padding");
+        var passwordField = Regex.Match(xaml, "x:Key=\"EditorPasswordField\"[\\s\\S]*?</Style>").Value;
+        True(passwordField.Contains("FormPasswordBox") && !passwordField.Contains("Property=\"Padding\""),
+            "the credential field must inherit the shared single-line padding");
         True(xaml.Contains("x:Key=\"EditorComboField\""), "model fields need a shared editor size");
         True(xaml.Contains("x:Key=\"EditorPasswordField\""), "credential fields need a shared editor size");
         True(code.Contains("Grid.SetColumn(second, 2)"), "wide field pairs must restore into column 2");
@@ -6663,6 +6682,11 @@ internal static class Program
         True(xaml.Contains("ModelCatalogStatusText"), "model fetch feedback must stay next to the model fields");
         True(xaml.Contains("接口与网络") && xaml.Contains("请求定制"),
             "advanced settings must stay split into plain-language groups");
+        True(xaml.Contains("InitialFoldSpacer") && code.Contains("usefulHeaderHeight = 104"),
+            "the initial viewport must not expose a severed model-card header or radio row");
+        True(xaml.Contains("PresetLeftColumn") && xaml.Contains("PresetRightColumn") &&
+             code.Contains("PresetRightColumn.Width = new GridLength(0)"),
+            "compact provider choices must release the unused second column");
     }
 
     private static void ModelCatalogEndpointsFollowProtocols()
@@ -7184,6 +7208,19 @@ internal static class Program
         }
     }
 
+    private static void ProviderEditorPopupPlacementFollowsViewport()
+    {
+        Equal(System.Windows.Controls.Primitives.PlacementMode.Bottom,
+            ServicesSection.ResolveEditorPopupPlacement(240, 40, 160),
+            "a dropdown with enough room below must open downward");
+        Equal(System.Windows.Controls.Primitives.PlacementMode.Top,
+            ServicesSection.ResolveEditorPopupPlacement(48, 280, 160),
+            "a dropdown near the fixed action bar must open upward");
+        Equal(System.Windows.Controls.Primitives.PlacementMode.Bottom,
+            ServicesSection.ResolveEditorPopupPlacement(48, 32, 160),
+            "when neither side fits, the side with more room must remain deterministic");
+    }
+
     private static void InformationArchitectureSurfacesPresent()
     {
         var appDir = Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows");
@@ -7261,6 +7298,90 @@ internal static class Program
     }
 
     // ================= Main-window empty-state CTA (REQ-UI-01/02) =================
+
+    private static void ThemeSwatchPreviewsEvenWhenTheSavedValueAlreadyMatches()
+    {
+        var previousContrast = ThemeService.HighContrastTestOverride;
+        ThemeService.HighContrastTestOverride = false;
+        try
+        {
+            EnsureApplication();
+            var section = new GeneralSection();
+            section.IsLoading = true;
+            Helpers.SelectComboByTag(section.ThemeCombo, "Dark");
+            ThemeService.Apply(ThemePreference.Light);
+            True(!ThemeService.IsDark, "setup leaves the light palette on screen");
+
+            section.IsLoading = false;
+            section.ChooseTheme("Dark");
+            True(ThemeService.IsDark,
+                "choosing the swatch that already matches the saved value still previews");
+            section.ChooseTheme("Light");
+            True(!ThemeService.IsDark, "a different swatch previews immediately");
+            Equal("Light", (section.ThemeCombo.SelectedItem as ComboBoxItem)?.Tag as string,
+                "the hidden combo keeps the value the settings window saves");
+
+            section.IsLoading = true;
+            section.ChooseTheme("Dark");
+            True(ThemeService.IsDark, "a click during loading still previews");
+        }
+        finally
+        {
+            ThemeService.HighContrastTestOverride = previousContrast;
+            ThemeService.Apply(ThemePreference.Dark);
+        }
+    }
+
+    private static void SummaryReadingDoesNotCancelOrCoverTheTranslation()
+    {
+        var (section, dir) = NewIsolatedTranslateSection();
+        try
+        {
+            var operation = new CancellationTokenSource();
+            var streaming = TranslateUiState.Initial with
+            {
+                Epoch = 3,
+                Phase = TranslateUiPhase.Streaming,
+                StreamText = "partial translation",
+                StatusText = "正在生成…",
+                IsStreamLayerVisible = true,
+                IsFinalLayerVisible = false,
+                IsProgressVisible = true,
+                IsTranslateButtonEnabled = false,
+            };
+            section.AdoptTranslationOperation(operation, streaming);
+            var status = section.BeginSummaryReading("hello world");
+            Equal(ReadingRequestCopy.SummaryWhileTranslating, status,
+                "an in-flight translation is named as still running");
+            True(!operation.IsCancellationRequested, "要点 must not cancel the translation");
+            True(section.IsHoldingSummary, "the summary reading is what is on screen");
+
+            var continued = streaming with { StreamText = "partial translation plus" };
+            section.ApplyState(continued);
+            True(section.IsHoldingSummary, "a translation update must stay behind the summary");
+            Equal(string.Empty, section.ResultBox.Text,
+                "the result surface is not replaced by the arriving translation");
+            Equal(string.Empty, section.StreamResultBox.Text,
+                "the stream layer stays untouched while the summary is on screen");
+
+            section.ShowTranslationReading();
+            True(!section.IsHoldingSummary, "switching back shows the translation reading");
+            Equal("partial translation plus", section.StreamResultBox.Text,
+                "switching back shows the translation that arrived in the background");
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+            catch (IOException)
+            {
+                // The isolated directory is a temp fixture. A locked file must not fail the assertion.
+            }
+            ProfileManager.ConfigPathOverride = null;
+        }
+    }
 
     private static (TranslateSection Section, string Dir) NewIsolatedTranslateSection()
     {
@@ -7578,6 +7699,10 @@ internal static class Program
                     "the engine page must be selected");
                 Equal(Visibility.Visible, ((System.Windows.Controls.Panel)providerSection.FindName("PresetsPanel")!).Visibility,
                     "the add-engine flow must start in the provider catalogue");
+                Equal(Visibility.Visible, providerSection.BackToListHeaderButton.Visibility,
+                    "the provider catalogue must keep return navigation in the page header");
+                Equal(Visibility.Collapsed, providerSection.AddEngineHeaderButton.Visibility,
+                    "the add action must not compete with return navigation inside the add flow");
 
                 // No duplicate routing controls may exist on the settings page.
                 True(providerSection.FindName("RoutingPanel") is null,
@@ -7633,9 +7758,11 @@ internal static class Program
                 "the zero-profile empty state must be visible");
             Equal(Visibility.Collapsed, section.ProfilesListBox.Visibility,
                 "the empty ListBox must not cover the CTA");
-            var button = section.AddFirstEngineButton;
+            var button = section.AddEngineHeaderButton;
             True(button.IsVisible && button.IsEnabled && button.IsHitTestVisible,
-                "the add-first-engine button must be visibly actionable");
+                "the header add-engine button must be the only empty-state CTA");
+            Equal(Visibility.Collapsed, section.AddFirstEngineButton.Visibility,
+                "the empty state must not show a second primary button");
 
             var center = button.TranslatePoint(
                 new Point(button.ActualWidth / 2, button.ActualHeight / 2), section);
@@ -7647,9 +7774,11 @@ internal static class Program
             button.RaiseEvent(new RoutedEventArgs(
                 System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
             Equal(Visibility.Visible, section.EditorForm.Visibility,
-                "clicking 添加第一个引擎 must open the editor");
+                "clicking 添加引擎 must open the editor");
             Equal(Visibility.Visible, section.PresetsPanel.Visibility,
                 "the first step must be the provider catalogue");
+            Equal(Visibility.Visible, section.BackToListHeaderButton.Visibility,
+                "the catalogue must expose return navigation without consuming a second content row");
         }
         finally
         {
@@ -7984,8 +8113,10 @@ internal static class Program
         RenderAndSave(privacyLight, 960, 760, Path.Combine(outDir, "settings_privacy_light.png"), ThemePreference.Light);
         RenderAndSave(CreateServiceEditorPreview(), 760, 620, Path.Combine(outDir, "service_editor_dark.png"), ThemePreference.Dark);
         RenderAndSave(CreateServiceEditorPreview(), 760, 620, Path.Combine(outDir, "service_editor_light.png"), ThemePreference.Light);
-        RenderAndSave(CreateServiceEditorPreview(), 620, 720, Path.Combine(outDir, "service_editor_compact_light.png"), ThemePreference.Light);
+        RenderAndSave(CreateServiceEditorPreview(previewWidth: 620, previewHeight: 720), 620, 720, Path.Combine(outDir, "service_editor_compact_light.png"), ThemePreference.Light);
         RenderAndSave(CreateAdvancedServiceEditorPreview(), 760, 920, Path.Combine(outDir, "service_editor_advanced_light.png"), ThemePreference.Light);
+        RenderAndSave(CreateProviderCataloguePreview(760, 620), 760, 620, Path.Combine(outDir, "provider_catalogue_light.png"), ThemePreference.Light);
+        RenderAndSave(CreateProviderCataloguePreview(620, 760), 620, 760, Path.Combine(outDir, "provider_catalogue_compact_dark.png"), ThemePreference.Dark);
         RenderAndSave(new QuickSearchWindow(history, vocab), 560, 360, Path.Combine(outDir, "quick_search_dark.png"), ThemePreference.Dark);
         RenderAndSave(new QuickSearchWindow(history, vocab), 560, 360, Path.Combine(outDir, "quick_search_light.png"), ThemePreference.Light);
         // T11: narrow content — the workbench must stack (input ≥160 DIP on
@@ -8199,6 +8330,8 @@ internal static class Program
         True(File.Exists(Path.Combine(outDir, "service_editor_dark.png")), "service_editor_dark.png must be created");
         True(File.Exists(Path.Combine(outDir, "service_editor_compact_light.png")), "compact service editor must be created");
         True(File.Exists(Path.Combine(outDir, "service_editor_advanced_light.png")), "advanced service editor must be created");
+        True(File.Exists(Path.Combine(outDir, "provider_catalogue_light.png")), "provider catalogue must be created");
+        True(File.Exists(Path.Combine(outDir, "provider_catalogue_compact_dark.png")), "compact provider catalogue must be created");
         True(File.Exists(Path.Combine(outDir, "quick_search_dark.png")), "quick_search_dark.png must be created");
         True(File.Exists(Path.Combine(outDir, "translation_panel_dark.png")), "translation_panel_dark.png must be created");
         True(File.Exists(Path.Combine(outDir, "translation_panel_error_dark.png")), "translation_panel_error_dark.png must be created");
@@ -8453,10 +8586,57 @@ internal static class Program
         host.Arrange(new Rect(0, 0, previewWidth, previewHeight));
         host.UpdateLayout();
         afterEditorShown?.Invoke(section);
+        section.AlignInitialFold();
+        host.UpdateLayout();
+        AssertEditorStartsOnWholeCardBoundary(section);
         return new Window
         {
             Content = host,
         };
+    }
+
+    private static Window CreateProviderCataloguePreview(double previewWidth, double previewHeight)
+    {
+        var section = new ServicesSection();
+        section.BeginAddEngineFlow();
+        var host = new System.Windows.Controls.Border
+        {
+            Child = section,
+            Padding = new Thickness(24),
+        };
+        host.SetResourceReference(System.Windows.Controls.Border.BackgroundProperty, "CanvasBrush");
+        host.Measure(new Size(previewWidth, previewHeight));
+        host.Arrange(new Rect(0, 0, previewWidth, previewHeight));
+        host.UpdateLayout();
+        True(section.ProviderPageTitle.IsVisible || section.ProviderPageTitle.Visibility == Visibility.Visible,
+            "provider catalogue must keep the page title visible");
+        True(section.BackToListHeaderButton.Visibility == Visibility.Visible,
+            "provider catalogue must keep the return-to-list action visible");
+        True(section.PresetsPanel.Visibility == Visibility.Visible,
+            "provider catalogue must display its provider choices");
+        if (previewWidth < 680)
+        {
+            True(section.PresetRightColumn.ActualWidth < 0.5,
+                "compact provider catalogue must release the unused second column");
+            True(section.PresetColumnLeft.ActualWidth > previewWidth * 0.75,
+                "compact provider catalogue choices must use the available width");
+        }
+        return new Window { Content = host };
+    }
+
+    private static void AssertEditorStartsOnWholeCardBoundary(ServicesSection section)
+    {
+        var scroll = section.EditorScroll;
+        var model = section.ModelCard;
+        if (scroll.ViewportHeight <= 1 || model.ActualHeight <= 1 || scroll.VerticalOffset > 1)
+        {
+            return;
+        }
+
+        var top = model.TranslatePoint(new Point(0, 0), scroll).Y;
+        var visibleSlice = scroll.ViewportHeight - top;
+        True(visibleSlice <= 1 || visibleSlice >= 104 || top + model.ActualHeight <= scroll.ViewportHeight + 0.5,
+            $"the initial editor viewport must not expose a severed model-card header; visible slice was {visibleSlice:F1} DIP");
     }
 
     private static Window CreateAdvancedServiceEditorPreview()
@@ -8535,6 +8715,8 @@ internal static class Program
             "compact General section must collapse the theme row's second column");
         Equal(0, Grid.GetColumn(window.GeneralSection.ThemeComboBox),
             "compact General section must move the theme combo into the first column");
+        Equal(0, Grid.GetColumn(window.GeneralSection.ThemeChoicePanel),
+            "compact General section must move the theme swatches into the first column");
         Equal(0d, window.PromptSectionHost.NameDescriptionGrid.ColumnDefinitions[1].Width.Value,
             "compact Prompt section must collapse the name/description gutter column");
         Equal(0, Grid.GetColumn(window.PromptSectionHost.DescriptionPanel),

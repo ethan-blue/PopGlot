@@ -63,11 +63,8 @@
             <Setter Property="Height" Value="40" />
             <Setter Property="MinWidth" Value="0" />
         </Style>
-        <Style x:Key="EditorPasswordField" TargetType="PasswordBox" BasedOn="{StaticResource {x:Type PasswordBox}}">
-            <Setter Property="Height" Value="40" />
+        <Style x:Key="EditorPasswordField" TargetType="PasswordBox" BasedOn="{StaticResource FormPasswordBox}">
             <Setter Property="MinWidth" Value="0" />
-            <Setter Property="Padding" Value="12,0" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
         <Style x:Key="EditorSectionTitle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
             <Setter Property="FontSize" Value="13" />
@@ -125,10 +122,17 @@
 
         <Grid Grid.Row="0">
             <StackPanel>
-                <TextBlock Text="翻译引擎" Style="{StaticResource PageTitle}" Margin="0,0,0,14" />
+                <TextBlock x:Name="ProviderPageTitle" Text="翻译引擎" Style="{StaticResource PageTitle}" Margin="0,0,0,14" />
             </StackPanel>
-            <Button x:Name="AddEngineHeaderButton" Content="添加引擎" HorizontalAlignment="Right" VerticalAlignment="Top"
-                    Style="{StaticResource PrimaryButton}" Padding="16,8" Click="AddProfile_Click" />
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
+                <Button x:Name="ChooseAnotherProviderButton" Content="更换服务商" Visibility="Collapsed"
+                        Style="{StaticResource GhostButton}" Padding="10,5" Margin="0,0,8,0"
+                        Click="ChooseAnotherProvider_Click" />
+                <Button x:Name="BackToListHeaderButton" Content="← 返回引擎列表" Visibility="Collapsed"
+                        Style="{StaticResource GhostButton}" Padding="10,5" Click="BackToServices_Click" />
+                <Button x:Name="AddEngineHeaderButton" Content="添加引擎"
+                        Style="{StaticResource PrimaryButton}" Padding="16,8" Click="AddProfile_Click" />
+            </StackPanel>
         </Grid>
 
         <!-- 路由唯一入口是主窗口底部的快速切换器；设置页不再提供默认路由控件。 -->
@@ -142,15 +146,12 @@
                     </StackPanel>
                     <Grid Grid.Row="1">
                         <StackPanel x:Name="ProfilesEmptyText" Visibility="Collapsed" Panel.ZIndex="1"
-                                    HorizontalAlignment="Center" VerticalAlignment="Center" Margin="30">
-                            <Border Width="44" Height="44" CornerRadius="13" Margin="0,0,0,12"
-                                    Background="{DynamicResource AccentSoftBrush}">
-                                <Path Data="{StaticResource IconProvider}" Width="20" Height="20" Stretch="Uniform"
-                                      Fill="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            </Border>
-                            <TextBlock Text="未配置翻译引擎" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center"
-                                       Margin="0,0,0,14" />
+                                    HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,8,0,0">
+                            <TextBlock Text="未配置翻译引擎。" FontSize="13"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <!-- 页眉「添加引擎」是唯一主按钮。这个按钮留在树上供旧调用点找到，不占空态。 -->
                             <Button x:Name="AddFirstEngineButton" Content="添加第一个引擎"
+                                    Visibility="Collapsed" IsHitTestVisible="False"
                                     Style="{StaticResource PrimaryButton}" Padding="16,7"
                                     AutomationProperties.Name="添加第一个引擎"
                                     Click="AddProfile_Click" />
@@ -159,7 +160,7 @@
                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <Border Padding="12,10" CornerRadius="{DynamicResource CardRadius}" Background="{DynamicResource InputBrush}"
+                                    <Border Padding="16,12" CornerRadius="{DynamicResource CardRadius}" Background="{DynamicResource InputBrush}"
                                             BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
                                         <Grid>
                                             <Grid.ColumnDefinitions>
@@ -167,7 +168,7 @@
                                                 <ColumnDefinition Width="150"/><ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
                                             <Border Width="30" Height="30" CornerRadius="10" Background="{DynamicResource AccentSoftBrush}">
-                                                <Path Data="{StaticResource IconProvider}" Width="15" Height="15" Stretch="Uniform"
+                                                <Path Data="{StaticResource IconProvider}" Width="16" Height="16" Stretch="Uniform"
                                                       Fill="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                             </Border>
                                             <StackPanel Grid.Column="1" Margin="9,0,10,0" VerticalAlignment="Center">
@@ -208,45 +209,44 @@
             <Border x:Name="EditorForm" Visibility="Collapsed" Padding="0" Background="Transparent" BorderThickness="0">
                 <Grid>
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/><RowDefinition Height="*"/>
+                        <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-                    <Grid x:Name="EditorBackRow" Grid.Row="0" Margin="0,0,0,12">
-                        <Button Content="← 返回引擎列表" Style="{StaticResource GhostButton}"
-                                Padding="8,5" HorizontalAlignment="Left" Click="BackToServices_Click" />
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                            <Button x:Name="ChooseAnotherProviderButton" Content="更换服务商" Visibility="Collapsed"
-                                    Style="{StaticResource GhostButton}" Padding="10,5" Click="ChooseAnotherProvider_Click" />
-                        </StackPanel>
-                    </Grid>
 
                     <!-- 底部留白：滚动到底时最后一个字段仍完整悬于固定操作栏
                          上方，不再贴着保存/取消按钮的下边缘。 -->
-                    <ScrollViewer x:Name="EditorScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="0,0,8,18">
+                    <ScrollViewer x:Name="EditorScroll" Grid.Row="0" VerticalScrollBarVisibility="Auto" Padding="0,0,8,24">
                         <StackPanel>
                             <StackPanel x:Name="PresetsPanel" Visibility="Collapsed">
                                 <TextBlock Text="选择服务商" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,16" />
 
                                 <!-- Prominent Custom / Relay preset card -->
-                                <Button Style="{StaticResource ProviderPresetButton}" Tag="custom" Click="Preset_Click"
+                                <Button x:Name="CustomPresetButton" Style="{StaticResource ProviderPresetButton}" Tag="custom" Click="Preset_Click"
                                         Margin="0,0,0,12" BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1.5"
                                         Background="{DynamicResource AccentSoftBrush}">
-                                    <Grid>
+                                    <Grid x:Name="CustomPresetGrid">
                                         <Grid.ColumnDefinitions>
                                              <ColumnDefinition Width="*" />
                                              <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                             <RowDefinition Height="Auto" />
+                                             <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
                                         <StackPanel VerticalAlignment="Center">
-                                            <StackPanel Orientation="Horizontal">
+                                            <WrapPanel x:Name="CustomPresetTitleRow" Orientation="Horizontal">
                                                 <TextBlock Text="自定义兼容引擎" FontWeight="SemiBold" FontSize="13"
                                                            Foreground="{DynamicResource TextPrimaryBrush}" />
-                                                <Border Style="{StaticResource StatusPill}" Background="{DynamicResource AccentBrush}"
+                                                <Border Style="{StaticResource StatusPill}"
+                                                        Background="{DynamicResource SurfaceRaisedBrush}"
+                                                        BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1"
                                                         Margin="8,0,0,0" Padding="6,1" VerticalAlignment="Center">
-                                                    <TextBlock Text="自建或第三方引擎" FontSize="11" Foreground="{DynamicResource AccentTextBrush}" FontWeight="SemiBold" />
+                                                    <TextBlock Text="自建或第三方引擎" FontSize="11"
+                                                               Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold" />
                                                 </Border>
-                                            </StackPanel>
+                                            </WrapPanel>
                                         </StackPanel>
-                                        <TextBlock Grid.Column="1" Text="接入 →" VerticalAlignment="Center" FontWeight="SemiBold"
+                                        <TextBlock x:Name="CustomPresetArrow" Grid.Column="1" Text="接入 →" VerticalAlignment="Center" FontWeight="SemiBold"
                                                    Foreground="{DynamicResource AccentBrush}" Margin="8,0,4,0" />
                                     </Grid>
                                 </Button>
@@ -254,14 +254,22 @@
                                 <TextBlock Text="标准服务商预设" FontSize="13" FontWeight="SemiBold"
                                            Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,10" />
 
-                                <Grid>
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                    <StackPanel>
+                                <Grid x:Name="PresetColumns">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition x:Name="PresetLeftColumn" Width="*"/>
+                                        <ColumnDefinition x:Name="PresetGutter" Width="16"/>
+                                        <ColumnDefinition x:Name="PresetRightColumn" Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel x:Name="PresetColumnLeft">
                                         <Button Style="{StaticResource ProviderPresetButton}" Tag="openai" AutomationProperties.Name="OpenAI 预设" Click="Preset_Click"><StackPanel><TextBlock Text="OpenAI" FontWeight="SemiBold"/><TextBlock Text="GPT · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
                                         <Button Style="{StaticResource ProviderPresetButton}" Tag="gemini" AutomationProperties.Name="Google Gemini 预设" Click="Preset_Click"><StackPanel><TextBlock Text="Google Gemini" FontWeight="SemiBold"/><TextBlock Text="Gemini · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
                                         <Button Style="{StaticResource ProviderPresetButton}" Tag="zhipu" AutomationProperties.Name="智谱 GLM 预设" Click="Preset_Click"><StackPanel><TextBlock Text="智谱 GLM" FontWeight="SemiBold"/><TextBlock Text="国内服务 · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
                                     </StackPanel>
-                                    <StackPanel Grid.Column="2">
+                                    <StackPanel x:Name="PresetColumnRight" Grid.Column="2">
                                         <Button Style="{StaticResource ProviderPresetButton}" Tag="deepseek" AutomationProperties.Name="DeepSeek 预设" Click="Preset_Click"><StackPanel><TextBlock Text="DeepSeek" FontWeight="SemiBold"/><TextBlock Text="文字翻译 · 官方接口" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
                                         <Button Style="{StaticResource ProviderPresetButton}" Tag="claude" AutomationProperties.Name="Anthropic Claude 预设" Click="Preset_Click"><StackPanel><TextBlock Text="Anthropic Claude" FontWeight="SemiBold"/><TextBlock Text="Messages · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
                                         <Button Style="{StaticResource ProviderPresetButton}" Tag="ollama" AutomationProperties.Name="Ollama（本地）预设" Click="Preset_Click"><StackPanel><TextBlock Text="Ollama（本地）" FontWeight="SemiBold"/><TextBlock Text="本机运行 · 无需 Key" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
@@ -288,7 +296,7 @@
                                     <StackPanel>
                                         <TextBlock Text="连接信息" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,14" />
                                         <Grid x:Name="IdentityFieldsGrid" Margin="0,0,0,14">
-                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                             <StackPanel x:Name="ServiceNamePanel">
                                                 <TextBlock Text="显示名称" Style="{StaticResource FieldLabel}"/>
@@ -326,6 +334,11 @@
                                     </StackPanel>
                                 </Border>
 
+                                <!-- A small dynamic spacer is used only when the first
+                                     viewport would otherwise show a severed card header.
+                                     It never participates once the card has useful room. -->
+                                <Border x:Name="InitialFoldSpacer" Height="0" />
+
                                 <Border x:Name="ModelCard" Style="{StaticResource EditorSectionCard}">
                                     <StackPanel>
                                         <Grid>
@@ -354,7 +367,7 @@
 
                                         <Grid x:Name="ModelFieldsGrid">
                                             <Grid.Margin>0,12,0,0</Grid.Margin>
-                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                             <StackPanel x:Name="TextModelPanel">
                                                 <TextBlock Text="文字模型" Style="{StaticResource FieldLabel}"/>
@@ -410,11 +423,11 @@
 
                                 <Border x:Name="AdvancedGroup" Margin="0,0,0,14">
 
-                                    <Expander x:Name="AdvancedExpander" Header="高级设置">
+                                    <Expander x:Name="AdvancedExpander" Header="高级设置" Expanded="AdvancedExpander_Expanded">
                                         <StackPanel Margin="0,14,0,0">
                                             <TextBlock Text="接口与网络" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,12" />
                                             <Grid x:Name="EndpointFieldsGrid">
-                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                                 <StackPanel x:Name="TextEndpointPanel">
                                                     <TextBlock Text="文字请求路径" Style="{StaticResource FieldLabel}"/>
@@ -429,7 +442,7 @@
                                             <Border Height="1" Margin="0,16,0,16" Background="{DynamicResource BorderSubtleBrush}" />
                                             <TextBlock Text="请求定制" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,12" />
                                             <Grid x:Name="AdvancedDetailsGrid">
-                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                                 <StackPanel x:Name="HeadersPanel">
                                                     <TextBlock Text="自定义请求头" Style="{StaticResource FieldLabel}"/>
@@ -455,7 +468,7 @@
                         </StackPanel>
                     </ScrollViewer>
 
-                    <Border x:Name="DraftGuardBar" Grid.Row="2" Visibility="Collapsed" Margin="0,10,0,0" Padding="12,10" CornerRadius="{DynamicResource CardRadius}"
+                    <Border x:Name="DraftGuardBar" Grid.Row="1" Visibility="Collapsed" Margin="0,10,0,0" Padding="12,10" CornerRadius="{DynamicResource CardRadius}"
                             Background="{DynamicResource WarningSoftBrush}" BorderBrush="{DynamicResource WarningBrush}" BorderThickness="1.5">
                         <!-- 说明文字独占一行并可换行：旧布局把文字和三个按钮
                              挤在同一行，窄面板上按钮直接压在省略号文字上。 -->
@@ -470,7 +483,7 @@
                         </StackPanel>
                     </Border>
 
-                    <Border x:Name="EditorActionBar" Grid.Row="3" Margin="0,10,0,0" Padding="0,10,0,0" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0">
+                    <Border x:Name="EditorActionBar" Grid.Row="2" Margin="0,10,0,0" Padding="0,10,0,0" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0">
                         <Grid>
                             <Button x:Name="DeleteServiceButton" Content="删除引擎" HorizontalAlignment="Left" Style="{StaticResource DangerButton}" Padding="12,6" Click="DeleteProfile_Click"/>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">

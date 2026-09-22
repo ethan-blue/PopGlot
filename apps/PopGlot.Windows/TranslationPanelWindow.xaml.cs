@@ -65,6 +65,8 @@ public partial class TranslationPanelWindow : Window
     private readonly System.Windows.Data.Binding? _resultCopyIconFillBinding;
 
     private CancellationTokenSource? _operation;
+    private CancellationTokenSource? _summaryOperation;
+    private bool _holdingSummary;
     private Func<CancellationToken, long, Task>? _retry;
     private byte[]? _screenshot;
     private string _translation = string.Empty;
@@ -373,7 +375,10 @@ public partial class TranslationPanelWindow : Window
                     {
                         RenderCancelledWithoutPartial();
                     }
-                    Progress.Visibility = Visibility.Collapsed;
+                    if (!_holdingSummary)
+                    {
+                        Progress.Visibility = Visibility.Collapsed;
+                    }
                 }
             }
         }
@@ -406,14 +411,33 @@ public partial class TranslationPanelWindow : Window
 
     private void ShowStoredTranslation()
     {
+        _holdingSummary = false;
         _reading.ShowTranslation();
         ShowTranslationChoice.IsChecked = true;
-        SetTranslationContent(_reading.TranslationText);
+        if (_operation is { IsCancellationRequested: false })
+        {
+            TranslationRichBox.Visibility = Visibility.Collapsed;
+            TranslationTextBox.Visibility = string.IsNullOrEmpty(_translation)
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            TranslationTextBox.Text = _translation;
+            Progress.Visibility = Visibility.Visible;
+            StreamIndicator.Visibility = string.IsNullOrEmpty(_translation)
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            ResultSkeleton.Visibility = string.IsNullOrEmpty(_translation)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            StatusText.Text = "正在翻译";
+            return;
+        }
+
+        SetTranslationContent(_translation);
         ExplanationText.Text = _translationNote;
         ExplanationBox.Visibility = string.IsNullOrWhiteSpace(_translationNote)
             ? Visibility.Collapsed
             : Visibility.Visible;
-        StatusText.Text = string.IsNullOrWhiteSpace(_reading.TranslationText) ? "还没有译文" : "译文";
+        StatusText.Text = string.IsNullOrWhiteSpace(_translation) ? "还没有译文" : "译文";
     }
 
     private async void ShowSummary_Click(object sender, RoutedEventArgs e)
@@ -421,7 +445,7 @@ public partial class TranslationPanelWindow : Window
         var source = SourceInputBox.Text.Trim();
         if (source.Length == 0)
         {
-            StatusText.Text = "请先输入原文，再看要点";
+            StatusText.Text = ReadingRequestCopy.NeedSource;
             ShowTranslationChoice.IsChecked = true;
             return;
         }
@@ -432,25 +456,22 @@ public partial class TranslationPanelWindow : Window
             return;
         }
 
-        if (_reading.Mode == ReadingMode.Translation)
+        if (_summaryOperation is { IsCancellationRequested: false })
         {
-            _reading.CaptureTranslation(_translation, ExplanationText.Text);
-            _translationNote = ExplanationText.Text;
+            BeginPanelSummaryReading();
+            ShowSummaryChoice.IsEnabled = false;
+            return;
         }
 
-        CancelOperation();
+        BeginPanelSummaryReading();
         var operation = new CancellationTokenSource();
-        _operation = operation;
+        _summaryOperation = operation;
         ShowSummaryChoice.IsEnabled = false;
-        ShowTranslationChoice.IsEnabled = false;
-        ResultSkeleton.Visibility = Visibility.Visible;
-        Progress.Visibility = Visibility.Visible;
-        StatusText.Text = "正在整理要点…";
         try
         {
             var response = await _coordinator.RunTextTaskAsync(
                 source, SourceLanguage, TargetLanguage, TextTaskKind.Summarize, operation.Token);
-            if (operation.IsCancellationRequested || _operation != operation)
+            if (operation.IsCancellationRequested || !ReferenceEquals(_summaryOperation, operation))
             {
                 return;
             }
@@ -461,44 +482,95 @@ public partial class TranslationPanelWindow : Window
                     .Concat(response.Result.Warnings)
                     .Where(line => !string.IsNullOrWhiteSpace(line))
                     .Select(line => line.Trim()));
-            _reading.RememberSummary(source, response.Result.TranslatedText, note);
+            var sameSource = string.Equals(SourceInputBox.Text.Trim(), source, StringComparison.Ordinal);
+            var show = _holdingSummary && sameSource;
+            _reading.RememberSummary(source, response.Result.TranslatedText, note, show);
+            if (!show)
+            {
+                if (_holdingSummary)
+                {
+                    ShowStoredTranslation();
+                }
+                return;
+            }
+
             PaintPanelSummary(response.Result.TranslatedText, note);
-            StatusText.Text = $"要点 · {response.Diagnostics.ElapsedMs} ms · 可切回译文";
+            StatusText.Text = ReadingRequestCopy.Finished(response.Diagnostics.ElapsedMs);
             RouteText.Text = response.EngineLabel;
         }
         catch (OperationCanceledException)
         {
-            StatusText.Text = "已取消要点";
-            ShowTranslationChoice.IsChecked = true;
+            if (_holdingSummary)
+            {
+                ShowStoredTranslation();
+                StatusText.Text = ReadingRequestCopy.SummaryCancelled;
+            }
         }
         catch (Exception ex)
         {
-            ShowStoredTranslation();
-            StatusText.Text = ex.Message;
+            if (_holdingSummary)
+            {
+                ShowStoredTranslation();
+                StatusText.Text = ex.Message;
+            }
         }
         finally
         {
-            if (_operation == operation)
+            var stillCurrent = ReferenceEquals(_summaryOperation, operation);
+            if (stillCurrent)
             {
-                ResultSkeleton.Visibility = Visibility.Collapsed;
-                Progress.Visibility = Visibility.Collapsed;
+                _summaryOperation = null;
+            }
+            if (stillCurrent || _summaryOperation is null)
+            {
+                if (_holdingSummary)
+                {
+                    ResultSkeleton.Visibility = Visibility.Collapsed;
+                    Progress.Visibility = Visibility.Collapsed;
+                }
                 ShowSummaryChoice.IsEnabled = true;
-                ShowTranslationChoice.IsEnabled = true;
+            }
+            try
+            {
+                operation.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Close already disposed this request.
             }
         }
     }
 
+    private void BeginPanelSummaryReading()
+    {
+        _reading.CaptureTranslation(_translation, _translationNote);
+        _holdingSummary = true;
+        ShowSummaryChoice.IsChecked = true;
+        StatusText.Text = ReadingRequestCopy.WhileRequesting(
+            _operation is { IsCancellationRequested: false });
+        ResultSkeleton.Visibility = Visibility.Collapsed;
+        Progress.Visibility = Visibility.Visible;
+    }
+
     private void PaintPanelSummary(string text, string note)
     {
+        _holdingSummary = true;
         ShowSummaryChoice.IsChecked = true;
-        SetTranslationContent(text, isMarkdown: false);
+        Progress.Visibility = Visibility.Collapsed;
+        ResultSkeleton.Visibility = Visibility.Collapsed;
+        StreamIndicator.Visibility = Visibility.Collapsed;
+        TranslationRichBox.Visibility = Visibility.Collapsed;
+        TranslationTextBox.Visibility = Visibility.Visible;
+        TranslationTextBox.Text = text;
         ExplanationText.Text = note;
         ExplanationBox.Visibility = string.IsNullOrWhiteSpace(note)
             ? Visibility.Collapsed
             : Visibility.Visible;
         TermsList.Visibility = Visibility.Collapsed;
         WarningBox.Visibility = Visibility.Collapsed;
-        StatusText.Text = "要点 · 切回「译文」可看翻译";
+        StatusText.Text = ReadingRequestCopy.SummaryReadyHint;
+        ResultCopyBtn.IsEnabled = !string.IsNullOrWhiteSpace(text);
+        ResultSpeakBtn.IsEnabled = !string.IsNullOrWhiteSpace(text);
     }
 
     private async Task TranslateTextAsync(string source, CancellationToken cancellation, long epoch)
@@ -610,6 +682,11 @@ public partial class TranslationPanelWindow : Window
         {
             _lastStreamRenderTicks = 0;
             _translation = string.Empty;
+            _reading.CaptureTranslation(_translation, _translationNote);
+            if (_holdingSummary)
+            {
+                return;
+            }
             TranslationTextBox.Text = string.Empty;
             ResultSkeleton.Visibility = Visibility.Visible;
             TranslationTextBox.Visibility = Visibility.Collapsed;
@@ -622,6 +699,11 @@ public partial class TranslationPanelWindow : Window
         if (update.Kind == TranslationStreamUpdateKind.Delta)
         {
             _translation = update.AccumulatedText ?? string.Empty;
+            _reading.CaptureTranslation(_translation, _translationNote);
+            if (_holdingSummary)
+            {
+                return;
+            }
             if (ResultSkeleton.Visibility == Visibility.Visible)
             {
                 ResultSkeleton.Visibility = Visibility.Collapsed;
@@ -667,6 +749,10 @@ public partial class TranslationPanelWindow : Window
 
     private void OnStageChanged(TranslationSessionStage stage)
     {
+        if (_holdingSummary)
+        {
+            return;
+        }
         // 预提示待决期间，准备态文本（选择模型/翻译/生成…）不覆盖它。
         switch (stage)
         {
@@ -702,7 +788,10 @@ public partial class TranslationPanelWindow : Window
     {
         if (session.Stage == TranslationSessionStage.Cancelled)
         {
-            Progress.Visibility = Visibility.Collapsed;
+            if (!_holdingSummary)
+            {
+                Progress.Visibility = Visibility.Collapsed;
+            }
             _gate.OnCancelled(session.TranslatedText);
             if (_gate.HasPartialText)
             {
@@ -717,7 +806,10 @@ public partial class TranslationPanelWindow : Window
 
         if (!session.IsCleanCompletion || session.Stage == TranslationSessionStage.Failed)
         {
-            Progress.Visibility = Visibility.Collapsed;
+            if (!_holdingSummary)
+            {
+                Progress.Visibility = Visibility.Collapsed;
+            }
             // A Partial keeps its visible text but lands here on purpose: the
             // gate records FailedWithPartial so result actions, auto-copy and
             // starring stay blocked while the retained text stays readable.
@@ -748,6 +840,7 @@ public partial class TranslationPanelWindow : Window
     private void RenderPreparingState(string status)
     {
         _lastStreamRenderTicks = 0;
+        _holdingSummary = false;
         _reading.ShowTranslation();
         ShowTranslationChoice.IsChecked = true;
         // 预提示待决时压过「正在翻译/正在识别画面文字」等准备态。
@@ -773,6 +866,11 @@ public partial class TranslationPanelWindow : Window
     private void RenderCancelledWithPartial(string partialText)
     {
         _translation = partialText;
+        _reading.CaptureTranslation(_translation, _translationNote);
+        if (_holdingSummary)
+        {
+            return;
+        }
         Progress.Visibility = Visibility.Collapsed;
         ResultSkeleton.Visibility = Visibility.Collapsed;
         TranslationRichBox.Visibility = Visibility.Collapsed;
@@ -798,6 +896,11 @@ public partial class TranslationPanelWindow : Window
     private void RenderCancelledWithoutPartial()
     {
         _translation = string.Empty;
+        _reading.CaptureTranslation(_translation, _translationNote);
+        if (_holdingSummary)
+        {
+            return;
+        }
         Progress.Visibility = Visibility.Collapsed;
         ResultSkeleton.Visibility = Visibility.Collapsed;
         TranslationRichBox.Visibility = Visibility.Collapsed;
@@ -822,6 +925,12 @@ public partial class TranslationPanelWindow : Window
     private void RenderFailedWithPartial(string partialText, string errorMessage)
     {
         _translation = partialText;
+        _translationNote = errorMessage;
+        _reading.CaptureTranslation(_translation, _translationNote);
+        if (_holdingSummary)
+        {
+            return;
+        }
         Progress.Visibility = Visibility.Collapsed;
         ResultSkeleton.Visibility = Visibility.Collapsed;
         TranslationRichBox.Visibility = Visibility.Collapsed;
@@ -933,6 +1042,32 @@ public partial class TranslationPanelWindow : Window
         }
     }
 
+    /// <summary>
+    /// The translation finished while the summary is on screen. Keep the
+    /// clipboard and star side effects, and leave the summary text where it is.
+    /// </summary>
+    private async Task FinishTranslationBehindSummaryAsync(string source)
+    {
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+        {
+            if (!_closing && _vocabulary is not null)
+            {
+                var starred = _vocabulary.IsStarred(source, SourceLanguage, TargetLanguage);
+                UpdateStarIcon(starred);
+            }
+        });
+        var settings = _shellSettings();
+        if (_gate.ShouldTriggerAutoCopy(settings.CopyTranslationAutomatically))
+        {
+            var clean = MarkdownPresenter.ToPlainText(_translation);
+            await TrySetClipboardAsync(clean);
+        }
+        if (StatusText.Text == ReadingRequestCopy.SummaryWhileTranslating)
+        {
+            StatusText.Text = ReadingRequestCopy.SummaryKeptTranslation;
+        }
+    }
+
     private async Task RenderFinalSuccessAsync(string source, TranslationSession session, string pipelineNote)
     {
         // Only clean completions reach this method (HandleSessionResultAsync
@@ -940,6 +1075,11 @@ public partial class TranslationPanelWindow : Window
         _translation = session.TranslatedText;
         _translationNote = session.Explanation;
         _reading.CaptureTranslation(session.TranslatedText, session.Explanation);
+        if (_holdingSummary)
+        {
+            await FinishTranslationBehindSummaryAsync(source);
+            return;
+        }
         _reading.ShowTranslation();
         ShowTranslationChoice.IsChecked = true;
         Progress.Visibility = Visibility.Collapsed;
@@ -1056,6 +1196,12 @@ public partial class TranslationPanelWindow : Window
 
     private void RenderFailure(string message)
     {
+        if (_holdingSummary)
+        {
+            _translationNote = message;
+            _reading.CaptureTranslation(_translation, _translationNote);
+            return;
+        }
         RenderState(TranslationSessionState.Failed);
         SetTranslationContent(FriendlyError(message), isMarkdown: false);
         TranslationTextBox.SetResourceReference(Control.ForegroundProperty, "TextPrimaryBrush");
@@ -1221,14 +1367,15 @@ public partial class TranslationPanelWindow : Window
 
     private async void ResultCopy_Click(object sender, RoutedEventArgs e)
     {
-        if (!_gate.CanCopy || string.IsNullOrWhiteSpace(_translation))
+        var text = _holdingSummary ? _reading.SummaryText : _translation;
+        if (string.IsNullOrWhiteSpace(text) || (!_holdingSummary && !_gate.CanCopy))
         {
             return;
         }
-        var clean = MarkdownPresenter.ToPlainText(_translation);
+        var clean = MarkdownPresenter.ToPlainText(text);
         if (await TrySetClipboardAsync(clean))
         {
-            StatusText.Text = "已复制译文到剪贴板";
+            StatusText.Text = _holdingSummary ? "已复制要点" : "已复制译文到剪贴板";
             ShowCopyFeedback(ResultCopyIcon);
             await Task.Delay(1400);
             EndCopyFeedback(ResultCopyIcon, _resultCopyIconFillBinding);
@@ -1312,6 +1459,9 @@ public partial class TranslationPanelWindow : Window
     private void SourceClear_Click(object sender, RoutedEventArgs e)
     {
         CancelOperation();
+        CancelSummary();
+        _holdingSummary = false;
+        _reading.ShowTranslation();
         _gate.ResetToIdle();
         SourceInputBox.Clear();
         SetTranslationContent(string.Empty);
@@ -1417,6 +1567,14 @@ public partial class TranslationPanelWindow : Window
 
     private void ResultSpeak_Click(object sender, RoutedEventArgs e)
     {
+        if (_holdingSummary)
+        {
+            if (!string.IsNullOrWhiteSpace(_reading.SummaryText))
+            {
+                SpeakOrStop(_reading.SummaryText, TargetLanguage);
+            }
+            return;
+        }
         if (!_gate.CanPerformResultActions || string.IsNullOrWhiteSpace(_translation))
         {
             return;
@@ -1756,6 +1914,11 @@ public partial class TranslationPanelWindow : Window
             // C05 Esc ladder: the first Escape cancels a running request and
             // keeps the partial result; the next one hides the panel with
             // its session intact. Closing/destroying is never an Esc outcome.
+            if (_holdingSummary && _summaryOperation is { IsCancellationRequested: false })
+            {
+                CancelSummary();
+                return;
+            }
             if (_operation is { IsCancellationRequested: false })
             {
                 CancelOperation();
@@ -1826,6 +1989,7 @@ public partial class TranslationPanelWindow : Window
             // partial; the panel hides and stays restorable from the tray.
             e.Cancel = true;
             CancelOperation();
+            CancelSummary();
             Hide();
             return;
         }
@@ -1995,6 +2159,24 @@ public partial class TranslationPanelWindow : Window
         }
     }
 
+    private void CancelSummary()
+    {
+        var operation = _summaryOperation;
+        _summaryOperation = null;
+        if (operation is null)
+        {
+            return;
+        }
+        try
+        {
+            operation.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The summary request already completed and disposed its source.
+        }
+    }
+
     private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
 
     /// <summary>
@@ -2006,6 +2188,7 @@ public partial class TranslationPanelWindow : Window
     internal void CloseAsUserIntent()
     {
         CancelOperation();
+        CancelSummary();
         var session = CreateSessionSnapshot();
         if (session is not null && !App.SharedSessionStore.TryStore(session, out var rejection))
         {
@@ -2196,6 +2379,7 @@ public partial class TranslationPanelWindow : Window
         ThemeService.ThemeChanged -= _themeChangedHandler;
         TtsService.Stop();
         CancelOperation();
+        CancelSummary();
         // 面板关闭后重试不再可能发生：释放截图与重试闭包（闭包本身
         // 捕获同一份 PNG 字节数组），避免已关闭面板长期钉住数 MB 内存。
         _screenshot = null;

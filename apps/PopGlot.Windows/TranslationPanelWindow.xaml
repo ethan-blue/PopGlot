@@ -280,7 +280,7 @@
                             <RadioButton x:Name="ShowSummaryChoice" Content="要点" GroupName="PanelReading"
                                          Style="{StaticResource SegmentChoice}"
                                          AutomationProperties.Name="显示要点"
-                                         ToolTip="把原文收成几条要点。译文还在，可以切回来。需要已配置的模型。"
+                                         ToolTip="另一次请求，不打断正在进行的翻译。切回「译文」可看翻译。需要已配置的模型。"
                                          Click="ShowSummary_Click" />
                             <TextBlock x:Name="EngineBadge" Style="{StaticResource Metadata}"
                                        FontWeight="SemiBold" FontSize="12" Margin="4,0,0,0"
