@@ -85,18 +85,25 @@ Run `PopGlot.exe`. It stays in the tray. Allow the free engine under Settings �
 
 ## 下载
 
-需要 Windows 10（19041 及以上）或 Windows 11，x64。发布包自带 .NET 10 桌面运行时，不用另外安装。
+需要 Windows 10（19041 及以上）或 Windows 11，64 位。
 
-当前已发布的安装包以 [GitHub Releases](https://github.com/ethan-blue/PopGlot/releases) 上的 tag 为准。仓库里的版本号是 `0.1.8`；在这个编号打上 tag 并推送之前，Releases 里还没有对应的 zip。不要把说明文档里的版本当成已经可以下载的包。
+[下载 PopGlot 0.1.8](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.8/PopGlot-v0.1.8-win-x64.zip)
 
-下载到 zip 之后，用同目录的 `.sha256` 核对：
+每一版的发布页都用同一个样子：标题是 `PopGlot 版本号`，页上直接写这一版改了什么，并附上 zip 和 `.sha256`。不用再点进另一份说明。
+
+| 版本 | 包里有没有 .NET |
+| --- | --- |
+| 0.1.2 及以后 | 有。解压后运行 `PopGlot.exe`。 |
+| 0.1.1 及以前 | 没有。要先安装 .NET 10 Desktop Runtime（x64）。 |
+
+文件名始终是 `PopGlot-v版本号-win-x64.zip`。校验：
 
 ```powershell
 (Get-FileHash -Path .\PopGlot-v0.1.8-win-x64.zip -Algorithm SHA256).Hash.ToLower()
 Get-Content .\PopGlot-v0.1.8-win-x64.zip.sha256
 ```
 
-包名里的版本号换成你实际下载的那一个。
+全部发布页在 [Releases](https://github.com/ethan-blue/PopGlot/releases)。
 
 ## 版本怎么编号
 

@@ -102,10 +102,19 @@ jobs:
           $hash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $zipName`n" | Set-Content -Path $shaPath -NoNewline
 
+      - name: Write the release page
+        id: release_page
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          ./scripts/write-release-notes.ps1 -Version $version -OutFile dist/release-notes.txt
+          "title=PopGlot $version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3.0.3
         with:
-          generate_release_notes: true
+          name: ${{ steps.release_page.outputs.title }}
+          body_path: dist/release-notes.txt
           files: |
             dist/PopGlot-${{ github.ref_name }}-win-x64.zip
             dist/PopGlot-${{ github.ref_name }}-win-x64.zip.sha256

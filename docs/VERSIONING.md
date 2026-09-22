@@ -75,4 +75,7 @@
    git tag -a vX.Y.Z -m "PopGlot X.Y.Z"
    ```
 8. 推送（需要远端时）：`git push origin main --tags`。
-   GitHub Actions release 工作流将自动校验四方版本、打包并附带 `.zip.sha256` 校验和。
+   发布工作流校验四方版本、打出 `PopGlot-vX.Y.Z-win-x64.zip` 和 `.sha256`，
+   并把发布页标题设为 `PopGlot vX.Y.Z`。页面正文由
+   `scripts/write-release-notes.ps1` 从 CHANGELOG 的对应小节生成，
+   包含系统要求和校验命令，不另开一份发布说明。
