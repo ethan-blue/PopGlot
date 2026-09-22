@@ -300,6 +300,8 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     private CancellationTokenSource? _translateOperation;
     private long _currentEpoch;
     private TranslateUiState _currentState = TranslateUiState.Initial;
+    private readonly ReadingModeState _reading = new();
+    private bool _holdingSummary;
     // 免费引擎预提示：待决期间压过「连接中」等准备态，真实进展出现即让位。
     private string? _pendingStyleNotice;
     private bool _languageChangeSuspended = true;
@@ -561,78 +563,110 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
     // ================= Event handlers =================
 
-    private async void TranslateSummary_Click(object sender, RoutedEventArgs e) =>
-        await RunTextTaskAsync(TextTaskKind.Summarize, "总结");
-
-    private async void TranslateExplain_Click(object sender, RoutedEventArgs e) =>
-        await RunTextTaskAsync(TextTaskKind.Explain, "快速解释");
-
-    private async Task RunTextTaskAsync(TextTaskKind task, string label)
+    private void ShowTranslation_Click(object sender, RoutedEventArgs e)
     {
-        if (_coordinator is null) return;
+        _holdingSummary = false;
+        _reading.ShowTranslation();
+        ApplyState(_currentState);
+    }
+
+    private async void ShowSummary_Click(object sender, RoutedEventArgs e)
+    {
+        if (_coordinator is null)
+        {
+            return;
+        }
+
         var source = TranslateInput.Text.Trim();
         if (source.Length == 0)
         {
-            TranslateStatus.Text = $"请先输入需要{label}的内容。";
+            TranslateStatus.Text = "请先输入原文，再看要点。";
+            ShowTranslationChoice.IsChecked = true;
             return;
         }
+
+        if (_reading.HasSummary(source))
+        {
+            PaintSummary(_reading.SummaryText, _reading.SummaryNote);
+            return;
+        }
+
+        _reading.CaptureTranslation(_currentState.FinalText, _currentState.ExplanationText);
         _translateOperation?.Cancel();
         _translateOperation?.Dispose();
         var operation = new CancellationTokenSource();
         _translateOperation = operation;
-        TranslateSummaryButton.IsEnabled = false;
-        TranslateExplainButton.IsEnabled = false;
-        TranslateResult.Visibility = Visibility.Collapsed;
-        TranslateRichResult.Visibility = Visibility.Collapsed;
-        TranslateStreamResult.Visibility = Visibility.Collapsed;
+        ShowSummaryChoice.IsEnabled = false;
+        ShowTranslationChoice.IsEnabled = false;
         TranslateEmptyState.Visibility = Visibility.Collapsed;
         TranslateProgress.Visibility = Visibility.Visible;
-        TranslateExplanationBox.Visibility = Visibility.Collapsed;
-        TranslateTermsList.Visibility = Visibility.Collapsed;
-        TranslateStatus.Text = $"正在{label}…";
+        TranslateStatus.Text = "正在整理要点…";
         try
         {
             var response = await _coordinator.RunTextTaskAsync(
                 source,
                 Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto),
                 Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN"),
-                task,
+                TextTaskKind.Summarize,
                 operation.Token);
-            if (operation.IsCancellationRequested || _translateOperation != operation) return;
-            TranslateResult.Text = response.Result.TranslatedText;
-            TranslateResult.Visibility = Visibility.Visible;
-            var supporting = new List<string>();
-            if (!string.IsNullOrWhiteSpace(response.Result.Explanation))
-                supporting.Add(response.Result.Explanation.Trim());
-            supporting.AddRange(response.Result.Warnings.Where(x => !string.IsNullOrWhiteSpace(x)));
-            TranslateExplanation.Text = string.Join("\n", supporting);
-            TranslateExplanationBox.Visibility = supporting.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-            TranslateTermsList.ItemsSource = response.Result.ProtectedTerms.Distinct().ToArray();
-            TranslateTermsList.Visibility = response.Result.ProtectedTerms.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-            TranslateStatus.Text = $"{label}完成 · {response.Diagnostics.ElapsedMs} ms";
+            if (operation.IsCancellationRequested || _translateOperation != operation)
+            {
+                return;
+            }
+
+            var note = string.Join(
+                "\n",
+                new[] { response.Result.Explanation }
+                    .Concat(response.Result.Warnings)
+                    .Where(line => !string.IsNullOrWhiteSpace(line))
+                    .Select(line => line.Trim()));
+            _reading.RememberSummary(source, response.Result.TranslatedText, note);
+            PaintSummary(response.Result.TranslatedText, note);
+            TranslateStatus.Text = $"要点 · {response.Diagnostics.ElapsedMs} ms · 可切回译文";
             TranslateEngineBadge.Text = response.EngineLabel;
-            TranslateResultCopyButton.IsEnabled = true;
-            TranslateResultSpeakButton.IsEnabled = true;
         }
         catch (OperationCanceledException)
         {
-            TranslateStatus.Text = $"已取消{label}";
+            TranslateStatus.Text = "已取消要点";
+            ShowTranslationChoice.IsChecked = true;
         }
         catch (Exception ex)
         {
-            TranslateExplanation.Text = ex.Message;
-            TranslateExplanationBox.Visibility = Visibility.Visible;
-            TranslateStatus.Text = $"{label}失败，可重试";
+            _holdingSummary = false;
+            ShowTranslationChoice.IsChecked = true;
+            ApplyState(_currentState);
+            TranslateStatus.Text = ex.Message;
         }
         finally
         {
             if (_translateOperation == operation)
             {
                 TranslateProgress.Visibility = Visibility.Collapsed;
-                TranslateSummaryButton.IsEnabled = true;
-                TranslateExplainButton.IsEnabled = true;
+                ShowSummaryChoice.IsEnabled = true;
+                ShowTranslationChoice.IsEnabled = true;
             }
         }
+    }
+
+    private void PaintSummary(string text, string note)
+    {
+        _holdingSummary = true;
+        ShowSummaryChoice.IsChecked = true;
+        TranslateEmptyState.Visibility = Visibility.Collapsed;
+        TranslateStreamResult.Visibility = Visibility.Collapsed;
+        TranslateStreamIndicator.Visibility = Visibility.Collapsed;
+        TranslateRichResult.Visibility = Visibility.Collapsed;
+        TranslateResult.Text = text;
+        TranslateResult.Visibility = Visibility.Visible;
+        TranslateExplanation.Text = note;
+        TranslateExplanationBox.Visibility = string.IsNullOrWhiteSpace(note)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        TranslateTermsList.Visibility = Visibility.Collapsed;
+        TranslateEngineBadge.Text = "要点";
+        TranslateStatus.Text = "要点 · 切回「译文」可看翻译";
+        TranslateResultCopyButton.IsEnabled = !string.IsNullOrWhiteSpace(text);
+        TranslateResultSpeakButton.IsEnabled = !string.IsNullOrWhiteSpace(text);
     }
 
     private async void Translate_Click(object sender, RoutedEventArgs e) => await TranslateAsync();
@@ -686,6 +720,9 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             RefreshStyleSelector();
         }
 
+        _holdingSummary = false;
+        _reading.ShowTranslation();
+        ShowTranslationChoice.IsChecked = true;
         ApplyState(TranslateSectionReducer.StartTranslation(_currentState, epoch));
 
         var progress = new Progress<TranslationStreamUpdate>(update =>
@@ -764,6 +801,19 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     {
         _currentState = state;
         if (_isUnloaded) return;
+        if (state.Phase is TranslateUiPhase.Preparing or TranslateUiPhase.Streaming or TranslateUiPhase.Finalizing)
+        {
+            _holdingSummary = false;
+        }
+        else if (state.Phase is TranslateUiPhase.Completed or TranslateUiPhase.Partial)
+        {
+            _reading.CaptureTranslation(state.FinalText, state.ExplanationText);
+        }
+
+        if (_holdingSummary)
+        {
+            return;
+        }
 
         TranslateButton.IsEnabled = state.IsTranslateButtonEnabled;
         TranslateProgress.Visibility = state.IsProgressVisible ? Visibility.Visible : Visibility.Collapsed;
@@ -1109,7 +1159,11 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             var updated = shell with { FreeEngineConsent = FreeEngineConsent.Allowed };
             ShellSettingsStore.Save(updated);
             UpdateServiceAvailability();
-            TranslateStatus.Text = $"已允许{EngineWording.FreePublicTranslationName}（联网公共服务）；首次翻译会连接 translate.googleapis.com。";
+            var provider = ShellSettingsStore.Load().FreeEngineProvider;
+            var host = provider == FreeEngineProvider.MyMemory
+                ? "api.mymemory.translated.net"
+                : "translate.googleapis.com";
+            TranslateStatus.Text = $"已允许{EngineWording.FreePublicTranslationName}；当前是{EngineWording.NameFor(provider)}（{host}）。";
         }
         catch (Exception exception)
         {

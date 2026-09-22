@@ -607,12 +607,12 @@ internal static partial class CoreBridge
         if ((settings.SafeDevMode || !settings.NetworkEnabled) && !settings.TargetsLocalRuntime)
         {
             throw new InvalidOperationException(
-                "安全离线模式或网络访问已禁用；总结和快速解释需要已配置的本地或在线模型。");
+                "安全离线模式或网络访问已禁用；要点需要已配置的本地或在线模型。");
         }
         var usesConfiguredProvider = !string.IsNullOrWhiteSpace(apiKey) || settings.TargetsLocalRuntime;
         if (!usesConfiguredProvider)
         {
-            throw new InvalidOperationException("请先配置模型服务，再使用总结或快速解释。");
+            throw new InvalidOperationException("请先配置模型服务，再使用要点。");
         }
         var effectiveKey = string.IsNullOrWhiteSpace(apiKey) ? "local" : apiKey;
         var requestId = $"text-task-{Guid.NewGuid():N}";

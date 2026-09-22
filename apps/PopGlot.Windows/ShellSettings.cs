@@ -238,7 +238,10 @@ internal sealed record ShellSettings(
     // 首次引导闸门：只有全新安装（从未有过设置文件）才是 false。升级与
     // 一键同意一样活在表单之外，任何设置保存都不得把老用户拉回引导。
     bool HasCompletedOnboarding = false,
-    HotkeyBinding? QuickSearchHotkey = null)
+    HotkeyBinding? QuickSearchHotkey = null,
+    // Which public text service the free engine may contact. Missing on
+    // older files means Google, the only choice those builds had.
+    FreeEngineProvider FreeEngineProvider = FreeEngineProvider.Google)
 {
     public HotkeyBinding QuickSearchHotkey { get; init; } =
         QuickSearchHotkey ?? HotkeyBinding.QuickSearchDefault;
@@ -482,7 +485,11 @@ internal static class ShellSettingsStore
                 persisted.HasCompletedOnboarding ?? true,
                 persisted.QuickSearchHotkey is not null
                     ? HotkeyBinding.Parse(persisted.QuickSearchHotkey, defaults.QuickSearchHotkey)
-                    : defaults.QuickSearchHotkey);
+                    : defaults.QuickSearchHotkey,
+                persisted.FreeEngineProvider is not null &&
+                Enum.TryParse<FreeEngineProvider>(persisted.FreeEngineProvider, ignoreCase: true, out var freeProvider)
+                    ? freeProvider
+                    : FreeEngineProvider.Google);
 
             lock (CacheLock)
             {
@@ -570,7 +577,8 @@ internal static class ShellSettingsStore
             settings.CloudSpeechEnabled,
             settings.CloseMainWindowToTray,
             settings.HasCompletedOnboarding,
-            settings.QuickSearchHotkey.Serialize());
+            settings.QuickSearchHotkey.Serialize(),
+            settings.FreeEngineProvider.ToString());
 
         // Write through a temporary file so a crash mid-write cannot leave the
         // user without settings on the next launch: exclusive-access write,
@@ -617,5 +625,6 @@ internal static class ShellSettingsStore
         bool? CloudSpeechEnabled = null,
         bool? CloseMainWindowToTray = null,
         bool? HasCompletedOnboarding = null,
-        string? QuickSearchHotkey = null);
+        string? QuickSearchHotkey = null,
+        string? FreeEngineProvider = null);
 }

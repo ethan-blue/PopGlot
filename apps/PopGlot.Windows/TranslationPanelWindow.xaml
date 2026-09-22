@@ -203,7 +203,7 @@
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                     <Path Width="12" Height="12" Stretch="Uniform"
                                           Fill="{DynamicResource AccentBrush}"
-                                          Data="{StaticResource IconSparkles}" VerticalAlignment="Center" />
+                                          Data="{StaticResource IconStyle}" VerticalAlignment="Center" />
                                     <TextBlock x:Name="StyleSelectorLabel" Text="风格" FontSize="11.5"
                                                Margin="4,0,0,0" VerticalAlignment="Center" MaxWidth="56"
                                                TextTrimming="CharacterEllipsis"
@@ -213,12 +213,6 @@
                                           Data="{StaticResource IconChevronDown}" VerticalAlignment="Center" />
                                 </StackPanel>
                             </Button>
-                            <Button x:Name="SummaryButton" Content="总结" Style="{StaticResource GhostButton}"
-                                    Padding="9,4" Margin="0,0,4,0" ToolTip="提炼选中文本的要点"
-                                    AutomationProperties.Name="总结选中文本" Click="Summary_Click" />
-                            <Button x:Name="ExplainButton" Content="快速解释" Style="{StaticResource GhostButton}"
-                                    Padding="9,4" Margin="0,0,6,0" ToolTip="用简单语言解释选中文本"
-                                    AutomationProperties.Name="快速解释选中文本" Click="Explain_Click" />
                             <Button x:Name="SourceSpeakBtn" Style="{StaticResource IconButton}" Width="32" Height="32" Margin="0,0,2,0"
                                     AutomationProperties.Name="朗读原文"
                                     ToolTip="朗读原文" Click="SourceSpeak_Click">
@@ -278,9 +272,19 @@
                     <!-- Engine header & result actions (Row 0) -->
                     <Grid Grid.Row="0" Margin="0,0,0,6">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <RadioButton x:Name="ShowTranslationChoice" Content="译文" GroupName="PanelReading"
+                                         Style="{StaticResource SegmentChoice}" IsChecked="True"
+                                         AutomationProperties.Name="显示译文"
+                                         ToolTip="翻译结果。说明附在译文下面，不用再单独解释。"
+                                         Click="ShowTranslation_Click" />
+                            <RadioButton x:Name="ShowSummaryChoice" Content="要点" GroupName="PanelReading"
+                                         Style="{StaticResource SegmentChoice}"
+                                         AutomationProperties.Name="显示要点"
+                                         ToolTip="把原文收成几条要点。译文还在，可以切回来。需要已配置的模型。"
+                                         Click="ShowSummary_Click" />
                             <TextBlock x:Name="EngineBadge" Style="{StaticResource Metadata}"
-                                       FontWeight="SemiBold" FontSize="12"
-                                       Foreground="{DynamicResource AccentBrush}" Text="译文"
+                                       FontWeight="SemiBold" FontSize="12" Margin="4,0,0,0"
+                                       Foreground="{DynamicResource AccentBrush}" Text=""
                                        VerticalAlignment="Center" />
 
                             <Border x:Name="StreamIndicator" Visibility="Collapsed"

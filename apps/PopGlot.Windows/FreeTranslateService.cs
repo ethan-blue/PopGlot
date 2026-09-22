@@ -48,6 +48,16 @@ internal sealed class FreeTranslateException(FreeTranslateFailureKind kind, stri
 }
 
 /// <summary>
+/// Which public text service a free-engine request may contact.
+/// The user picks one. A failure never silently sends the same text to the other.
+/// </summary>
+internal enum FreeEngineProvider
+{
+    Google,
+    MyMemory,
+}
+
+/// <summary>
 /// Zero-configuration fallback so the app translates something useful before
 /// the user has any API key.
 /// </summary>
@@ -118,13 +128,28 @@ internal static class FreeTranslateService
     internal sealed record FreeEndpoint(
         string Host,
         Func<string, string, string, string> BuildUrl,
-        Func<string, (string Translated, string Phonetic)> Parse);
+        Func<string, (string Translated, string Phonetic)> Parse,
+        FreeEngineProvider Provider = FreeEngineProvider.Google,
+        Func<string, string, string, HttpRequestMessage>? BuildRequest = null);
 
     /// <summary>A04 test seam: replaces the endpoint table so construction
     /// failures (throwing BuildUrl) are injectable.</summary>
     internal static FreeEndpoint[]? EndpointsOverride { get; set; }
 
-    private static FreeEndpoint[] Endpoints => EndpointsOverride ?? DefaultEndpoints;
+    private static FreeEndpoint[] EndpointsFor(FreeEngineProvider provider) =>
+        DefaultEndpoints.Where(endpoint => endpoint.Provider == provider).ToArray();
+
+    private static FreeEngineProvider ReadSelectedProvider()
+    {
+        try
+        {
+            return ShellSettingsStore.Load().FreeEngineProvider;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return FreeEngineProvider.Google;
+        }
+    }
 
     private static readonly FreeEndpoint[] DefaultEndpoints =
     [
@@ -138,6 +163,12 @@ internal static class FreeTranslateService
             static (sl, tl, q) =>
                 $"https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl={sl}&tl={tl}&q={HttpUtility.UrlEncode(q)}",
             ParseDictChromeEx),
+        new FreeEndpoint(
+            "api.mymemory.translated.net",
+            static (_, _, _) => "https://api.mymemory.translated.net/get",
+            ParseMyMemory,
+            FreeEngineProvider.MyMemory,
+            static (sl, tl, q) => BuildMyMemoryRequest(sl, tl, q)),
     ];
 
     public static async Task<TranslationResponse> TranslateAsync(
@@ -145,7 +176,8 @@ internal static class FreeTranslateService
         string sourceLang = "auto",
         string targetLang = "zh-CN",
         FreeEngineAuthorization? authorization = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        FreeEngineProvider? provider = null)
     {
         ArgumentNullException.ThrowIfNull(text);
         // The last send boundary: without an authorization issued by
@@ -171,7 +203,8 @@ internal static class FreeTranslateService
             tl = "zh-CN";
         }
 
-        var cacheKey = $"{sl}|{tl}|{trimmed}";
+        var selected = provider ?? ReadSelectedProvider();
+        var cacheKey = $"{selected}|{sl}|{tl}|{trimmed}";
         TranslationResponse? cached;
         lock (CacheGate)
         {
@@ -186,7 +219,7 @@ internal static class FreeTranslateService
 
         var started = Stopwatch.GetTimestamp();
         Exception? lastError = null;
-        var endpoints = Endpoints;
+        var endpoints = EndpointsOverride ?? EndpointsFor(selected);
         var sendable = 0;     // endpoints attempted (past cooldown and URL budget)
         var coolingDown = 0;  // endpoints skipped: host still in 429 cooldown
         var overBudget = 0;   // endpoints skipped: final URI beyond the local length budget
@@ -203,19 +236,32 @@ internal static class FreeTranslateService
             }
 
             // Built and measured BEFORE the send claim: a local length-budget
-            // rejection must never consume an authorization permit, and the
+            // rejection must never consume an authorization permit, and a
             // GET URL must not silently balloon with long CJK input.
-            var url = endpoint.BuildUrl(sl, tl, trimmed);
-            if (url.Length > MaxRequestUrlLength)
+            // A throwing builder is a construction failure: it propagates
+            // without being recorded as a transport error.
+            HttpRequestMessage request;
+            if (endpoint.BuildRequest is { } buildRequest)
             {
-                overBudget++;
-                continue;
+                request = buildRequest(sl, tl, trimmed);
+            }
+            else
+            {
+                var url = endpoint.BuildUrl(sl, tl, trimmed);
+                if (url.Length > MaxRequestUrlLength)
+                {
+                    overBudget++;
+                    continue;
+                }
+
+                request = new HttpRequestMessage(HttpMethod.Get, url);
             }
 
             sendable++;
             try
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                using (request)
+                {
                 request.Headers.Add(
                     "User-Agent",
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36");
@@ -320,6 +366,7 @@ internal static class FreeTranslateService
                         elapsedMs));
                 AddToCache(cacheKey, result);
                 return result;
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -453,6 +500,84 @@ internal static class FreeTranslateService
         return (builder.ToString(), phonetic);
     }
 
+    /// <summary>
+    /// MyMemory has no auto-detect. When the user left the source on auto,
+    /// pick a side from the characters actually present instead of guessing
+    /// a language over the network.
+    /// </summary>
+    internal static string ResolveMyMemorySource(string sourceLang, string text)
+    {
+        var normalized = LanguageCatalog.Normalize(sourceLang);
+        if (!string.Equals(normalized, LanguageCatalog.Auto, StringComparison.OrdinalIgnoreCase))
+        {
+            return normalized;
+        }
+
+        var cjk = 0;
+        var latin = 0;
+        foreach (var ch in text)
+        {
+            if (ch is >= '\u4e00' and <= '\u9fff')
+            {
+                cjk++;
+            }
+            else if (char.IsAsciiLetter(ch))
+            {
+                latin++;
+            }
+        }
+
+        return cjk > latin ? "zh-CN" : "en";
+    }
+
+    private static HttpRequestMessage BuildMyMemoryRequest(string sourceLang, string targetLang, string text)
+    {
+        var target = LanguageCatalog.Normalize(targetLang);
+        if (string.Equals(target, LanguageCatalog.Auto, StringComparison.OrdinalIgnoreCase))
+        {
+            target = "zh-CN";
+        }
+
+        var body = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["q"] = text,
+            ["langpair"] = $"{ResolveMyMemorySource(sourceLang, text)}|{target}",
+        });
+        return new HttpRequestMessage(HttpMethod.Post, "https://api.mymemory.translated.net/get")
+        {
+            Content = body,
+        };
+    }
+
+    internal static (string Translated, string Phonetic) ParseMyMemory(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        if (root.TryGetProperty("responseStatus", out var status) &&
+            status.ValueKind == JsonValueKind.Number &&
+            status.GetInt32() != 200)
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        if (!root.TryGetProperty("responseData", out var data) ||
+            data.ValueKind != JsonValueKind.Object ||
+            !data.TryGetProperty("translatedText", out var translated) ||
+            translated.ValueKind != JsonValueKind.String)
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        var text = translated.GetString() ?? string.Empty;
+        // Quota and rejection come back as HTTP 200 with this sentence in the text.
+        if (text.Contains("MYMEMORY WARNING", StringComparison.OrdinalIgnoreCase))
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        return (text, string.Empty);
+    }
+
     private static (string Translated, string Phonetic) ParseDictChromeEx(string json)
     {
         // Shape: [["译文","检测语言"], ...] with one pair per text segment.
@@ -523,70 +648,89 @@ internal static class FreeTranslateService
 
     private static readonly TimeSpan HealthTtl = TimeSpan.FromMinutes(10);
     private static readonly object HealthGate = new();
-    private static long _healthCompletedTicks;
-    private static Task<FreeEngineHealth>? _healthProbe;
-    private static FreeEngineHealth _lastHealth;
-    private static bool _hasHealthResult;
+    private static readonly ConcurrentDictionary<FreeEngineProvider, FreeEngineHealth> HealthByProvider = new();
+    private static readonly ConcurrentDictionary<FreeEngineProvider, long> HealthCompletedTicks = new();
+    private static readonly ConcurrentDictionary<FreeEngineProvider, Task<FreeEngineHealth>> HealthProbes = new();
     private static int _probeSequence;
 
-    /// <summary>Most recent probe outcome; never triggers a network call.</summary>
-    public static FreeEngineHealth LastHealth => _lastHealth;
+    /// <summary>Most recent probe of the provider the user currently has selected.</summary>
+    public static FreeEngineHealth LastHealth => LastHealthFor(ReadSelectedProvider());
 
-    /// <summary>False until the first probe ever completed in this process.</summary>
-    public static bool HasHealthResult => _hasHealthResult;
+    /// <summary>False until that selected provider has been probed in this process.</summary>
+    public static bool HasHealthResult => HasHealthResultFor(ReadSelectedProvider());
+
+    public static bool HasHealthResultFor(FreeEngineProvider provider) =>
+        HealthByProvider.ContainsKey(provider);
+
+    public static FreeEngineHealth LastHealthFor(FreeEngineProvider provider) =>
+        HealthByProvider.TryGetValue(provider, out var health) ? health : default;
 
     /// <summary>
-    /// Whether the free engine currently reaches a working endpoint. Cached
-    /// for HealthTtl; pass force=true to re-check immediately (footer click).
+    /// Whether the selected free engine currently reaches a working endpoint.
+    /// Cached for HealthTtl; pass force=true to re-check immediately (footer click).
     /// A probe transmits only with an authorization issued by OutboundPolicy;
-    /// force relaxes the cache, never the authorization.
+    /// force relaxes the cache, never the authorization. One provider's result
+    /// never stands in for the other.
     /// </summary>
     public static Task<FreeEngineHealth> GetHealthAsync(
         bool force = false,
-        FreeEngineAuthorization? authorization = null)
+        FreeEngineAuthorization? authorization = null) =>
+        GetHealthAsync(ReadSelectedProvider(), force, authorization);
+
+    public static Task<FreeEngineHealth> GetHealthAsync(
+        FreeEngineProvider provider,
+        bool force,
+        FreeEngineAuthorization? authorization)
     {
         lock (HealthGate)
         {
-            if (!force && DateTime.UtcNow.Ticks - Interlocked.Read(ref _healthCompletedTicks) < HealthTtl.Ticks)
+            if (!force &&
+                HealthByProvider.TryGetValue(provider, out var cached) &&
+                HealthCompletedTicks.TryGetValue(provider, out var completed) &&
+                DateTime.UtcNow.Ticks - completed < HealthTtl.Ticks)
             {
-                return Task.FromResult(_lastHealth);
+                return Task.FromResult(cached);
             }
-            if (_healthProbe is not null && !force)
+            if (!force && HealthProbes.TryGetValue(provider, out var inflight))
             {
-                return _healthProbe;
+                return inflight;
             }
-            var probe = ProbeCoreAsync(authorization);
-            _healthProbe = probe;
+            var probe = ProbeCoreAsync(provider, authorization);
+            HealthProbes[provider] = probe;
             return probe;
         }
     }
 
-    private static async Task<FreeEngineHealth> ProbeCoreAsync(FreeEngineAuthorization? authorization)
+    private static async Task<FreeEngineHealth> ProbeCoreAsync(
+        FreeEngineProvider provider,
+        FreeEngineAuthorization? authorization)
     {
         var started = Stopwatch.GetTimestamp();
+        FreeEngineHealth health;
         try
         {
             // A unique text every time so the probe never answers from the
             // translation cache — it must hit the real endpoint.
             var text = $"ping {Interlocked.Increment(ref _probeSequence)}";
-            await TranslateAsync(text, "auto", "zh-CN", authorization, CancellationToken.None);
-            _lastHealth = new FreeEngineHealth(
+            await TranslateAsync(text, "auto", "zh-CN", authorization, CancellationToken.None, provider);
+            health = new FreeEngineHealth(
                 true, (int)Stopwatch.GetElapsedTime(started).TotalMilliseconds, null);
         }
         catch (Exception exception)
         {
-            _lastHealth = new FreeEngineHealth(false, 0, exception.Message);
+            health = new FreeEngineHealth(false, 0, exception.Message);
         }
         finally
         {
-            _hasHealthResult = true;
-            Interlocked.Exchange(ref _healthCompletedTicks, DateTime.UtcNow.Ticks);
             lock (HealthGate)
             {
-                _healthProbe = null;
+                HealthProbes.TryRemove(provider, out _);
             }
         }
-        return _lastHealth;
+
+        HealthByProvider[provider] = health;
+        HealthCompletedTicks[provider] = DateTime.UtcNow.Ticks;
+        return health;
     }
 
     private static FreeTranslateException RateLimitedError(bool inCooldown) => new(

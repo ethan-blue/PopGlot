@@ -68,6 +68,8 @@ public partial class TranslationPanelWindow : Window
     private Func<CancellationToken, long, Task>? _retry;
     private byte[]? _screenshot;
     private string _translation = string.Empty;
+    private readonly ReadingModeState _reading = new();
+    private string _translationNote = string.Empty;
     private string _sourceKind = "划词";
     private bool _userMoved;
     private Point? _lockedTopLeftPixels;
@@ -400,61 +402,79 @@ public partial class TranslationPanelWindow : Window
         }
     }
 
-    private async void Summary_Click(object sender, RoutedEventArgs e) =>
-        await RunTextTaskAsync(TextTaskKind.Summarize, "总结");
+    private void ShowTranslation_Click(object sender, RoutedEventArgs e) => ShowStoredTranslation();
 
-    private async void Explain_Click(object sender, RoutedEventArgs e) =>
-        await RunTextTaskAsync(TextTaskKind.Explain, "快速解释");
+    private void ShowStoredTranslation()
+    {
+        _reading.ShowTranslation();
+        ShowTranslationChoice.IsChecked = true;
+        SetTranslationContent(_reading.TranslationText);
+        ExplanationText.Text = _translationNote;
+        ExplanationBox.Visibility = string.IsNullOrWhiteSpace(_translationNote)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        StatusText.Text = string.IsNullOrWhiteSpace(_reading.TranslationText) ? "还没有译文" : "译文";
+    }
 
-    private async Task RunTextTaskAsync(TextTaskKind task, string label)
+    private async void ShowSummary_Click(object sender, RoutedEventArgs e)
     {
         var source = SourceInputBox.Text.Trim();
         if (source.Length == 0)
         {
-            StatusText.Text = $"请先输入需要{label}的内容";
+            StatusText.Text = "请先输入原文，再看要点";
+            ShowTranslationChoice.IsChecked = true;
             return;
         }
+
+        if (_reading.HasSummary(source))
+        {
+            PaintPanelSummary(_reading.SummaryText, _reading.SummaryNote);
+            return;
+        }
+
+        if (_reading.Mode == ReadingMode.Translation)
+        {
+            _reading.CaptureTranslation(_translation, ExplanationText.Text);
+            _translationNote = ExplanationText.Text;
+        }
+
         CancelOperation();
         var operation = new CancellationTokenSource();
         _operation = operation;
-        SummaryButton.IsEnabled = false;
-        ExplainButton.IsEnabled = false;
-        TranslationTextBox.Clear();
-        TranslationTextBox.SetValue(Ui.PlaceholderProperty, $"正在{label}…");
+        ShowSummaryChoice.IsEnabled = false;
+        ShowTranslationChoice.IsEnabled = false;
         ResultSkeleton.Visibility = Visibility.Visible;
         Progress.Visibility = Visibility.Visible;
-        ExplanationBox.Visibility = Visibility.Collapsed;
-        TermsList.Visibility = Visibility.Collapsed;
-        WarningBox.Visibility = Visibility.Collapsed;
-        StatusText.Text = $"正在{label}…";
+        StatusText.Text = "正在整理要点…";
         try
         {
             var response = await _coordinator.RunTextTaskAsync(
-                source, SourceLanguage, TargetLanguage, task, operation.Token);
-            if (operation.IsCancellationRequested || _operation != operation) return;
-            TranslationTextBox.Text = response.Result.TranslatedText;
-            TranslationTextBox.SetValue(Ui.PlaceholderProperty, "结果为空");
-            ExplanationText.Text = response.Result.Explanation;
-            ExplanationBox.Visibility = string.IsNullOrWhiteSpace(response.Result.Explanation)
-                ? Visibility.Collapsed : Visibility.Visible;
-            TermsList.ItemsSource = response.Result.ProtectedTerms.Distinct().ToArray();
-            TermsList.Visibility = response.Result.ProtectedTerms.Count > 0
-                ? Visibility.Visible : Visibility.Collapsed;
-            WarningText.Text = string.Join("\n", response.Result.Warnings);
-            WarningBox.Visibility = response.Result.Warnings.Count > 0
-                ? Visibility.Visible : Visibility.Collapsed;
-            StatusText.Text = $"{label}完成 · {response.Diagnostics.ElapsedMs} ms";
+                source, SourceLanguage, TargetLanguage, TextTaskKind.Summarize, operation.Token);
+            if (operation.IsCancellationRequested || _operation != operation)
+            {
+                return;
+            }
+
+            var note = string.Join(
+                "\n",
+                new[] { response.Result.Explanation }
+                    .Concat(response.Result.Warnings)
+                    .Where(line => !string.IsNullOrWhiteSpace(line))
+                    .Select(line => line.Trim()));
+            _reading.RememberSummary(source, response.Result.TranslatedText, note);
+            PaintPanelSummary(response.Result.TranslatedText, note);
+            StatusText.Text = $"要点 · {response.Diagnostics.ElapsedMs} ms · 可切回译文";
             RouteText.Text = response.EngineLabel;
         }
         catch (OperationCanceledException)
         {
-            StatusText.Text = $"已取消{label}";
+            StatusText.Text = "已取消要点";
+            ShowTranslationChoice.IsChecked = true;
         }
         catch (Exception ex)
         {
-            ExplanationText.Text = ex.Message;
-            ExplanationBox.Visibility = Visibility.Visible;
-            StatusText.Text = $"{label}失败，可重试";
+            ShowStoredTranslation();
+            StatusText.Text = ex.Message;
         }
         finally
         {
@@ -462,10 +482,23 @@ public partial class TranslationPanelWindow : Window
             {
                 ResultSkeleton.Visibility = Visibility.Collapsed;
                 Progress.Visibility = Visibility.Collapsed;
-                SummaryButton.IsEnabled = true;
-                ExplainButton.IsEnabled = true;
+                ShowSummaryChoice.IsEnabled = true;
+                ShowTranslationChoice.IsEnabled = true;
             }
         }
+    }
+
+    private void PaintPanelSummary(string text, string note)
+    {
+        ShowSummaryChoice.IsChecked = true;
+        SetTranslationContent(text, isMarkdown: false);
+        ExplanationText.Text = note;
+        ExplanationBox.Visibility = string.IsNullOrWhiteSpace(note)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        TermsList.Visibility = Visibility.Collapsed;
+        WarningBox.Visibility = Visibility.Collapsed;
+        StatusText.Text = "要点 · 切回「译文」可看翻译";
     }
 
     private async Task TranslateTextAsync(string source, CancellationToken cancellation, long epoch)
@@ -715,6 +748,8 @@ public partial class TranslationPanelWindow : Window
     private void RenderPreparingState(string status)
     {
         _lastStreamRenderTicks = 0;
+        _reading.ShowTranslation();
+        ShowTranslationChoice.IsChecked = true;
         // 预提示待决时压过「正在翻译/正在识别画面文字」等准备态。
         StatusText.Text = _pendingStyleNotice ?? status;
         Progress.Visibility = Visibility.Visible;
@@ -903,6 +938,10 @@ public partial class TranslationPanelWindow : Window
         // Only clean completions reach this method (HandleSessionResultAsync
         // routes everything else to the partial/failure renderers).
         _translation = session.TranslatedText;
+        _translationNote = session.Explanation;
+        _reading.CaptureTranslation(session.TranslatedText, session.Explanation);
+        _reading.ShowTranslation();
+        ShowTranslationChoice.IsChecked = true;
         Progress.Visibility = Visibility.Collapsed;
         ResultSkeleton.Visibility = Visibility.Collapsed;
         StreamIndicator.Visibility = Visibility.Collapsed;

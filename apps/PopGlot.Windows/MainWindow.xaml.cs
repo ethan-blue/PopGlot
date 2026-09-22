@@ -295,7 +295,7 @@ public partial class MainWindow : Window
             var (settings, activeProfile, hasKey, consent, hasUserEngine) = statusData;
             var (_, tone) = DescribeEngine(settings, hasKey, consent);
             EngineSummary.Text = UsesFreeEngine(settings, hasKey, consent)
-                ? EngineWording.FreeEngineName
+                ? EngineWording.ActiveFreeEngineName()
                 : activeProfile is not null
                     ? activeProfile.Name
                     : DescribeEngine(settings, hasKey, consent).Summary;
@@ -497,7 +497,7 @@ public partial class MainWindow : Window
             var consent = ShellSettingsStore.Load().FreeEngineConsent;
             var (_, tone) = DescribeEngine(settings, hasKey, consent);
             EngineSummary.Text = UsesFreeEngine(settings, hasKey, consent)
-                ? EngineWording.FreeEngineName
+                ? EngineWording.ActiveFreeEngineName()
                 : activeProfile is not null
                     ? activeProfile.Name
                     : DescribeEngine(settings, hasKey, consent).Summary;
@@ -549,7 +549,7 @@ public partial class MainWindow : Window
             var paintsFooter = IsActiveRouteFreeEngine();
             if (force && paintsFooter)
             {
-                EngineSummary.Text = $"{EngineWording.FreeEngineName} · 检测中…";
+                EngineSummary.Text = $"{EngineWording.ActiveFreeEngineName()} · 检测中…";
             }
             var health = await FreeTranslateService.GetHealthAsync(force, authorization);
             if (!System.Windows.Application.Current.Dispatcher.CheckAccess())
@@ -562,16 +562,16 @@ public partial class MainWindow : Window
             }
             if (health.Ok)
             {
-                EngineSummary.Text = $"{EngineWording.FreeEngineName}可用 · {health.LatencyMs} ms";
+                EngineSummary.Text = $"{EngineWording.ActiveFreeEngineName()}可用 · {health.LatencyMs} ms";
                 EngineDot.SetResourceReference(Border.BackgroundProperty, "SuccessBrush");
-                EngineHealthButton.ToolTip = $"{EngineWording.FreeEngineName}可用 · 点击重新检测";
+                EngineHealthButton.ToolTip = $"{EngineWording.ActiveFreeEngineName()}可用 · 点击重新检测";
             }
             else
             {
-                EngineSummary.Text = $"{EngineWording.FreeEngineName}不可用";
+                EngineSummary.Text = $"{EngineWording.ActiveFreeEngineName()}不可用";
                 EngineDot.SetResourceReference(Border.BackgroundProperty, "WarningBrush");
                 EngineHealthButton.ToolTip =
-                    $"{EngineWording.FreeEngineName}不可用：{health.Error} · 点击重新检测";
+                    $"{EngineWording.ActiveFreeEngineName()}不可用：{health.Error} · 可在引擎菜单改选另一条免费引擎";
             }
         }
         catch (Exception)
@@ -587,10 +587,10 @@ public partial class MainWindow : Window
         {
             return; // window may be gone; RefreshEngineStatus will repaint next time
         }
-        EngineSummary.Text = $"{EngineWording.FreeEngineName}未检测";
+        EngineSummary.Text = $"{EngineWording.ActiveFreeEngineName()}未检测";
         EngineDot.SetResourceReference(Border.BackgroundProperty, "TextSecondaryBrush");
         EngineHealthButton.ToolTip = denial is null
-            ? $"{EngineWording.FreeEngineName}未检测 · 点击重新检测"
+            ? $"{EngineWording.ActiveFreeEngineName()}未检测 · 点击重新检测"
             : $"未检测：{denial.Message}";
     }
 
@@ -686,22 +686,26 @@ public partial class MainWindow : Window
             menu.Items.Add(item);
         }
 
-        // 免费引擎是可显式选择的文字线路（仅文字；截图视觉线路不变），
-        // 并附带最近一次探测结果；未探测过就如实显示“未检测”。
-        var freeActive = config.PreferFreeEngine;
-        var freeState = !FreeTranslateService.HasHealthResult
-            ? "未检测"
-            : FreeTranslateService.LastHealth.Ok
-                ? $"可用 · {FreeTranslateService.LastHealth.LatencyMs} ms"
-                : "当前不可用";
-        var freeItem = new MenuItem
+        // 两条公共文字线路，用户显式选一条。失败不会悄悄改发到另一条。
+        // 探测结果按线路分开记；没探测过就显示「未检测」。
+        var selectedFree = ShellSettingsStore.Load().FreeEngineProvider;
+        foreach (var provider in new[] { FreeEngineProvider.Google, FreeEngineProvider.MyMemory })
         {
-            Header = $"{EngineWording.FreeEngineName} · {freeState} · 仅文字",
-            FontWeight = freeActive ? FontWeights.SemiBold : FontWeights.Normal,
-            Icon = freeActive ? MakeActiveCheck() : null,
-        };
-        freeItem.Click += async (_, _) => await SwitchToFreeEngineAsync();
-        menu.Items.Add(freeItem);
+            var chosen = provider;
+            var freeActive = config.PreferFreeEngine && selectedFree == chosen;
+            var freeState = FreeHealthLabel(chosen);
+            var item = new MenuItem
+            {
+                Header = $"{EngineWording.NameFor(chosen)} · {freeState} · 仅文字",
+                FontWeight = freeActive ? FontWeights.SemiBold : FontWeights.Normal,
+                Icon = freeActive ? MakeActiveCheck() : null,
+                ToolTip = chosen == FreeEngineProvider.MyMemory
+                    ? "Google 线路不可用时改用这一条。文本发往 api.mymemory.translated.net，不发截图。"
+                    : "文本发往 translate.googleapis.com，不发截图。",
+            };
+            item.Click += async (_, _) => await SwitchToFreeEngineAsync(chosen);
+            menu.Items.Add(item);
+        }
 
         menu.Items.Add(new Separator());
         menu.Items.Add(MakeMenuHeader("图片引擎"));
@@ -733,7 +737,7 @@ public partial class MainWindow : Window
         var manage = new MenuItem { Header = "管理引擎…" };
         manage.Click += (_, _) => OpenSettings?.Invoke();
         menu.Items.Add(manage);
-        var reprobe = new MenuItem { Header = $"重新检测{EngineWording.FreeEngineName}" };
+        var reprobe = new MenuItem { Header = $"重新检测{EngineWording.ActiveFreeEngineName()}" };
         reprobe.Click += async (_, _) => await UpdateFreeEngineHealthAsync(force: true);
         menu.Items.Add(reprobe);
 
@@ -831,20 +835,32 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task SwitchToFreeEngineAsync()
+    private static string FreeHealthLabel(FreeEngineProvider provider)
+    {
+        if (!FreeTranslateService.HasHealthResultFor(provider))
+        {
+            return "未检测";
+        }
+
+        var health = FreeTranslateService.LastHealthFor(provider);
+        return health.Ok ? $"可用 · {health.LatencyMs} ms" : "当前不可用";
+    }
+
+    private async Task SwitchToFreeEngineAsync(FreeEngineProvider provider)
     {
         if (_isSwitchingEngine) return;
         _isSwitchingEngine = true;
+        var name = EngineWording.NameFor(provider);
         try
         {
-            SetStatus($"正在切换到{EngineWording.FreeEngineName}…", StatusTone.Info);
+            SetStatus($"正在切换到{name}…", StatusTone.Info);
             var (ok, error) = await Task.Run(() =>
             {
-                var success = ProfileManager.TrySwitchToFreeEngine(out var message);
+                var success = ProfileManager.TrySwitchToFreeEngine(provider, out var message);
                 return (success, message);
             });
             SetStatus(
-                ok ? $"已切换到{EngineWording.FreeEngineName}（仅文字翻译）。" : error,
+                ok ? $"已切换到{name}（仅文字翻译）。" : error,
                 ok ? StatusTone.Success : StatusTone.Error);
             RefreshEngineStatus();
         }
@@ -874,7 +890,7 @@ public partial class MainWindow : Window
         {
             return consent == FreeEngineConsent.Denied
                 ? ($"{EngineWording.FreeEngineName}已关闭，且未配置翻译引擎", StatusTone.Warning)
-                : (EngineWording.FreeEngineName, StatusTone.Info);
+                : (EngineWording.ActiveFreeEngineName(), StatusTone.Info);
         }
         return (string.IsNullOrWhiteSpace(settings.TextModel)
             ? "未填写文本模型"

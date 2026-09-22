@@ -43,7 +43,7 @@ PopGlot 在代码层面构建了严格的出网门禁（`OutboundPolicy`）：
 ## 内置公共翻译的授权语义
 
 为了保障开箱即用，PopGlot 提供了内置免费公共翻译作为后备线路：
-1. **明确接收方披露**：首次使用前，系统会明确弹窗提示：「内置公共翻译把待翻译文字发送到 translate.googleapis.com 与 clients5.google.com；不发送截图、历史记录或密钥」；
+1. **明确接收方披露**：免费引擎有两条可选线路，一次只使用选中的那一条。Google 线路发往 `translate.googleapis.com` 与 `clients5.google.com`；备用线路发往 `api.mymemory.translated.net`。两者都只发送待翻译文字，不发送截图、历史记录或密钥。
 2. **独立撤销权**：授权状态记录在本地 `windows-shell.json` 的 `FreeEngineConsent` 字段中，用户可随时在「设置 → 隐私与数据」中撤销授权；
 3. **撤销即失效**：一旦撤销，所有公共翻译请求立即中止，未配置其他可用引擎时将安全引导至设置页。
 

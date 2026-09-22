@@ -64,6 +64,9 @@ internal static class Program
             True(OutboundPolicy.LiveSettingsLoader is null, "no live core settings in the pure host");
         });
 
+        Run("reading mode keeps the translation when a summary is shown", ReadingModeKeepsTranslation);
+        Run("free engine provider round-trips and stays on Google when missing", FreeEngineProviderRoundTrip);
+        await RunAsync("alternate free engine contacts only MyMemory", AlternateFreeEngineContactsMyMemory);
         Run("session store enforces max 5 sessions and LRU eviction", SessionStoreCapacityAndLru);
         Run("session store enforces 2MiB byte budget", SessionStoreByteBudget);
         Run("session store evicts sessions after 30 minute TTL", SessionStoreTtlEviction);
@@ -278,6 +281,94 @@ internal static class Program
             "an unreadable store must refuse to save");
         True(!store.Clear(), "Clear must refuse while the file is unreadable");
         True(File.ReadAllText(oversize).Length == fixture.Length, "the original file must be untouched");
+    }
+
+    private static void ReadingModeKeepsTranslation()
+    {
+        var reading = new ReadingModeState();
+        reading.CaptureTranslation("hello 的译文", "这是说明");
+        reading.ShowTranslation();
+        Equal(ReadingMode.Translation, reading.Mode, "a fresh translation is the translation reading");
+        True(!reading.HasSummary("hello"), "no summary exists yet");
+
+        reading.RememberSummary("hello", "一条要点", "更短");
+        Equal(ReadingMode.Summary, reading.Mode, "showing the summary changes the reading");
+        Equal("hello 的译文", reading.TranslationText, "the translation text survives the summary");
+        Equal("这是说明", reading.TranslationNote, "the translation note survives the summary");
+        True(reading.HasSummary("hello"), "the summary is cached for that source");
+        True(!reading.HasSummary("other"), "a different source does not reuse the summary");
+
+        reading.ShowTranslation();
+        Equal(ReadingMode.Translation, reading.Mode, "switching back does not drop the summary cache");
+        True(reading.HasSummary("hello"), "the summary is still there for the next switch");
+        Equal("一条要点", reading.SummaryText, "the cached summary text is unchanged");
+    }
+
+    private static void FreeEngineProviderRoundTrip()
+    {
+        var path = consentPath();
+        File.WriteAllText(path, """{"SchemaVersion":3}""");
+        Equal(FreeEngineProvider.Google, ShellSettingsStore.Load(path).FreeEngineProvider,
+            "a file from before the choice existed stays on Google");
+
+        ShellSettingsStore.Save(
+            ShellSettings.Default with { FreeEngineProvider = FreeEngineProvider.MyMemory },
+            path);
+        Equal(FreeEngineProvider.MyMemory, ShellSettingsStore.Load(path).FreeEngineProvider,
+            "the selected public engine is persisted");
+
+        ShellSettingsStore.Save(ShellSettings.Default, path);
+        Equal(FreeEngineProvider.Google, ShellSettingsStore.Load(path).FreeEngineProvider,
+            "the default choice is Google");
+    }
+
+    private static async Task AlternateFreeEngineContactsMyMemory()
+    {
+        var originalSender = FreeTranslateService.HttpSenderOverride;
+        var settings = DemoSettings();
+        ShellSettingsStore.Save(
+            ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed },
+            consentPath());
+        string? host = null;
+        string? body = null;
+        FreeTranslateService.HttpSenderOverride = async (request, _) =>
+        {
+            host = request.RequestUri?.Host;
+            body = request.Content is null ? null : await request.Content.ReadAsStringAsync();
+            var payload = request.RequestUri?.Host == "api.mymemory.translated.net"
+                ? """{"responseStatus":200,"responseData":{"translatedText":"你好"}}"""
+                : "[[[\"google-translation\",\"source\",\"en\",\"\"]]]";
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(payload, Encoding.UTF8, "application/json"),
+            };
+        };
+        try
+        {
+            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var auth), "allowed consent issues a token");
+            var alternate = await FreeTranslateService.TranslateAsync(
+                "你好", "auto", "en", auth, provider: FreeEngineProvider.MyMemory);
+            Equal("api.mymemory.translated.net", host, "the alternate engine must not contact Google");
+            Equal("你好", alternate.Result.TranslatedText, "MyMemory text is parsed");
+            True(body?.Contains("langpair=zh-CN%7Cen") == true || body?.Contains("langpair=zh-CN|en") == true,
+                $"MyMemory must send an explicit pair, got {body}");
+
+            host = null;
+            var google = await FreeTranslateService.TranslateAsync(
+                "hello", "en", "zh-CN", auth, provider: FreeEngineProvider.Google);
+            True(host is "translate.googleapis.com" or "clients5.google.com",
+                $"the Google choice stays on Google, got {host}");
+            Equal("google-translation", google.Result.TranslatedText, "the Google parser still runs");
+            Equal("zh-CN", FreeTranslateService.ResolveMyMemorySource("auto", "你好世界"),
+                "mostly CJK text is not sent as English");
+            Equal("en", FreeTranslateService.ResolveMyMemorySource("auto", "hello"),
+                "mostly Latin text stays English");
+        }
+        finally
+        {
+            FreeTranslateService.HttpSenderOverride = originalSender;
+            ShellSettingsStore.Save(ShellSettings.Default, consentPath());
+        }
     }
 
     private static void AuthorizationTokenBasics()

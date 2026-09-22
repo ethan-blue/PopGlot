@@ -66,7 +66,7 @@
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <Path Width="12" Height="12" Stretch="Uniform"
                               Fill="{DynamicResource AccentBrush}"
-                              Data="{StaticResource IconSparkles}" VerticalAlignment="Center" />
+                              Data="{StaticResource IconStyle}" VerticalAlignment="Center" />
                         <TextBlock x:Name="StyleSelectorLabel" Text="风格" Margin="6,0,0,0"
                                    VerticalAlignment="Center" MaxWidth="120"
                                    TextTrimming="CharacterEllipsis" />
@@ -350,11 +350,16 @@
 
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
 
-                            <TextBlock Text="译文" Style="{StaticResource FieldLabel}"
-
-                                       Foreground="{DynamicResource TextSecondaryBrush}"
-
-                                       FontWeight="SemiBold" VerticalAlignment="Center" Margin="0" />
+                            <RadioButton x:Name="ShowTranslationChoice" Content="译文" GroupName="WorkbenchReading"
+                                         Style="{StaticResource SegmentChoice}" IsChecked="True"
+                                         AutomationProperties.Name="显示译文"
+                                         ToolTip="翻译结果。说明附在译文下面，不用再单独解释。"
+                                         Click="ShowTranslation_Click" />
+                            <RadioButton x:Name="ShowSummaryChoice" Content="要点" GroupName="WorkbenchReading"
+                                         Style="{StaticResource SegmentChoice}" Margin="0"
+                                         AutomationProperties.Name="显示要点"
+                                         ToolTip="把原文收成几条要点。译文还在，可以切回来。需要已配置的模型。"
+                                         Click="ShowSummary_Click" />
 
                             <Border x:Name="TranslateStreamIndicator" Visibility="Collapsed"
 
@@ -472,7 +477,7 @@
 
                                                 AutomationProperties.Name="允许联网免费引擎"
 
-                                                ToolTip="仅发送待翻译文本至 translate.googleapis.com；不发送截图、历史或密钥"
+                                                ToolTip="只把待翻译文本发给你选中的公共翻译（Google 或 MyMemory）；不发送截图、历史或密钥"
 
                                                 Click="EnableFreeEngine_Click" />
                                     </StackPanel>
@@ -544,14 +549,6 @@
                                        AutomationProperties.Name="翻译状态" />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                            <Button x:Name="TranslateSummaryButton" Content="总结"
-                                    Style="{StaticResource GhostButton}" Padding="10,5" Margin="0,0,6,0"
-                                    ToolTip="用当前模型提炼要点" AutomationProperties.Name="总结原文"
-                                    Click="TranslateSummary_Click" />
-                            <Button x:Name="TranslateExplainButton" Content="快速解释"
-                                    Style="{StaticResource GhostButton}" Padding="10,5" Margin="0,0,8,0"
-                                    ToolTip="用简单语言解释原文" AutomationProperties.Name="快速解释原文"
-                                    Click="TranslateExplain_Click" />
                             <Button x:Name="TranslateResultSpeakButton" Style="{StaticResource IconButton}"
                                     Width="32" Height="32"
                                     AutomationProperties.Name="朗读译文" ToolTip="朗读译文"

@@ -2,6 +2,34 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:PopGlot.Windows">
+    <UserControl.Resources>
+        <Style x:Key="ThemeSwatch" TargetType="RadioButton">
+            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="Chrome" Padding="6,6,6,5" CornerRadius="8"
+                                BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1"
+                                Background="{DynamicResource SurfaceBrush}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource AccentSoftBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentBorderBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
 
     <!-- Card-grouped desktop settings -->
     <StackPanel>
@@ -24,8 +52,54 @@
                     </Grid.RowDefinitions>
                     <StackPanel x:Name="ThemeTextPanel" VerticalAlignment="Center">
                         <TextBlock Text="主题" Style="{StaticResource RowTitle}" VerticalAlignment="Center" />
+                        <TextBlock Text="点选后立即预览，保存后记住" Style="{StaticResource RowHint}" />
+                    </StackPanel>
+                    <!-- Visible choices. The combo stays as the saved value the
+                         settings window already reads; compact layout still moves it. -->
+                    <StackPanel x:Name="ThemeChoicePanel" Grid.Column="1" Grid.Row="0"
+                                Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                        <RadioButton x:Name="ThemeSystemChoice" GroupName="AppTheme" Tag="System"
+                                     Style="{StaticResource ThemeSwatch}"
+                                     AutomationProperties.Name="主题跟随系统"
+                                     Checked="ThemeChoice_Checked">
+                            <StackPanel Width="52">
+                                <Grid Width="36" Height="22" HorizontalAlignment="Center">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border Background="#F4F6F8" CornerRadius="3,0,0,3" />
+                                    <Border Grid.Column="1" Background="#181B22" CornerRadius="0,3,3,0" />
+                                </Grid>
+                                <TextBlock Text="跟随系统" FontSize="11" HorizontalAlignment="Center" Margin="0,4,0,0" />
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton x:Name="ThemeLightChoice" GroupName="AppTheme" Tag="Light"
+                                     Style="{StaticResource ThemeSwatch}"
+                                     AutomationProperties.Name="浅色主题"
+                                     Checked="ThemeChoice_Checked">
+                            <StackPanel Width="44">
+                                <Border Width="36" Height="22" CornerRadius="3" Background="#F4F6F8" HorizontalAlignment="Center">
+                                    <Border Width="16" Height="3" Background="#5563B8" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="4,5,0,0" />
+                                </Border>
+                                <TextBlock Text="浅色" FontSize="11" HorizontalAlignment="Center" Margin="0,4,0,0" />
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton x:Name="ThemeDarkChoice" GroupName="AppTheme" Tag="Dark"
+                                     Style="{StaticResource ThemeSwatch}" Margin="0"
+                                     AutomationProperties.Name="深色主题"
+                                     Checked="ThemeChoice_Checked">
+                            <StackPanel Width="44">
+                                <Border Width="36" Height="22" CornerRadius="3" Background="#181B22" HorizontalAlignment="Center">
+                                    <Border Width="16" Height="3" Background="#7C89D9" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="4,5,0,0" />
+                                </Border>
+                                <TextBlock Text="深色" FontSize="11" HorizontalAlignment="Center" Margin="0,4,0,0"
+                                           Foreground="#C5CAD3" />
+                            </StackPanel>
+                        </RadioButton>
                     </StackPanel>
                     <ComboBox x:Name="ThemeComboBox" Grid.Column="1" Grid.Row="0" VerticalAlignment="Center"
+                              Visibility="Collapsed"
                               AutomationProperties.Name="主题"
                               SelectionChanged="ThemeComboBox_SelectionChanged">
                         <ComboBoxItem Tag="System">跟随系统</ComboBoxItem>

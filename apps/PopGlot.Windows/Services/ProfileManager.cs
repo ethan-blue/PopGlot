@@ -687,7 +687,10 @@ internal static class ProfileManager
     /// 把内置免费引擎选为当前文字线路（仅文字；截图的视觉线路不变）。
     /// 先按出网策略校验：安全离线/断网/已拒绝授权时明确拒绝。
     /// </summary>
-    public static bool TrySwitchToFreeEngine(out string error)
+    public static bool TrySwitchToFreeEngine(out string error) =>
+        TrySwitchToFreeEngine(FreeEngineProvider.Google, out error);
+
+    public static bool TrySwitchToFreeEngine(FreeEngineProvider provider, out string error)
     {
         var settings = CoreBridge.GetSettings();
         if (!OutboundPolicy.AllowsFreeEngine(settings, out var denial))
@@ -696,6 +699,11 @@ internal static class ProfileManager
                 ? "当前策略不允许使用免费引擎。"
                 : $"{denial.Message} {denial.ActionableSuggestion}".Trim();
             return false;
+        }
+        var shell = ShellSettingsStore.Load();
+        if (shell.FreeEngineProvider != provider)
+        {
+            ShellSettingsStore.Save(shell with { FreeEngineProvider = provider });
         }
         var config = Load();
         config.PreferFreeEngine = true;

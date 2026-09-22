@@ -1,8 +1,6 @@
 # PopGlot 离线帮助与使用文档中心
 
-欢迎使用 PopGlot！PopGlot 是专为 Windows 设计的极速、本地优先、保护隐私的 AI 翻译与查词助手。
-
-本文档中心提供全面的本地离线使用指南，无需联网即可随时在应用内查阅。
+PopGlot 是 Windows 上的划词和截图翻译。这些页面存在本机，不需要联网。
 
 ---
 
@@ -16,7 +14,7 @@
 
 ### 2. [隐私边界与数据安全 (Privacy & Security)](privacy-and-security.md)
 - 什么数据会出网 vs 什么数据绝对不出网
-- 安全离线模式一键切断原理
+- 安全离线模式如何拒绝全部外发
 - 内置公共翻译授权语义与撤销权
 - API Key 硬件级加密托管（Windows 凭据管理器）
 - 历史记录与生词本的本地容量边界与敏感词自动过滤
@@ -31,9 +29,9 @@
 - 主流服务商配置：DeepSeek、OpenAI、Anthropic Claude、Google Gemini
 - 本地私有离线模型接入（Ollama、LM Studio、vLLM）
 - 凭据安全存储与免凭据拦截机制
-- 「验证连接」草稿测试与模型智能推荐档位（速度/均衡/质量）
+- 「验证连接」草稿测试与模型推荐档位（速度 / 均衡 / 质量）
 
-### 5. [常见故障与自愈诊断 (Troubleshooting)](troubleshooting.md)
+### 5. [常见故障 (Troubleshooting)](troubleshooting.md)
 - 提示「尚未配置翻译引擎」的修复路径
 - HTTP 401 鉴权失败与 API Key 排查
 - HTTP 429 限流保护与一分钟自动冷却机制

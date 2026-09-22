@@ -42,18 +42,12 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
             if (compact)
             {
                 ThemeRowGrid.ColumnDefinitions[1].Width = new GridLength(0);
-                Grid.SetColumn(ThemeComboBox, 0);
-                Grid.SetRow(ThemeComboBox, 1);
-                ThemeComboBox.Margin = new Thickness(0, 8, 0, 0);
-                ThemeComboBox.HorizontalAlignment = HorizontalAlignment.Stretch;
+                PlaceThemeChoice(0, 1, new Thickness(0, 8, 0, 0), HorizontalAlignment.Left);
             }
             else
             {
-                ThemeRowGrid.ColumnDefinitions[1].Width = new GridLength(170);
-                Grid.SetColumn(ThemeComboBox, 1);
-                Grid.SetRow(ThemeComboBox, 0);
-                ThemeComboBox.Margin = new Thickness(0);
-                ThemeComboBox.HorizontalAlignment = HorizontalAlignment.Stretch;
+                ThemeRowGrid.ColumnDefinitions[1].Width = GridLength.Auto;
+                PlaceThemeChoice(1, 0, new Thickness(0), HorizontalAlignment.Right);
             }
         }
 
@@ -93,18 +87,74 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
 
     // ================= Event handlers =================
 
+    private bool _syncingTheme;
+
+    private void PlaceThemeChoice(int column, int row, Thickness margin, HorizontalAlignment alignment)
+    {
+        Grid.SetColumn(ThemeComboBox, column);
+        Grid.SetRow(ThemeComboBox, row);
+        ThemeComboBox.Margin = margin;
+        ThemeComboBox.HorizontalAlignment = HorizontalAlignment.Stretch;
+        if (ThemeChoicePanel is null)
+        {
+            return;
+        }
+
+        Grid.SetColumn(ThemeChoicePanel, column);
+        Grid.SetRow(ThemeChoicePanel, row);
+        ThemeChoicePanel.Margin = margin;
+        ThemeChoicePanel.HorizontalAlignment = alignment;
+    }
+
     private void ThemeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        SyncThemeChoices();
         if (_loading)
         {
             return;
         }
         ThemeService.Apply(Helpers.SelectedEnum(ThemeComboBox, ThemePreference.System));
-        // Walk up to find the parent Window and apply chrome
         var window = Window.GetWindow(this);
         if (window is not null)
         {
             ThemeService.ApplyWindowChrome(window);
+        }
+    }
+
+    private void ThemeChoice_Checked(object sender, RoutedEventArgs e)
+    {
+        if (_syncingTheme || _loading || sender is not RadioButton { Tag: string tag })
+        {
+            return;
+        }
+
+        if (ThemeComboBox.SelectedItem is ComboBoxItem current &&
+            string.Equals(current.Tag as string, tag, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        Helpers.SelectComboByTag(ThemeComboBox, tag);
+    }
+
+    private void SyncThemeChoices()
+    {
+        if (ThemeSystemChoice is null)
+        {
+            return;
+        }
+
+        var tag = (ThemeComboBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "System";
+        _syncingTheme = true;
+        try
+        {
+            ThemeSystemChoice.IsChecked = tag == "System";
+            ThemeLightChoice.IsChecked = tag == "Light";
+            ThemeDarkChoice.IsChecked = tag == "Dark";
+        }
+        finally
+        {
+            _syncingTheme = false;
         }
     }
 

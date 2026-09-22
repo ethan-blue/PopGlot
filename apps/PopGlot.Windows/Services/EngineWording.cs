@@ -14,6 +14,12 @@ internal static class EngineWording
     public const string FreeEngineName = "内置免费引擎";
 
     /// <summary>
+    /// Second public text engine. The user picks it when the Google route
+    /// is blocked; it is never tried silently behind the Google choice.
+    /// </summary>
+    public const string AlternateFreeEngineName = "备用免费引擎";
+
+    /// <summary>
     /// 空态/向导中对同一条免费线路的展示名。0.1.6 起与
     /// <see cref="FreeEngineName"/> 统一，不再使用「内置公共翻译」别名。
     /// </summary>
@@ -30,7 +36,26 @@ internal static class EngineWording
 
     /// <summary>隐私语境中对免费引擎的诚实定性：它是联网公共服务。</summary>
     public const string FreeEngineOnlineServiceNote =
-        "联网公共翻译服务，仅发送待翻译文本；不发送截图、历史记录或密钥。";
+        "联网公共翻译，只把待翻译文本发给你选中的那一条：Google（translate.googleapis.com）或 MyMemory（api.mymemory.translated.net）。不发送截图、历史或密钥。";
+
+    public static string NameFor(FreeEngineProvider provider) => provider switch
+    {
+        FreeEngineProvider.MyMemory => AlternateFreeEngineName,
+        _ => FreeEngineName,
+    };
+
+    /// <summary>The public engine the user last chose. Falls back to Google.</summary>
+    public static string ActiveFreeEngineName()
+    {
+        try
+        {
+            return NameFor(ShellSettingsStore.Load().FreeEngineProvider);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return FreeEngineName;
+        }
+    }
 
     /// <summary>主窗口关闭按钮：设置选择关闭驻留托盘时的名称。</summary>
     public const string CloseToTrayAction = "关闭到托盘";

@@ -52,13 +52,12 @@
             <Setter Property="Margin" Value="0,0,0,14" />
             <Setter Property="CornerRadius" Value="{StaticResource CardRadius}" />
             <Setter Property="Background" Value="{DynamicResource SurfaceMutedBrush}" />
-            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
         </Style>
-        <Style x:Key="EditorTextField" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+        <Style x:Key="EditorTextField" TargetType="TextBox" BasedOn="{StaticResource FormTextBox}">
             <Setter Property="Height" Value="40" />
             <Setter Property="MinWidth" Value="0" />
-            <Setter Property="Padding" Value="12,0" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
         <Style x:Key="EditorComboField" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
             <Setter Property="Height" Value="40" />
@@ -434,8 +433,8 @@
                                                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                                 <StackPanel x:Name="HeadersPanel">
                                                     <TextBlock Text="自定义请求头" Style="{StaticResource FieldLabel}"/>
-                                                    <TextBox x:Name="ExtraHeadersTextBox" Height="104" AcceptsReturn="True" VerticalContentAlignment="Top"
-                                                             VerticalScrollBarVisibility="Auto" FontFamily="{StaticResource MonoFontFamily}"
+                                                    <TextBox x:Name="ExtraHeadersTextBox" Style="{StaticResource FormTextArea}"
+                                                             Height="104" FontFamily="{StaticResource MonoFontFamily}"
                                                              local:Ui.Placeholder="例如：X-Organization: team-a"/>
                                                 </StackPanel>
                                                 <StackPanel x:Name="CapabilitiesPanel" Grid.Column="2">

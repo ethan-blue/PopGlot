@@ -17,13 +17,12 @@
             <Setter Property="Margin" Value="0,0,0,14" />
             <Setter Property="CornerRadius" Value="{DynamicResource CardRadius}" />
             <Setter Property="Background" Value="{DynamicResource SurfaceMutedBrush}" />
-            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
         </Style>
-        <Style x:Key="PromptTextField" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+        <Style x:Key="PromptTextField" TargetType="TextBox" BasedOn="{StaticResource FormTextBox}">
             <Setter Property="Height" Value="40" />
             <Setter Property="MinWidth" Value="0" />
-            <Setter Property="Padding" Value="12,0" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
         <Style x:Key="PromptSectionTitle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
             <Setter Property="FontSize" Value="13" />
@@ -215,7 +214,7 @@
                             <StackPanel x:Name="CustomsEmptyPanel" Margin="8,16,8,20" HorizontalAlignment="Center">
                                 <Border Width="44" Height="44" CornerRadius="13" Margin="0,0,0,12"
                                         Background="{DynamicResource AccentSoftBrush}" HorizontalAlignment="Center">
-                                    <Path Data="{StaticResource IconSparkles}" Width="20" Height="20" Stretch="Uniform"
+                                    <Path Data="{StaticResource IconStyle}" Width="20" Height="20" Stretch="Uniform"
                                           Fill="{DynamicResource AccentBrush}" HorizontalAlignment="Center"
                                           VerticalAlignment="Center" />
                                 </Border>
@@ -345,10 +344,8 @@
                                         <TextBlock Text="指令正文" Style="{StaticResource PromptSectionTitle}" />
                                         <TextBlock Text="占位符发送前由本机展开；\{{ 表示字面 {{"
                                                    Style="{StaticResource Caption}" Margin="0,4,0,10" />
-                                        <TextBox x:Name="InstructionTextBox" MinHeight="150"
-                                                 AcceptsReturn="True" TextWrapping="Wrap"
-                                                 VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
-                                                 VerticalAlignment="Stretch"
+                                        <TextBox x:Name="InstructionTextBox" Style="{StaticResource FormTextArea}"
+                                                 MinHeight="150" VerticalAlignment="Stretch"
                                                  local:Ui.Placeholder="例如：使用自然的目标语言，保持术语一致，不增补原文没有的内容。"
                                                  AutomationProperties.Name="指令正文"
                                                  TextChanged="EditorField_Changed" />
@@ -443,10 +440,10 @@
                                                     Padding="10,5" AutomationProperties.Name="复制效果预览结果"
                                                     Click="CopyPreview_Click" />
                                         </Grid>
-                                        <TextBox x:Name="PreviewTextBox" Height="132" Margin="0,12,0,0"
+                                        <TextBox x:Name="PreviewTextBox" Style="{StaticResource FormTextArea}"
+                                                 Height="132" Margin="0,12,0,0"
                                                  IsReadOnly="True" IsReadOnlyCaretVisible="False"
-                                                 TextWrapping="Wrap" VerticalContentAlignment="Top"
-                                                 VerticalScrollBarVisibility="Auto" FontSize="12.5"
+                                                 FontSize="12.5"
                                                  AutomationProperties.Name="效果预览结果" />
                                         <TextBlock x:Name="PreviewStatusText" Style="{StaticResource Caption}"
                                                    Margin="2,8,0,0" TextWrapping="Wrap"

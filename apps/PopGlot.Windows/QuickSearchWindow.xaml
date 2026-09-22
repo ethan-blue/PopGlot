@@ -117,7 +117,7 @@
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <Path Width="12" Height="12" Stretch="Uniform"
                                       Fill="{DynamicResource AccentBrush}"
-                                      Data="{StaticResource IconSparkles}" VerticalAlignment="Center" />
+                                      Data="{StaticResource IconStyle}" VerticalAlignment="Center" />
                                 <TextBlock x:Name="StyleSelectorLabel" Text="风格" FontSize="11.5"
                                            Margin="4,0,0,0" VerticalAlignment="Center" MaxWidth="72"
                                            TextTrimming="CharacterEllipsis"
@@ -257,13 +257,8 @@
                             BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
                             Visibility="Collapsed">
                         <StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                                <Path Width="12" Height="12" Stretch="Uniform"
-                                      Fill="{DynamicResource AccentBrush}"
-                                      Data="{StaticResource IconSparkles}" VerticalAlignment="Center" />
-                                <TextBlock Text="详细释义" FontSize="11" FontWeight="SemiBold"
-                                           Foreground="{DynamicResource AccentBrush}" Margin="5,0,0,0" VerticalAlignment="Center" />
-                            </StackPanel>
+                            <TextBlock Text="说明" FontSize="11" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,4" />
                             <TextBlock x:Name="ExplanationLabel" FontSize="12.5"
                                        Foreground="{DynamicResource TextSecondaryBrush}" LineHeight="18"
                                        TextWrapping="Wrap" Margin="0,2,0,0" />

@@ -78,7 +78,8 @@ internal sealed class FreeEngineAuthorization
 /// </summary>
 internal static class OutboundPolicy
 {
-    public const string FreeEngineDestination = "Google 公共翻译服务（translate.googleapis.com）";
+    public const string FreeEngineDestination =
+        "你选中的公共翻译（Google translate.googleapis.com，或备用 MyMemory api.mymemory.translated.net）";
 
     /// <summary>
     /// Asked once per unset consent, before the first outbound free-engine

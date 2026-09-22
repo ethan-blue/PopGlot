@@ -490,7 +490,7 @@ internal sealed class TranslationCoordinator
                 // 免费引擎没有 prompt 通道，外壳也绝不拼接风格文本：如实记录
                 // 自定义风格未应用（OCR+免费文字同一事实，见下）。
                 session.PromptSupport = TranslationPromptSupport.NotSupported;
-                session.PipelineLabel = EngineWording.FreeEngineName;
+                session.PipelineLabel = EngineWording.ActiveFreeEngineName();
                 response = await TranslateFreeWithTokenProtectionAsync(
                     settings, trimmed, sourceLang, targetLang, freeAuth!, cancellationToken);
 
@@ -599,7 +599,7 @@ internal sealed class TranslationCoordinator
         var apiKey = textRoute is null ? null : _executor.LoadApiKey(textRoute.CredentialTarget);
         if (textRoute is null && !settings.TargetsLocalRuntime)
         {
-            throw new InvalidOperationException("请先在设置中配置模型引擎，再使用总结或快速解释。");
+            throw new InvalidOperationException("请先在设置中配置模型引擎，再使用要点。免费引擎不能整理要点。");
         }
         var routeSettings = textRoute?.Profile.ToProviderSettings(settings);
         return await CoreBridge.RunTextTaskAsync(
@@ -1121,6 +1121,7 @@ internal sealed class TranslationCoordinator
         session.PipelineKind = TranslationPipelineKind.OcrFreeText;
         session.TextExecutor = TranslationTextExecutor.FreeEngine;
         session.PromptSupport = TranslationPromptSupport.NotSupported;
+        session.PipelineLabel = EngineWording.ActiveFreeEngineName();
     }
 
     /// <summary>

@@ -1478,7 +1478,7 @@ internal static class WaveRegressionTests
         True(coordinator.Contains("session.PipelineKind = TranslationPipelineKind.VisionDirect;", StringComparison.Ordinal) &&
              coordinator.Contains("session.PromptSupport = TranslationPromptSupport.NotApplicable;", StringComparison.Ordinal),
             "the vision-direct route must record NotApplicable (no text stage, nothing promised)");
-        True(coordinator.Contains("session.PipelineLabel = EngineWording.FreeEngineName;", StringComparison.Ordinal),
+        True(coordinator.Contains("session.PipelineLabel = EngineWording.ActiveFreeEngineName();", StringComparison.Ordinal),
             "the free-engine label comes from the single EngineWording source");
         True(coordinator.Contains("TranslationPipelineKind.OcrUserText;", StringComparison.Ordinal) &&
              coordinator.Contains("TranslationPipelineKind.OcrFreeText;", StringComparison.Ordinal),
@@ -1487,6 +1487,10 @@ internal static class WaveRegressionTests
         // 4) The display label and the typed engine agree by construction.
         Equal("内置免费引擎", EngineWording.FreeEngineName,
             "the single wording source keeps the free-engine name");
+        Equal("备用免费引擎", EngineWording.AlternateFreeEngineName,
+            "the alternate public engine has one name");
+        Equal(EngineWording.FreeEngineName, EngineWording.NameFor(FreeEngineProvider.Google));
+        Equal(EngineWording.AlternateFreeEngineName, EngineWording.NameFor(FreeEngineProvider.MyMemory));
     }
 
     // ===================== F2: judged-visual regressions =====================
@@ -2536,7 +2540,10 @@ internal static class WaveRegressionTests
             main.Width = 747;
             PumpUntil(Task.CompletedTask);
             PumpUntil(Task.CompletedTask);
-            Equal(747.0, tracker.StableSize.Width, "after the settle a user resize is honoured again");
+            // 150% DPI snaps 747 DIP (1120.5 px) to the next physical pixel,
+            // which comes back as 747.333 DIP. The resize was still observed.
+            True(Math.Abs(tracker.StableSize.Width - 747) < 1,
+                $"after the settle a user resize is honoured again, got {tracker.StableSize.Width}");
         }
         finally
         {
