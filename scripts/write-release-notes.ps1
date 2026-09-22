@@ -14,7 +14,7 @@ if ($Version -notmatch '^\d+\.\d+\.\d+$') {
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $changelogPath = Join-Path $repoRoot 'CHANGELOG.md'
-$changelog = Get-Content -Path $changelogPath -Raw
+$changelog = Get-Content -Path $changelogPath -Raw -Encoding utf8
 $pattern = "(?ms)^## $([regex]::Escape($Version)) [^\r\n]*\r?\n(.*?)(?=^## |\z)"
 if ($changelog -notmatch $pattern) {
     throw "CHANGELOG.md has no section for $Version."
@@ -36,10 +36,10 @@ $packageLine
 
 下载本页的 $zip。旁边的 .sha256 是校验值：
 
-```powershell
+``````powershell
 (Get-FileHash -Path .\$zip -Algorithm SHA256).Hash.ToLower()
 Get-Content .\$zip.sha256
-```
+``````
 
 $section
 "@
@@ -49,7 +49,8 @@ if ($OutFile) {
     if ($directory -and -not (Test-Path $directory)) {
         New-Item -ItemType Directory -Path $directory | Out-Null
     }
-    Set-Content -Path $OutFile -Value $notes -Encoding utf8NoBOM
+    # BOM so the release action does not read the Chinese text as Latin-1.
+    Set-Content -Path $OutFile -Value $notes -Encoding utf8BOM
 } else {
     Write-Output $notes
 }
