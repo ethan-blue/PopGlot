@@ -176,7 +176,7 @@
                     <TextBox x:Name="SourceInputBox" Grid.Row="0" Style="{StaticResource FlatTextBox}"
                              FontSize="14" TextWrapping="Wrap" AcceptsReturn="True"
                              MinHeight="36" MaxHeight="86" VerticalScrollBarVisibility="Auto"
-                             local:Ui.Placeholder="输入文本，Enter 翻译"
+                             local:Ui.Placeholder="输入文本，Enter 翻译，Shift+Enter 换行"
                              AutomationProperties.Name="翻译原文输入框"
                              KeyDown="SourceInputBox_KeyDown" />
 
