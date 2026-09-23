@@ -147,7 +147,7 @@
                     <Grid Grid.Row="1">
                         <StackPanel x:Name="ProfilesEmptyText" Visibility="Collapsed" Panel.ZIndex="1"
                                     HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,8,0,0">
-                            <TextBlock Text="未配置翻译引擎。" FontSize="13"
+                            <TextBlock Text="尚未添加翻译引擎，点击右上角「添加引擎」开始。" FontSize="13"
                                        Foreground="{DynamicResource TextSecondaryBrush}" />
                             <!-- 页眉「添加引擎」是唯一主按钮。这个按钮留在树上供旧调用点找到，不占空态。 -->
                             <Button x:Name="AddFirstEngineButton" Content="添加第一个引擎"
