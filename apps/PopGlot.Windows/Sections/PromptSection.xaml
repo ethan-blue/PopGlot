@@ -259,7 +259,9 @@
                     </Grid>
 
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="0,0,8,0">
-                        <StackPanel MaxWidth="760" HorizontalAlignment="Stretch">
+                        <!-- 宽度上限与引擎编辑器（900）一致：同一设置窗内两个
+                             编辑器的可用宽度同宽，双列字段不再挤在窄列里。 -->
+                        <StackPanel MaxWidth="900" HorizontalAlignment="Stretch">
                             <StackPanel Orientation="Horizontal" Margin="2,0,2,14">
                                 <TextBlock x:Name="EditorTitleText" Text="新建自定义模板" FontSize="18"
                                            FontWeight="SemiBold" VerticalAlignment="Center"
