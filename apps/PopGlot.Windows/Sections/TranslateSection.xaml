@@ -519,12 +519,10 @@
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Background="{DynamicResource SurfacePressedBrush}"
-                                                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                                                CornerRadius="8" Padding="8,3" Margin="0,0,6,5">
-                                            <TextBlock Text="{Binding}" Style="{StaticResource Metadata}"
-                                                       Foreground="{DynamicResource TextSecondaryBrush}" />
-                                        </Border>
+                                        <Button Style="{StaticResource TokenChipButton}"
+                                                Content="{Binding}" Margin="0,2,4,2"
+                                                AutomationProperties.Name="复制术语"
+                                                Click="TranslateTermChip_Click" />
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>

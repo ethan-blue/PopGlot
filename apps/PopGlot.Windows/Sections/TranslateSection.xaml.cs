@@ -1476,6 +1476,20 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         }
     }
 
+    // 术语芯片与浮窗（TermChip_Click）行为一致：点击复制，成功/失败都落在
+    // 状态栏，不给系统弹窗。
+    private async void TranslateTermChip_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as System.Windows.Controls.Button)?.Content is not string term ||
+            string.IsNullOrWhiteSpace(term))
+        {
+            return;
+        }
+        TranslateStatus.Text = await Helpers.CopyToClipboardAsync(term)
+            ? $"已复制术语：{term}"
+            : "复制失败，剪贴板被占用";
+    }
+
     private void TranslateClear_Click(object sender, RoutedEventArgs e)
     {
         _translateOperation?.Cancel();
