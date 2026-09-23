@@ -1181,7 +1181,9 @@
                                           ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                           ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"
                                           TextElement.Foreground="{TemplateBinding Foreground}" />
-                        <!-- Editable mode (model pickers): free text with suggestion items. -->
+                        <!-- Editable mode (model pickers): free text with suggestion items.
+                             Left inset matches the 12 DIP text/placeholder alignment used
+                             by the Selection presenter and FormTextBox. -->
                         <TextBox x:Name="PART_EditableTextBox" Margin="10,0,34,0" VerticalAlignment="Center"
                                  Background="Transparent" BorderThickness="0" Padding="2,0"
                                  FontSize="{TemplateBinding FontSize}" FontFamily="{TemplateBinding FontFamily}"
