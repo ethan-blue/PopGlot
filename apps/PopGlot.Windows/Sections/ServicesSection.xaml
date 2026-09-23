@@ -278,7 +278,9 @@
                                 </Grid>
                             </StackPanel>
 
-                            <StackPanel x:Name="ConfigFormPanel" MaxWidth="760" HorizontalAlignment="Stretch">
+                            <!-- 宽度上限 900：设置窗 960 下表单不再明显窄于
+                                 可用区，两侧大空白消失；超宽屏仍居中限宽。 -->
+                            <StackPanel x:Name="ConfigFormPanel" MaxWidth="900" HorizontalAlignment="Stretch">
                                 <Grid x:Name="EditorHeaderGrid" Margin="2,0,2,18">
                                     <StackPanel Orientation="Horizontal">
                                         <Border Width="44" Height="44" CornerRadius="12" Background="{DynamicResource AccentSoftBrush}"
