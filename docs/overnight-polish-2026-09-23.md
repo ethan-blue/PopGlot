@@ -411,3 +411,29 @@ ErrorSettingsButton.Visibility = Visibility.Collapsed;
 - [ ] T01 的 LiteLLM 预设显示地址字段的行为是否符合预期
 - [ ] T02 表单 900 上限在最小窗宽 680 下的观感（compact 逻辑未动，理论上不受影响）
 - [ ] 合并 `polish/overnight-2026-09-23` → main
+
+---
+
+# 执行报告 · 第二轮（同夜继续）
+
+第一轮 10 项任务全部落地后，对第一轮未深入的区域做了第二轮细节扫描：极速查词、资料库、通用、快捷键、隐私与数据、提示词、主窗页脚、EngineWording 文案目录。
+
+| 项 | 状态 | Commit | 说明 |
+|---|---|---|---|
+| R2-A | ✅ DONE | `8230fad` | 添加流程身份行的本地判定从硬编码 `preset == "ollama"` 改为 `ProviderSettings.IsLocalBaseUrl(baseUrl)`。修正：LiteLLM 预设（默认 localhost:4000）在添加预览里显示「OpenAI 兼容 · localhost」，保存后重开却显示「本地服务 · localhost」——同一引擎两处身份不一致。ollama 行为不变（其 URL 本来就判本机），custom（空地址）不变 |
+| R2-B | ✅ DONE | `6f58228` | 提示词模板编辑器表单 `MaxWidth` 760→900，与 T02 的引擎编辑器统一。同一设置窗内两个编辑器同宽；提示词编辑器含名称/说明、领域/受众双列字段，放宽受益明显 |
+| 快速查词无术语芯片 | ✅ 已核 | — | QuickSearchWindow 无 TermsList（QuickSearchState 也无 ProtectedTerms 字段）。属精简定位的功能面取舍，不是缺陷；如需补齐属新功能，等用户决定 |
+| 资料库 | ✅ 已核 | — | 清空/删除均已用 ConfirmButton 两步确认正确接线；搜索、导出、详情布局无问题 |
+| 通用/快捷键/隐私/数据 | ✅ 已核 | — | 主题色样、开关行、隐私承诺卡、危险按钮均无问题 |
+| 提示词其余部分 | ✅ 已核 | — | 变量芯片（TokenChipButton+ToolTip）、只读徽章、错误内联态、配额计数均正常 |
+| 主窗页脚 | ✅ 已核 | — | 快速切换器、状态点、省略+悬停全文均正常 |
+| EngineWording | ✅ 已核 | — | 文案唯一出处维护良好；LiteLLM 是预设名，不属 EngineWording 管辖（其契约是引擎线路命名），无需加常量 |
+| ReadingRequestCopy | ✅ 已核 | — | 要点相关文案一致 |
+
+**第二轮验证口径**：R2-A/R2-B 提交前 C# Release 编译 0 警告 0 错误；提交后复跑 cargo test --workspace 210 passed / 0 failed、PureTests 26 passed / 0 failed。
+
+**E3 手动验证待办**（真实 UI 行为，遵循仓库既有惯例不写纯夹具冒充）：
+- 工作台术语芯片点击复制（T04）需在真机翻译含术语保护的文本后点芯片确认状态栏提示
+- LiteLLM 预设完整添加流程（T01 + R2-A）需真机走一遍：选预设 → 看到「本地服务 · localhost」→ 保存 → 重开编辑器字段齐全
+
+**累计分支状态**：12 个 commit（含文档），main 未动，未发版。
