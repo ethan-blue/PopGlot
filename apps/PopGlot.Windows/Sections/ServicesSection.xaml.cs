@@ -1215,7 +1215,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         EditorActionBar.Visibility = Visibility.Visible;
         ChooseAnotherProviderButton.Visibility = Visibility.Visible;
         DeleteServiceButton.Visibility = Visibility.Collapsed;
-        UpdateEditorIdentity(ServiceNameTextBox.Text, type, baseUrl, preset == "ollama");
+        // 本地判定与保存后的 profile.IsLocal（IsLocalBaseUrl）同一口径，
+        // 避免 Ollama/LiteLLM 这类本机预设在添加预览与重开编辑器之间
+        // 「本地服务 / OpenAI 兼容」来回变。
+        UpdateEditorIdentity(ServiceNameTextBox.Text, type, baseUrl, ProviderSettings.IsLocalBaseUrl(baseUrl));
         UpdateCredentialGating();
         RefreshRecommendations();
         if (_isAdding)
