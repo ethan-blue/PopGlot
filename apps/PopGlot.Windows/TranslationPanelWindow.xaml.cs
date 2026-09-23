@@ -566,6 +566,9 @@ public partial class TranslationPanelWindow : Window
         ExplanationBox.Visibility = string.IsNullOrWhiteSpace(note)
             ? Visibility.Collapsed
             : Visibility.Visible;
+        // 「打开设置」只属于错误说明；此前失败残留的按钮不能跟着
+        // 出现在要点视图的说明行旁。
+        ErrorSettingsButton.Visibility = Visibility.Collapsed;
         TermsList.Visibility = Visibility.Collapsed;
         WarningBox.Visibility = Visibility.Collapsed;
         StatusText.Text = ReadingRequestCopy.SummaryReadyHint;
