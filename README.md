@@ -1,7 +1,7 @@
 # PopGlot
 
 [![Windows](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D4)](https://github.com/ethan-blue/PopGlot/releases)
-[![Version](https://img.shields.io/badge/version-0.1.9-5B67B5)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.1.10-5B67B5)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-3D8B6E)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/ethan-blue/PopGlot/ci.yml?branch=main&label=CI)](https://github.com/ethan-blue/PopGlot/actions)
 
@@ -87,7 +87,7 @@ Run `PopGlot.exe`. It stays in the tray. Allow the free engine under Settings �
 
 需要 Windows 10（19041 及以上）或 Windows 11，64 位。
 
-[下载 PopGlot 0.1.9](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.9/PopGlot-v0.1.9-win-x64.zip)
+[下载 PopGlot 0.1.10](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.10/PopGlot-v0.1.10-win-x64.zip)
 
 每一版的发布页都用同一个样子：标题是 `PopGlot 版本号`，页上直接写这一版改了什么，并附上 zip 和 `.sha256`。不用再点进另一份说明。
 
