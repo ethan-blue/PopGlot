@@ -303,7 +303,7 @@
                                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                             <StackPanel x:Name="ServiceNamePanel">
                                                 <TextBlock Text="显示名称" Style="{StaticResource FieldLabel}"/>
-                                                <TextBox x:Name="ServiceNameTextBox" Style="{StaticResource EditorTextField}" local:Ui.Placeholder="例如：公司 Gemini"/>
+                                                <TextBox x:Name="ServiceNameTextBox" Style="{StaticResource EditorTextField}" local:Ui.Placeholder="例如：公司内部代理"/>
                                             </StackPanel>
                                             <StackPanel x:Name="CustomProtocolGroup" Grid.Column="2" Visibility="Collapsed">
                                                 <TextBlock Text="接口协议" Style="{StaticResource FieldLabel}" />
@@ -316,7 +316,7 @@
                                         <StackPanel x:Name="BaseUrlPanel" Visibility="Collapsed" Margin="0,0,0,14">
                                             <TextBlock Text="请求地址" Style="{StaticResource FieldLabel}"/>
                                             <TextBox x:Name="BaseUrlTextBox" Style="{StaticResource EditorTextField}" FontFamily="{StaticResource MonoFontFamily}"
-                                                     local:Ui.Placeholder="https://api.openai.com/v1 或 https://your-proxy.com/v1"/>
+                                                     local:Ui.Placeholder="例如：http://localhost:4000 或 https://your-proxy.com/v1"/>
                                         </StackPanel>
                                         <TextBlock Text="API Key" Style="{StaticResource FieldLabel}" />
                                         <Grid x:Name="ApiKeyInputGrid">
