@@ -273,6 +273,7 @@
                                         <Button Style="{StaticResource ProviderPresetButton}" Tag="deepseek" AutomationProperties.Name="DeepSeek 预设" Click="Preset_Click"><StackPanel><TextBlock Text="DeepSeek" FontWeight="SemiBold"/><TextBlock Text="文字翻译 · 官方接口" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
                                         <Button Style="{StaticResource ProviderPresetButton}" Tag="claude" AutomationProperties.Name="Anthropic Claude 预设" Click="Preset_Click"><StackPanel><TextBlock Text="Anthropic Claude" FontWeight="SemiBold"/><TextBlock Text="Messages · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
                                         <Button Style="{StaticResource ProviderPresetButton}" Tag="ollama" AutomationProperties.Name="Ollama（本地）预设" Click="Preset_Click"><StackPanel><TextBlock Text="Ollama（本地）" FontWeight="SemiBold"/><TextBlock Text="本机运行 · 无需 Key" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="litellm" AutomationProperties.Name="LiteLLM Proxy 预设" Click="Preset_Click"><StackPanel><TextBlock Text="LiteLLM Proxy" FontWeight="SemiBold"/><TextBlock Text="统一代理 · OpenAI 兼容" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
                                     </StackPanel>
                                 </Grid>
                             </StackPanel>

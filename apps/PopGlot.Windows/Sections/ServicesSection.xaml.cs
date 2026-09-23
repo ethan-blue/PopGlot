@@ -1145,6 +1145,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 "/chat/completions", "已填入 GLM 接入地址，填 Key 后点「获取模型」。"),
             "ollama" => (ProviderType.OpenAiCompatible, "http://localhost:11434/v1",
                 "/chat/completions", "已应用 Ollama 预设，点「获取模型」拉取本地模型。"),
+            "litellm" => (ProviderType.OpenAiCompatible, "http://localhost:4000",
+                "/chat/completions", "已填入 LiteLLM Proxy 预设，确认地址后点「获取模型」。"),
             _ => (ProviderType.OpenAiCompatible, string.Empty,
                 "/chat/completions", "填写协议、Base URL，再获取或输入模型。"),
         };
@@ -1156,7 +1158,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             if (string.IsNullOrWhiteSpace(ServiceNameTextBox.Text) ||
                 ServiceNameTextBox.Text.StartsWith("新引擎") ||
                 ServiceNameTextBox.Text.StartsWith("新服务") ||
-                ServiceNameTextBox.Text is "OpenAI" or "DeepSeek" or "Google Gemini" or "Anthropic Claude" or "智谱 GLM" or "Ollama（本地）" or "自定义引擎" or "自定义服务")
+                ServiceNameTextBox.Text is "OpenAI" or "DeepSeek" or "Google Gemini" or "Anthropic Claude" or "智谱 GLM" or "Ollama（本地）" or "LiteLLM Proxy" or "自定义引擎" or "自定义服务")
             {
                 ServiceNameTextBox.Text = preset switch
                 {
@@ -1166,6 +1168,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                     "claude" => "Anthropic Claude",
                     "zhipu" => "智谱 GLM",
                     "ollama" => "Ollama（本地）",
+                    "litellm" => "LiteLLM Proxy",
                     _ => "自定义引擎",
                 };
             }
@@ -1186,11 +1189,15 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             _visionTracker.Reset();
             UseTextModelForVisionCheckBox.IsChecked = false;
             VisionModelCombo.IsEnabled = true;
-            CustomProtocolGroup.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
-            BaseUrlPanel.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
+            // LiteLLM 与自定义引擎一样展示协议和请求地址：代理常部署在远程
+            // 主机，地址是该预设的核心字段，协议上 LiteLLM 代理也支持多家
+            // 原生格式透传。
+            var showConnectionFields = isCustom || preset == "litellm";
+            CustomProtocolGroup.Visibility = showConnectionFields ? Visibility.Visible : Visibility.Collapsed;
+            BaseUrlPanel.Visibility = showConnectionFields ? Visibility.Visible : Visibility.Collapsed;
             // Preset cloud hosts hide the protocol surface entirely; custom and
             // local services keep the advanced fields available.
-            AdvancedGroup.Visibility = isCustom || !IsPresetCloudHost(baseUrl)
+            AdvancedGroup.Visibility = showConnectionFields || !IsPresetCloudHost(baseUrl)
                 ? Visibility.Visible
                 : Visibility.Collapsed;
             ApplyEditorLayout();
@@ -1224,7 +1231,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
 
         StatusChanged?.Invoke(note, StatusTone.Info);
-        if (isCustom)
+        if (isCustom || preset == "litellm")
         {
             BaseUrlTextBox.Focus();
         }
