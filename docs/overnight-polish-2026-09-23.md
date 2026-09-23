@@ -371,3 +371,43 @@ ErrorSettingsButton.Visibility = Visibility.Collapsed;
 4. **不合并到 main** — 等用户审核通过后再合并
 5. **不修改已归档的 UI-REFACTOR 文档** — 那些是历史快照
 6. **不发版本** — 打磨分支不触发 release 流程
+
+---
+
+# 执行报告（2026-09-23 夜间自动执行）
+
+分支 `polish/overnight-2026-09-23`，共 10 个 commit。**每条改动提交前均验证：C# Release 编译 0 警告 0 错误；cargo test --workspace 210 passed / 0 failed；PureTests 26 passed / 0 failed（exit 0）。**
+
+| 任务 | 状态 | Commit | 说明 |
+|---|---|---|---|
+| T04 | ✅ DONE | `11d02c1` | 工作台术语芯片 Border→Button（TokenChipButton 样式），新增 `TranslateTermChip_Click`，走 `Helpers.CopyToClipboardAsync`（与浮窗同一剪贴板通道），状态栏反馈成功/失败 |
+| T01 | ✅ DONE | `a923ba1` | 新增 LiteLLM 预设卡片（`http://localhost:4000` + `/chat/completions`，OpenAI 兼容）。**执行中修正**：预设与自定义引擎一样显示「接口协议」「请求地址」并聚焦地址框（LiteLLM 代理常远程部署，地址是核心字段；且其代理层支持多家原生格式透传，协议下拉有意义），与 Ollama 隐藏地址的做法不同 |
+| T02 | ✅ DONE | `e046de5` | `ConfigFormPanel` MaxWidth 760→900，宽窗两侧空白收窄 |
+| T03 | ✅ DONE | `9c79918` | 名称占位「例如：公司内部代理」；地址占位加入 `http://localhost:4000` 示例 |
+| T11 | ⚠️ DONE(修正) | `71b9090` | **文档前提有误**：`PART_EditableTextBox` 实际文字起点 = Margin 10 + Padding 2 = 12 DIP，与 Selection presenter（12）、TextBox（Padding 12）本已对齐。按文档改成 12 反而错位到 14。仅提交注释澄清 10+2=12 的对齐约束，数值未动 |
+| T06 | ✅ DONE | `6318648` | 浮窗初始占位补「Shift+Enter 换行」（与第 665 行运行时提示一致） |
+| T08 | ✅ DONE | `27088e0` | 空态文案改为给出「添加引擎」指引 |
+| T12 | ✅ DONE(修正) | `1f6cb33` | **文档定位有误**：成功路径 `RenderFinalSuccessAsync` 第 1090 行已有 `Collapsed`。真实缺口在要点渲染 `PaintPanelSummary` — 此前失败残留的「打开设置」按钮会跟到要点说明旁。已在该路径补 `Collapsed` |
+| T17 | ✅ DONE | `7efd0b2` | CHANGELOG 顶部新增「未发布」段（未发版，随下版本发布） |
+| T05 | ✅ 已核 | — | 正文 `IsReadOnly` 可选中可复制，浮窗/工作台一致，无需改动 |
+| T07 | ✅ 已核 | — | 极速查词占位无需改动 |
+| T09 | ✅ 已核 | — | 工作台空态引导无需改动 |
+| T10 | ✅ 已核 | — | 编辑器滚动底部留白 24 已正确 |
+| T13 | ✅ 已核 | — | 工作台说明区无「打开设置」按钮（`OpenSettings_Click` 仅程序化调用），不存在残留问题 |
+| T14 | ✅ 已核 | — | 浮窗 `TermChip_Click` 已有 `TrySetClipboardAsync` 异常处理 |
+| T15 | ✅ 已核 | — | LiteLLM `/models` 返回标准 OpenAI 格式，现有 adapter 已兼容 |
+| T16 | ✅ 已核 | — | 未新增枚举值，序列化无影响 |
+| T18 | ⏭ N/A | — | `docs/DESIGN_SYSTEM.md` 无预设清单章节，无需补充 |
+
+## 与文档的差异说明
+
+1. **T01 超出文档范围**：文档只要求加预设按钮和 switch 分支；执行中发现沿用 Ollama 的可见性逻辑会隐藏代理地址字段，远程部署的 LiteLLM 用户将无法填地址。故 litellm 分支复用自定义引擎的「显示协议+地址」路径。这是行为差异点，用户审核时请重点看这一条。
+2. **T11/T12 前提修正**见上表，改动以实际代码事实为准。
+3. **任务文档勘误**：附录 A/B 中 PureTests 项目名应为 `PopGlot.Windows.PureTests.csproj`（文档写的 `PopGlot.PureTests.csproj` 不存在）。
+4. **测试口径**：cargo 全套 11 个 suite，210 passed / 0 failed；PureTests 26/26。为诚实计数，未采用截断输出推算。
+
+## 待用户审核
+
+- [ ] T01 的 LiteLLM 预设显示地址字段的行为是否符合预期
+- [ ] T02 表单 900 上限在最小窗宽 680 下的观感（compact 逻辑未动，理论上不受影响）
+- [ ] 合并 `polish/overnight-2026-09-23` → main
