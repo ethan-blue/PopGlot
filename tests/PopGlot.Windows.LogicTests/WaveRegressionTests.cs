@@ -2588,4 +2588,62 @@ internal static class WaveRegressionTests
             try { quickSearch.Close(); } catch { }
         }
     }
+
+    /// <summary>
+    /// Guards the model ComboBox against template regressions: DropDownScrollViewer must
+    /// be named for WPF wheel/arrow support, CanContentScroll must be true for virtualization,
+    /// and the popup must exist.
+    /// </summary>
+    public static void ProviderEditorModelComboBoxWheelAndPopupInvariants()
+    {
+        EnsureApp();
+        var section = new ServicesSection();
+        section.Measure(new Size(800, 600));
+        section.Arrange(new Rect(0, 0, 800, 600));
+        section.UpdateLayout();
+
+        var textCombo = section.TextModelCombo;
+        ArgumentNullException.ThrowIfNull(textCombo);
+        Equal(true, ScrollViewer.GetCanContentScroll(textCombo), "ComboBox must enable CanContentScroll for virtualized scrolling");
+
+        textCombo.ApplyTemplate();
+        var popup = textCombo.Template?.FindName("PART_Popup", textCombo) as System.Windows.Controls.Primitives.Popup;
+        True(popup != null, "PART_Popup must exist on TextModelCombo");
+
+        popup!.IsOpen = true;
+        popup.UpdateLayout();
+
+        var scrollViewer = textCombo.Template?.FindName("DropDownScrollViewer", textCombo) as ScrollViewer;
+        True(scrollViewer != null, "DropDownScrollViewer must exist in ComboBox template for WPF wheel/arrow navigation");
+        popup.IsOpen = false;
+    }
+
+    /// <summary>
+    /// Guard that shared text-vision model mirrors correctly and unlocking behaves as expected.
+    /// </summary>
+    public static void ProviderEditorSharedModelSyncAndUnlockingInvariants()
+    {
+        EnsureApp();
+        var section = new ServicesSection();
+        section.Measure(new Size(800, 600));
+        section.Arrange(new Rect(0, 0, 800, 600));
+        section.UpdateLayout();
+
+        // 1. Initial shared state
+        section.UseTextModelForVisionCheckBox.IsChecked = true;
+        section.TextModelCombo.Text = "gpt-4o";
+        Equal("gpt-4o", section.VisionModelCombo.Text, "When shared, vision model should mirror text model");
+        Equal(Visibility.Visible, section.SharedModelHintText.Visibility, "SharedModelHintText should be visible when shared");
+
+        // 2. Unchecking shared allows independent model
+        section.UseTextModelForVisionCheckBox.IsChecked = false;
+        Equal(Visibility.Collapsed, section.SharedModelHintText.Visibility, "SharedModelHintText should be collapsed when independent");
+        section.VisionModelCombo.Text = "gemini-1.5-pro";
+        section.TextModelCombo.Text = "claude-3-5-sonnet";
+        Equal("gemini-1.5-pro", section.VisionModelCombo.Text, "When independent, vision model should not be overwritten");
+
+        // 3. Virtualization flags on ComboBoxes
+        Equal(true, VirtualizingPanel.GetIsVirtualizing(section.TextModelCombo), "IsVirtualizing should be true");
+        Equal(VirtualizationMode.Recycling, VirtualizingPanel.GetVirtualizationMode(section.TextModelCombo), "VirtualizationMode should be Recycling");
+    }
 }

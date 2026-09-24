@@ -91,8 +91,8 @@
         </Border>
 
         <!-- Instruction chip, centred on the monitor under the cursor. -->
-        <Border x:Name="HintChip" Padding="14,8" CornerRadius="10"
-                Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
+        <Border x:Name="HintChip" Padding="12,8" CornerRadius="12"
+                Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
             <Border.Effect>
                 <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="0.35" Color="{DynamicResource ShadowColor}" />
             </Border.Effect>
@@ -105,7 +105,7 @@
 
                 <!-- Explicit keycaps: Shift -->
                 <StackPanel x:Name="ShiftHintGroup" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,0">
-                    <Border CornerRadius="4" Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}"
+                    <Border CornerRadius="4" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}"
                             BorderThickness="1" Padding="5,1" Margin="0,0,5,0" VerticalAlignment="Center">
                         <TextBlock Text="Shift" FontFamily="{StaticResource MonoFontFamily}" FontSize="11" FontWeight="SemiBold"
                                    Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
@@ -115,7 +115,7 @@
 
                 <!-- Explicit keycaps: Esc -->
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border CornerRadius="4" Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}"
+                    <Border CornerRadius="4" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}"
                             BorderThickness="1" Padding="5,1" Margin="0,0,5,0" VerticalAlignment="Center">
                         <TextBlock Text="Esc" FontFamily="{StaticResource MonoFontFamily}" FontSize="11" FontWeight="SemiBold"
                                    Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
@@ -128,8 +128,8 @@
         <!-- Live drag-phase hint: mirrors the Shift state while the marquee is
              being dragged. Occupies the same anchor slot as HintChip — the two
              are never visible at the same time (chip swaps at drag start). -->
-        <Border x:Name="DragHintChip" Visibility="Collapsed" Padding="14,8" CornerRadius="10"
-                Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
+        <Border x:Name="DragHintChip" Visibility="Collapsed" Padding="12,8" CornerRadius="12"
+                Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
             <Border.Effect>
                 <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="0.35" Color="{DynamicResource ShadowColor}" />
             </Border.Effect>

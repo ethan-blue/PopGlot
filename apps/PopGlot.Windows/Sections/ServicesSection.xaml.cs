@@ -99,6 +99,34 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         ProviderTypeComboBox.DropDownOpened += EditorCombo_DropDownOpened;
         TextModelCombo.DropDownOpened += EditorCombo_DropDownOpened;
         VisionModelCombo.DropDownOpened += EditorCombo_DropDownOpened;
+        ProviderTypeComboBox.DropDownClosed += EditorCombo_DropDownClosed;
+        TextModelCombo.DropDownClosed += EditorCombo_DropDownClosed;
+        VisionModelCombo.DropDownClosed += EditorCombo_DropDownClosed;
+        TextModelCombo.SelectionChanged += (_, _) =>
+        {
+            if (UseTextModelForVisionCheckBox.IsChecked == true)
+            {
+                VisionModelCombo.Text = TextModelCombo.Text;
+            }
+            MarkEditorDirty();
+            if (!_loading)
+            {
+                _recommendationDebounce.Stop();
+                _recommendationDebounce.Start();
+            }
+        };
+        VisionModelPanel.PreviewMouseLeftButtonDown += (_, _) =>
+        {
+            if (UseTextModelForVisionCheckBox.IsChecked == true)
+            {
+                UseTextModelForVisionCheckBox.IsChecked = false;
+                VisionModelCombo.IsEnabled = true;
+                VisionModelCombo.Focus();
+            }
+        };
+        HookComboWheel(TextModelCombo);
+        HookComboWheel(VisionModelCombo);
+        HookComboWheel(ProviderTypeComboBox);
     }
 
     internal bool IsLoading { get => _loading; set => _loading = value; }
@@ -325,12 +353,41 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
     }
 
+    private void HookComboWheel(ComboBox combo)
+    {
+        combo.PreviewMouseWheel += (s, e) =>
+        {
+            if (combo.IsDropDownOpen)
+            {
+                if (combo.Template?.FindName("DropDownScrollViewer", combo) is ScrollViewer sv)
+                {
+                    int lines = Math.Max(1, Math.Abs(e.Delta) / 40);
+                    for (int i = 0; i < lines; i++)
+                    {
+                        if (e.Delta < 0)
+                        {
+                            sv.LineDown();
+                        }
+                        else
+                        {
+                            sv.LineUp();
+                        }
+                    }
+                    e.Handled = true;
+                }
+            }
+        };
+    }
+
     private void EditorCombo_DropDownOpened(object? sender, EventArgs e)
     {
         if (sender is not ComboBox combo || combo.Template?.FindName("PART_Popup", combo) is not Popup popup)
         {
             return;
         }
+
+        popup.PreviewMouseWheel -= EditorPopup_PreviewMouseWheel;
+        popup.PreviewMouseWheel += EditorPopup_PreviewMouseWheel;
 
         if (EditorScroll.ViewportHeight <= 1)
         {
@@ -353,11 +410,51 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
         var spaceBelow = EditorScroll.ViewportHeight - below.Y;
         var spaceAbove = above.Y;
-        var want = Math.Min(combo.MaxDropDownHeight, 160);
+        var itemCount = combo.Items.Count;
+        var estimateNeeded = itemCount > 0 ? (itemCount * 36.0 + 12.0) : 160.0;
+        var want = Math.Min(320.0, Math.Max(120.0, estimateNeeded));
         var placement = ResolveEditorPopupPlacement(spaceBelow, spaceAbove, want);
         var openAbove = placement == PlacementMode.Top;
         popup.Placement = placement;
         popup.VerticalOffset = openAbove ? -4 : 4;
+
+        var available = openAbove ? (spaceAbove - 8) : (spaceBelow - 8);
+        var maxAvailable = Math.Max(60.0, available);
+        combo.MaxDropDownHeight = Math.Min(want, maxAvailable);
+    }
+
+    private void EditorCombo_DropDownClosed(object? sender, EventArgs e)
+    {
+        if (sender is ComboBox combo)
+        {
+            combo.MaxDropDownHeight = 320.0;
+            if (combo.Template?.FindName("PART_Popup", combo) is Popup popup)
+            {
+                popup.PreviewMouseWheel -= EditorPopup_PreviewMouseWheel;
+            }
+        }
+    }
+
+    private void EditorPopup_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (sender is Popup popup &&
+            popup.TemplatedParent is ComboBox combo &&
+            combo.Template?.FindName("DropDownScrollViewer", combo) is ScrollViewer sv)
+        {
+            int lines = Math.Max(1, Math.Abs(e.Delta) / 40);
+            for (int i = 0; i < lines; i++)
+            {
+                if (e.Delta < 0)
+                {
+                    sv.LineDown();
+                }
+                else
+                {
+                    sv.LineUp();
+                }
+            }
+            e.Handled = true;
+        }
     }
 
     internal static PlacementMode ResolveEditorPopupPlacement(
@@ -421,6 +518,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 MarkEditorDirty();
                 var text = combo.Text;
                 combo.ToolTip = string.IsNullOrWhiteSpace(text) ? null : text;
+                if (combo == TextModelCombo && UseTextModelForVisionCheckBox.IsChecked == true)
+                {
+                    VisionModelCombo.Text = text;
+                    VisionModelCombo.ToolTip = "已开启「图文共用此模型」，图片输入将使用与文字相同的模型。如需独立指定，请取消勾选「图文共用此模型」开关。";
+                }
                 if (!_loading)
                 {
                     // 按键级重建推荐 chips 的开销不小，走防抖合并。
@@ -428,6 +530,17 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                     _recommendationDebounce.Start();
                 }
             }));
+        System.ComponentModel.DependencyPropertyDescriptor
+            .FromProperty(ComboBox.TextProperty, typeof(ComboBox))
+            .AddValueChanged(TextModelCombo, (_, _) =>
+            {
+                if (UseTextModelForVisionCheckBox.IsChecked == true)
+                {
+                    VisionModelCombo.Text = TextModelCombo.Text;
+                    VisionModelCombo.ToolTip = "已开启「图文共用此模型」，图片输入将使用与文字相同的模型。如需独立指定，请取消勾选「图文共用此模型」开关。";
+                }
+            });
+
         void WatchToggle(System.Windows.Controls.Primitives.ToggleButton toggle)
         {
             toggle.Checked += (_, _) => MarkEditorDirty();
@@ -545,6 +658,13 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             VisionModelCombo.Text);
         VisionModelCombo.IsEnabled = enabled;
         VisionModelCombo.Text = effectiveVision;
+        VisionModelCombo.ToolTip = shared
+            ? "已开启「图文共用此模型」，图片输入将使用与文字相同的模型。如需独立指定，请取消勾选「图文共用此模型」开关。"
+            : (string.IsNullOrWhiteSpace(VisionModelCombo.Text) ? "选择或输入图片模型标识" : VisionModelCombo.Text);
+        if (SharedModelHintText != null)
+        {
+            SharedModelHintText.Visibility = shared ? Visibility.Visible : Visibility.Collapsed;
+        }
         MarkEditorDirty();
         RefreshRecommendations();
     }
@@ -665,6 +785,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 string.Equals(profile.TextModel, profile.VisionModel, StringComparison.Ordinal);
             UseTextModelForVisionCheckBox.IsChecked = sharedModel;
             VisionModelCombo.IsEnabled = !sharedModel;
+            if (SharedModelHintText != null)
+            {
+                SharedModelHintText.Visibility = sharedModel ? Visibility.Visible : Visibility.Collapsed;
+            }
             _visionTracker.OnLoaded(profile.TextModel, profile.VisionModel);
             UpdateModelSuggestions(profile.ProviderType);
             ExtraHeadersTextBox.Text = string.Join(
@@ -1189,6 +1313,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             _visionTracker.Reset();
             UseTextModelForVisionCheckBox.IsChecked = false;
             VisionModelCombo.IsEnabled = true;
+            if (SharedModelHintText != null)
+            {
+                SharedModelHintText.Visibility = Visibility.Collapsed;
+            }
             // LiteLLM 与自定义引擎一样展示协议和请求地址：代理常部署在远程
             // 主机，地址是该预设的核心字段，协议上 LiteLLM 代理也支持多家
             // 原生格式透传。
@@ -1352,6 +1480,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         VisionModelCombo.ItemsSource = ids;
         TextModelCombo.Text = currentText;
         VisionModelCombo.Text = currentVision;
+        if (UseTextModelForVisionCheckBox.IsChecked == true && string.IsNullOrWhiteSpace(currentVision))
+        {
+            VisionModelCombo.Text = currentText;
+        }
 
         if (!string.IsNullOrWhiteSpace(currentVision) &&
             !currentVision.StartsWith('{') &&
@@ -1504,9 +1636,13 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 {
                     if (UseTextModelForVisionCheckBox.IsChecked == true)
                     {
-                        return;
+                        UseTextModelForVisionCheckBox.IsChecked = false;
+                        VisionModelCombo.IsEnabled = true;
                     }
                     VisionModelCombo.Text = modelId;
+                    VisionModelCombo.ToolTip = modelId;
+                    MarkEditorDirty();
+                    RefreshRecommendations();
                 };
             }
             else
@@ -1514,6 +1650,14 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 button.Click += (_, _) =>
                 {
                     TextModelCombo.Text = modelId;
+                    TextModelCombo.ToolTip = modelId;
+                    if (UseTextModelForVisionCheckBox.IsChecked == true)
+                    {
+                        VisionModelCombo.Text = modelId;
+                        VisionModelCombo.ToolTip = modelId;
+                    }
+                    MarkEditorDirty();
+                    RefreshRecommendations();
                 };
             }
 

@@ -1106,6 +1106,7 @@
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="Padding" Value="10,8" />
         <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="ToolTip" Value="{Binding RelativeSource={RelativeSource Self}, Path=Content}" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
         <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
         <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
@@ -1162,7 +1163,9 @@
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="MaxDropDownHeight" Value="320" />
         <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
-        <Setter Property="ScrollViewer.CanContentScroll" Value="False" />
+        <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
+        <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
+        <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
         <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
         <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
@@ -1206,18 +1209,21 @@
                                Placement="Bottom" VerticalOffset="4" HorizontalOffset="-10"
                                PopupAnimation="Fade"
                                IsOpen="{TemplateBinding IsDropDownOpen}">
-                            <Grid Margin="10,2,10,12">
+                            <Grid Margin="10,2,10,12" Background="Transparent">
                                 <Border Background="{DynamicResource SurfaceRaisedBrush}"
                                         BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1"
                                         CornerRadius="{StaticResource CardRadius}"
                                         MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                                        MaxWidth="640"
                                         MaxHeight="{TemplateBinding MaxDropDownHeight}"
                                         SnapsToDevicePixels="True">
                                     <Border.Effect>
                                         <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="0.28"
                                                           Color="{DynamicResource ShadowColor}" />
                                     </Border.Effect>
-                                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,5">
+                                    <ScrollViewer x:Name="DropDownScrollViewer"
+                                                  CanContentScroll="{TemplateBinding ScrollViewer.CanContentScroll}"
+                                                  VerticalScrollBarVisibility="Auto" Padding="0,5">
                                         <ItemsPresenter />
                                     </ScrollViewer>
                                 </Border>
@@ -1281,7 +1287,9 @@
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="MaxDropDownHeight" Value="320" />
         <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
-        <Setter Property="ScrollViewer.CanContentScroll" Value="False" />
+        <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
+        <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
+        <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
         <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
         <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
@@ -1309,7 +1317,7 @@
                                Placement="Bottom" VerticalOffset="4" HorizontalOffset="-8"
                                PopupAnimation="Fade"
                                IsOpen="{TemplateBinding IsDropDownOpen}">
-                            <Grid Margin="10,2,10,12">
+                            <Grid Margin="10,2,10,12" Background="Transparent">
                                 <Border Background="{DynamicResource SurfaceRaisedBrush}"
                                         BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
                                         CornerRadius="{StaticResource ControlRadius}"
@@ -1320,7 +1328,9 @@
                                         <DropShadowEffect BlurRadius="16" ShadowDepth="3" Opacity="0.22"
                                                           Color="{DynamicResource ShadowColor}" />
                                     </Border.Effect>
-                                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,4">
+                                    <ScrollViewer x:Name="DropDownScrollViewer"
+                                                  CanContentScroll="{TemplateBinding ScrollViewer.CanContentScroll}"
+                                                  VerticalScrollBarVisibility="Auto" Padding="0,4">
                                         <ItemsPresenter />
                                     </ScrollViewer>
                                 </Border>
@@ -1708,14 +1718,15 @@
         <Setter Property="OverridesDefaultStyle" Value="True" />
         <Setter Property="Grid.IsSharedSizeScope" Value="True" />
         <Setter Property="HasDropShadow" Value="True" />
+        <Setter Property="MinWidth" Value="160" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ContextMenu">
                     <Border Background="{DynamicResource SurfaceRaisedBrush}"
-                            BorderBrush="{DynamicResource BorderStrongBrush}"
+                            BorderBrush="{DynamicResource BorderSubtleBrush}"
                             BorderThickness="1"
                             CornerRadius="10"
-                            Padding="4,5">
+                            Padding="4">
                         <Border.Effect>
                             <DropShadowEffect BlurRadius="16" ShadowDepth="4" Opacity="0.3" Color="{DynamicResource ShadowColor}" />
                         </Border.Effect>
@@ -1730,7 +1741,8 @@
         <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
         <Setter Property="FontSize" Value="12.5" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-        <Setter Property="Padding" Value="10,6" />
+        <Setter Property="Padding" Value="10,5" />
+        <Setter Property="MinHeight" Value="32" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="Template">
             <Setter.Value>

@@ -1587,7 +1587,8 @@ internal static class TranslationStyleMenu
             Focusable = false,
             IsHitTestVisible = false,
             FontWeight = FontWeights.SemiBold,
-            FontSize = 11.5,
+            FontSize = 12,
+            Padding = new Thickness(12, 6, 12, 4),
         };
         item.SetResourceReference(Control.ForegroundProperty, "TextTertiaryBrush");
         return item;

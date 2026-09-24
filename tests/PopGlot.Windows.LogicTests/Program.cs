@@ -381,7 +381,9 @@ internal static class Program
         RunStaBatch(
             ("high contrast apply resolved round trip restores the normal theme", WaveRegressionTests.HighContrastApplyResolvedRoundTripRestoresNormalTheme),
             ("main window dpi transition guards the stable normal size", WaveRegressionTests.MainWindowDpiTransitionGuardsStableSize),
-            ("quick search dpi transition settles once and keeps the 480 dip width", WaveRegressionTests.QuickSearchDpiTransitionSettlesOnceAtMinWidth));
+            ("quick search dpi transition settles once and keeps the 480 dip width", WaveRegressionTests.QuickSearchDpiTransitionSettlesOnceAtMinWidth),
+            ("provider editor model combobox wheel and popup template invariants", WaveRegressionTests.ProviderEditorModelComboBoxWheelAndPopupInvariants),
+            ("provider editor shared model sync and unlocking invariants", WaveRegressionTests.ProviderEditorSharedModelSyncAndUnlockingInvariants));
 
 
         if (Environment.GetEnvironmentVariable("POPGLOT_SMOKE_FREE") == "1")

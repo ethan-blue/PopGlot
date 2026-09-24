@@ -355,15 +355,15 @@
                                         <!-- Recommendation Preference -->
                                         <Grid x:Name="PreferenceRowHost" Margin="0,12,0,0">
                                             <WrapPanel x:Name="PreferenceRadiosPanel" VerticalAlignment="Center">
-                                                <TextBlock Text="推荐偏好" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="0,0,12,0" />
+                                                <TextBlock Text="推荐偏好" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="0,4,12,4" />
                                                 <RadioButton x:Name="PreferenceSpeedRadio" Content="速度优先" GroupName="ModelPreferenceGroup"
-                                                             AutomationProperties.Name="速度优先偏好" Margin="0,0,12,0"
+                                                             AutomationProperties.Name="速度优先偏好" Margin="0,4,12,4"
                                                              Checked="PreferenceRadio_Checked" />
                                                 <RadioButton x:Name="PreferenceBalancedRadio" Content="均衡推荐" GroupName="ModelPreferenceGroup"
-                                                             AutomationProperties.Name="均衡推荐偏好" Margin="0,0,12,0" IsChecked="True"
+                                                             AutomationProperties.Name="均衡推荐偏好" Margin="0,4,12,4" IsChecked="True"
                                                              Checked="PreferenceRadio_Checked" />
                                                 <RadioButton x:Name="PreferenceQualityRadio" Content="质量优先" GroupName="ModelPreferenceGroup"
-                                                             AutomationProperties.Name="质量优先偏好"
+                                                             AutomationProperties.Name="质量优先偏好" Margin="0,4,0,4"
                                                              Checked="PreferenceRadio_Checked" />
                                             </WrapPanel>
                                         </Grid>
@@ -419,6 +419,9 @@
                                                   Style="{StaticResource SwitchCheckBox}"
                                                   Checked="UseTextModelForVision_Changed"
                                                   Unchecked="UseTextModelForVision_Changed" />
+                                        <TextBlock x:Name="SharedModelHintText" Style="{StaticResource Caption}"
+                                                   Margin="46,3,0,0" Foreground="{DynamicResource TextTertiaryBrush}"
+                                                   Text="开启后，图片识别与翻译将直接复用文字模型，无需单独配置图片模型" />
                                         <TextBlock x:Name="ModelCatalogStatusText" Visibility="Collapsed" Style="{StaticResource Caption}"
                                                    Margin="2,9,0,0" TextWrapping="Wrap" />
                                     </StackPanel>

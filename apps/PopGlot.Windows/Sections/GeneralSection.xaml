@@ -70,9 +70,9 @@
                                 Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                         <RadioButton x:Name="ThemeSystemChoice" GroupName="AppTheme" Tag="System"
                                      Style="{StaticResource ThemeSwatch}"
-                                     AutomationProperties.Name="主题跟随系统"
+                                     AutomationProperties.Name="系统主题"
                                      Click="ThemeChoice_Click">
-                            <StackPanel Width="52">
+                            <StackPanel Width="44">
                                 <Grid Width="36" Height="22" HorizontalAlignment="Center">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
@@ -81,7 +81,7 @@
                                     <Border Background="#F4F6F8" CornerRadius="3,0,0,3" />
                                     <Border Grid.Column="1" Background="#181B22" CornerRadius="0,3,3,0" />
                                 </Grid>
-                                <TextBlock Text="跟随系统" FontSize="11" HorizontalAlignment="Center" Margin="0,4,0,0" />
+                                <TextBlock Text="系统" FontSize="11" HorizontalAlignment="Center" Margin="0,4,0,0" />
                             </StackPanel>
                         </RadioButton>
                         <RadioButton x:Name="ThemeLightChoice" GroupName="AppTheme" Tag="Light"
@@ -103,8 +103,7 @@
                                 <Border Width="36" Height="22" CornerRadius="3" Background="#181B22" HorizontalAlignment="Center">
                                     <Border Width="16" Height="3" Background="#7C89D9" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="4,5,0,0" />
                                 </Border>
-                                <TextBlock Text="深色" FontSize="11" HorizontalAlignment="Center" Margin="0,4,0,0"
-                                           Foreground="#C5CAD3" />
+                                <TextBlock Text="深色" FontSize="11" HorizontalAlignment="Center" Margin="0,4,0,0" />
                             </StackPanel>
                         </RadioButton>
                     </StackPanel>
