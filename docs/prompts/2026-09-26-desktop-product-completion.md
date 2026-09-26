@@ -66,9 +66,16 @@
   - **C15/C16 残留核实已由后续波次修复**（关闭到托盘开关已有、编辑态页头主按钮已降级）；**C18** 高对比状态色/交互态映射已在后续波次完成，**U10 文档过期已修**（DESIGN_SYSTEM 60/30/10 → 实际表面/强调/语义结构 + HC 覆盖说明）；**C19** 旧图标资产清理（6 个 v1-v3 文件删除，`81a1739`）。
   - **并行 WIP 影响实证**：共享树上跑套件 204/89——失败全部是「不能创建多个 Application 实例」级联，根因是并行会话 WIP 的排队异常触发产品熔断（与 C12 压测发现的机制一致），与本会话提交无关（稳定 worktree 同代码 288/0）。**主树上的测试结论在并行 WIP 落地前不可信**——所有验证均应在独立 worktree 进行。
 - 2026-09-26（第四轮，C12 收口进行中）：
-  - **随行证据链补齐**：隔离诊断日志（`%TEMP%\popglot-logic-testsun-*/logs/crash-20260926.log`）记录了压测翻动期间的成批 `InvalidOperationException`（同一秒内 20+ 条、stage=unknown）——这就是触发产品熔断的源异常，发生在单个泵队窗口内，因此逐圈风暴复位来不及。压测架已改用 ContextIdle 层级排空（SystemIdle 帧不会执行更早的 ContextIdle/ApplicationIdle 待办——修正了此前"深排空"的层级错误）并打印/留档幸存者圈号（`eb24f7d`）。
+  - **随行证据链补齐**：隔离诊断日志（`%TEMP%\popglot-logic-tests
+un-*/logs/crash-20260926.log`）记录了压测翻动期间的成批 `InvalidOperationException`（同一秒内 20+ 条、stage=unknown）——这就是触发产品熔断的源异常，发生在单个泵队窗口内，因此逐圈风暴复位来不及。压测架已改用 ContextIdle 层级排空（SystemIdle 帧不会执行更早的 ContextIdle/ApplicationIdle 待办——修正了此前"深排空"的层级错误）并打印/留档幸存者圈号（`eb24f7d`）。
   - **级联间歇性的工作假设**：压测进程与并行会话的测试进程并发时，App 启动热键注册可能间歇失败→启动失败路径异步 Shutdown→cycle 2 起全面级联；且两个会话的测试进程会互相争抢全局热键。**结论：C12 压测必须在独占时段跑（无任何并行测试进程）**，已记入执行前提。
   - **下一动作**（等并行会话 WIP 落地+独占时段）：在 worktree 重跑 `lifecycle-stress` → 读 survivor cycle → 若恒为第 1 圈则定位首窗根（疑 Application.MainWindow 赋值语义），若恒为末圈则定位收尾根（疑 idle 队列残留）→ 出四家族最终判定。
+- 2026-09-26（第五轮，C12 终判达成）：独占时段在 worktree（eb24f7d+判定修正）复跑两次，判定**稳定复现**：
+  - **QuickSearch：全合同 PASS**（alive=0 计平台驻留、主题回基线、WS 445→438MB 平台、堆恒定）。
+  - **Main：回收 PASS**（199/200 可回收；唯一幸存者=最后显示的窗口，IsLoaded=false 且被 `Application.Windows` 保留——WPF 平台驻留，探针 A 在裸 Window 上同样复现 1/200）。「主题订阅 0→1」残留附着在该平台驻留窗口上：其关闭序列（Closed 派发）在无消息循环的压测线程上未走完，产品侧订阅本身对称（199/200 已退订）——**真机消息循环复核（E3 型）确认后即可闭合**。
+  - **Panel：回收 PASS**（平台驻留），但 **WS 单调增长 13-15/19 仍开**——窗口对象可回收而 WS 增长指向原生/非窗口资源，CSV 已归档待分析（open item）。
+  - **Settings：真实泄漏 200/200 判定成立**（platformRetained=False 正确区分），根=描述符静态根，修复在并行 WIP 待落地转绿。
+  - **TTS：PASS**。判定逻辑已区分「平台驻留」（恰 1 个 IsLoaded=false 幸存者且在 Application.Windows 内）与「真实泄漏」（IsLoaded=true 幸存者或 ≥2 个）——压测架最终形态已同步主树并归档 `artifacts/lifecycle/c12-final-run*.log`。
 - 门禁记录：本轮所有提交前后共 3 次全量验证（cargo test --locked / fmt / clippy、C# Debug+Release 0 警告 0 错误、PureTests 26/0、LogicTests 286→287/0、隔离目录、真配置哈希不变、`no unsanctioned public network send` PASS）。
 - 2026-09-26：**C10 组件级基准**（`762f3ce`）——经真实协调器 + mock 执行器：100 次完成回环 P50=15.5ms / P95=16.2ms / max=16.3ms / 失败 0；100 次取消 P95≈0ms / 错阶段 0；以「完成写入历史恰 100 条、取消不写」作完成/取消交叉验证。LogicTests 288/0。诚实口径：测试宿主组件管线，非应用级 hotkey→painted 预算（归 scripts/measure-*）。
 

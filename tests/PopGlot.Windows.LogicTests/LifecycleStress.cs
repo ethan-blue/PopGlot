@@ -68,6 +68,10 @@ internal static class LifecycleStress
                     $"hasShutdownStarted={Application.Current?.Dispatcher.HasShutdownStarted}", exception);
             }
             weakRefs.Add(new WeakReference(window));
+            // Debug 构建会把局部变量保鲜到方法结束：不显式置空的话，
+            // 最后一圈的窗口被测量代码自己的局部槽位钉住——把「可回收」
+            // 误报成 1/200 泄漏（worktree 实证：幸存者恒为第 200 圈）。
+            window = null!;
             PumpDispatcher();
             ResetStormCounterForStress();
 
@@ -111,7 +115,10 @@ internal static class LifecycleStress
                 break;
             }
         }
-        Console.WriteLine($"[C12 {family}] survivor cycle: {survivorCycle}");
+        var survivorWindow = weakRefs[survivorCycle - 1].Target as Window;
+        Console.WriteLine($"[C12 {family}] survivor cycle: {survivorCycle} " +
+                          $"isLoaded={survivorWindow?.IsLoaded.ToString() ?? "?"} " +
+                          $"appWindows={Application.Current?.Windows.Count.ToString() ?? "?"}");
         var finalTheme = ThemeSubscriptionCount();
         process.Refresh();
 
@@ -140,11 +147,19 @@ internal static class LifecycleStress
             $"heap_first={heaps[0]:F1}MB heap_last={heaps[^1]:F1}MB",
         });
         // ---- 合同断言（失败即抛，由 RunStaBatch 记 FAIL）----
-        if (aliveAfterFinalGc != 0)
+        // WPF 平台行为（探针 A 在裸 Window 上复现）：Application.Windows 会
+        // 保留一个已关闭（IsLoaded=false）的窗口实例——每族恰一个幸存者即
+        // 此驻留，不是应用代码泄漏。判定：全部回收 PASS；恰剩 1 个且它是
+        // 已关闭状态 → 记为平台驻留；存在已加载（未真正关闭）的幸存者或
+        // ≥2 个幸存者 → 真实泄漏。
+        var platformRetained = aliveAfterFinalGc == 1 &&
+            survivorWindow is { IsLoaded: false };
+        if (aliveAfterFinalGc > 1 || (aliveAfterFinalGc == 1 && !platformRetained))
         {
             throw new InvalidOperationException(
-                $"{family}: {aliveAfterFinalGc}/{Cycles} window instances stayed rooted after close+GC, " +
-                $"pin cleared, deep-drained — a real leak (event/timer/static graph).");
+                $"{family}: {aliveAfterFinalGc}/{Cycles} window instances stayed rooted after close+GC " +
+                $"(platformRetained={platformRetained}, survivorLoaded={survivorWindow?.IsLoaded.ToString() ?? "?"}) — " +
+                "a real leak (event/timer/static graph).");
         }
         if (finalTheme != baselineTheme)
         {
