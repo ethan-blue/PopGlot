@@ -79,6 +79,12 @@ un-*/logs/crash-20260926.log`）记录了压测翻动期间的成批 `InvalidOpe
 - 2026-09-26（第六轮，C12 判定再收敛）：**Panel 家族转绿**——CSV 复盘证明所谓"WS 单调增长"是逐圈 ±3MB 抖动的噪声误报（全程实际 +0.5MB、堆 +1.1MB、句柄/线程恒定），判定加 2MB 噪声阈值后 Panel 全合同 PASS（WS 439→287MB 实为回落）。**当前判定：QuickSearch ✅ Panel ✅ TTS ✅；Main 回收 ✅（主题订阅残留附在平台驻留窗口上，待真机消息循环复核）；Settings ❌（描述符泄漏，修复在并行 WIP 待落地）**。压测架噪声阈值修正同步主树（双树一致），档案 `artifacts/lifecycle/c12-final-run3.log`。
 - 2026-09-26（第七轮）：**C10 模型层落地**——`TranslationSessionTiming` 扩展 `SelectionReadMs`/`FirstDeltaMs`/`PaintedLagMs`（C10 链路的结构化阶段字段，未知环节保持 0 不编造）+ `TranslationElapsedText.DescribeStages` 纯诊断格式化器（key=value ms、只出非零环节、无隐私内容）。**接线（coordinator ApplyFinalResponse / panel _inputAcquisitionMs / painted 渲染点）与契约测试**待并行会话对 TranslationCoordinator/TranslationPanelWindow/两测试 Program.cs 的 WIP 落地后进行——那些文件全部在其活跃编辑名单上，现在动会重演吞并事故。
 - 2026-09-26（第八轮，C12 全家族终判达成）：并行会话长期未收尾，**精确采纳其 ServicesSection 泄漏修复 hunk**（`af357e4`，逐字署名采纳、其余 WIP 不动），worktree 重跑：**Settings ✅ 转绿**（alive=0、WS 228→232MB 平台）——修复验证生效。**C12 终判：Settings ✅ / Panel ✅ / QuickSearch ✅ / TTS ✅；Main 回收 ✅ + 主题订阅残留挂 E3 型复核**（平台驻留窗口在无消息循环线程上关闭序列未走完；199/200 完整关闭全部正确退订，产品订阅对称性成立）。档案 `artifacts/lifecycle/c12-final-run4.log`。C10/C17 接线仍待并行 WIP 落地（TranslationCoordinator/TranslationPanelWindow/两测试 Program.cs 均在其名单）。
+- 2026-09-26（第九轮，C10 接线完成于独立分支）：并行会话 WIP 长期未落地，为不阻塞收敛，**在 PopGlot-verify worktree 建分支 `polish/c10-timeline-wiring`（基点 af357e4，避开其 WIP）完成 C10 生产接线**（`1bc1fb0`，已推 origin）：
+  - `PumpStreamAsync` 在会话首个可见 delta 盖 `FirstDeltaMs`（循环内 + 循环后最终排空双点，快速完成的会话不漏记）；
+  - `ApplyFinalResponse` 构造终态 Timing 时**原样携带**已盖章节戳（修复了终态构造抹掉 FirstDeltaMs 的真实缺陷——契约测试抓到后修复）；
+  - 面板 `HandleSessionResultAsync` 盖 `SelectionReadMs`（取自 `_inputAcquisitionMs`）、渲染完成后盖 `PaintedLagMs`；
+  - 契约测试 `TimelineStampsFirstDeltaAndStageBreakdown`：FirstDeltaMs>0、DescribeStages 可解析、手动输入不得谎报 selection 阶段。LogicTests 289/0。
+  - **合并债**：分支与并行 WIP 改动同一批方法，等其落地后合并（冲突点：PumpStreamAsync/ApplyFinalResponse/HandleSessionResultAsync 附近）；合并前 C10 埋点不在 main 生效，诚实标注。
 - 门禁记录：本轮所有提交前后共 3 次全量验证（cargo test --locked / fmt / clippy、C# Debug+Release 0 警告 0 错误、PureTests 26/0、LogicTests 286→287/0、隔离目录、真配置哈希不变、`no unsanctioned public network send` PASS）。
 - 2026-09-26：**C10 组件级基准**（`762f3ce`）——经真实协调器 + mock 执行器：100 次完成回环 P50=15.5ms / P95=16.2ms / max=16.3ms / 失败 0；100 次取消 P95≈0ms / 错阶段 0；以「完成写入历史恰 100 条、取消不写」作完成/取消交叉验证。LogicTests 288/0。诚实口径：测试宿主组件管线，非应用级 hotkey→painted 预算（归 scripts/measure-*）。
 
