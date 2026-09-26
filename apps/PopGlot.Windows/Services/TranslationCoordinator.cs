@@ -1421,6 +1421,15 @@ internal sealed class TranslationCoordinator
                 if (session.Stage != TranslationSessionStage.Streaming)
                 {
                     session.Stage = TranslationSessionStage.Streaming;
+                    // C10 结构化时间点：会话首个可见 delta 距请求起点的毫秒数。
+                    // 只在仍为 0 时写（多段会话的后续分段不覆盖首段记录）。
+                    if (session.Timing.FirstDeltaMs == 0)
+                    {
+                        session.Timing = session.Timing with
+                        {
+                            FirstDeltaMs = (ulong)Stopwatch.GetElapsedTime(startTimestampTicks).TotalMilliseconds,
+                        };
+                    }
                     onStageChanged?.Invoke(session.Stage);
                 }
                 session.TranslatedText = textPrefix + buffer.GetAccumulatedText();
@@ -1458,6 +1467,15 @@ internal sealed class TranslationCoordinator
             {
                 session.Stage = TranslationSessionStage.Streaming;
                 onStageChanged?.Invoke(session.Stage);
+            }
+            // 快速完成的会话在首轮轮询前就已完成：最终排空里的 delta 同样
+            // 是「可见的首 delta」，FirstDeltaMs 不得漏记。
+            if (session.Timing.FirstDeltaMs == 0)
+            {
+                session.Timing = session.Timing with
+                {
+                    FirstDeltaMs = (ulong)Stopwatch.GetElapsedTime(startTimestampTicks).TotalMilliseconds,
+                };
             }
             session.TranslatedText = textPrefix + buffer.GetAccumulatedText();
             progress?.Report(new TranslationStreamUpdate(
@@ -1538,7 +1556,11 @@ internal sealed class TranslationCoordinator
             OcrElapsedMs: ocrElapsedMs,
             RoutingElapsedMs: routingElapsedMs,
             NetworkElapsedMs: networkElapsedMs > 0 ? networkElapsedMs : response.Diagnostics.ElapsedMs,
-            TotalElapsedMs: (ulong)totalStopwatch.ElapsedMilliseconds);
+            TotalElapsedMs: (ulong)totalStopwatch.ElapsedMilliseconds,
+            // C10：泵/面板已盖的章节戳不可被终态构造抹掉——原样携带。
+            SelectionReadMs: session.Timing.SelectionReadMs,
+            FirstDeltaMs: session.Timing.FirstDeltaMs,
+            PaintedLagMs: session.Timing.PaintedLagMs);
         session.CompletedAt = DateTimeOffset.UtcNow;
 
         onStageChanged?.Invoke(session.Stage);

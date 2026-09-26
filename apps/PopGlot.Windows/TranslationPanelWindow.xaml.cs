@@ -772,6 +772,13 @@ public partial class TranslationPanelWindow : Window
 
     private async Task HandleSessionResultAsync(string source, TranslationSession session, long epoch, string pipelineNote)
     {
+        // C10 结构化时间点：划词读取耗时随会话记录；绘制滞后从本方法
+        // （协调器返回、UI 接管）起算，到终态渲染完成为止。
+        session.Timing = session.Timing with
+        {
+            SelectionReadMs = (ulong)Math.Max(0, _inputAcquisitionMs),
+        };
+        var paintLagTimer = Stopwatch.StartNew();
         if (session.Stage == TranslationSessionStage.Cancelled)
         {
             if (!_holdingSummary)
@@ -819,6 +826,11 @@ public partial class TranslationPanelWindow : Window
 
         _gate.OnCompleted(session.TranslatedText);
         await RenderFinalSuccessAsync(source, session, pipelineNote);
+        // C10：终态已渲染——滞后期结束。写在此处（方法尾部）即"painted"时刻。
+        session.Timing = session.Timing with
+        {
+            PaintedLagMs = (ulong)paintLagTimer.ElapsedMilliseconds,
+        };
     }
 
     // ================= Rendering =================
