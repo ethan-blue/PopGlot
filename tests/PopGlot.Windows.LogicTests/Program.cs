@@ -242,6 +242,7 @@ internal static class Program
         await RunAsync("coordinator free engine single shot emits reset and delta and writes history once", CoordinatorFreeSingleShotAsync);
         await RunAsync("long input plans into ordered segments", LongInputPlansIntoOrderedSegmentsAsync);
         await RunAsync("c10 loopback benchmark 100 runs and 100 cancels", LoopbackBenchmarkHundredRunsAndCancellationAsync);
+        await RunAsync("c10 timeline stamps first delta and stage breakdown", TimelineStampsFirstDeltaAndStageBreakdown);
         await RunAsync("cancel between segments stops later requests", CancelBetweenSegmentsStopsLaterRequestsAsync);
         await RunAsync("segment failure keeps fragments as partial", SegmentFailureKeepsFragmentsAsPartialAsync);
         await RunAsync("incomplete segment stops session as partial", IncompleteSegmentStopsSessionAsPartialAsync);
@@ -5673,6 +5674,49 @@ internal static class Program
             "an integrity-incomplete segment must not yield a Completed session");
         Equal(1, Volatile.Read(ref requestCount), "later segments must not run after an incomplete one");
         Equal(0, history.Entries.Count);
+    }
+
+    /// <summary>
+    /// C10 生产接线契约：真实协调器完成一次会话后，Timing.FirstDeltaMs 必须带
+    /// 上首 delta 的毫秒数，DescribeStages 输出稳定可解析的阶段拆分；面板侧的
+    /// SelectionReadMs/PaintedLagMs 由 UI 测试覆盖，这里守住协调器侧与格式化。
+    /// </summary>
+    private static async Task TimelineStampsFirstDeltaAndStageBreakdown()
+    {
+        var history = new FakeHistoryRepository();
+        var executor = new FakeTranslationExecutor();
+        var coordinator = new TranslationCoordinator(history: history, executor: executor);
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(5, ct);
+                buffer.TryAppend("[译:C10 timeline]");
+                buffer.Complete();
+                tcs.SetResult(new TranslationResponse(
+                    new TranslationResult("[译:C10 timeline]", "", "", [], []),
+                    new ProviderDiagnostics(
+                        sessionId, ProviderType.OpenAiCompatible,
+                        "https://api.example.com", 1, 200, 5)));
+            });
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        var session = await coordinator.TranslateTextAsync(
+            "The build failed with a FileNotFoundError for config.json.",
+            "en", "zh-CN", TranslationInputSource.Manual);
+
+        Equal(TranslationSessionStage.Completed, session.Stage, "the mock session completes");
+        True(session.Timing.FirstDeltaMs > 0,
+            $"FirstDeltaMs must be stamped by the pump on the first visible delta; got {session.Timing.FirstDeltaMs}");
+        var breakdown = TranslationElapsedText.DescribeStages(session.Timing);
+        True(breakdown.Contains("firstDelta=") && breakdown.Contains("total="),
+            $"the stage breakdown must include firstDelta and total; got '{breakdown}'");
+        True(!breakdown.Contains("selection="),
+            "a manual-input session must not claim a selection-read stage");
     }
 
     /// <summary>
