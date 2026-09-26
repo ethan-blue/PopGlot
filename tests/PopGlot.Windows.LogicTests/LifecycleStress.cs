@@ -196,10 +196,14 @@ internal static class LifecycleStress
 
     private static int WorkingSetIncreases(List<double> workingSets)
     {
+        // ±3MB 的逐圈抖动在 400+MB 的工作集上是噪声（Panel 实测全程
+        // +0.5MB 却被逐字节比较计成 14/19 次增长）。只把超过 2MB 的
+        // 上台阶计为真实增长；总平台仍由 final-vs-bound 断言把守。
+        const double noiseFloorMb = 2.0;
         var increases = 0;
         for (var i = 1; i < workingSets.Count; i++)
         {
-            if (workingSets[i] > workingSets[i - 1])
+            if (workingSets[i] > workingSets[i - 1] + noiseFloorMb)
             {
                 increases++;
             }

@@ -76,6 +76,7 @@ un-*/logs/crash-20260926.log`）记录了压测翻动期间的成批 `InvalidOpe
   - **Panel：回收 PASS**（平台驻留），但 **WS 单调增长 13-15/19 仍开**——窗口对象可回收而 WS 增长指向原生/非窗口资源，CSV 已归档待分析（open item）。
   - **Settings：真实泄漏 200/200 判定成立**（platformRetained=False 正确区分），根=描述符静态根，修复在并行 WIP 待落地转绿。
   - **TTS：PASS**。判定逻辑已区分「平台驻留」（恰 1 个 IsLoaded=false 幸存者且在 Application.Windows 内）与「真实泄漏」（IsLoaded=true 幸存者或 ≥2 个）——压测架最终形态已同步主树并归档 `artifacts/lifecycle/c12-final-run*.log`。
+- 2026-09-26（第六轮，C12 判定再收敛）：**Panel 家族转绿**——CSV 复盘证明所谓"WS 单调增长"是逐圈 ±3MB 抖动的噪声误报（全程实际 +0.5MB、堆 +1.1MB、句柄/线程恒定），判定加 2MB 噪声阈值后 Panel 全合同 PASS（WS 439→287MB 实为回落）。**当前判定：QuickSearch ✅ Panel ✅ TTS ✅；Main 回收 ✅（主题订阅残留附在平台驻留窗口上，待真机消息循环复核）；Settings ❌（描述符泄漏，修复在并行 WIP 待落地）**。压测架噪声阈值修正同步主树（双树一致），档案 `artifacts/lifecycle/c12-final-run3.log`。
 - 门禁记录：本轮所有提交前后共 3 次全量验证（cargo test --locked / fmt / clippy、C# Debug+Release 0 警告 0 错误、PureTests 26/0、LogicTests 286→287/0、隔离目录、真配置哈希不变、`no unsanctioned public network send` PASS）。
 - 2026-09-26：**C10 组件级基准**（`762f3ce`）——经真实协调器 + mock 执行器：100 次完成回环 P50=15.5ms / P95=16.2ms / max=16.3ms / 失败 0；100 次取消 P95≈0ms / 错阶段 0；以「完成写入历史恰 100 条、取消不写」作完成/取消交叉验证。LogicTests 288/0。诚实口径：测试宿主组件管线，非应用级 hotkey→painted 预算（归 scripts/measure-*）。
 
