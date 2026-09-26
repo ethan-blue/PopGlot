@@ -475,7 +475,7 @@ public partial class TranslationPanelWindow : Window
             onStarting: () =>
             {
                 BeginPanelSummaryReading();
-                StatusText.Text = "正在整理要点（独立模型请求，可能产生额外服务费用）…";
+                StatusText.Text = "正在整理要点…";
                 ShowSummaryChoice.IsEnabled = false;
             },
             onSuccess: outcome =>

@@ -19,7 +19,8 @@ internal sealed record ProfilesRow(
     string StateText,
     Brush StateBrush,
     Brush StateTextBrush,
-    System.Windows.Visibility IsDefaultBadge);
+    System.Windows.Visibility IsDefaultBadge,
+    System.Windows.Visibility SetDefaultVisibility);
 
 /// <summary>
 /// Service settings as a master–detail surface: profile list on the left,
@@ -905,7 +906,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 ToneTextBrush(stateTone),
                 profile.Id == config.ActiveProfileId
                     ? Visibility.Visible
-                    : Visibility.Collapsed);
+                    : Visibility.Collapsed,
+                profile.Id == config.ActiveProfileId
+                    ? Visibility.Collapsed
+                    : Visibility.Visible);
         }).ToList();
         var hasProfiles = config.Profiles.Count > 0;
         ProfilesEmptyText.Visibility = hasProfiles
@@ -2103,7 +2107,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 return;
             }
 
-            StatusChanged?.Invoke($"正在验证「{profile.Name}」…", StatusTone.Info);
+            StatusChanged?.Invoke($"正在测试「{profile.Name}」…", StatusTone.Info);
             var settings = profile.ToProviderSettings(CoreBridge.GetSettings());
             var outcome = "ok";
             StatusTone tone;
@@ -2113,13 +2117,13 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 var response = await CoreBridge.TestConnectionDraftAsync(
                     settings, string.IsNullOrWhiteSpace(key) ? "local" : key);
                 tone = StatusTone.Success;
-                message = $"「{profile.Name}」验证成功 · {response.Diagnostics.ElapsedMs} ms";
+                message = $"「{profile.Name}」可用 · {response.Diagnostics.ElapsedMs} ms";
             }
             catch (Exception exception)
             {
                 outcome = ClassifyTestFailure(exception);
                 tone = StatusTone.Error;
-                message = $"「{profile.Name}」验证失败：{DescribeTestFailure(exception)}";
+                message = $"「{profile.Name}」未连接：{DescribeTestFailure(exception)}";
             }
 
             var testedAtUtc = DateTime.UtcNow;
@@ -2135,7 +2139,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
         catch (Exception exception)
         {
-            StatusChanged?.Invoke($"验证引擎失败：{exception.Message}", StatusTone.Error);
+            StatusChanged?.Invoke($"测试失败：{exception.Message}", StatusTone.Error);
         }
         finally
         {
@@ -2374,6 +2378,34 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             _suppressListEvents = false;
         }
         OpenProfileInEditor(profileId);
+    }
+
+    private void SetDefaultProfile_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as Button)?.Tag is not string profileId)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!ProfileManager.TrySwitchActiveProfile(profileId, out var error))
+            {
+                StatusChanged?.Invoke(error, StatusTone.Warning);
+                return;
+            }
+
+            var profile = ProfileManager.Load().Profiles.FirstOrDefault(item => item.Id == profileId);
+            RefreshProfilesList();
+            ProfileChanged?.Invoke();
+            StatusChanged?.Invoke(
+                profile is null ? "已设为默认引擎。" : $"「{profile.Name}」已设为默认引擎。",
+                StatusTone.Success);
+        }
+        catch (Exception exception)
+        {
+            StatusChanged?.Invoke($"切换失败：{exception.Message}", StatusTone.Error);
+        }
     }
 
     private void OpenProfileInEditor(string profileId)

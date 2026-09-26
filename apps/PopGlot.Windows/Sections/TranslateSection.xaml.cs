@@ -628,7 +628,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             onStarting: () =>
             {
                 BeginSummaryReading(source);
-                TranslateStatus.Text = "正在整理要点（独立模型请求，可能产生额外服务费用）…";
+                TranslateStatus.Text = "正在整理要点…";
                 ShowSummaryChoice.IsEnabled = false;
             },
             onSuccess: outcome =>
@@ -1198,9 +1198,9 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         ShowSummaryChoice.ToolTip = capability.State switch
         {
             RouteCapabilityState.Unsupported => "当前公共翻译不支持整理要点，请配置模型引擎。",
-            RouteCapabilityState.NeedsConfiguration => $"{capability.Reason}。切回「译文」可看翻译。",
-            RouteCapabilityState.Unknown => "未知模型能力，可能产生额外服务费用。切回「译文」可看翻译。",
-            _ => "独立模型请求，可能产生额外服务费用。切回「译文」可看翻译。需要已配置的模型。",
+            RouteCapabilityState.NeedsConfiguration => capability.Reason,
+            RouteCapabilityState.Unknown => "可以尝试整理要点，会额外使用一次模型额度。",
+            _ => "整理原文要点，会额外使用一次模型额度。",
         };
     }
 

@@ -341,6 +341,24 @@ internal static partial class MarkdownPresenter
 
             var trimmedLine = line.TrimStart();
 
+            // Markdown thematic breaks are layout, not content. Rendering
+            // the raw "---" made packaged help and model-formatted results
+            // look unfinished and could be mistaken for translated text.
+            var thematicCandidate = trimmedLine.Trim();
+            if (thematicCandidate is "---" or "***" or "___")
+            {
+                var rule = new Border
+                {
+                    Height = 1,
+                    Margin = new Thickness(0, document.Blocks.Count > 0 ? 10 : 2, 0, 10),
+                    SnapsToDevicePixels = true,
+                };
+                rule.SetResourceReference(Border.BackgroundProperty, "BorderSubtleBrush");
+                document.Blocks.Add(new BlockUIContainer(rule));
+                addParagraphSpacing = false;
+                continue;
+            }
+
             // Headings: # , ## , ###
             if (trimmedLine.StartsWith('#'))
             {

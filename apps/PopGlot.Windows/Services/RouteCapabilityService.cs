@@ -147,7 +147,7 @@ internal static class RouteCapabilityService
             return new SummaryCapability(
                 RouteCapabilityState.Unknown,
                 RouteKind.UnknownModel,
-                "模型能力未知，可尝试使用；要点为独立模型请求，可能产生额外服务费用。",
+                "可以尝试整理要点。",
                 "未知模型",
                 CanNavigateToAddEngine: false);
         }
@@ -156,7 +156,7 @@ internal static class RouteCapabilityService
         return new SummaryCapability(
             RouteCapabilityState.Available,
             RouteKind.ValidRemote,
-            "模型引擎已就绪；要点为独立模型请求，可能产生额外服务费用。",
+            "可以整理要点。",
             "模型引擎",
             CanNavigateToAddEngine: false);
     }

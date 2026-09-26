@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:PopGlot.Windows"
-        Title="帮助" Width="780" Height="560" MinWidth="620" MinHeight="440"
+        Title="帮助" Width="820" Height="560" MinWidth="620" MinHeight="440"
         Icon="/PopGlot;component/Assets/PopGlot-v5.ico"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource CanvasBrush}" Foreground="{DynamicResource TextPrimaryBrush}"
@@ -16,9 +16,11 @@
                       ResizeBorderThickness="6" UseAeroCaptionButtons="False" />
     </WindowChrome.WindowChrome>
 
+    <Border Background="{DynamicResource CanvasBrush}"
+            BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
     <Grid Background="{DynamicResource CanvasBrush}">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="188" />
+            <ColumnDefinition Width="168" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
@@ -112,7 +114,7 @@
                 </StackPanel>
             </Grid>
 
-            <StackPanel Grid.Row="1" Margin="24,6,28,10">
+            <StackPanel Grid.Row="1" Margin="28,8,32,10">
                 <TextBlock x:Name="ArticleTitle" FontSize="20" FontWeight="SemiBold"
                            TextTrimming="CharacterEllipsis"
                            ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
@@ -123,7 +125,7 @@
             </StackPanel>
 
             <RichTextBox x:Name="ArticleViewer" Grid.Row="2"
-                         Margin="24,0,28,20"
+                         Margin="28,0,32,20"
                          Style="{StaticResource FlatRichTextBox}"
                          Background="{DynamicResource CanvasBrush}"
                          FontSize="13.5" Padding="0,8,8,8"
@@ -133,4 +135,5 @@
                          AutomationProperties.LiveSetting="Polite" />
         </Grid>
     </Grid>
+    </Border>
 </Window>

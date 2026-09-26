@@ -2243,6 +2243,16 @@ internal static class Program
         var firstText = string.Concat(firstReflow.Inlines.OfType<Run>().Select(run => run.Text));
         True(firstText.Contains("第一行 只是", StringComparison.Ordinal),
             $"reflowed prose must insert a readable space, got: {firstText}");
+
+        var ruleDoc = new FlowDocument();
+        MarkdownPresenter.RenderToFlowDocument(
+            ruleDoc,
+            "上文\n\n---\n\n下文",
+            Application.Current.Resources);
+        Equal(3, ruleDoc.Blocks.Count,
+            "a Markdown thematic break must render as one visual rule between two paragraphs");
+        True(ruleDoc.Blocks.Skip(1).First() is BlockUIContainer,
+            "thematic-break syntax must not appear as a prose paragraph");
     }
 
     private static IEnumerable<Inline> CollectInlines(BlockCollection blocks)

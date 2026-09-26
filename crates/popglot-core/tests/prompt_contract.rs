@@ -486,6 +486,9 @@ fn test_category_a_token_protection_and_structural_rules() {
     assert!(sys.contains("Preserve code, Markdown structure, headings, lists, links, inline code, fenced code, identifiers, file paths, commands, shell syntax, URLs, error codes, version numbers, and ⟦PG_0000⟧ placeholders byte-for-byte."));
     assert!(sys.contains("Never translate, execute, normalize, renumber, or remove them."));
     assert!(sys.contains("Keep line breaks and formatting where possible."));
+    assert!(sys.contains("Write natural target-language prose instead of mirroring the source language's word order."));
+    assert!(sys.contains("Merge accidental hard line wraps in ordinary prose into readable paragraphs"));
+    assert!(sys.contains("never merge code, commands, table rows, headings, or list items."));
     assert!(sys.contains("The metadata JSON must not be wrapped in Markdown fences."));
 }
 

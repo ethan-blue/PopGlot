@@ -307,8 +307,8 @@ internal static class Program
             settings: defaultSettings);
         Equal(RouteCapabilityState.Available, validRemoteResult.State, "valid remote route must support summary");
         Equal(RouteKind.ValidRemote, validRemoteResult.RouteKind, "route kind must be ValidRemote");
-        True(validRemoteResult.Reason.Contains("独立模型请求") && validRemoteResult.Reason.Contains("服务费用"),
-            "valid remote route must mention independent request and potential fees");
+        Equal("可以整理要点。", validRemoteResult.Reason,
+            "valid remote route should use concise user-facing copy");
         True(!validRemoteResult.CanNavigateToAddEngine, "valid remote route does not need add engine exit");
 
         // 4. 无凭据 (Remote provider configured but missing API key)
