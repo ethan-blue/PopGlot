@@ -819,7 +819,7 @@ public partial class TranslationPanelWindow : Window
             }
             else
             {
-                RenderFailure(fullMessage);
+                RenderFailure(fullMessage, session.Error?.Kind ?? TranslationErrorKind.Unknown);
             }
             return;
         }
@@ -1192,7 +1192,7 @@ public partial class TranslationPanelWindow : Window
         }
     }
 
-    private void RenderFailure(string message)
+    private void RenderFailure(string message, TranslationErrorKind kind = TranslationErrorKind.Unknown)
     {
         if (_holdingSummary)
         {
@@ -1201,7 +1201,7 @@ public partial class TranslationPanelWindow : Window
             return;
         }
         RenderState(TranslationSessionState.Failed);
-        SetTranslationContent(FriendlyError(message), isMarkdown: false);
+        SetTranslationContent(FriendlyError(message, kind), isMarkdown: false);
         TranslationTextBox.SetResourceReference(Control.ForegroundProperty, "TextPrimaryBrush");
         // The headline is deliberately short; the raw provider message stays
         // available underneath because it is what makes the problem fixable.
@@ -1243,7 +1243,30 @@ public partial class TranslationPanelWindow : Window
         EngineBadge.SetResourceReference(TextBlock.ForegroundProperty, strong);
     }
 
-    internal static string FriendlyError(string message)
+    internal static string FriendlyError(string message) =>
+        FriendlyError(message, TranslationErrorKind.Unknown);
+
+    /// <summary>
+    /// C17：结构化分类优先——协调器已把异常分类成 <see cref="TranslationErrorKind"/>，
+    /// kind 直查 headline（稳定、可测试）；文本匹配只给 Unknown 兜底（例如
+    /// 还没经过协调器分类的原始异常），且原有匹配顺序保持不变。
+    /// </summary>
+    internal static string FriendlyError(string message, TranslationErrorKind kind) => kind switch
+    {
+        TranslationErrorKind.RateLimited => "翻译请求被限流，请稍后重试",
+        TranslationErrorKind.OfflineOnly or TranslationErrorKind.NetworkDisabled => "模型网络目前未启用",
+        TranslationErrorKind.Configuration => "还差一步：配置模型密钥",
+        TranslationErrorKind.Unauthorized => "密钥无效或没有权限",
+        TranslationErrorKind.OcrFailed => "本地 OCR 没能识别出文字",
+        TranslationErrorKind.ServerError => "翻译引擎服务端错误，请稍后重试",
+        TranslationErrorKind.ParseError => "翻译引擎返回了无法解析的响应",
+        TranslationErrorKind.Sensitive => "内容含疑似敏感信息，已跳过",
+        // 取消/空输入/未知落到文本匹配或兜底：取消有专属文案路径，空输入
+        // 不会成会话，Unknown 里可能藏着上面词典能识别的措辞。
+        _ => FriendlyErrorByMessage(message),
+    };
+
+    private static string FriendlyErrorByMessage(string message)
     {
         // Ordered from most specific to least: rate-limit and offline messages
         // also mention keys and networks, so they must match first.

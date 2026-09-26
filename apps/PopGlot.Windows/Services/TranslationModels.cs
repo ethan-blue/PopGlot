@@ -133,7 +133,28 @@ internal sealed record TranslationError(
     TranslationErrorKind Kind,
     string Message,
     string? ActionableSuggestion = null,
-    bool IsTransient = false);
+    bool IsTransient = false)
+{
+    /// <summary>
+    /// C17 结构化 reason code：稳定、可解析、可测试的串值（诊断与测试用，
+    /// 不直接上屏）。来源是协调器分类出的 Kind，不是消息文本猜测。
+    /// </summary>
+    public string ReasonCode => Kind switch
+    {
+        TranslationErrorKind.Configuration => "configuration",
+        TranslationErrorKind.NetworkDisabled => "network_disabled",
+        TranslationErrorKind.OfflineOnly => "offline_only",
+        TranslationErrorKind.RateLimited => "rate_limited",
+        TranslationErrorKind.Unauthorized => "unauthorized",
+        TranslationErrorKind.ServerError => "server_error",
+        TranslationErrorKind.ParseError => "parse_error",
+        TranslationErrorKind.Cancelled => "cancelled",
+        TranslationErrorKind.OcrFailed => "ocr_failed",
+        TranslationErrorKind.Sensitive => "sensitive",
+        TranslationErrorKind.EmptyInput => "empty_input",
+        _ => "unknown",
+    };
+}
 
 internal sealed record TranslationSessionTiming(
     ulong OcrElapsedMs = 0,

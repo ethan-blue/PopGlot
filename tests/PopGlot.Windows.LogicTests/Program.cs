@@ -244,6 +244,7 @@ internal static class Program
         await RunAsync("long input plans into ordered segments", LongInputPlansIntoOrderedSegmentsAsync);
         await RunAsync("c10 loopback benchmark 100 runs and 100 cancels", LoopbackBenchmarkHundredRunsAndCancellationAsync);
         await RunAsync("c10 timeline stamps first delta and stage breakdown", TimelineStampsFirstDeltaAndStageBreakdown);
+        Run("c17 kind-first friendly errors take precedence over text matching", KindFirstFriendlyErrorsTakePrecedence);
         await RunAsync("cancel between segments stops later requests", CancelBetweenSegmentsStopsLaterRequestsAsync);
         await RunAsync("segment failure keeps fragments as partial", SegmentFailureKeepsFragmentsAsPartialAsync);
         await RunAsync("incomplete segment stops session as partial", IncompleteSegmentStopsSessionAsPartialAsync);
@@ -5750,6 +5751,37 @@ internal static class Program
             "an integrity-incomplete segment must not yield a Completed session");
         Equal(1, Volatile.Read(ref requestCount), "later segments must not run after an incomplete one");
         Equal(0, history.Entries.Count);
+    }
+
+    /// <summary>
+    /// C17 契约：结构化 Kind 直查的 headline 必须赢过文本匹配——即使消息
+    /// 文本里嵌着别的关键词（比如一条 ServerError 消息里提到"网络"也要回
+    /// 服务端错误，而不是"模型网络未启用"）；Unknown 兜底仍走原词典。
+    /// </summary>
+    private static void KindFirstFriendlyErrorsTakePrecedence()
+    {
+        // Kind=ServerError 的消息即使包含"网络"字样，也必须是服务端错误。
+        Equal(
+            "翻译引擎服务端错误，请稍后重试",
+            TranslationPanelWindow.FriendlyError("网络抖动导致 502 Bad Gateway", TranslationErrorKind.ServerError),
+            "structured kind must win over embedded '网络' text");
+        // Kind=RateLimited 同理。
+        Equal(
+            "翻译请求被限流，请稍后重试",
+            TranslationPanelWindow.FriendlyError("上游 502，且提示 429", TranslationErrorKind.RateLimited),
+            "kind=rate_limited wins over any text");
+        // Unknown 兜底仍走原词典（既有措辞不回归）。
+        Equal(
+            "模型网络目前未启用",
+            TranslationPanelWindow.FriendlyError("模型网络目前未启用：请检查设置"),
+            "unknown kind falls back to the legacy dictionary");
+        Equal(
+            "还差一步：配置模型密钥",
+            TranslationPanelWindow.FriendlyError("缺少 API Key"),
+            "unknown-kind dictionary still matches API Key text");
+        // ReasonCode 稳定可解析。
+        var error = new TranslationError(TranslationErrorKind.RateLimited, "429");
+        Equal("rate_limited", error.ReasonCode, "reason code is the stable serialised form");
     }
 
     /// <summary>

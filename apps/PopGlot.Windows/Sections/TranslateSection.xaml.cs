@@ -231,7 +231,8 @@ internal static class TranslateSectionReducer
         return current with
         {
             Phase = hasPartialFail ? TranslateUiPhase.Partial : TranslateUiPhase.Failed,
-            FinalText = hasPartialFail ? current.StreamText : TranslationPanelWindow.FriendlyError(message),
+            FinalText = hasPartialFail ? current.StreamText : TranslationPanelWindow.FriendlyError(
+                message, session.Error?.Kind ?? TranslationErrorKind.Unknown),
             IsStreamLayerVisible = false,
             IsFinalLayerVisible = true,
             IsStreamIndicatorVisible = false,
