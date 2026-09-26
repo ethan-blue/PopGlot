@@ -12530,6 +12530,11 @@ internal static class Program
         var quickSearch = new QuickSearchWindow(qsHistory, qsVocab);
         try
         {
+            // Result actions keep the shared 32-DIP minimum click target.
+            Equal(32.0, quickSearch.SpeakButton.Width);
+            Equal(32.0, quickSearch.CopyButton.Width);
+            Equal(32.0, quickSearch.StarButton.Width);
+
             // 1. Enter keycap is accessible and keyboard operable
             True(quickSearch.EnterKeycapButton is Button, "Enter keycap must be a Button");
             Equal(true, quickSearch.EnterKeycapButton.Focusable, "Enter keycap must be focusable");

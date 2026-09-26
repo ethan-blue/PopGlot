@@ -194,14 +194,14 @@
 
                                 <!-- Top-right Action Buttons -->
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                    <Button x:Name="SpeakButton" Style="{StaticResource IconButton}" Width="30" Height="30"
+                                    <Button x:Name="SpeakButton" Style="{StaticResource IconButton}" Width="32" Height="32"
                                             AutomationProperties.Name="朗读译文"
                                             ToolTip="朗读译文 (Ctrl+P)" Click="Speak_Click">
                                         <Path x:Name="SpeakIcon" Width="12" Height="12" Stretch="Uniform"
                                               Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                               Data="{StaticResource IconSpeaker}" />
                                     </Button>
-                                    <Button x:Name="CopyButton" Style="{StaticResource IconButton}" Width="30" Height="30"
+                                    <Button x:Name="CopyButton" Style="{StaticResource IconButton}" Width="32" Height="32"
                                             Margin="4,0,0,0"
                                             AutomationProperties.Name="复制译文"
                                             ToolTip="复制译文 (Ctrl+Shift+C)" Click="Copy_Click">
@@ -209,7 +209,7 @@
                                               Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                               Data="{StaticResource IconCopy}" />
                                     </Button>
-                                    <Button x:Name="StarButton" Style="{StaticResource IconButton}" Width="30" Height="30"
+                                    <Button x:Name="StarButton" Style="{StaticResource IconButton}" Width="32" Height="32"
                                             Margin="4,0,0,0"
                                             AutomationProperties.Name="收藏到生词本"
                                             ToolTip="收藏到生词本 (Ctrl+S)" Click="Star_Click">

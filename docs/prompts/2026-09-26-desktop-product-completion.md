@@ -87,13 +87,14 @@ un-*/logs/crash-20260926.log`）记录了压测翻动期间的成批 `InvalidOpe
   - **合并债**：分支与并行 WIP 改动同一批方法，等其落地后合并（冲突点：PumpStreamAsync/ApplyFinalResponse/HandleSessionResultAsync 附近）；合并前 C10 埋点不在 main 生效，诚实标注。
 - 门禁记录：本轮所有提交前后共 3 次全量验证（cargo test --locked / fmt / clippy、C# Debug+Release 0 警告 0 错误、PureTests 26/0、LogicTests 286→287/0、隔离目录、真配置哈希不变、`no unsanctioned public network send` PASS）。
 - 2026-09-26：**C10 组件级基准**（`762f3ce`）——经真实协调器 + mock 执行器：100 次完成回环 P50=15.5ms / P95=16.2ms / max=16.3ms / 失败 0；100 次取消 P95≈0ms / 错阶段 0；以「完成写入历史恰 100 条、取消不写」作完成/取消交叉验证。LogicTests 288/0。诚实口径：测试宿主组件管线，非应用级 hotkey→painted 预算（归 scripts/measure-*）。
+- 2026-09-26（第十轮，分支收敛）：并行产品补全成果已固化为 `dc9cdec` 并快进 `main`，随后以合并提交 `5c12e7e` 接入 `polish/c10-timeline-wiring`；三处重叠文件由 Git 三方合并且无文本冲突。合并后 `verify.ps1` 全绿：Rust test/fmt/clippy、WPF 构建、PureTests 33/0、LogicTests 295/0；C10 `timeline stamps first delta and stage breakdown` 契约已在 `main` 生效。旧条目中的“合并债”至此解除；仍未闭合的是应用级 hotkey→shell-visible→sent 全链路实测，不得把组件基准表述为应用级预算。
 
 ## 剩余未完成与阻塞（如实保留）
 
 | 项 | 状态 | 阻塞原因 / 下一步 |
 |---|---|---|
-| C10 生产侧结构化时间点 | 部分 | 组件基准已落地；hotkey→shell→selection→sent→first-delta→painted 生产埋点仍待做（涉及热路径，需专项波次） |
-| C12 生命周期 4 窗×200 开关 + WS 验收 | 未完成 | 真机可跑但耗时长；需独立时段执行并留档（下一轮首选） |
+| C10 生产侧结构化时间点 | 部分 | selection / first-delta / painted 生产接线与组件基准已合入 `main`；仍缺应用级 hotkey→shell-visible→sent 全链路实测 |
+| C12 生命周期 4 窗×200 开关 + WS 验收 | 基本闭环 | Settings / Panel / QuickSearch / TTS 已通过；Main 回收通过，主题订阅仅剩真机消息循环 E3 型复核 |
 | C13–C19 各残留子条款 | 部分 | 逐条为：结构化 reason code（C17）、错误原文折叠交互（C14/C17）、高对比交互态映射（C18）、旧文档 10 轮往返复核（C18）、Narrator 走查（C19，E3）等；按波次推进 |
 | C22 免费引擎商业 ADR | **阻塞** | 负责人商业决策，实施者不可代做 |
 | C23 四 Provider 真网 E2E | **阻塞** | 需用户显式网络授权 + 真实引擎可用（其网络环境不稳） |
