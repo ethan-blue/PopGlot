@@ -57,7 +57,11 @@ public partial class MainWindow : Window
         RefreshCloseButtonForTraySetting();
 
         ThemeService.ApplyWindowChrome(this);
-        ThemeService.ThemeChanged += (_, _) => ThemeService.ApplyWindowChrome(this);
+        // C12：与 QuickSearch/Settings/浮窗同一对称退订模式。内联 lambda 会把
+        // 每个实例永久驻留进静态事件，200 次开关即 200 个 rooted 主窗口。
+        _themeChangedHandler = (_, _) => ThemeService.ApplyWindowChrome(this);
+        ThemeService.ThemeChanged += _themeChangedHandler;
+        Closed += (_, _) => ThemeService.ThemeChanged -= _themeChangedHandler;
         StateChanged += (_, _) => UpdateMaximizeButtonGlyph();
         // E3-F12/F14: one stable Normal-state DIP size, seeded from the XAML
         // Width/Height. PerMonitorV2 round trips used to leave the window at
@@ -342,6 +346,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<StatusChannel, StatusEntry> _residentStatuses = new();
     private StatusEntry? _transientStatus;
     private readonly System.Windows.Threading.DispatcherTimer _transientRevertTimer;
+    private EventHandler? _themeChangedHandler;
 
     /// <summary>Transient messages hold the floor by tone: errors linger
     /// longer, confirmations clear quickly.</summary>
@@ -701,7 +706,7 @@ public partial class MainWindow : Window
                 Icon = freeActive ? MakeActiveCheck() : null,
                 ToolTip = chosen == FreeEngineProvider.MyMemory
                     ? "Google 线路不可用时改用这一条。文本发往 api.mymemory.translated.net，不发截图。"
-                    : "文本发往 translate.googleapis.com，不发截图。",
+                    : "文本发往 translate.googleapis.com / clients5.google.com，不发截图。",
             };
             item.Click += async (_, _) => await SwitchToFreeEngineAsync(chosen);
             menu.Items.Add(item);
