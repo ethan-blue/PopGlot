@@ -280,7 +280,7 @@
                             <RadioButton x:Name="ShowSummaryChoice" Content="要点" GroupName="PanelReading"
                                          Style="{StaticResource SegmentChoice}"
                                          AutomationProperties.Name="显示要点"
-                                         ToolTip="另一次请求，不打断正在进行的翻译。切回「译文」可看翻译。需要已配置的模型。"
+                                         ToolTip="独立模型请求，可能产生额外服务费用。切回「译文」可看翻译。需要已配置的模型。"
                                          Click="ShowSummary_Click" />
                             <TextBlock x:Name="EngineBadge" Style="{StaticResource Metadata}"
                                        FontWeight="SemiBold" FontSize="12" Margin="4,0,0,0"
@@ -367,7 +367,8 @@
                                      IsReadOnly="True" IsDocumentEnabled="True"
                                      Background="Transparent" BorderThickness="0"
                                      Visibility="Collapsed"
-                                     AutomationProperties.Name="格式化翻译结果" />
+                                     AutomationProperties.LiveSetting="Off"
+                                      AutomationProperties.Name="格式化翻译结果" />
                         <!-- Skeleton shown while a request is in flight -->
                         <StackPanel x:Name="ResultSkeleton" Margin="2,0,0,0" Height="68"
                                     Visibility="Collapsed" IsHitTestVisible="False">

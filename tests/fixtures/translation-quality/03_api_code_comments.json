@@ -1,0 +1,288 @@
+[
+  {
+    "id": "API-001",
+    "category": "api_code_comments",
+    "source": "/// Acquires a reader lock on the underlying `RwLock<Arc<State>>`. Returns `Err(PoisonError)` if a panic occurred while holding the lock.",
+    "protected_tokens": [
+      "RwLock<Arc<State>>",
+      "Err(PoisonError)"
+    ],
+    "allowed_variations": [
+      "获取读锁",
+      "若持有锁期间发生恐慌则返回错误"
+    ],
+    "key_semantics": "文档注释：获取读锁，若锁中毒则返回中毒错误",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "API-002",
+    "category": "api_code_comments",
+    "source": "public async Task<IReadOnlyList<UserRecord>> QueryUsersAsync(string tenantId, CancellationToken cancellationToken = default)",
+    "protected_tokens": [
+      "public async Task<IReadOnlyList<UserRecord>> QueryUsersAsync(string tenantId, CancellationToken cancellationToken = default)"
+    ],
+    "allowed_variations": [
+      "异步查询用户列表",
+      "查询指定租户的用户记录"
+    ],
+    "key_semantics": "C# 异步方法签名保留",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "API-003",
+    "category": "api_code_comments",
+    "source": "// TODO: Optimize string allocation using `Span<T>` or `ArrayPool<byte>.Shared` to reduce GC pressure.",
+    "protected_tokens": [
+      "Span<T>",
+      "ArrayPool<byte>.Shared",
+      "GC"
+    ],
+    "allowed_variations": [
+      "使用内存切片或对象池优化字符串分配",
+      "减少垃圾回收压力"
+    ],
+    "key_semantics": "代码 TODO 注释：通过共享内存池避免垃圾回收停顿",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "API-004",
+    "category": "api_code_comments",
+    "source": "export interface ApiResponse<TData = unknown, TMeta = Record<string, string>> {\n  readonly success: boolean;\n  readonly data?: TData;\n  readonly error?: {\n    code: number;\n    message: string;\n  };\n}",
+    "protected_tokens": [
+      "export interface ApiResponse<TData = unknown, TMeta = Record<string, string>>",
+      "readonly success: boolean",
+      "readonly data?: TData"
+    ],
+    "allowed_variations": [
+      "接口定义",
+      "通用响应契约"
+    ],
+    "key_semantics": "TypeScript 接口定义需完整保留语法结构",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "API-005",
+    "category": "api_code_comments",
+    "source": "/**\n * @param timeoutMs Maximum duration in milliseconds before rejecting with {@link TimeoutError}.\n * @throws {TypeError} If the given url is not a valid absolute URL.\n */",
+    "protected_tokens": [
+      "timeoutMs",
+      "TimeoutError",
+      "TypeError"
+    ],
+    "allowed_variations": [
+      "超时毫秒数",
+      "若 URL 无效抛出类型错误"
+    ],
+    "key_semantics": "JSDoc 标签与异常类型契约保留",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "API-006",
+    "category": "api_code_comments",
+    "source": "SELECT id, user_id, amount, status FROM orders WHERE status = 'PENDING' AND created_at >= NOW() - INTERVAL '24 HOURS' FOR UPDATE SKIP LOCKED;",
+    "protected_tokens": [
+      "SELECT id, user_id, amount, status FROM orders WHERE status = 'PENDING' AND created_at >= NOW() - INTERVAL '24 HOURS' FOR UPDATE SKIP LOCKED;"
+    ],
+    "allowed_variations": [
+      "SQL 查询语句",
+      "查询最近 24 小时未决订单并跳过已锁定行"
+    ],
+    "key_semantics": "SQL 语句必须完全保持原样，不应被汉化关键字",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "API-007",
+    "category": "api_code_comments",
+    "source": "/// # Safety\n/// Calling this function is `unsafe` because the caller must ensure that `ptr` is aligned to a 4-byte boundary and points to valid initialized memory.",
+    "protected_tokens": [
+      "# Safety",
+      "unsafe",
+      "`ptr`",
+      "4-byte boundary"
+    ],
+    "allowed_variations": [
+      "安全规范",
+      "调用者必须确保指针已 4 字节对齐且指向有效已初始化内存"
+    ],
+    "key_semantics": "Rust unsafe 函数安全前提说明",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "API-008",
+    "category": "api_code_comments",
+    "source": "POST /v1/chat/completions HTTP/1.1\nHost: api.openai.com\nContent-Type: application/json\nAuthorization: Bearer sk-antigravity-mock-token",
+    "protected_tokens": [
+      "POST /v1/chat/completions HTTP/1.1",
+      "Host: api.openai.com",
+      "Content-Type: application/json"
+    ],
+    "allowed_variations": [
+      "HTTP 请求标头",
+      "报文原样保留"
+    ],
+    "key_semantics": "HTTP 请求行与协议标头逐字正确",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "API-009",
+    "category": "api_code_comments",
+    "source": "# Invariant: self._buffer must never contain unescaped newline characters when self._in_string is False.",
+    "protected_tokens": [
+      "self._buffer",
+      "self._in_string"
+    ],
+    "allowed_variations": [
+      "类不变量：当不在字符串内时缓冲区不得包含未转义换行符"
+    ],
+    "key_semantics": "状态机不变量约束说明",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "API-010",
+    "category": "api_code_comments",
+    "source": "impl<T> Deref for MutexGuard<'_, T> {\n    type Target = T;\n    fn deref(&self) -> &T {\n        unsafe { &*self.lock.data.get() }\n    }\n}",
+    "protected_tokens": [
+      "impl<T> Deref for MutexGuard<'_, T>",
+      "type Target = T;",
+      "fn deref(&self) -> &T"
+    ],
+    "allowed_variations": [
+      "解引用 trait 实现"
+    ],
+    "key_semantics": "代码块保持逐字保留，不翻译函数与类型标识",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "API-011",
+    "category": "api_code_comments",
+    "source": "@deprecated(since = \"2.4.0\", note = \"Use `fetch_all_with_context` instead to propagate OpenTelemetry trace headers.\")",
+    "protected_tokens": [
+      "@deprecated",
+      "2.4.0",
+      "fetch_all_with_context",
+      "OpenTelemetry"
+    ],
+    "allowed_variations": [
+      "已废弃标记",
+      "改用 fetch_all_with_context 以传播分布式链路追踪头"
+    ],
+    "key_semantics": "弃用注解及替代 API 建议",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "API-012",
+    "category": "api_code_comments",
+    "source": "{\"query\": \"query GetUser($id: ID!) { user(id: $id) { name email role { permissions } } }\"}",
+    "protected_tokens": [
+      "GetUser($id: ID!)",
+      "role { permissions }"
+    ],
+    "allowed_variations": [
+      "GraphQL 查询负载"
+    ],
+    "key_semantics": "JSON 格式内的 GraphQL 语法保持完整",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "API-013",
+    "category": "api_code_comments",
+    "source": "inline uint32_t popcount_u32(uint32_t val) noexcept {\n    return static_cast<uint32_t>(__builtin_popcount(val));\n}",
+    "protected_tokens": [
+      "inline uint32_t popcount_u32(uint32_t val) noexcept",
+      "__builtin_popcount"
+    ],
+    "allowed_variations": [
+      "计算 32 位无符号整数二进制 1 的位数"
+    ],
+    "key_semantics": "C++ 内联函数保持逐字符保留",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "API-014",
+    "category": "api_code_comments",
+    "source": "/* WARNING: Modifying this schema version without running `migrate_db` will cause runtime panics on deserialization. */",
+    "protected_tokens": [
+      "WARNING:",
+      "`migrate_db`",
+      "deserialization"
+    ],
+    "allowed_variations": [
+      "警告：未经迁移直接修改架构版本会导致反序列化时发生运行时恐慌"
+    ],
+    "key_semantics": "开发警示注释与命令依赖",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "API-015",
+    "category": "api_code_comments",
+    "source": "sealed record TokenBucketRateLimiter(int Capacity, double RefillTokensPerSecond) : IRateLimiter;",
+    "protected_tokens": [
+      "sealed record TokenBucketRateLimiter(int Capacity, double RefillTokensPerSecond) : IRateLimiter;"
+    ],
+    "allowed_variations": [
+      "令牌桶限流器记录类型声明"
+    ],
+    "key_semantics": "C# 记录类型声明完全保留",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  }
+]

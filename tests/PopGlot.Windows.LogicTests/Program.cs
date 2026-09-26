@@ -338,6 +338,12 @@ internal static class Program
             ("the empty service list cannot cover the add-first-engine button", EmptyServiceListLeavesAddButtonClickable),
             ("theme swatch previews even when the saved value already matches", ThemeSwatchPreviewsEvenWhenTheSavedValueAlreadyMatches),
             ("summary reading does not cancel or cover the translation", SummaryReadingDoesNotCancelOrCoverTheTranslation));
+        await RunStaAsync("summary late arrival does not overwrite new input or language", SummaryLateArrivalDoesNotOverwriteCurrentSection);
+        await RunStaAsync("summary failure isolates and preserves existing translation", SummaryFailurePreservesTranslation);
+        await RunStaAsync("R02 workbench three exits and in-place continuation", R02WorkbenchThreeExitsAndInPlaceContinuation);
+        await RunStaAsync("R03 summary route capability honesty and upfront notice", R03SummaryRouteCapabilityHonesty);
+        await RunStaAsync("R04 core interaction escape precedence and accessibility contracts", R04InteractionAndAccessibilityContracts);
+        await RunStaAsync("R08 data section backup and restore UI contracts", R08DataSectionBackupAndRestoreUiContracts);
         await RunAsync("coordinator refuses new work while the fuse is closed", CoordinatorRefusesWorkWhenFused);
 
         // C09 prompt regressions against the FINAL CoreBridge shape, all on the
@@ -7541,6 +7547,414 @@ internal static class Program
         return (section, dir);
     }
 
+    private static (TranslateSection Section, string Dir, FakeTranslationExecutor Executor) NewIsolatedTranslateSectionWithExecutor()
+    {
+        ProfileManager.ResetForTests();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-sec-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        ProfileManager.ConfigPathOverride = Path.Combine(dir, "product-config.json");
+        CoreBridge.Initialize();
+        EnsureApplication();
+        var executor = new FakeTranslationExecutor();
+        var coordinator = new TranslationCoordinator(
+            new HistoryStore(Path.Combine(dir, "history.json")),
+            executor: executor);
+        var section = new TranslateSection();
+        section.Initialize(coordinator, vocabulary: null);
+        return (section, dir, executor);
+    }
+
+    private static async Task SummaryLateArrivalDoesNotOverwriteCurrentSection()
+    {
+        var (section, dir, executor) = NewIsolatedTranslateSectionWithExecutor();
+        try
+        {
+            var initialText = "第一段待总结文本";
+            section.InputBox.Text = initialText;
+            var state = TranslateUiState.Initial with
+            {
+                Epoch = 1,
+                Phase = TranslateUiPhase.Idle,
+                FinalText = "第一段的有效译文",
+                IsFinalLayerVisible = true,
+            };
+            section.ApplyState(state);
+
+            var tcs = new TaskCompletionSource<TranslationResponse>();
+            executor.OnRunTextTask = (apiKey, src, srcLang, tgtLang, task, token, settings) => tcs.Task;
+
+            var summaryTask = section.TriggerSummaryAsync();
+            True(section.IsHoldingSummary, "summary reading started");
+
+            // User clears or changes input before response completes
+            section.InputBox.Text = "新的第二段文本";
+
+            True(!section.IsHoldingSummary, "changing input immediately resets holding summary");
+            Equal("第一段的有效译文", section.ResultBox.Text, "translation is preserved");
+
+            // Late arrival finishes
+            tcs.SetResult(new TranslationResponse(
+                new TranslationResult("已失效的旧要点", "", "旧说明", [], []),
+                new ProviderDiagnostics("req-1", ProviderType.OpenAiCompatible, "https://api.example.com", 1, 200, 10)));
+            await summaryTask;
+
+            True(!section.IsHoldingSummary, "late arrival does not reopen summary reading");
+            Equal("第一段的有效译文", section.ResultBox.Text, "late arrival does not overwrite translation box");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+            ProfileManager.ConfigPathOverride = null;
+        }
+    }
+
+    private static async Task SummaryFailurePreservesTranslation()
+    {
+        var (section, dir, executor) = NewIsolatedTranslateSectionWithExecutor();
+        try
+        {
+            section.InputBox.Text = "需要总结的内容";
+            var state = TranslateUiState.Initial with
+            {
+                Epoch = 1,
+                Phase = TranslateUiPhase.Idle,
+                FinalText = "不可丢失的关键译文",
+                IsFinalLayerVisible = true,
+            };
+            section.ApplyState(state);
+
+            executor.OnRunTextTask = (apiKey, src, srcLang, tgtLang, task, token, settings) =>
+                throw new InvalidOperationException("API Key expired or network down");
+
+            await section.TriggerSummaryAsync();
+
+            True(!section.IsHoldingSummary, "failed summary reverts to translation");
+            Equal("不可丢失的关键译文", section.ResultBox.Text, "translation text must remain intact");
+            True(section.StatusBlock.Text.Contains("API Key expired or network down"),
+                "status block reports failure message");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+            ProfileManager.ConfigPathOverride = null;
+        }
+    }
+
+    private static async Task R02WorkbenchThreeExitsAndInPlaceContinuation()
+    {
+        var (section, dir, executor) = NewIsolatedTranslateSectionWithExecutor();
+        try
+        {
+            executor.TextRoute = null;
+            executor.ApiKey = null;
+            var freeSends = 0;
+            executor.OnTranslateFree = (text, src, tgt, token) =>
+            {
+                freeSends++;
+                return Task.FromResult(new TranslationResponse(
+                    new TranslationResult("已自动继续翻译", "", "", [], []),
+                    new ProviderDiagnostics("d1", ProviderType.OpenAiCompatible, "http://127.0.0.1", 1, 200, 10)));
+            };
+
+            SetIsolatedConsent(FreeEngineConsent.Unset);
+            section.RefreshAfterSettingsChanged();
+
+            // 1. All 3 in-place exits must be visible when unconfigured
+            Equal(Visibility.Visible, section.FreeEngineEntryButton.Visibility,
+                "exit 1: 允许公共翻译 must be visible");
+            Equal("允许公共翻译", $"{section.FreeEngineEntryButton.Content}", "exit 1 label");
+
+            var cta = CtaButton(section);
+            Equal(Visibility.Visible, cta.Visibility, "exit 2: 添加翻译引擎 must be visible");
+            Equal("添加翻译引擎", $"{cta.Content}", "exit 2 label");
+
+            Equal(Visibility.Visible, section.OfflineUsageEntryButton.Visibility,
+                "exit 3: 查看离线用法 must be visible");
+            Equal("查看离线用法", $"{section.OfflineUsageEntryButton.Content}", "exit 3 label");
+
+            // 2. Click exit 3: 查看离线用法
+            var offlineNavigations = 0;
+            section.OpenOfflineUsageFlow = () => offlineNavigations++;
+            section.OfflineUsageEntryButton.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            Equal(1, offlineNavigations, "clicking offline usage must trigger offline usage flow once");
+            Equal(FreeEngineConsent.Unset, ShellSettingsStore.Load().FreeEngineConsent, "consent must remain unset");
+
+            // 3. User enters text and hits Enter/Translate when unconfigured:
+            // Must block in-place with 3 exits, zero network sends, zero dialogs, preserving input text!
+            section.InputBox.Text = "Hello unconfigured world";
+            var blockedBefore = TestIsolation.BlockedPublicSends;
+
+            typeof(TranslateSection)
+                .GetMethod("Translate_Click", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(section, new object[] { section, new RoutedEventArgs() });
+
+            Equal(blockedBefore, TestIsolation.BlockedPublicSends, "must not send any network request before consent");
+            Equal("Hello unconfigured world", section.InputBox.Text, "input text must be preserved");
+            Equal(Visibility.Visible, section.EmptyStateGuide.Visibility, "guide must remain visible in place");
+            True(section.StatusBlock.Text.Contains("未配置引擎或未允许公共翻译"), "status must explain in-place options");
+
+            // 4. Click exit 1: 允许公共翻译:
+            // Persists Allowed and immediately continues translation of pending text!
+            typeof(TranslateSection)
+                .GetMethod("EnableFreeEngine_Click", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(section, new object[] { section, new RoutedEventArgs() });
+
+            Equal(FreeEngineConsent.Allowed, ShellSettingsStore.Load().FreeEngineConsent,
+                "consent must be persisted as Allowed");
+            Equal(Visibility.Collapsed, section.FreeEngineEntryButton.Visibility,
+                "consented free engine retires the entry button");
+            Equal(1, freeSends, "translating pending text must be continued exactly once on consent");
+            Equal(blockedBefore, TestIsolation.BlockedPublicSends, "no public network send should be attempted");
+
+            // 5. Test settings navigation retains input
+            section.InputBox.Text = "Preserve this text";
+            var settingsNavigations = 0;
+            section.OpenAddEngineFlow = () => settingsNavigations++;
+            cta.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            Equal(1, settingsNavigations, "clicking add engine must trigger add engine flow");
+            Equal("Preserve this text", section.InputBox.Text, "input text must be preserved after clicking settings");
+        }
+        finally
+        {
+            ProfileManager.ResetForTests();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    private static async Task R03SummaryRouteCapabilityHonesty()
+    {
+        var (section, dir, executor) = NewIsolatedTranslateSectionWithExecutor();
+        try
+        {
+            // Case 1: Route is free engine (allowed fallback)
+            executor.TextRoute = null;
+            executor.ApiKey = null;
+            SetIsolatedConsent(FreeEngineConsent.Allowed);
+            section.RefreshAfterSettingsChanged();
+            section.InputBox.Text = "Some source text to summarize";
+
+            var blockedBefore = TestIsolation.BlockedPublicSends;
+
+            // Trigger summary on free engine route
+            await section.TriggerSummaryAsync();
+
+            // Must NOT throw, must NOT send network request, must stay/switch to translation
+            Equal(blockedBefore, TestIsolation.BlockedPublicSends, "free engine summary must not send any request");
+            True(!section.IsHoldingSummary, "must not enter holding summary on unsupported route");
+            True(section.StatusBlock.Text.Contains("当前公共翻译不支持整理要点"),
+                "status must report upfront reason without throwing exception");
+
+            // ToolTip honesty check
+            var summaryChoice = (System.Windows.Controls.RadioButton)section.FindName("ShowSummaryChoice")!;
+            True($"{summaryChoice.ToolTip}".Contains("当前公共翻译不支持整理要点"),
+                "summary tooltip must state upfront reason on free route");
+        }
+        finally
+        {
+            ProfileManager.ResetForTests();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    private static async Task R04InteractionAndAccessibilityContracts()
+    {
+        var (section, dir, executor) = NewIsolatedTranslateSectionWithExecutor();
+        var history = new HistoryStore(TestIsolation.HistoryPath);
+        var vocab = new VocabularyStore(TestIsolation.VocabularyPath);
+        var panel = new TranslationPanelWindow(
+            new Rect(100, 100, 20, 20),
+            history,
+            () => ShellSettings.Default,
+            null,
+            null,
+            vocab);
+        var source = new System.Windows.Interop.HwndSource(
+            new System.Windows.Interop.HwndSourceParameters("popglot-r04-test") { Width = 8, Height = 8 });
+
+        try
+        {
+            // --- Part 1: Accessibility & LiveSetting contracts ---
+            // Streaming result elements must be LiveSetting = Off to prevent spamming screen readers
+            Equal(System.Windows.Automation.AutomationLiveSetting.Off,
+                System.Windows.Automation.AutomationProperties.GetLiveSetting(section.ResultBox),
+                "TranslateResult LiveSetting must be Off");
+            var streamBox = (System.Windows.Controls.TextBox)section.FindName("TranslateStreamResult")!;
+            Equal(System.Windows.Automation.AutomationLiveSetting.Off,
+                System.Windows.Automation.AutomationProperties.GetLiveSetting(streamBox),
+                "TranslateStreamResult LiveSetting must be Off");
+            Equal(System.Windows.Automation.AutomationLiveSetting.Off,
+                System.Windows.Automation.AutomationProperties.GetLiveSetting(panel.StreamTextBox),
+                "Panel TranslationTextBox LiveSetting must be Off");
+            var panelRich = (System.Windows.Controls.RichTextBox)panel.FindName("TranslationRichBox")!;
+            Equal(System.Windows.Automation.AutomationLiveSetting.Off,
+                System.Windows.Automation.AutomationProperties.GetLiveSetting(panelRich),
+                "Panel TranslationRichBox LiveSetting must be Off");
+
+            // Status blocks must be LiveSetting = Polite
+            Equal(System.Windows.Automation.AutomationLiveSetting.Polite,
+                System.Windows.Automation.AutomationProperties.GetLiveSetting(section.StatusBlock),
+                "Workbench StatusBlock LiveSetting must be Polite");
+            var panelStatus = (System.Windows.Controls.TextBlock)panel.FindName("StatusText")!;
+            Equal(System.Windows.Automation.AutomationLiveSetting.Polite,
+                System.Windows.Automation.AutomationProperties.GetLiveSetting(panelStatus),
+                "Panel StatusText LiveSetting must be Polite");
+
+            // Reading mode toggle labels
+            var showTrans = (System.Windows.Controls.RadioButton)section.FindName("ShowTranslationChoice")!;
+            var showSumm = (System.Windows.Controls.RadioButton)section.FindName("ShowSummaryChoice")!;
+            Equal("显示译文", System.Windows.Automation.AutomationProperties.GetName(showTrans),
+                "ShowTranslationChoice must have accessible name");
+            Equal("显示要点", System.Windows.Automation.AutomationProperties.GetName(showSumm),
+                "ShowSummaryChoice must have accessible name");
+
+            // --- Part 2: Workbench Esc ladder & task cancellation ---
+            // A. In-flight translation Esc cancels task, retains partial text
+            var transCts = new CancellationTokenSource();
+            var runningState = TranslateUiState.Initial with
+            {
+                Phase = TranslateUiPhase.Streaming,
+                StreamText = "Partial translated stream",
+                IsStreamLayerVisible = true,
+            };
+            section.AdoptTranslationOperation(transCts, runningState);
+
+            var escEvent1 = new System.Windows.Input.KeyEventArgs(
+                System.Windows.Input.Keyboard.PrimaryDevice, source, 0, System.Windows.Input.Key.Escape)
+            {
+                RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent,
+            };
+            section.RaiseEvent(escEvent1);
+
+            True(escEvent1.Handled, "Esc during workbench translation must be handled");
+            True(transCts.IsCancellationRequested, "Esc must request cancellation on translation CTS");
+
+            // Simulate the reducer applying cancellation
+            section.ApplyState(TranslateSectionReducer.ApplyError(section.CurrentState, new OperationCanceledException(), section.CurrentState.Epoch));
+            Equal(TranslateUiPhase.Partial, section.CurrentState.Phase, "in-flight cancellation retains partial stream");
+            Equal("Partial translated stream", section.CurrentState.FinalText, "partial text is preserved in FinalText");
+
+            // B. IME active Esc must NOT cancel workbench task
+            var transCts2 = new CancellationTokenSource();
+            section.AdoptTranslationOperation(transCts2, runningState);
+            Ui.SetIsComposing(section.InputBox, true);
+
+            var imeEsc = new System.Windows.Input.KeyEventArgs(
+                System.Windows.Input.Keyboard.PrimaryDevice, source, 0, System.Windows.Input.Key.Escape)
+            {
+                RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent,
+            };
+            section.InputBox.RaiseEvent(imeEsc);
+            True(!imeEsc.Handled, "IME composition Esc must not be handled by workbench");
+            True(!transCts2.IsCancellationRequested, "IME composition Esc must not cancel translation operation");
+            Ui.SetIsComposing(section.InputBox, false);
+
+            // --- Part 3: TranslationPanel Esc ladder & cancellation target ---
+            panel.Show();
+            True(panel.IsVisible, "panel must be visible");
+
+            // When summary is running and holding summary:
+            var summCts = new CancellationTokenSource();
+            panel.AdoptSummaryOperation(summCts);
+            typeof(TranslationPanelWindow)
+                .GetField("_holdingSummary", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .SetValue(panel, true);
+
+            var panelEsc1 = new System.Windows.Input.KeyEventArgs(
+                System.Windows.Input.Keyboard.PrimaryDevice, source, 0, System.Windows.Input.Key.Escape)
+            {
+                RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent,
+            };
+            panel.RaiseEvent(panelEsc1);
+            True(panelEsc1.Handled, "Esc during summary must be handled");
+            True(summCts.IsCancellationRequested, "Esc while holding summary must cancel summary CTS");
+            True(panel.IsVisible, "first Esc must NOT hide the panel while task was in flight");
+
+            // Second Esc after task cancellation hides panel
+            var panelEsc2 = new System.Windows.Input.KeyEventArgs(
+                System.Windows.Input.Keyboard.PrimaryDevice, source, 0, System.Windows.Input.Key.Escape)
+            {
+                RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent,
+            };
+            panel.RaiseEvent(panelEsc2);
+            True(panelEsc2.Handled, "second Esc must be handled");
+            True(!panel.IsVisible, "second Esc must hide the panel");
+
+            panel.Close();
+        }
+        finally
+        {
+            source.Dispose();
+            ProfileManager.ResetForTests();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    private static Task R08DataSectionBackupAndRestoreUiContracts()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "popglot-backup-ui-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var historyPath = Path.Combine(tempDir, "history.json");
+            var vocabPath = Path.Combine(tempDir, "vocab.json");
+            var history = new HistoryStore(historyPath);
+            history.TryAdd(new TranslationHistoryEntry(
+                Guid.NewGuid(),
+                DateTimeOffset.UtcNow,
+                "workbench",
+                "Source Hello",
+                "Target 你好",
+                "",
+                []), enabled: true);
+
+            var vocab = new VocabularyStore(vocabPath);
+            vocab.ToggleStar("hello", "你好");
+
+            var section = new PopGlot.Windows.Sections.DataSection();
+            var appliedSettings = false;
+            section.Initialize(
+                history,
+                vocab,
+                () => ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed },
+                _ => { appliedSettings = true; });
+
+            var backupFile = Path.Combine(tempDir, "exported-backup.popglot-backup.json");
+            PopGlot.Windows.Sections.DataSection.CustomSavePathPicker = () => backupFile;
+
+            string? lastStatus = null;
+            section.StatusChanged += (msg, _) => lastStatus = msg;
+
+            var exportBtn = (System.Windows.Controls.Button)section.FindName("ExportBackupButton")!;
+            exportBtn.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+
+            True(File.Exists(backupFile), "backup file must be created by export button click");
+            True(lastStatus is not null && lastStatus.Contains("已成功导出备份包"), "status must announce successful export");
+
+            // Test import button
+            PopGlot.Windows.Sections.DataSection.CustomOpenPathPicker = () => backupFile;
+            var importBtn = (System.Windows.Controls.Button)section.FindName("ImportBackupButton")!;
+            importBtn.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+
+            True(lastStatus is not null && lastStatus.Contains("数据恢复成功"), "status must announce successful restoration");
+            True(appliedSettings, "shell settings applier must have been invoked during restore");
+
+            // Test corrupted file handling
+            var corruptedFile = Path.Combine(tempDir, "corrupted.json");
+            File.WriteAllText(corruptedFile, "{ \"schema_version\": 999 }");
+            PopGlot.Windows.Sections.DataSection.CustomOpenPathPicker = () => corruptedFile;
+            importBtn.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+
+            True(lastStatus is not null && lastStatus.Contains("恢复终止"), "corrupted/unknown schema must safely terminate restore with notice");
+        }
+        finally
+        {
+            PopGlot.Windows.Sections.DataSection.CustomSavePathPicker = null;
+            PopGlot.Windows.Sections.DataSection.CustomOpenPathPicker = null;
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+        return Task.CompletedTask;
+    }
+
     private static void SetIsolatedConsent(FreeEngineConsent consent) =>
         ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = consent });
 
@@ -9758,6 +10172,23 @@ internal static class Program
 
     private static void RunSta(string name, Action test) => RunStaBatch((name, test));
 
+    private static async Task RunStaAsync(string name, Func<Task> test)
+    {
+        if (!ClaimTestName(name) || !ShouldRun(name)) return;
+        try
+        {
+            await GetStaHarnessDispatcher().InvokeAsync(test).Task.Unwrap();
+            _passed++;
+            Console.WriteLine($"PASS {name}");
+        }
+        catch (Exception ex)
+        {
+            _failed++;
+            Console.WriteLine($"FAIL {name}: {ex.Message}");
+            Console.WriteLine(ex);
+        }
+    }
+
     /// <summary>
     /// Runs several UI-bound tests on ONE STA thread with individual
     /// reporting. WPF Application resources are thread-affine: a test that
@@ -10607,6 +11038,23 @@ internal static class Program
         public Func<ProviderSettings, string, string, string, string, string, long, CancellationToken, TranslationStreamSession>? OnStreamTextDraft { get; set; }
         public Func<ProviderSettings, string, string, byte[], string, string, string, long, CancellationToken, TranslationStreamSession>? OnStreamVisionDraft { get; set; }
         public Func<string, string, string, CancellationToken, Task<TranslationResponse>>? OnTranslateFree { get; set; }
+        public Func<string?, string, string, string, TextTaskKind, CancellationToken, ProviderSettings?, Task<TranslationResponse>>? OnRunTextTask { get; set; }
+
+        public Task<TranslationResponse> RunTextTaskAsync(
+            string? apiKey,
+            string source,
+            string sourceLang,
+            string targetLang,
+            TextTaskKind task,
+            CancellationToken cancellationToken,
+            ProviderSettings? routeSettings = null)
+        {
+            if (OnRunTextTask is not null)
+            {
+                return OnRunTextTask(apiKey, source, sourceLang, targetLang, task, cancellationToken, routeSettings);
+            }
+            return CoreBridge.RunTextTaskAsync(apiKey, source, sourceLang, targetLang, task, cancellationToken, routeSettings);
+        }
 
         public ProviderSettings GetSettings() => Settings;
 

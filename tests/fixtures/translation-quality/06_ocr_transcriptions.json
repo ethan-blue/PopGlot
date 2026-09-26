@@ -1,0 +1,201 @@
+[
+  {
+    "id": "OCR-001",
+    "category": "ocr_transcriptions",
+    "source": "[Dialog Title: Alert]\nFailed to initialize DirectX 12 renderer: D3D12CreateDevice failed with code 0x887A0004.\nPlease verify that your graphics driver supports Feature Level 12_0.\n[Button: OK]  [Button: Exit]",
+    "protected_tokens": [
+      "DirectX 12",
+      "D3D12CreateDevice",
+      "0x887A0004",
+      "Feature Level 12_0"
+    ],
+    "allowed_variations": [
+      "初始化 DirectX 12 渲染器失败",
+      "请确认显卡驱动支持特性级别 12_0"
+    ],
+    "key_semantics": "对话框截屏文字：DirectX 初始化失败与错误代码",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "OCR-002",
+    "category": "ocr_transcriptions",
+    "source": "git status\nOn branch feature/user-auth\nChanges not staged for commit:\n  (use \"git add <file>...\" to update what will be committed)\n\tmodified:   src/auth.rs\n\tdeleted:    config/secrets.json.example",
+    "protected_tokens": [
+      "feature/user-auth",
+      "src/auth.rs",
+      "config/secrets.json.example"
+    ],
+    "allowed_variations": [
+      "位于分支 feature/user-auth",
+      "尚未暂存以备提交的变更"
+    ],
+    "key_semantics": "终端命令行截图中的 git 状态与受保护文件路径",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "OCR-003",
+    "category": "ocr_transcriptions",
+    "source": "HTTP/2 403 Forbidden\nx-ratelimit-limit: 60\nx-ratelimit-remaining: 0\nx-ratelimit-reset: 1774567200\n{\"error\": \"API rate limit exceeded for IP 198.51.100.24\"}",
+    "protected_tokens": [
+      "HTTP/2 403 Forbidden",
+      "x-ratelimit-limit: 60",
+      "198.51.100.24"
+    ],
+    "allowed_variations": [
+      "超过 API 限流配额",
+      "禁止访问"
+    ],
+    "key_semantics": "抓包截图中的 HTTP 响应头与限流错误信息",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "OCR-004",
+    "category": "ocr_transcriptions",
+    "source": "Visual Studio Code - Source Control\nCommit (Ctrl+Enter) to commit on 'main'\n1 staged change:\n  M  package.json (+2, -1)\n2 unstaged changes:\n  D  README.old.md\n  ?  dist/bundle.js",
+    "protected_tokens": [
+      "package.json",
+      "README.old.md",
+      "dist/bundle.js"
+    ],
+    "allowed_variations": [
+      "已暂存的变更",
+      "未暂存的变更"
+    ],
+    "key_semantics": "IDE 源码管理侧边栏截图",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "OCR-005",
+    "category": "ocr_transcriptions",
+    "source": "Windows Security Warning\nThe publisher of 'Setup_v0.1.10.exe' could not be verified.\nFile path: D:\\Downloads\\Setup_v0.1.10.exe\n[Run anyway] [Cancel]",
+    "protected_tokens": [
+      "Setup_v0.1.10.exe",
+      "D:\\Downloads\\Setup_v0.1.10.exe"
+    ],
+    "allowed_variations": [
+      "无法验证发布者",
+      "仍然运行",
+      "取消"
+    ],
+    "key_semantics": "操作系统安全警告弹窗文字与操作按钮",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "OCR-006",
+    "category": "ocr_transcriptions",
+    "source": "Task Manager - Performance\nCPU: AMD Ryzen 9 7950X 16-Core Processor\nBase speed: 4.50 GHz | Utilization: 12% | Processes: 284 | Threads: 3892",
+    "protected_tokens": [
+      "AMD Ryzen 9 7950X",
+      "4.50 GHz"
+    ],
+    "allowed_variations": [
+      "CPU 使用率：12%",
+      "进程数：284"
+    ],
+    "key_semantics": "任务管理器性能选项卡系统硬件信息截图",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "OCR-007",
+    "category": "ocr_transcriptions",
+    "source": "pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121\nLooking in indexes: https://download.pytorch.org/whl/cu121\nCollecting torch==2.3.0+cu121 (2400.4 MB)",
+    "protected_tokens": [
+      "pip install torch torchvision",
+      "https://download.pytorch.org/whl/cu121",
+      "torch==2.3.0+cu121"
+    ],
+    "allowed_variations": [
+      "正在收集包",
+      "寻找安装源"
+    ],
+    "key_semantics": "终端下载安装深度学习框架包输出截图",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "OCR-008",
+    "category": "ocr_transcriptions",
+    "source": "[Web Inspector - Console]\n[Uncaught ReferenceError: window.ethereum is not defined at metamask_connector.js:31:15]\n(anonymous) @ metamask_connector.js:31",
+    "protected_tokens": [
+      "ReferenceError: window.ethereum is not defined",
+      "metamask_connector.js:31:15"
+    ],
+    "allowed_variations": [
+      "未捕获的引用错误",
+      "未定义"
+    ],
+    "key_semantics": "浏览器控制台未捕获异常报错截图",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "OCR-009",
+    "category": "ocr_transcriptions",
+    "source": "Postman 200 OK (342 ms, 1.24 KB)\n{\n  \"status\": \"healthy\",\n  \"uptime\": 86400,\n  \"version\": \"v1.14.2\",\n  \"database\": {\"ping\": \"1ms\", \"connected\": true}\n}",
+    "protected_tokens": [
+      "200 OK",
+      "\"status\": \"healthy\"",
+      "\"version\": \"v1.14.2\""
+    ],
+    "allowed_variations": [
+      "健康检查响应结果",
+      "已连接"
+    ],
+    "key_semantics": "接口调试工具健康检查响应报文截图",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "OCR-010",
+    "category": "ocr_transcriptions",
+    "source": "BIOS Setup Utility - Boot\nBoot Option #1: [UEFI: Samsung SSD 980 PRO 1TB, Partition 1]\nBoot Option #2: [Disabled]\nSecure Boot: [Enabled] | TPM 2.0: [Active]",
+    "protected_tokens": [
+      "Samsung SSD 980 PRO 1TB",
+      "Secure Boot: [Enabled]",
+      "TPM 2.0: [Active]"
+    ],
+    "allowed_variations": [
+      "安全启动：已启用",
+      "启动选项"
+    ],
+    "key_semantics": "主板设置界面启动项与安全模块截图",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  }
+]

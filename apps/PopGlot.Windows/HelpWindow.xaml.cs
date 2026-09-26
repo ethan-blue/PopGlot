@@ -26,7 +26,11 @@ public partial class HelpWindow : Window
 
     private bool _suppressListEvents;
 
-    public HelpWindow()
+    public HelpWindow() : this(null)
+    {
+    }
+
+    public HelpWindow(string? initialArticleFile)
     {
         InitializeComponent();
         var missing = new List<string>();
@@ -57,9 +61,36 @@ public partial class HelpWindow : Window
         else
         {
             _suppressListEvents = true;
-            ArticleList.SelectedIndex = 0;
+            var targetIndex = 0;
+            if (!string.IsNullOrEmpty(initialArticleFile))
+            {
+                for (var i = 0; i < Articles.Length; i++)
+                {
+                    if (string.Equals(Articles[i].File, initialArticleFile, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(Articles[i].Title, initialArticleFile, StringComparison.OrdinalIgnoreCase))
+                    {
+                        targetIndex = i;
+                        break;
+                    }
+                }
+            }
+            ArticleList.SelectedIndex = targetIndex;
             _suppressListEvents = false;
             LoadSelectedArticle();
+        }
+    }
+
+    public void SelectArticle(string fileOrTitle)
+    {
+        if (string.IsNullOrEmpty(fileOrTitle)) return;
+        for (var i = 0; i < Articles.Length; i++)
+        {
+            if (string.Equals(Articles[i].File, fileOrTitle, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(Articles[i].Title, fileOrTitle, StringComparison.OrdinalIgnoreCase))
+            {
+                ArticleList.SelectedIndex = i;
+                break;
+            }
         }
     }
 

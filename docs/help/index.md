@@ -16,7 +16,7 @@ PopGlot 是 Windows 上的划词和截图翻译。这些页面存在本机，不
 - 什么数据会出网 vs 什么数据绝对不出网
 - 安全离线模式如何拒绝全部外发
 - 内置公共翻译授权语义与撤销权
-- API Key 硬件级加密托管（Windows 凭据管理器）
+- API Key 安全托管（由 Windows 凭据管理器使用 DPAPI 安全保存）
 - 历史记录与生词本的本地容量边界与敏感词自动过滤
 
 ### 3. [快捷键全景与冲突排查 (Keyboard Shortcuts)](keyboard-shortcuts.md)

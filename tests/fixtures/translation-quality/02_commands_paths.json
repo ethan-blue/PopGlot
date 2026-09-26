@@ -1,0 +1,273 @@
+[
+  {
+    "id": "CMD-001",
+    "category": "commands_paths",
+    "source": "Execute `docker run -d --restart=unless-stopped -p 8080:80 -v /etc/ssl:/etc/ssl:ro --name web-proxy nginx:alpine`",
+    "protected_tokens": [
+      "docker run -d --restart=unless-stopped -p 8080:80 -v /etc/ssl:/etc/ssl:ro --name web-proxy nginx:alpine"
+    ],
+    "allowed_variations": [
+      "运行以下命令",
+      "执行命令"
+    ],
+    "key_semantics": "启动 nginx 后台容器并挂载证书卷与映射端口",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "CMD-002",
+    "category": "commands_paths",
+    "source": "Run `kubectl apply -f ./deployments/prod-api.yaml -n production --dry-run=client` to preview the resource diff.",
+    "protected_tokens": [
+      "kubectl apply -f ./deployments/prod-api.yaml -n production --dry-run=client"
+    ],
+    "allowed_variations": [
+      "预览资源差异",
+      "以客户端试运行模式执行"
+    ],
+    "key_semantics": "使用 kubectl 在 production 命名空间执行客户端干燥模拟",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "CMD-003",
+    "category": "commands_paths",
+    "source": "Never execute `rm -rf / --no-preserve-root` on any production or development host.",
+    "protected_tokens": [
+      "rm -rf / --no-preserve-root"
+    ],
+    "allowed_variations": [
+      "切勿执行",
+      "严禁运行"
+    ],
+    "key_semantics": "禁止在任何主机上运行破坏性删除根目录命令（语义不得反转）",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "CMD-004",
+    "category": "commands_paths",
+    "source": "The configuration file is located at `C:\\Users\\Default\\AppData\\Local\\PopGlot\\settings.json`.",
+    "protected_tokens": [
+      "C:\\Users\\Default\\AppData\\Local\\PopGlot\\settings.json"
+    ],
+    "allowed_variations": [
+      "配置文件位于",
+      "配置文件路径为"
+    ],
+    "key_semantics": "指示 PopGlot 核心配置文件的绝对路径",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "CMD-005",
+    "category": "commands_paths",
+    "source": "Use `chmod 600 ~/.ssh/id_ed25519` to secure your private key permissions.",
+    "protected_tokens": [
+      "chmod 600 ~/.ssh/id_ed25519"
+    ],
+    "allowed_variations": [
+      "保护私钥权限",
+      "限制密钥访问权限"
+    ],
+    "key_semantics": "将私钥权限收敛为仅属主可读写",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "CMD-006",
+    "category": "commands_paths",
+    "source": "Fetch commits with `git fetch origin pull/42/head:pr-42 --tags --prune`.",
+    "protected_tokens": [
+      "git fetch origin pull/42/head:pr-42 --tags --prune"
+    ],
+    "allowed_variations": [
+      "拉取 PR 分支",
+      "获取远端变更"
+    ],
+    "key_semantics": "拉取特定 PR 分支并清理已删除的远端引用",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "CMD-007",
+    "category": "commands_paths",
+    "source": "Mount the remote SMB share to `/mnt/storage` using `mount -t cifs -o ro,guest //192.168.1.10/public /mnt/storage`.",
+    "protected_tokens": [
+      "/mnt/storage",
+      "mount -t cifs -o ro,guest //192.168.1.10/public /mnt/storage"
+    ],
+    "allowed_variations": [
+      "挂载远程共享",
+      "只读访客挂载"
+    ],
+    "key_semantics": "以只读访客模式将网络共享挂载到指定目录",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "CMD-008",
+    "category": "commands_paths",
+    "source": "Export logs by running `journalctl -u nginx.service --since \"2026-09-20 00:00:00\" --no-pager > /tmp/nginx.log`.",
+    "protected_tokens": [
+      "journalctl -u nginx.service --since \"2026-09-20 00:00:00\" --no-pager > /tmp/nginx.log"
+    ],
+    "allowed_variations": [
+      "导出服务日志",
+      "重定向到文件"
+    ],
+    "key_semantics": "导出指定时间之后系统服务日志至临时文件",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "CMD-009",
+    "category": "commands_paths",
+    "source": "Install toolchain via `rustup target add x86_64-pc-windows-msvc --toolchain nightly-2026-08-15`.",
+    "protected_tokens": [
+      "rustup target add x86_64-pc-windows-msvc --toolchain nightly-2026-08-15"
+    ],
+    "allowed_variations": [
+      "安装交叉编译目标",
+      "添加目标三元组"
+    ],
+    "key_semantics": "为指定的特定版本 nightly 工具链安装 MSVC 编译目标",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "CMD-010",
+    "category": "commands_paths",
+    "source": "The SQLite database is kept under `D:/Database/Store/app_v2.db?mode=ro&cache=shared`.",
+    "protected_tokens": [
+      "D:/Database/Store/app_v2.db?mode=ro&cache=shared"
+    ],
+    "allowed_variations": [
+      "数据库存放于",
+      "SQLite 数据库路径"
+    ],
+    "key_semantics": "指出包含查询参数的数据库连接路径",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "CMD-011",
+    "category": "commands_paths",
+    "source": "Check open TCP sockets with `ss -tlpn sport = :443`.",
+    "protected_tokens": [
+      "ss -tlpn sport = :443"
+    ],
+    "allowed_variations": [
+      "检查开放的 TCP 端口",
+      "查看 443 端口监听状态"
+    ],
+    "key_semantics": "查询监听在 443 端口的套接字与关联进程",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "CMD-012",
+    "category": "commands_paths",
+    "source": "Download payload using `curl -fsSL https://get.example.org/install.sh | bash -s -- --prefix=/opt/bin`.",
+    "protected_tokens": [
+      "curl -fsSL https://get.example.org/install.sh | bash -s -- --prefix=/opt/bin"
+    ],
+    "allowed_variations": [
+      "下载并执行安装脚本",
+      "通过管道传递给 bash"
+    ],
+    "key_semantics": "下载在线安装脚本并带前缀参数执行",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "CMD-013",
+    "category": "commands_paths",
+    "source": "Inspect file signature: `file -b --mime-type /usr/lib/x86_64-linux-gnu/libc.so.6`.",
+    "protected_tokens": [
+      "file -b --mime-type /usr/lib/x86_64-linux-gnu/libc.so.6"
+    ],
+    "allowed_variations": [
+      "检查文件 MIME 类型",
+      "检测文件格式签名"
+    ],
+    "key_semantics": "查询共享库文件的 MIME 类型",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "CMD-014",
+    "category": "commands_paths",
+    "source": "Deploy schema with `prisma migrate deploy --schema=./prisma/schema.prisma`.",
+    "protected_tokens": [
+      "prisma migrate deploy --schema=./prisma/schema.prisma"
+    ],
+    "allowed_variations": [
+      "应用数据库迁移",
+      "执行架构部署"
+    ],
+    "key_semantics": "针对指定路径的 schema 运行数据库迁移",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "CMD-015",
+    "category": "commands_paths",
+    "source": "Set registry proxy via `npm config set proxy http://127.0.0.1:7890 --global`.",
+    "protected_tokens": [
+      "npm config set proxy http://127.0.0.1:7890 --global"
+    ],
+    "allowed_variations": [
+      "设置全局代理",
+      "配置 npm HTTP 代理"
+    ],
+    "key_semantics": "在全局范围设置 npm 包管理器的 HTTP 代理",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  }
+]

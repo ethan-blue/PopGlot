@@ -56,5 +56,66 @@
                     VerticalAlignment="Center"
                     Style="{StaticResource DangerButton}" Padding="12,5" ToolTip="点击两次确认" />
         </Grid>
+
+        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,16" />
+
+        <TextBlock Text="数据备份与恢复" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
+
+        <Grid Style="{StaticResource SettingsRow}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="导出数据备份" Style="{StaticResource RowTitle}" />
+                <TextBlock Style="{StaticResource RowHint}"
+                           Text="导出历史记录、生词本与非秘密配置 · 零凭据 · 格式可读" />
+            </StackPanel>
+            <Button x:Name="ExportBackupButton" Grid.Column="1" Content="导出备份"
+                    VerticalAlignment="Center"
+                    Style="{StaticResource GhostButton}" Padding="14,5"
+                    AutomationProperties.Name="导出数据备份"
+                    Click="ExportBackup_Click" />
+        </Grid>
+
+        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
+
+        <Grid Style="{StaticResource SettingsRow}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="恢复数据备份" Style="{StaticResource RowTitle}" />
+                <TextBlock Style="{StaticResource RowHint}"
+                           Text="安全校验版本与结构 · 覆盖前自动生成本地还原副本" />
+            </StackPanel>
+            <Button x:Name="ImportBackupButton" Grid.Column="1" Content="恢复备份"
+                    VerticalAlignment="Center"
+                    Style="{StaticResource GhostButton}" Padding="14,5"
+                    AutomationProperties.Name="恢复数据备份"
+                    Click="ImportBackup_Click" />
+        </Grid>
+
+        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,16" />
+
+        <TextBlock Text="排障与诊断" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
+
+        <Grid Style="{StaticResource SettingsRow}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="导出排障诊断包" Style="{StaticResource RowTitle}" />
+                <TextBlock Style="{StaticResource RowHint}"
+                           Text="仅含版本、错误码与协议 · 绝无原文/译文/密钥 · 零网络" />
+            </StackPanel>
+            <Button x:Name="ExportDiagnosticsButton" Grid.Column="1" Content="导出诊断"
+                    VerticalAlignment="Center"
+                    Style="{StaticResource GhostButton}" Padding="14,5"
+                    AutomationProperties.Name="导出排障诊断包"
+                    Click="ExportDiagnostics_Click" />
+        </Grid>
     </StackPanel>
 </UserControl>

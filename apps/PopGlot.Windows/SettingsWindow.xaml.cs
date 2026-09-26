@@ -103,7 +103,11 @@ public partial class SettingsWindow : Window
         InitializeComponent();
         _componentInitialized = true;
 
-        DataSection.Initialize(history, vocabulary);
+        DataSection.Initialize(history, vocabulary, () => _shellSettings, s =>
+        {
+            _shellSettings = s;
+            CaptureSection.SetShellSettings(s);
+        });
         CaptureSection.SetShellSettings(shellSettings);
 
         ProviderSection.StatusChanged += SetStatus;

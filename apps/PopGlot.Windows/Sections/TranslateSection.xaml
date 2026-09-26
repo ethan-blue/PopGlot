@@ -1,7 +1,8 @@
 <UserControl x:Class="PopGlot.Windows.Sections.TranslateSection"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:PopGlot.Windows">
+             xmlns:local="clr-namespace:PopGlot.Windows"
+             KeyDown="TranslateSection_KeyDown">
 
     <!-- High-density single-plane dual-column workstation -->
     <Grid>
@@ -358,7 +359,7 @@
                             <RadioButton x:Name="ShowSummaryChoice" Content="要点" GroupName="WorkbenchReading"
                                          Style="{StaticResource SegmentChoice}" Margin="0"
                                          AutomationProperties.Name="显示要点"
-                                         ToolTip="另一次请求，不打断正在进行的翻译。切回「译文」可看翻译。需要已配置的模型。"
+                                         ToolTip="独立模型请求，可能产生额外服务费用。切回「译文」可看翻译。需要已配置的模型。"
                                          Click="ShowSummary_Click" />
 
                             <Border x:Name="TranslateStreamIndicator" Visibility="Collapsed"
@@ -401,7 +402,8 @@
 
                                          Foreground="{DynamicResource TextPrimaryBrush}"
 
-                             AutomationProperties.Name="翻译结果"
+                             AutomationProperties.LiveSetting="Off"
+                              AutomationProperties.Name="翻译结果"
 
                              AutomationProperties.HelpText="译文将显示在这里" />
 
@@ -416,7 +418,8 @@
                                              IsReadOnly="True"
                                              IsDocumentEnabled="True"
                                              VerticalScrollBarVisibility="Disabled"
-                                             AutomationProperties.Name="格式化翻译结果" />
+                                             AutomationProperties.LiveSetting="Off"
+                                              AutomationProperties.Name="格式化翻译结果" />
 
                                 <TextBox x:Name="TranslateStreamResult"
 
@@ -434,7 +437,8 @@
 
                                          Foreground="{DynamicResource TextPrimaryBrush}"
 
-                                         AutomationProperties.Name="流式翻译中" />
+                                         AutomationProperties.LiveSetting="Off"
+                                          AutomationProperties.Name="流式翻译中" />
 
                                 <!-- First-use guidance. Two disjoint states, one
                                      hierarchy per state (层级收敛) — never stacked
@@ -465,21 +469,24 @@
                                         <TextBlock x:Name="GuideDescription" Text="添加翻译引擎后即可开始使用。"
                                                    Style="{StaticResource Caption}" HorizontalAlignment="Center"
                                                    Foreground="{DynamicResource TextTertiaryBrush}" Margin="0,4,0,12" />
-                                        <Button x:Name="GoToSettingsButton" Content="添加翻译引擎" Style="{StaticResource PrimaryButton}"
-                                                Padding="16,6" HorizontalAlignment="Center" Cursor="Hand"
-                                                AutomationProperties.Name="添加翻译引擎"
-                                                Click="OpenAddEngine_Click" />
-                                        <Button x:Name="EnableFreeEngineButton" Content="允许联网免费引擎"
-
-                                                Style="{StaticResource GhostButton}" Padding="10,6" Margin="0,10,0,0"
-
-                                                HorizontalAlignment="Center"
-
-                                                AutomationProperties.Name="允许联网免费引擎"
-
-                                                ToolTip="只把待翻译文本发给你选中的公共翻译（Google 或 MyMemory）；不发送截图、历史或密钥"
-
-                                                Click="EnableFreeEngine_Click" />
+                                        <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                            <Button x:Name="EnableFreeEngineButton" Content="允许公共翻译"
+                                                    Style="{StaticResource GhostButton}" Padding="10,6" Margin="4"
+                                                    HorizontalAlignment="Center"
+                                                    AutomationProperties.Name="允许公共翻译"
+                                                    ToolTip="只把待翻译文本发给你选中的公共翻译（Google 或 MyMemory）；不发送截图、历史或密钥"
+                                                    Click="EnableFreeEngine_Click" />
+                                            <Button x:Name="GoToSettingsButton" Content="添加翻译引擎" Style="{StaticResource PrimaryButton}"
+                                                    Padding="14,6" Margin="4" HorizontalAlignment="Center" Cursor="Hand"
+                                                    AutomationProperties.Name="添加翻译引擎"
+                                                    Click="OpenAddEngine_Click" />
+                                            <Button x:Name="ViewOfflineUsageButton" Content="查看离线用法"
+                                                    Style="{StaticResource GhostButton}" Padding="10,6" Margin="4"
+                                                    HorizontalAlignment="Center"
+                                                    AutomationProperties.Name="查看离线用法"
+                                                    ToolTip="查看随包附带的离线使用指南"
+                                                    Click="ViewOfflineUsage_Click" />
+                                        </WrapPanel>
                                     </StackPanel>
 
                                     <!-- Normal idle guidance: one title, one hint, one primary CTA. -->

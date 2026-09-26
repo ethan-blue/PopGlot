@@ -2125,7 +2125,7 @@ mod tests {
         );
     }
 
-    /// A single giant token beyond MAX_SEGMENTS × budget refuses up front —
+    /// A single giant token beyond `MAX_SEGMENTS` × budget refuses up front —
     /// never silently truncated, never silently re-joined.
     #[test]
     fn giant_single_token_rejects_on_segment_count() {

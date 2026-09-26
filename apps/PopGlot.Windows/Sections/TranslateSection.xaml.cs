@@ -298,7 +298,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     private TranslationCoordinator? _coordinator;
     private VocabularyStore? _vocabulary;
     private CancellationTokenSource? _translateOperation;
-    private CancellationTokenSource? _summaryOperation;
+    private readonly SummaryLifecycleCoordinator _summaryLifecycle = new();
     private long _currentEpoch;
     private TranslateUiState _currentState = TranslateUiState.Initial;
     private readonly ReadingModeState _reading = new();
@@ -369,9 +369,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         _translateOperation?.Cancel();
         _translateOperation?.Dispose();
         _translateOperation = null;
-        _summaryOperation?.Cancel();
-        _summaryOperation?.Dispose();
-        _summaryOperation = null;
+        _summaryLifecycle.Cancel();
     }
 
     internal void Initialize(TranslationCoordinator coordinator, VocabularyStore? vocabulary)
@@ -393,6 +391,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     internal StackPanel EmptyStateGuide => TranslateEmptyState;
     internal Button StarButton => TranslateStarButton;
     internal Button FreeEngineEntryButton => EnableFreeEngineButton;
+    internal Button OfflineUsageEntryButton => ViewOfflineUsageButton;
     internal Action? OpenSettings { get; set; }
 
     /// <summary>
@@ -401,6 +400,11 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     /// shell (App); when unset the plain OpenSettings fallback applies.
     /// </summary>
     internal Action? OpenAddEngineFlow { get; set; }
+
+    /// <summary>
+    /// Direct route for the 查看离线用法 call to action: opens offline HelpWindow.
+    /// </summary>
+    internal Action? OpenOfflineUsageFlow { get; set; }
     internal System.Windows.Controls.Grid PaneGrid => TranslatePaneGrid;
     internal Border StreamIndicator => TranslateStreamIndicator;
     internal TextBlock ExplanationText => TranslateExplanation;
@@ -577,7 +581,15 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         ApplyState(_currentState);
     }
 
-    private async void ShowSummary_Click(object sender, RoutedEventArgs e)
+    internal void CancelSummary()
+    {
+        _summaryLifecycle.Cancel();
+    }
+
+    private async void ShowSummary_Click(object sender, RoutedEventArgs e) =>
+        await TriggerSummaryAsync();
+
+    internal async Task TriggerSummaryAsync()
     {
         if (_coordinator is null)
         {
@@ -592,98 +604,75 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             return;
         }
 
-        if (_reading.HasSummary(source))
+        // R03: Probe capability before issuing request or throwing exceptions
+        var capability = _coordinator.EvaluateSummaryCapability();
+        if (capability.State is RouteCapabilityState.Unsupported or RouteCapabilityState.NeedsConfiguration)
         {
-            PaintSummary(_reading.SummaryText, _reading.SummaryNote);
+            TranslateStatus.Text = capability.Reason;
+            ShowTranslationChoice.IsChecked = true;
             return;
         }
 
-        if (_summaryOperation is { IsCancellationRequested: false })
-        {
-            BeginSummaryReading(source);
-            ShowSummaryChoice.IsEnabled = false;
-            return;
-        }
+        var sourceLang = Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto);
+        var targetLang = Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN");
 
-        BeginSummaryReading(source);
-        var operation = new CancellationTokenSource();
-        _summaryOperation = operation;
-        ShowSummaryChoice.IsEnabled = false;
-        try
-        {
-            var response = await _coordinator.RunTextTaskAsync(
-                source,
-                Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto),
-                Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN"),
-                TextTaskKind.Summarize,
-                operation.Token);
-            if (operation.IsCancellationRequested || !ReferenceEquals(_summaryOperation, operation))
+        await _summaryLifecycle.ExecuteSummaryAsync(
+            _coordinator,
+            _reading,
+            source,
+            sourceLang,
+            targetLang,
+            isHoldingSummary: () => _holdingSummary,
+            getCurrentSource: () => TranslateInput.Text,
+            getCurrentTargetLanguage: () => Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN"),
+            onStarting: () =>
             {
-                return;
-            }
-
-            var note = string.Join(
-                "\n",
-                new[] { response.Result.Explanation }
-                    .Concat(response.Result.Warnings)
-                    .Where(line => !string.IsNullOrWhiteSpace(line))
-                    .Select(line => line.Trim()));
-            var sameSource = string.Equals(TranslateInput.Text.Trim(), source, StringComparison.Ordinal);
-            var show = _holdingSummary && sameSource;
-            _reading.RememberSummary(source, response.Result.TranslatedText, note, show);
-            if (!show)
-            {
-                if (_holdingSummary)
-                {
-                    ShowTranslationReading();
-                }
-                return;
-            }
-
-            PaintSummary(response.Result.TranslatedText, note);
-            TranslateStatus.Text = ReadingRequestCopy.Finished(response.Diagnostics.ElapsedMs);
-            TranslateEngineBadge.Text = response.EngineLabel;
-        }
-        catch (OperationCanceledException)
-        {
-            if (_holdingSummary)
-            {
-                ShowTranslationReading();
-                TranslateStatus.Text = ReadingRequestCopy.SummaryCancelled;
-            }
-        }
-        catch (Exception ex)
-        {
-            if (_holdingSummary)
-            {
-                ShowTranslationReading();
-                TranslateStatus.Text = ex.Message;
-            }
-        }
-        finally
-        {
-            var stillCurrent = ReferenceEquals(_summaryOperation, operation);
-            if (stillCurrent)
-            {
-                _summaryOperation = null;
-            }
-            if (stillCurrent || _summaryOperation is null)
+                BeginSummaryReading(source);
+                TranslateStatus.Text = "正在整理要点（独立模型请求，可能产生额外服务费用）…";
+                ShowSummaryChoice.IsEnabled = false;
+            },
+            onSuccess: outcome =>
             {
                 if (_holdingSummary)
                 {
                     TranslateProgress.Visibility = Visibility.Collapsed;
                 }
                 ShowSummaryChoice.IsEnabled = true;
-            }
-            try
+
+                if (outcome.ElapsedMs == 0 && string.IsNullOrEmpty(outcome.EngineLabel))
+                {
+                    PaintSummary(outcome.SummaryText, outcome.Notes);
+                    TranslateStatus.Text = ReadingRequestCopy.Finished(0);
+                    return;
+                }
+
+                if (!outcome.IsCurrent)
+                {
+                    if (_holdingSummary)
+                    {
+                        ShowTranslationReading();
+                    }
+                    return;
+                }
+
+                PaintSummary(outcome.SummaryText, outcome.Notes);
+                TranslateStatus.Text = ReadingRequestCopy.Finished(outcome.ElapsedMs);
+                TranslateEngineBadge.Text = outcome.EngineLabel;
+            },
+            onError: error =>
             {
-                operation.Dispose();
-            }
-            catch (ObjectDisposedException)
-            {
-                // Unload already disposed this request.
-            }
-        }
+                if (_holdingSummary)
+                {
+                    TranslateProgress.Visibility = Visibility.Collapsed;
+                }
+                ShowSummaryChoice.IsEnabled = true;
+
+                if (error.IsCurrent)
+                {
+                    ShowTranslationReading();
+                    TranslateStatus.Text = error.Message;
+                }
+            });
     }
 
     /// <summary>
@@ -759,6 +748,50 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         await TranslateAsync();
     }
 
+    private void TranslateSection_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape)
+        {
+            return;
+        }
+        var target = (e.OriginalSource as DependencyObject) ?? (e.Source as DependencyObject) ?? (Keyboard.FocusedElement as DependencyObject) ?? TranslateInput;
+        if (target is not null && Ui.GetIsComposing(target))
+        {
+            Ui.SetIsComposing(target, false);
+            return;
+        }
+        if (_holdingSummary)
+        {
+            if (_summaryLifecycle.IsRunning)
+            {
+                e.Handled = true;
+                CancelSummary();
+                return;
+            }
+            if (_translateOperation is { IsCancellationRequested: false })
+            {
+                e.Handled = true;
+                _translateOperation.Cancel();
+                return;
+            }
+        }
+        else
+        {
+            if (_translateOperation is { IsCancellationRequested: false })
+            {
+                e.Handled = true;
+                _translateOperation.Cancel();
+                return;
+            }
+            if (_summaryLifecycle.IsRunning)
+            {
+                e.Handled = true;
+                CancelSummary();
+                return;
+            }
+        }
+    }
+
     private async Task TranslateAsync()
     {
         if (_coordinator is null) return;
@@ -766,6 +799,22 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         if (string.IsNullOrEmpty(source))
         {
             TranslateStatus.Text = "请先输入要翻译的内容。";
+            return;
+        }
+
+        // R02: 未配置引擎且未允许公共翻译时，在原位置给出三个出口，不产生弹窗，不外发网络请求。
+        if (!HasConfiguredUserEngine() && !HasFallbackRoute())
+        {
+            UpdateServiceAvailability();
+            if (TranslateEmptyState is not null)
+            {
+                TranslateEmptyState.Visibility = Visibility.Visible;
+            }
+            if (UnconfiguredGuidePanel is not null)
+            {
+                UnconfiguredGuidePanel.Visibility = Visibility.Visible;
+            }
+            TranslateStatus.Text = "未配置引擎或未允许公共翻译，请在右侧选择接入方式。";
             return;
         }
 
@@ -1139,6 +1188,20 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         {
             UpdateServiceAvailability();
         }
+        UpdateSummaryCapabilityVisuals();
+    }
+
+    private void UpdateSummaryCapabilityVisuals()
+    {
+        if (ShowSummaryChoice is null) return;
+        var capability = _coordinator?.EvaluateSummaryCapability() ?? RouteCapabilityService.EvaluateCurrent();
+        ShowSummaryChoice.ToolTip = capability.State switch
+        {
+            RouteCapabilityState.Unsupported => "当前公共翻译不支持整理要点，请配置模型引擎。",
+            RouteCapabilityState.NeedsConfiguration => $"{capability.Reason}。切回「译文」可看翻译。",
+            RouteCapabilityState.Unknown => "未知模型能力，可能产生额外服务费用。切回「译文」可看翻译。",
+            _ => "独立模型请求，可能产生额外服务费用。切回「译文」可看翻译。需要已配置的模型。",
+        };
     }
 
     private void UpdateServiceAvailability()
@@ -1185,10 +1248,11 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         }
         if (EnableFreeEngineButton is not null)
         {
-            EnableFreeEngineButton.Visibility = consent == FreeEngineConsent.Unset
-                ? Visibility.Visible
-                : Visibility.Collapsed;
+            EnableFreeEngineButton.Visibility = hasFallbackRoute
+                ? Visibility.Collapsed
+                : Visibility.Visible;
         }
+        UpdateSummaryCapabilityVisuals();
 
         if (!hasUserEngine && _currentState.Phase == TranslateUiPhase.Idle && string.IsNullOrWhiteSpace(_currentState.FinalText))
         {
@@ -1231,7 +1295,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     /// destinations named. Saving here is the same action the privacy page
     /// performs; nothing is sent until the user actually translates.
     /// </summary>
-    private void EnableFreeEngine_Click(object sender, RoutedEventArgs e)
+    private async void EnableFreeEngine_Click(object sender, RoutedEventArgs e)
     {
         try
         {
@@ -1244,10 +1308,38 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
                 ? "api.mymemory.translated.net"
                 : "translate.googleapis.com";
             TranslateStatus.Text = $"已允许{EngineWording.FreePublicTranslationName}；当前是{EngineWording.NameFor(provider)}（{host}）。";
+
+            // R02: 授权成功后可继续用户刚才发起的同一请求；取消或保存失败时保留原文。
+            var pending = TranslateInput.Text.Trim();
+            if (!string.IsNullOrEmpty(pending) && _currentState.Phase == TranslateUiPhase.Idle)
+            {
+                await TranslateAsync();
+            }
         }
         catch (Exception exception)
         {
             TranslateStatus.Text = $"保存授权失败：{exception.Message}";
+        }
+    }
+
+    /// <summary>
+    /// 查看离线用法出口：直接打开随包自带的离线文档。
+    /// </summary>
+    private void ViewOfflineUsage_Click(object sender, RoutedEventArgs e)
+    {
+        if (OpenOfflineUsageFlow is not null)
+        {
+            OpenOfflineUsageFlow.Invoke();
+            return;
+        }
+        try
+        {
+            var help = new HelpWindow("provider-setup/index.md") { Owner = Window.GetWindow(this) };
+            help.Show();
+        }
+        catch
+        {
+            try { new HelpWindow("provider-setup/index.md").Show(); } catch { }
         }
     }
 
@@ -1321,17 +1413,37 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         TranslateCounter.Text = $"{length} 字符";
         // 空输入时隐藏「0 字符」：数字零没有信息量，只会在页脚占位。
         TranslateCounter.Visibility = length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        if (TranslateInput.Text.Trim().Length == 0 || _holdingSummary)
+        {
+            CancelSummary();
+            if (_holdingSummary)
+            {
+                ShowTranslationReading();
+            }
+        }
     }
 
     // ================= Language pair =================
 
     private void SourceLang_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        CancelSummary();
+        if (_holdingSummary)
+        {
+            ShowTranslationReading();
+        }
         PersistLanguagePair();
     }
 
-    private void TargetLang_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+    private void TargetLang_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        CancelSummary();
+        if (_holdingSummary)
+        {
+            ShowTranslationReading();
+        }
         PersistLanguagePair();
+    }
 
     /// <summary>Remembers the pair so the floating panel opens the same way.</summary>
     private void PersistLanguagePair()
@@ -1363,6 +1475,12 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
     private void TranslateSwap_Click(object sender, RoutedEventArgs e)
     {
+        CancelSummary();
+        if (_holdingSummary)
+        {
+            ShowTranslationReading();
+        }
+
         var (source, target) = LanguageCatalog.Swap(
             Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto),
             Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN"));
@@ -1495,10 +1613,9 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         _translateOperation?.Cancel();
         _translateOperation?.Dispose();
         _translateOperation = null;
-        _summaryOperation?.Cancel();
-        _summaryOperation?.Dispose();
-        _summaryOperation = null;
+        CancelSummary();
         _holdingSummary = false;
+        _reading.ClearSummaryDisplay();
         var epoch = Interlocked.Increment(ref _currentEpoch);
         ApplyState(TranslateUiState.Initial with { Epoch = epoch });
         UpdateStarVisualState(false);

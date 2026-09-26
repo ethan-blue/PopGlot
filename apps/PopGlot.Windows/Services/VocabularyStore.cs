@@ -366,6 +366,54 @@ internal sealed class VocabularyStore : IVocabularyRepository
         return true;
     }
 
+    /// <summary>
+    /// Replaces the current wordbook entries with the supplied words,
+    /// after checking entry limits and budgets. Queues persistence snapshot.
+    /// Returns true when successfully committed to disk.
+    /// </summary>
+    public bool RestoreWords(IEnumerable<VocabularyWord> words)
+    {
+        ArgumentNullException.ThrowIfNull(words);
+        var valid = new List<VocabularyWord>();
+        foreach (var word in words)
+        {
+            if (word is null) continue;
+            if (string.IsNullOrWhiteSpace(word.Word)) continue;
+            if (word.Word.Length > MaxEntryCharacters || (word.Translation?.Length ?? 0) > MaxEntryCharacters) continue;
+            valid.Add(word);
+        }
+        var capped = valid.Take(MaxEntries).ToList();
+
+        TaskCompletionSource<bool> tcs;
+        List<VocabularyWord> previous;
+        lock (_gate)
+        {
+            if (LoadBlocked)
+            {
+                return false;
+            }
+            var json = JsonSerializer.Serialize(capped, new JsonSerializerOptions { WriteIndented = true });
+            if (StrictUtf8.GetByteCount(json) > MaxFileBytes)
+            {
+                return false;
+            }
+            previous = _words;
+            _words = capped;
+            tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _persistChannel.Writer.TryWrite(new PersistRequest(json, tcs));
+        }
+        var written = tcs.Task.GetAwaiter().GetResult();
+        if (!written)
+        {
+            lock (_gate)
+            {
+                _words = previous;
+            }
+            return false;
+        }
+        return true;
+    }
+
     /// <summary>Word equality is case-sensitive (code identifiers); language tags compare loosely.</summary>
     private static bool SameIdentity(VocabularyWord entry, string word, string sourceLang, string targetLang) =>
         string.Equals(entry.Word, word, StringComparison.Ordinal) &&

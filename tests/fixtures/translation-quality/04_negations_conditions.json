@@ -1,0 +1,262 @@
+[
+  {
+    "id": "NEG-001",
+    "category": "negations_conditions",
+    "source": "Do not delete temporary files unless the extraction process has successfully completed with exit code 0.",
+    "protected_tokens": [
+      "exit code 0"
+    ],
+    "allowed_variations": [
+      "除非解压进程已以退出代码 0 成功完成，否则切勿删除临时文件",
+      "在解压成功完成前不要删除临时文件"
+    ],
+    "key_semantics": "条件与否定：禁止在成功退出前删除文件（语义绝对不得反转为‘应删除临时文件’）",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "NEG-002",
+    "category": "negations_conditions",
+    "source": "This feature is not supported in version 1.2 or earlier; upgrade to at least 2.0 before enabling it.",
+    "protected_tokens": [
+      "version 1.2",
+      "2.0"
+    ],
+    "allowed_variations": [
+      "此特性在 1.2 及更早版本中不受支持",
+      "启用前请先升级到至少 2.0 版本"
+    ],
+    "key_semantics": "版本限制与否定：早期版本不支持，必须升级到 2.0+",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "NEG-003",
+    "category": "negations_conditions",
+    "source": "Never commit API keys or unencrypted passwords into source control repositories.",
+    "protected_tokens": [
+      "API keys"
+    ],
+    "allowed_variations": [
+      "切勿将 API 密钥或未加密密码提交到代码仓库",
+      "严禁将明文凭据纳入源码控制"
+    ],
+    "key_semantics": "绝对否定禁令：禁止提交密钥到仓库",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "NEG-004",
+    "category": "negations_conditions",
+    "source": "The lock will not be released automatically if an unhandled thread abort occurs.",
+    "protected_tokens": [
+      "thread abort"
+    ],
+    "allowed_variations": [
+      "若发生未处理的线程中止，锁将不会被自动释放"
+    ],
+    "key_semantics": "条件否定：未处理异常发生时锁不会释放，可能引发死锁",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "NEG-005",
+    "category": "negations_conditions",
+    "source": "Only users with the `Admin` role can modify system settings, provided two-factor authentication is active.",
+    "protected_tokens": [
+      "`Admin`",
+      "two-factor authentication"
+    ],
+    "allowed_variations": [
+      "仅在双重身份验证处于激活状态的前提下，具备 Admin 角色的用户才能修改系统设置"
+    ],
+    "key_semantics": "充分必要复合条件：双因素认证 + Admin 角色同时满足",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "NEG-006",
+    "category": "negations_conditions",
+    "source": "Clients must not send more than 100 requests per minute unless an explicit enterprise quota is granted.",
+    "protected_tokens": [
+      "100 requests per minute"
+    ],
+    "allowed_variations": [
+      "除非获得了显式企业配额授权，否则客户端每分钟发起的请求不得超过 100 次"
+    ],
+    "key_semantics": "速率限制条件禁令：非企业用户不得超限",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "NEG-007",
+    "category": "negations_conditions",
+    "source": "Under no circumstances should the background worker bypass signature verification.",
+    "protected_tokens": [
+      "signature verification"
+    ],
+    "allowed_variations": [
+      "在任何情况下，后台工作进程都不得绕过签名验证"
+    ],
+    "key_semantics": "强语气倒装否定：绝对不得跳过签名验证",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "NEG-008",
+    "category": "negations_conditions",
+    "source": "If and only if the handshake packet contains a valid nonce will the server allocate session memory.",
+    "protected_tokens": [
+      "nonce"
+    ],
+    "allowed_variations": [
+      "当且仅当握手数据包包含有效随机数（nonce）时，服务器才会分配会话内存"
+    ],
+    "key_semantics": "充要条件：必须包含有效 nonce 才分配内存",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "NEG-009",
+    "category": "negations_conditions",
+    "source": "Data cannot be restored after clicking 'Confirm Erase'; this operation is permanent and irreversible.",
+    "protected_tokens": [
+      "'Confirm Erase'"
+    ],
+    "allowed_variations": [
+      "点击「确认擦除」后数据无法恢复；此操作具有永久性且不可逆"
+    ],
+    "key_semantics": "不可逆操作与否定警示：擦除后不可恢复",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "NEG-010",
+    "category": "negations_conditions",
+    "source": "Without explicit consent from the user, no outbound network telemetry may be dispatched.",
+    "protected_tokens": [
+      "outbound network telemetry"
+    ],
+    "allowed_variations": [
+      "未经用户明确同意，不得外发任何网络遥测数据"
+    ],
+    "key_semantics": "隐私保护前置否定：无同意不外发",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "NEG-011",
+    "category": "negations_conditions",
+    "source": "Neither primary nor replica nodes will accept writes during the split-brain arbitration phase.",
+    "protected_tokens": [
+      "split-brain arbitration"
+    ],
+    "allowed_variations": [
+      "在脑裂仲裁阶段，主节点和副本节点均不接受写入请求"
+    ],
+    "key_semantics": "双重并列否定：主从节点均不接受写操作",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "NEG-012",
+    "category": "negations_conditions",
+    "source": "The cache is invalidated if the revision mismatch flag is raised or if the TTL has expired, but not otherwise.",
+    "protected_tokens": [
+      "TTL"
+    ],
+    "allowed_variations": [
+      "若触发版本不匹配标志或 TTL 已过期，缓存将被失效；除此之外不会失效"
+    ],
+    "key_semantics": "排他性条件：仅两种情况缓存失效，其余保持有效",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "NEG-013",
+    "category": "negations_conditions",
+    "source": "Avoid calling synchronous I/O methods from within the UI dispatcher thread to prevent frame drops.",
+    "protected_tokens": [
+      "UI dispatcher thread"
+    ],
+    "allowed_variations": [
+      "避免在 UI 调度器线程内调用同步 I/O 方法，以防止掉帧卡顿"
+    ],
+    "key_semantics": "操作建议与反面劝阻：不要在 UI 线程执行阻塞 I/O",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "NEG-014",
+    "category": "negations_conditions",
+    "source": "Unless specifically configured otherwise, all outgoing requests default to HTTPS port 443.",
+    "protected_tokens": [
+      "HTTPS port 443"
+    ],
+    "allowed_variations": [
+      "除非特别另行配置，否则所有出站请求均默认使用 HTTPS 443 端口"
+    ],
+    "key_semantics": "默认值与特例说明：默认走安全 443 端口",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "NEG-015",
+    "category": "negations_conditions",
+    "source": "Do not attempt to decrypt payloads using expired certificates; verification will fail and abort the pipeline.",
+    "protected_tokens": [
+      "expired certificates"
+    ],
+    "allowed_variations": [
+      "不要尝试使用过期证书解密负载；验证将失败并中止流水线"
+    ],
+    "key_semantics": "禁止行为及确定性失败因果关系",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  }
+]

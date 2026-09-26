@@ -12,6 +12,26 @@ internal enum ReadingMode
 }
 
 /// <summary>
+/// Immutable identity of a summary (or text task) request.
+/// Distinguishes not just source text, but target language, engine, model and configuration version.
+/// </summary>
+internal sealed record SummaryRequestIdentity(
+    string Source,
+    string SourceLanguage,
+    string TargetLanguage,
+    TextTaskKind TaskKind,
+    string? EngineProfileId,
+    string? ModelName,
+    int ConfigVersion);
+
+/// <summary>
+/// Snapshot tying a request identity to a specific UI generation.
+/// </summary>
+internal sealed record SummaryRequestSnapshot(
+    SummaryRequestIdentity Identity,
+    long Generation);
+
+/// <summary>
 /// Status lines for the summary reading. A summary is its own request:
 /// it must not sound like it replaced the translation.
 /// </summary>
@@ -51,7 +71,9 @@ internal sealed class ReadingModeState
 
     public string SummaryNote { get; private set; } = string.Empty;
 
-    private string? _summarySource;
+    public SummaryRequestIdentity? CurrentSummaryIdentity { get; private set; }
+
+    private readonly Dictionary<SummaryRequestIdentity, (string Text, string Note)> _summaryCache = new();
 
     public void CaptureTranslation(string? text, string? note)
     {
@@ -61,19 +83,58 @@ internal sealed class ReadingModeState
 
     public void ShowTranslation() => Mode = ReadingMode.Translation;
 
-    public bool HasSummary(string source) =>
-        SummaryText.Length > 0 &&
-        _summarySource is not null &&
-        string.Equals(_summarySource, source, StringComparison.Ordinal);
+    public bool HasSummary(SummaryRequestIdentity identity) =>
+        _summaryCache.TryGetValue(identity, out var item) && item.Text.Length > 0;
 
-    public void RememberSummary(string source, string? text, string? note, bool show = true)
+    public bool HasSummary(string source) =>
+        CurrentSummaryIdentity is not null &&
+        string.Equals(CurrentSummaryIdentity.Source, source, StringComparison.Ordinal) &&
+        SummaryText.Length > 0;
+
+    public bool TryGetSummary(SummaryRequestIdentity identity, out (string Text, string Note) summary) =>
+        _summaryCache.TryGetValue(identity, out summary);
+
+    public bool ShowSummary(SummaryRequestIdentity identity)
     {
-        _summarySource = source;
-        SummaryText = text ?? string.Empty;
-        SummaryNote = note ?? string.Empty;
+        if (_summaryCache.TryGetValue(identity, out var item))
+        {
+            CurrentSummaryIdentity = identity;
+            SummaryText = item.Text;
+            SummaryNote = item.Note;
+            Mode = ReadingMode.Summary;
+            return true;
+        }
+        return false;
+    }
+
+    public void RememberSummary(SummaryRequestIdentity identity, string? text, string? note, bool show = true)
+    {
+        var safeText = text ?? string.Empty;
+        var safeNote = note ?? string.Empty;
+        _summaryCache[identity] = (safeText, safeNote);
+        if (show || CurrentSummaryIdentity is null || CurrentSummaryIdentity.Equals(identity))
+        {
+            CurrentSummaryIdentity = identity;
+            SummaryText = safeText;
+            SummaryNote = safeNote;
+        }
         if (show)
         {
             Mode = ReadingMode.Summary;
         }
+    }
+
+    public void RememberSummary(string source, string? text, string? note, bool show = true)
+    {
+        var identity = new SummaryRequestIdentity(source, string.Empty, string.Empty, TextTaskKind.Summarize, null, null, 0);
+        RememberSummary(identity, text, note, show);
+    }
+
+    public void ClearSummaryDisplay()
+    {
+        CurrentSummaryIdentity = null;
+        SummaryText = string.Empty;
+        SummaryNote = string.Empty;
+        Mode = ReadingMode.Translation;
     }
 }

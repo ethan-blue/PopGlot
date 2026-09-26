@@ -317,6 +317,13 @@ internal static class ProfileManager
     /// <summary>Test seam: redirects the config file (also disables seeding).</summary>
     internal static string? ConfigPathOverride;
 
+    private static int _revision;
+
+    /// <summary>Monotonically increasing version counter for profile/engine configuration changes.</summary>
+    public static int Revision => Volatile.Read(ref _revision);
+
+    public static void BumpRevision() => Interlocked.Increment(ref _revision);
+
     /// <summary>Test seam: clears the process-wide cache between scenarios.</summary>
     internal static void ResetForTests()
     {
@@ -324,6 +331,7 @@ internal static class ProfileManager
         {
             _cached = null;
             ConfigPathOverride = null;
+            Interlocked.Increment(ref _revision);
         }
     }
 
@@ -569,6 +577,7 @@ internal static class ProfileManager
             }
             File.Move(tempPath, targetPath, overwrite: true);
             _cached = config.Clone();
+            Interlocked.Increment(ref _revision);
         }
         finally
         {

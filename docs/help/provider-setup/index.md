@@ -59,7 +59,7 @@ PopGlot 原生内置支持四大主流大模型通信协议（OpenAI Compatible�
 ## 凭据管理与连接测试机制
 
 ### 1. 凭据存储与安全隔离
-- 填入的 API Key 在保存时直接存入 **Windows Credential Manager**；
+- 填入的 API Key 在保存时直接存入 **Windows Credential Manager**（目标格式：`PopGlot/provider/{id}`，由 Windows DPAPI 安全加密）；
 - 界面上的密码框支持「清除」操作，且未填入新 Key 时不会覆盖已存有效凭据。
 
 ### 2. 「验证连接」的运行机制

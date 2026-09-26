@@ -1,0 +1,301 @@
+[
+  {
+    "id": "ERR-001",
+    "category": "errors",
+    "source": "System.NullReferenceException: Object reference not set to an instance of an object at Service.Auth.LoginAsync() in AuthService.cs:line 84",
+    "protected_tokens": [
+      "System.NullReferenceException",
+      "Service.Auth.LoginAsync()",
+      "AuthService.cs:line 84"
+    ],
+    "allowed_variations": [
+      "对象引用未设置到对象实例",
+      "未将对象引用设置到对象的实例",
+      "空引用异常"
+    ],
+    "key_semantics": "AuthService 第 84 行登录方法发生空引用异常",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "ERR-002",
+    "category": "errors",
+    "source": "FATAL: Connection to PostgreSQL server at '10.0.1.42:5432' failed: FATAL: password authentication failed for user 'pg_backup'",
+    "protected_tokens": [
+      "PostgreSQL",
+      "10.0.1.42:5432",
+      "pg_backup"
+    ],
+    "allowed_variations": [
+      "用户口令认证失败",
+      "密码身份验证失败"
+    ],
+    "key_semantics": "数据库连接由于用户密码认证失败而终止",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "ERR-003",
+    "category": "errors",
+    "source": "CORS error: Access to fetch at 'https://api.internal.net/v2/items' from origin 'http://localhost:3000' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.",
+    "protected_tokens": [
+      "https://api.internal.net/v2/items",
+      "http://localhost:3000",
+      "Access-Control-Allow-Origin"
+    ],
+    "allowed_variations": [
+      "已被跨域资源共享策略阻止",
+      "缺少 Access-Control-Allow-Origin 请求头"
+    ],
+    "key_semantics": "浏览器端因服务端响应缺少 CORS 头而拦截请求",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "ERR-004",
+    "category": "errors",
+    "source": "git push rejected: [remote rejected] main -> main (protected branch hook declined: requires 2 approving reviews)",
+    "protected_tokens": [
+      "git push",
+      "main -> main",
+      "protected branch hook declined"
+    ],
+    "allowed_variations": [
+      "推送被远程拒绝",
+      "保护分支钩子拒绝：需要 2 个批准审核"
+    ],
+    "key_semantics": "受保护分支由于缺少审核批准而拒绝推送",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "ERR-005",
+    "category": "errors",
+    "source": "java.lang.OutOfMemoryError: Java heap space at java.base/java.util.Arrays.copyOf(Arrays.java:3537)",
+    "protected_tokens": [
+      "java.lang.OutOfMemoryError: Java heap space",
+      "Arrays.copyOf(Arrays.java:3537)"
+    ],
+    "allowed_variations": [
+      "Java 堆内存溢出",
+      "堆空间不足"
+    ],
+    "key_semantics": "数组拷贝过程中 Java 虚拟机堆内存耗尽",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "ERR-006",
+    "category": "errors",
+    "source": "OSError: [Errno 28] No space left on device: '/var/log/app/worker.log'",
+    "protected_tokens": [
+      "OSError: [Errno 28]",
+      "No space left on device",
+      "/var/log/app/worker.log"
+    ],
+    "allowed_variations": [
+      "设备上没有剩余空间",
+      "磁盘空间不足"
+    ],
+    "key_semantics": "写入日志文件时操作系统报告设备磁盘已满",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "ERR-007",
+    "category": "errors",
+    "source": "CUDA out of memory. Tried to allocate 2.40 GiB (GPU 0; 11.76 GiB total capacity; 10.12 GiB already allocated; 1.15 GiB free; 10.35 GiB reserved in total by PyTorch)",
+    "protected_tokens": [
+      "CUDA out of memory",
+      "GPU 0",
+      "PyTorch"
+    ],
+    "allowed_variations": [
+      "显存溢出",
+      "GPU 内存耗尽"
+    ],
+    "key_semantics": "显存不足以分配 2.40 GiB 缓冲区",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "ERR-008",
+    "category": "errors",
+    "source": "npm ERR! code ERESOLVE\nnpm ERR! ERESOLVE unable to resolve dependency tree: peer react@\"^18.0.0\" from react-dom@18.2.0",
+    "protected_tokens": [
+      "ERESOLVE",
+      "react@\"^18.0.0\"",
+      "react-dom@18.2.0"
+    ],
+    "allowed_variations": [
+      "无法解析依赖树",
+      "依赖版本冲突"
+    ],
+    "key_semantics": "npm 无法满足对等依赖版本约束",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "ERR-009",
+    "category": "errors",
+    "source": "HTTP 504 Gateway Timeout: The upstream server failed to respond within 30000ms while processing GET /api/v1/reports",
+    "protected_tokens": [
+      "HTTP 504 Gateway Timeout",
+      "30000ms",
+      "GET /api/v1/reports"
+    ],
+    "allowed_variations": [
+      "网关超时",
+      "上游服务器未在 30 秒内响应"
+    ],
+    "key_semantics": "反向代理等待上游报表接口响应超时",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "ERR-010",
+    "category": "errors",
+    "source": "error[E0382]: use of moved value: `buffer` at src/parser.rs:114:9",
+    "protected_tokens": [
+      "error[E0382]",
+      "use of moved value",
+      "`buffer`",
+      "src/parser.rs:114:9"
+    ],
+    "allowed_variations": [
+      "借用已移动的值",
+      "使用了所有权已转移的变量"
+    ],
+    "key_semantics": "Rust 编译器报错：变量 buffer 所有权已转移后再次被使用",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "ERR-011",
+    "category": "errors",
+    "source": "SSL certificate problem: self-signed certificate in certificate chain when connecting to https://registry.corp.internal",
+    "protected_tokens": [
+      "https://registry.corp.internal",
+      "SSL certificate problem"
+    ],
+    "allowed_variations": [
+      "证书链中存在自签名证书",
+      "SSL 证书不受信任"
+    ],
+    "key_semantics": "TLS 握手校验由于证书链包含自签名证书而失败",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "ERR-012",
+    "category": "errors",
+    "source": "Docker daemon error: failed to create task for container: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: exec: \"/entrypoint.sh\": permission denied",
+    "protected_tokens": [
+      "/entrypoint.sh",
+      "permission denied",
+      "OCI runtime create failed"
+    ],
+    "allowed_variations": [
+      "权限被拒绝",
+      "容器启动失败"
+    ],
+    "key_semantics": "容器执行入口脚本 /entrypoint.sh 因缺少可执行权限失败",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "ERR-013",
+    "category": "errors",
+    "source": "Deadlock detected: Transaction (Process ID 68) was deadlocked on lock resources with another process and has been chosen as the deadlock victim. Rerun the transaction.",
+    "protected_tokens": [
+      "Process ID 68",
+      "deadlock victim"
+    ],
+    "allowed_variations": [
+      "检测到死锁",
+      "被选为死锁牺牲品",
+      "重试该事务"
+    ],
+    "key_semantics": "数据库引擎检测到资源死锁并回滚了牺牲进程",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "ERR-014",
+    "category": "errors",
+    "source": "Segmentation fault (core dumped): Invalid memory access at address 0x0000000000000008 in ./bin/engine",
+    "protected_tokens": [
+      "Segmentation fault (core dumped)",
+      "0x0000000000000008",
+      "./bin/engine"
+    ],
+    "allowed_variations": [
+      "段错误（核心已转储）",
+      "无效内存访问"
+    ],
+    "key_semantics": "程序访问受限非法内存地址触发崩溃",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "ERR-015",
+    "category": "errors",
+    "source": "SyntaxError: Unexpected token '?' in JSON at position 0: invalid BOM or encoding detected.",
+    "protected_tokens": [
+      "SyntaxError",
+      "JSON at position 0"
+    ],
+    "allowed_variations": [
+      "位置 0 处存在非预期的 token",
+      "无效的 BOM 或编码"
+    ],
+    "key_semantics": "解析 JSON 文本在首字节遇到非法字符，通常由于文件编码包含 BOM 头",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  }
+]

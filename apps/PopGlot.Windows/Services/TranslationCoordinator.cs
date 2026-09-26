@@ -77,6 +77,16 @@ internal interface ITranslationExecutor
         string targetLang,
         FreeEngineAuthorization authorization,
         CancellationToken cancellationToken);
+
+    Task<TranslationResponse> RunTextTaskAsync(
+        string? apiKey,
+        string source,
+        string sourceLang,
+        string targetLang,
+        TextTaskKind task,
+        CancellationToken cancellationToken,
+        ProviderSettings? routeSettings = null) =>
+        CoreBridge.RunTextTaskAsync(apiKey, source, sourceLang, targetLang, task, cancellationToken, routeSettings);
 }
 
 internal sealed class DefaultTranslationExecutor : ITranslationExecutor
@@ -582,11 +592,56 @@ internal sealed class TranslationCoordinator
         }
     }
 
-    public async Task<TranslationResponse> RunTextTaskAsync(
+    public SummaryRequestSnapshot CreateSummarySnapshot(
         string source,
         string sourceLang,
         string targetLang,
-        TextTaskKind task,
+        TextTaskKind taskKind,
+        long generation)
+    {
+        var settings = _executor.GetSettings();
+        var routes = _executor.ResolveRoutes();
+        var textRoute = routes.Text;
+        var engineId = textRoute?.Profile.Id ?? (settings.TargetsLocalRuntime ? "local" : "none");
+        var model = textRoute?.Profile.TextModel ?? settings.TextModel;
+        var configVersion = ProfileManager.Revision;
+        var identity = new SummaryRequestIdentity(
+            source,
+            sourceLang,
+            targetLang,
+            taskKind,
+            engineId,
+            model,
+            configVersion);
+        return new SummaryRequestSnapshot(identity, generation);
+    }
+
+    internal SummaryCapability EvaluateSummaryCapability()
+    {
+        var settings = _executor.GetSettings();
+        var routes = _executor.ResolveRoutes();
+        var textRoute = routes.Text;
+        var apiKey = textRoute is null ? null : _executor.LoadApiKey(textRoute.CredentialTarget);
+        var shell = ShellSettingsStore.Load();
+        var preferFree = false;
+        try
+        {
+            preferFree = ProfileManager.Load().PreferFreeEngine;
+        }
+        catch
+        {
+        }
+
+        return RouteCapabilityService.Evaluate(
+            textRoute?.Profile,
+            preferFree,
+            shell.FreeEngineConsent,
+            apiKey,
+            settings);
+    }
+
+    public async Task<TranslationResponse> RunSummaryTaskAsync(
+        SummaryRequestSnapshot snapshot,
         CancellationToken cancellationToken = default)
     {
         if (!RuntimeGate.NewWorkAllowed)
@@ -602,8 +657,25 @@ internal sealed class TranslationCoordinator
             throw new InvalidOperationException("请先在设置中配置模型引擎，再使用要点。免费引擎不能整理要点。");
         }
         var routeSettings = textRoute?.Profile.ToProviderSettings(settings);
-        return await CoreBridge.RunTextTaskAsync(
-            apiKey, source, sourceLang, targetLang, task, cancellationToken, routeSettings);
+        return await _executor.RunTextTaskAsync(
+            apiKey,
+            snapshot.Identity.Source,
+            snapshot.Identity.SourceLanguage,
+            snapshot.Identity.TargetLanguage,
+            snapshot.Identity.TaskKind,
+            cancellationToken,
+            routeSettings);
+    }
+
+    public async Task<TranslationResponse> RunTextTaskAsync(
+        string source,
+        string sourceLang,
+        string targetLang,
+        TextTaskKind task,
+        CancellationToken cancellationToken = default)
+    {
+        var snapshot = CreateSummarySnapshot(source, sourceLang, targetLang, task, 0);
+        return await RunSummaryTaskAsync(snapshot, cancellationToken);
     }
 
     public async Task<TranslationSession> TranslateScreenshotAsync(

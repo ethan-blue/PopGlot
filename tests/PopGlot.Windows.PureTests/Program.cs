@@ -65,6 +65,8 @@ internal static class Program
         });
 
         Run("reading mode keeps the translation when a summary is shown", ReadingModeKeepsTranslation);
+        Run("summary request identity segregates cache by target lang, engine, and version", SummaryRequestIdentitySegregation);
+        Run("R03 route capability evaluates all five states accurately", RouteCapabilityEvaluatesAllFiveStates);
         Run("free engine provider round-trips and stays on Google when missing", FreeEngineProviderRoundTrip);
         await RunAsync("alternate free engine contacts only MyMemory", AlternateFreeEngineContactsMyMemory);
         Run("session store enforces max 5 sessions and LRU eviction", SessionStoreCapacityAndLru);
@@ -91,6 +93,11 @@ internal static class Program
         // and the PastRevisions null-folding serialization contract.
         Run("prompt envelope unwraps rust camelCase multi-word fields", PromptEnvelopeBindsCamelCaseMultiWordFields);
         Run("prompt save serialization folds null past revisions into an absent field", PromptSerializationFoldsNullPastRevisions);
+        Run("R05 translation quality fixtures are complete and valid", TranslationQualityFixturesAreCompleteAndValid);
+        Run("R07 safe diagnostics exporter strict whitelist and bait secrets redaction", SafeDiagnosticsExporterStrictWhitelistAndBaitSecretsRedaction);
+        Run("R08 user data migration and recovery service package roundtrip and safety guards", UserDataBackupAndRecoverySafetyGuards);
+        Run("R09 summary lifecycle coordinator isolates requests and manages generation recency", SummaryLifecycleCoordinatorGenerationAndCancellation);
+        Run("R11 distribution maturity specifications and packaging invariants", DistributionMaturityAndPackagingInvariants);
 
         Console.WriteLine($"\nPopGlot pure tests: {_passed} passed, {_failed} failed, " +
                           $"{Interlocked.Read(ref refusedSends)} send attempts refused.");
@@ -243,6 +250,100 @@ internal static class Program
             "tilde info strings are allowed");
     }
 
+    private static void RouteCapabilityEvaluatesAllFiveStates()
+    {
+        var defaultSettings = DemoSettings() with
+        {
+            NetworkEnabled = true,
+            SafeDevMode = false,
+        };
+
+        // 1. 免费线路 (Free route)
+        var freeResult = RouteCapabilityService.Evaluate(
+            activeProfile: null,
+            preferFreeEngine: true,
+            freeEngineConsent: FreeEngineConsent.Allowed,
+            apiKey: null,
+            settings: defaultSettings);
+        Equal(RouteCapabilityState.Unsupported, freeResult.State, "free route must not support summary");
+        Equal(RouteKind.FreeEngine, freeResult.RouteKind, "route kind must be FreeEngine");
+        True(freeResult.Reason.Contains("不支持整理要点"), "reason must explain free engine cannot summarize");
+        True(freeResult.CanNavigateToAddEngine, "free route must offer add engine exit");
+
+        // 2. 本机模型 (Local model: Ollama / LM Studio)
+        var localProfile = new ProviderProfile
+        {
+            Id = "ollama-profile",
+            Name = "Local Ollama",
+            ProviderType = ProviderType.OpenAiCompatible,
+            IsLocal = true,
+            TextModel = "llama3:latest",
+        };
+        var localResult = RouteCapabilityService.Evaluate(
+            activeProfile: localProfile,
+            preferFreeEngine: false,
+            freeEngineConsent: FreeEngineConsent.Unset,
+            apiKey: null,
+            settings: defaultSettings);
+        Equal(RouteCapabilityState.Available, localResult.State, "local model must support summary");
+        Equal(RouteKind.LocalModel, localResult.RouteKind, "route kind must be LocalModel");
+        True(localResult.Reason.Contains("本地模型已就绪"), "reason must announce local model ready");
+        True(!localResult.CanNavigateToAddEngine, "local model ready does not need add engine exit");
+
+        // 3. 有效远程路线 (Valid remote provider, e.g. OpenAI / DeepSeek with API key and known model)
+        var remoteProfile = new ProviderProfile
+        {
+            Id = "openai-profile",
+            Name = "OpenAI Official",
+            ProviderType = ProviderType.OpenAiCompatible,
+            ApiBaseUrl = "https://api.openai.com/v1",
+            TextModel = "gpt-4o-mini",
+        };
+        var validRemoteResult = RouteCapabilityService.Evaluate(
+            activeProfile: remoteProfile,
+            preferFreeEngine: false,
+            freeEngineConsent: FreeEngineConsent.Unset,
+            apiKey: "sk-valid-key",
+            settings: defaultSettings);
+        Equal(RouteCapabilityState.Available, validRemoteResult.State, "valid remote route must support summary");
+        Equal(RouteKind.ValidRemote, validRemoteResult.RouteKind, "route kind must be ValidRemote");
+        True(validRemoteResult.Reason.Contains("独立模型请求") && validRemoteResult.Reason.Contains("服务费用"),
+            "valid remote route must mention independent request and potential fees");
+        True(!validRemoteResult.CanNavigateToAddEngine, "valid remote route does not need add engine exit");
+
+        // 4. 无凭据 (Remote provider configured but missing API key)
+        var missingKeyResult = RouteCapabilityService.Evaluate(
+            activeProfile: remoteProfile,
+            preferFreeEngine: false,
+            freeEngineConsent: FreeEngineConsent.Unset,
+            apiKey: null,
+            settings: defaultSettings);
+        Equal(RouteCapabilityState.NeedsConfiguration, missingKeyResult.State, "missing key must need configuration");
+        Equal(RouteKind.MissingCredential, missingKeyResult.RouteKind, "route kind must be MissingCredential");
+        True(missingKeyResult.Reason.Contains("未配置密钥"), "reason must explain key is missing");
+        True(missingKeyResult.CanNavigateToAddEngine, "missing key must offer add/configure engine exit");
+
+        // 5. 未知模型 (Unknown / Custom model / proxy endpoint)
+        var unknownModelProfile = new ProviderProfile
+        {
+            Id = "custom-profile",
+            Name = "Custom Gateway",
+            ProviderType = ProviderType.OpenAiCompatible,
+            ApiBaseUrl = "https://ai.internal.corp/v1",
+            TextModel = "custom-gateway-llm",
+        };
+        var unknownResult = RouteCapabilityService.Evaluate(
+            activeProfile: unknownModelProfile,
+            preferFreeEngine: false,
+            freeEngineConsent: FreeEngineConsent.Unset,
+            apiKey: "corp-token",
+            settings: defaultSettings);
+        Equal(RouteCapabilityState.Unknown, unknownResult.State, "custom proxy must evaluate to Unknown");
+        Equal(RouteKind.UnknownModel, unknownResult.RouteKind, "route kind must be UnknownModel");
+        True(unknownResult.Reason.Contains("模型能力未知") && unknownResult.Reason.Contains("服务费用"),
+            "unknown model must mention unknown capability and potential fees");
+    }
+
     private static void DiagnosticsStayStructured()
     {
         var secret = "synthetic-secret-123";
@@ -307,6 +408,38 @@ internal static class Program
         Equal(ReadingMode.Translation, reading.Mode, "caching a later summary does not cover the translation");
         Equal("hello 的译文", reading.TranslationText, "the translation text is still the original");
         Equal("更新后的要点", reading.SummaryText, "the cached summary can update without being shown");
+    }
+
+    private static void SummaryRequestIdentitySegregation()
+    {
+        var reading = new ReadingModeState();
+        var idZh = new SummaryRequestIdentity("hello", "en", "zh-CN", TextTaskKind.Summarize, "p1", "gpt-4o", 1);
+        var idJa = new SummaryRequestIdentity("hello", "en", "ja", TextTaskKind.Summarize, "p1", "gpt-4o", 1);
+        var idEngine = new SummaryRequestIdentity("hello", "en", "zh-CN", TextTaskKind.Summarize, "p2", "claude-3-5", 1);
+        var idVersion = new SummaryRequestIdentity("hello", "en", "zh-CN", TextTaskKind.Summarize, "p1", "gpt-4o", 2);
+
+        reading.RememberSummary(idZh, "中文要点", "注-中文");
+        True(reading.HasSummary(idZh), "zh summary must be cached");
+        True(!reading.HasSummary(idJa), "ja summary must not hit zh cache");
+        True(!reading.HasSummary(idEngine), "different engine must not hit cache");
+        True(!reading.HasSummary(idVersion), "different config version must not hit cache");
+
+        reading.RememberSummary(idJa, "日本語要約", "注-日文");
+        True(reading.HasSummary(idJa), "ja summary must now be cached");
+        Equal("日本語要約", reading.SummaryText, "active summary text is ja");
+
+        True(reading.TryGetSummary(idZh, out var zhCached), "zh summary still present");
+        Equal("中文要点", zhCached.Text, "zh cached text preserved");
+
+        reading.ShowSummary(idZh);
+        Equal("中文要点", reading.SummaryText, "switching identity restores zh display");
+
+        // Late arrival for ja with show: false while zh is active
+        reading.RememberSummary(idJa, "更新的日本語要約", "注-更新", show: false);
+        Equal("中文要点", reading.SummaryText, "late arrival for different identity must not overwrite active display");
+
+        True(reading.TryGetSummary(idJa, out var jaUpdated), "ja cache was updated in background");
+        Equal("更新的日本語要約", jaUpdated.Text, "background cache update was stored");
     }
 
     private static void FreeEngineProviderRoundTrip()
@@ -585,6 +718,19 @@ internal static class Program
         try
         {
             await action();
+        }
+        catch (Exception exception) when (exception is T)
+        {
+            return;
+        }
+        throw new InvalidOperationException($"expected {typeof(T).Name}, but no exception was thrown");
+    }
+
+    internal static void Throws<T>(Action action) where T : Exception
+    {
+        try
+        {
+            action();
         }
         catch (Exception exception) when (exception is T)
         {
@@ -1377,7 +1523,304 @@ internal static class Program
                 $"{message}: expected {expected}, got {actual}");
         }
     }
+
+internal static string FindProjectRoot()
+    {
+        var dir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Cargo.toml")))
+        {
+            dir = dir.Parent;
+        }
+        return dir?.FullName ?? AppDomain.CurrentDomain.BaseDirectory;
+    }
+
+    private static void TranslationQualityFixturesAreCompleteAndValid()
+    {
+        var projectRoot = FindProjectRoot();
+        var fixtureDir = Path.Combine(projectRoot, "tests", "fixtures", "translation-quality");
+        True(Directory.Exists(fixtureDir), $"Fixture directory must exist: {fixtureDir}");
+
+        var expectedCategories = new Dictionary<string, (string File, int ExpectedCount)>
+        {
+            ["errors"] = ("01_errors.json", 15),
+            ["commands_paths"] = ("02_commands_paths.json", 15),
+            ["api_code_comments"] = ("03_api_code_comments.json", 15),
+            ["negations_conditions"] = ("04_negations_conditions.json", 15),
+            ["multilingual_glossary"] = ("05_multilingual_glossary.json", 10),
+            ["ocr_transcriptions"] = ("06_ocr_transcriptions.json", 10),
+        };
+
+        var totalItems = 0;
+        var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (cat, (file, expectedCount)) in expectedCategories)
+        {
+            var filePath = Path.Combine(fixtureDir, file);
+            True(File.Exists(filePath), $"Category file {file} must exist");
+            var json = File.ReadAllText(filePath, Encoding.UTF8);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            Equal(JsonValueKind.Array, root.ValueKind, $"{file} must be a JSON array");
+            Equal(expectedCount, root.GetArrayLength(), $"{file} must have exactly {expectedCount} items");
+
+            foreach (var item in root.EnumerateArray())
+            {
+                totalItems++;
+                var id = item.GetProperty("id").GetString();
+                var category = item.GetProperty("category").GetString();
+                var source = item.GetProperty("source").GetString();
+                var keySemantics = item.GetProperty("key_semantics").GetString();
+
+                True(!string.IsNullOrWhiteSpace(id), "id must not be empty");
+                True(seenIds.Add(id!), $"id {id} must be unique");
+                Equal(cat, category, $"category in item {id} must match file category");
+                True(!string.IsNullOrWhiteSpace(source), $"source in item {id} must not be empty");
+                True(!string.IsNullOrWhiteSpace(keySemantics), $"key_semantics in item {id} must not be empty");
+
+                var tokens = item.GetProperty("protected_tokens");
+                Equal(JsonValueKind.Array, tokens.ValueKind, $"protected_tokens in {id} must be an array");
+                True(tokens.GetArrayLength() > 0, $"item {id} must have at least one protected token");
+
+                foreach (var tok in tokens.EnumerateArray())
+                {
+                    var tokenStr = tok.GetString();
+                    True(!string.IsNullOrWhiteSpace(tokenStr), $"token in {id} must not be empty");
+                    True(source!.Contains(tokenStr!), $"protected token '{tokenStr}' must be present in source of {id}");
+                }
+
+                var scoring = item.GetProperty("scoring_rules");
+                True(scoring.GetProperty("exact_token_match").GetBoolean(), $"exact_token_match in {id} must be true");
+                True(scoring.GetProperty("no_semantic_inversion").GetBoolean(), $"no_semantic_inversion in {id} must be true");
+                True(scoring.GetProperty("no_hallucinated_facts").GetBoolean(), $"no_hallucinated_facts in {id} must be true");
+            }
+        }
+
+        Equal(80, totalItems, "Total quality fixture items across 6 categories must be exactly 80");
+    }
+
+    private static void SafeDiagnosticsExporterStrictWhitelistAndBaitSecretsRedaction()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"popglot-diag-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var exportPath = Path.Combine(tempDir, "diagnostics.json");
+
+        try
+        {
+            var baitKey = "sk-1234567890abcdef1234567890";
+            var baitToken = "Bearer ghp_abcdef12345678901234567890";
+            var baitUrl = "https://api.openai.com/v1/chat/completions?api_key=secret-in-query-12345";
+            var baitUserPath = "C:\\Users\\SecretDeveloper\\AppData\\Local\\PopGlot";
+
+            var rec1 = SafeDiagnosticsExporter.CreateRecord(
+                eventId: $"evt-{baitKey}",
+                stage: "translation",
+                errorCode: "0x80004005",
+                protocol: "openai-compatible",
+                sanitizedRoute: baitUrl,
+                elapsedMs: 250);
+
+            var rec2 = SafeDiagnosticsExporter.CreateRecord(
+                eventId: "evt-normal-002",
+                stage: "settings",
+                errorCode: "401",
+                protocol: baitToken,
+                sanitizedRoute: SafeDiagnosticsExporter.SanitizeRoute(ProviderType.OpenAiCompatible, baitUserPath),
+                elapsedMs: 120);
+
+            var package = SafeDiagnosticsExporter.CreatePackage(new[] { rec1, rec2 }, appVersion: "0.1.10");
+
+            // Verify whitelist contract
+            Equal("0.1.10", package.AppVersion, "AppVersion must be preserved");
+            True(package.ZeroNetworkExport, "ZeroNetworkExport must be true");
+            Equal(8, package.WhitelistedFields.Count, "WhitelistedFields must have exactly 8 fields");
+
+            // Format to JSON
+            var json = SafeDiagnosticsExporter.FormatJson(package);
+
+            // Strict Secret Redaction Assertions
+            True(!json.Contains(baitKey), "Serialized JSON must never contain bait API key");
+            True(!json.Contains("secret-in-query-12345"), "Serialized JSON must never contain URL query secrets");
+            True(!json.Contains("ghp_abcdef12345678901234567890"), "Serialized JSON must never contain bearer tokens");
+            True(!json.Contains("SecretDeveloper"), "Serialized JSON must never contain username from paths");
+
+            // Verify redaction markers
+            True(json.Contains("[redacted-key]"), "Bait key must be replaced with [redacted-key]");
+            True(json.Contains("?…"), "Query string must be redacted to ?…");
+            True(json.Contains("[redacted-token]"), "Bearer token must be redacted to [redacted-token]");
+            True(json.Contains("[user]"), "User path must be redacted to [user]");
+
+            // Verify ExportToFile
+            var success = SafeDiagnosticsExporter.TryExportToFile(package, exportPath, out var message);
+            True(success, "TryExportToFile must succeed");
+            True(File.Exists(exportPath), "Export file must be created on disk");
+            var diskContent = File.ReadAllText(exportPath, Encoding.UTF8);
+            True(!diskContent.Contains(baitKey), "Disk file must never contain bait API key");
+            True(!diskContent.Contains("SecretDeveloper"), "Disk file must never contain username");
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    private static void UserDataBackupAndRecoverySafetyGuards()
+    {
+        // 1. Validation error conditions
+        var emptyVal = UserDataBackupService.ValidateBackup("");
+        Equal(BackupValidationStatus.EmptyPackage, emptyVal.Status, "Empty content must be flagged as EmptyPackage");
+
+        var corruptVal = UserDataBackupService.ValidateBackup("{ \"invalid\": true, broken json }");
+        Equal(BackupValidationStatus.CorruptedJson, corruptVal.Status, "Invalid JSON must be flagged as CorruptedJson");
+
+        var higherVal = UserDataBackupService.ValidateBackup("{\"schema_version\": 999, \"app_version\": \"9.9.9\"}");
+        Equal(BackupValidationStatus.UnsupportedHigherVersion, higherVal.Status, "Higher schema version must be flagged as UnsupportedHigherVersion");
+        True(higherVal.Message.Contains("高于当前软件支持版本"), "Higher version message must prompt to upgrade PopGlot");
+
+        // 2. Round-trip creation, diff preview, and restoration with safe rollback
+        var tempDir = Path.Combine(Path.GetTempPath(), $"popglot-r08-pure-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var histPath = Path.Combine(tempDir, "hist.json");
+        var vocabPath = Path.Combine(tempDir, "vocab.json");
+
+        try
+        {
+            var history = new HistoryStore(histPath);
+            var vocab = new VocabularyStore(vocabPath);
+
+            // Populate baseline entries
+            var entry = new TranslationHistoryEntry(
+                Id: Guid.NewGuid(),
+                CreatedAt: DateTimeOffset.UtcNow,
+                SourceKind: "workbench",
+                Source: "git checkout -b feature/test",
+                Translation: "创建并检出新分支 feature/test",
+                Explanation: "git 命令行用法说明",
+                ProtectedTerms: ["git", "-b", "feature/test"],
+                SourceLanguage: "en",
+                TargetLanguage: "zh-CN");
+            var addHist = history.TryAdd(entry, enabled: true);
+            Equal(HistoryAddResult.Stored, addHist, "History entry must be stored");
+
+            var addVocab = vocab.ToggleStar("deterministic", "adj. 确定性的", sourceLang: "en", targetLang: "zh-CN");
+            True(addVocab.Starred, "Vocabulary word must be starred");
+            history.Flush();
+            vocab.Flush();
+
+            // Create backup package
+            var package = UserDataBackupService.CreateBackup(
+                history,
+                vocab,
+                ShellSettings.Default with { Theme = ThemePreference.Dark },
+                new CoreProductConfig { SchemaVersion = 6 });
+
+            Equal(1, package.SchemaVersion, "SchemaVersion must be 1");
+            Equal("0.1.10", package.AppVersion, "AppVersion must match 0.1.10");
+            True(package.History is not null && package.History.Count == 1, "Package must contain 1 history entry");
+            True(package.Vocabulary is not null && package.Vocabulary.Count == 1, "Package must contain 1 vocabulary word");
+            True(package.ShellSettings is not null && package.ShellSettings.Theme == ThemePreference.Dark, "ShellSettings must roundtrip theme");
+
+            // Format to JSON
+            var json = UserDataBackupService.SerializeBackup(package);
+            True(!json.Contains("sk-"), "Backup JSON must never contain API keys");
+            True(!json.Contains("password"), "Backup JSON must never contain passwords");
+
+            // Validate valid JSON
+            var validVal = UserDataBackupService.ValidateBackup(json);
+            Equal(BackupValidationStatus.Valid, validVal.Status, "Serialized package must be valid");
+
+            // Analyze differences
+            var diff = UserDataBackupService.AnalyzeDifferences(package, history, vocab);
+            Equal(1, diff.BackupHistoryCount, "Diff backup history count");
+            Equal(1, diff.BackupVocabularyCount, "Diff backup vocabulary count");
+            True(diff.SummaryText.Contains("包含 1 条"), "Summary text must describe 1 history item");
+            True(diff.SummaryText.Contains("包含 1 个词"), "Summary text must describe 1 vocabulary item");
+
+            // Clear stores
+            history.Clear();
+            vocab.Clear();
+            history.Flush();
+            vocab.Flush();
+            Equal(0, history.Load().Count, "History must be cleared");
+            Equal(0, vocab.GetAll().Count, "Vocabulary must be cleared");
+
+            // Restore from package
+            UserDataBackupService.RestoreBackup(package, history, vocab);
+            history.Flush();
+            vocab.Flush();
+
+            var restoredHist = history.Load();
+            var restoredVocab = vocab.GetAll();
+            Equal(1, restoredHist.Count, "Restored history must have 1 entry");
+            Equal("git checkout -b feature/test", restoredHist[0].Source, "Restored history source exact match");
+            Equal(1, restoredVocab.Count, "Restored vocabulary must have 1 word");
+            Equal("deterministic", restoredVocab[0].Word, "Restored vocabulary word exact match");
+
+            // Rollback guard on higher version restore attempt
+            var badPackage = package with { SchemaVersion = 999 };
+            Throws<InvalidOperationException>(() =>
+                UserDataBackupService.RestoreBackup(badPackage, history, vocab));
+            Equal(1, history.Load().Count, "Store must remain untouched on rejected restore");
+            Equal(1, vocab.GetAll().Count, "Store must remain untouched on rejected restore");
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    private static void SummaryLifecycleCoordinatorGenerationAndCancellation()
+    {
+        var lifecycle = new SummaryLifecycleCoordinator();
+        Equal(0L, lifecycle.CurrentGeneration, "Initial generation is 0");
+        True(!lifecycle.IsRunning, "Not running initially");
+        lifecycle.Cancel();
+        Equal(1L, lifecycle.CurrentGeneration, "Generation bumped on cancel");
+        True(!lifecycle.IsRunning, "Not running after cancel");
+    }
+
+    private static void DistributionMaturityAndPackagingInvariants()
+    {
+        var projectRoot = FindProjectRoot();
+
+        // 1. docs/DISTRIBUTION_MATURITY.md exists and covers levels & verification checklist
+        var maturityDocPath = Path.Combine(projectRoot, "docs", "DISTRIBUTION_MATURITY.md");
+        True(File.Exists(maturityDocPath), "docs/DISTRIBUTION_MATURITY.md must exist");
+        var maturityDoc = File.ReadAllText(maturityDocPath);
+        True(maturityDoc.Contains("Level 1: 便携绿色包"), "doc must define Level 1 portable zip baseline");
+        True(maturityDoc.Contains("Level 2: 托管安装器"), "doc must define Level 2 installer proposal");
+        True(maturityDoc.Contains("Level 3: 受控自动更新"), "doc must define Level 3 auto-update proposal");
+        True(maturityDoc.Contains("D1-01") && maturityDoc.Contains("D1-08"), "doc must include verification matrix D1-01 through D1-08");
+
+        // 2. docs/VERSIONING.md cross-references DISTRIBUTION_MATURITY.md
+        var versioningDocPath = Path.Combine(projectRoot, "docs", "VERSIONING.md");
+        True(File.Exists(versioningDocPath), "docs/VERSIONING.md must exist");
+        var versioningDoc = File.ReadAllText(versioningDocPath);
+        True(versioningDoc.Contains("DISTRIBUTION_MATURITY.md"), "VERSIONING.md must cross-reference DISTRIBUTION_MATURITY.md");
+
+        // 3. scripts/publish-package.ps1 enforces --self-contained and generates build-manifest.json
+        var publishScriptPath = Path.Combine(projectRoot, "scripts", "publish-package.ps1");
+        True(File.Exists(publishScriptPath), "scripts/publish-package.ps1 must exist");
+        var publishScript = File.ReadAllText(publishScriptPath);
+        True(publishScript.Contains("--self-contained"), "publish script must specify --self-contained");
+        True(publishScript.Contains("build-manifest.json"), "publish script must generate build-manifest.json");
+
+        // 4. scripts/write-release-notes.ps1 provides sha256 checking instructions
+        var releaseNotesScriptPath = Path.Combine(projectRoot, "scripts", "write-release-notes.ps1");
+        True(File.Exists(releaseNotesScriptPath), "scripts/write-release-notes.ps1 must exist");
+        var releaseNotesScript = File.ReadAllText(releaseNotesScriptPath);
+        True(releaseNotesScript.Contains("Get-FileHash") && releaseNotesScript.Contains(".sha256"),
+            "write-release-notes.ps1 must format sha256 checksum verification instructions");
+
+        // 5. .github/workflows/release.yml enforces 4-way consistency and self-contained packaging
+        var releaseYmlPath = Path.Combine(projectRoot, ".github", "workflows", "release.yml");
+        True(File.Exists(releaseYmlPath), ".github/workflows/release.yml must exist");
+        var releaseYml = File.ReadAllText(releaseYmlPath);
+        True(releaseYml.Contains("--self-contained true"), "release.yml must enforce --self-contained true");
+        True(releaseYml.Contains("PopGlot.Windows.csproj") && releaseYml.Contains("Cargo.toml") && releaseYml.Contains("CHANGELOG.md"),
+            "release.yml must validate 4-way consistency across manifests");
+    }
 }
+
 
 /// <summary>In-memory credential stub; the pure host never sees the OS vault.</summary>
 internal sealed class PureCredentialVault : ICredentialVault

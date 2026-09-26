@@ -308,6 +308,8 @@ internal sealed partial class HistoryStore : IHistoryRepository
         }
     }
 
+    internal string FilePath => _path;
+
     public bool Clear()
     {
         lock (_gate)
@@ -315,6 +317,52 @@ internal sealed partial class HistoryStore : IHistoryRepository
             _entries = [];
             _persistChannel.Writer.TryWrite(new HistoryPersistRequest(null, true, null));
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Replaces all history entries with the provided valid entries.
+    /// Filters expired, sensitive or oversized entries, and writes snapshot to disk.
+    /// </summary>
+    public bool RestoreEntries(IEnumerable<TranslationHistoryEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        var cutoff = DateTimeOffset.UtcNow - MaxAge;
+        var valid = new List<TranslationHistoryEntry>();
+        foreach (var entry in entries)
+        {
+            if (entry is null || entry.CreatedAt < cutoff)
+            {
+                continue;
+            }
+            if (!CanPersist(entry))
+            {
+                continue;
+            }
+            valid.Add(entry);
+        }
+        var next = valid
+            .OrderByDescending(e => e.CreatedAt)
+            .Take(MaxEntries)
+            .ToList();
+
+        lock (_gate)
+        {
+            try
+            {
+                var json = JsonSerializer.Serialize(next, JsonOptions);
+                if (Encoding.UTF8.GetByteCount(json) > MaxFileBytes)
+                {
+                    return false;
+                }
+                _entries = next;
+                _persistChannel.Writer.TryWrite(new HistoryPersistRequest(json, false, null));
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
     }
 

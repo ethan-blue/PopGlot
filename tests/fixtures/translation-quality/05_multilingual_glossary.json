@@ -1,0 +1,187 @@
+[
+  {
+    "id": "GLO-001",
+    "category": "multilingual_glossary",
+    "source": "In Kubernetes, a Pod is scheduled onto a Node by the kube-scheduler based on resource requests and affinity rules.",
+    "protected_tokens": [
+      "Kubernetes",
+      "Pod",
+      "Node",
+      "kube-scheduler"
+    ],
+    "allowed_variations": [
+      "在 Kubernetes 中，Pod 会由 kube-scheduler 根据资源请求与亲和性规则调度到 Node 上"
+    ],
+    "key_semantics": "云原生专业术语与组件名称保持不被过度翻译（如 Pod 不能翻译为‘豆荚’）",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "GLO-002",
+    "category": "multilingual_glossary",
+    "source": "The garbage collector uses generational hypothesis to prioritize Young Generation over Tenured Generation.",
+    "protected_tokens": [
+      "garbage collector",
+      "Young Generation",
+      "Tenured Generation"
+    ],
+    "allowed_variations": [
+      "垃圾收集器利用分代假设，优先处理年轻代（新生代）而非老年代"
+    ],
+    "key_semantics": "JVM/CLR 内存分代术语对应准确",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "GLO-003",
+    "category": "multilingual_glossary",
+    "source": "Configured fallback route switches to the Free Engine destination via Google Translate endpoints.",
+    "protected_tokens": [
+      "Free Engine",
+      "Google Translate"
+    ],
+    "allowed_variations": [
+      "已配置的后备路由通过谷歌翻译端点切换至公共免费引擎目标"
+    ],
+    "key_semantics": "PopGlot 内部路由机制专业名词一致性",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "GLO-004",
+    "category": "multilingual_glossary",
+    "source": "Apply zero-trust architecture principles: microsegmentation, continuous verification, and least privilege.",
+    "protected_tokens": [
+      "zero-trust architecture",
+      "microsegmentation",
+      "least privilege"
+    ],
+    "allowed_variations": [
+      "应用零信任架构原则：微隔离、持续验证和最小权限"
+    ],
+    "key_semantics": "网络安全架构核心术语",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "GLO-005",
+    "category": "multilingual_glossary",
+    "source": "The neural machine translation pipeline features Byte-Pair Encoding (BPE) and multi-head self-attention.",
+    "protected_tokens": [
+      "Byte-Pair Encoding (BPE)",
+      "multi-head self-attention"
+    ],
+    "allowed_variations": [
+      "神经机器翻译流水线采用字节对编码（BPE）与多头自注意力机制"
+    ],
+    "key_semantics": "大模型与 NLP 算法专业术语精准表达",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "GLO-006",
+    "category": "multilingual_glossary",
+    "source": "DPAPI (Data Protection API) encrypts secrets with the user's master key in Windows Credential Manager.",
+    "protected_tokens": [
+      "DPAPI",
+      "Data Protection API",
+      "Windows Credential Manager"
+    ],
+    "allowed_variations": [
+      "DPAPI 使用 Windows 凭据管理器中用户的长效主密钥加密机密数据"
+    ],
+    "key_semantics": "Windows 系统安全存储术语，不得宣称为硬件加密",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "GLO-007",
+    "category": "multilingual_glossary",
+    "source": "Vector embeddings are indexed using HNSW (Hierarchical Navigable Small World) for sub-millisecond similarity search.",
+    "protected_tokens": [
+      "HNSW",
+      "Hierarchical Navigable Small World"
+    ],
+    "allowed_variations": [
+      "向量嵌入使用分层可导航小世界（HNSW）算法建立索引以实现亚毫秒级相似度检索"
+    ],
+    "key_semantics": "向量检索算法专业名词规范",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "GLO-008",
+    "category": "multilingual_glossary",
+    "source": "Ensure idempotency on message consumers by utilizing unique deduplication keys with Redis SETNX.",
+    "protected_tokens": [
+      "idempotency",
+      "Redis SETNX"
+    ],
+    "allowed_variations": [
+      "利用 Redis SETNX 和唯一去重键确保消息消费者的幂等性"
+    ],
+    "key_semantics": "分布式架构名词‘幂等性’与 Redis 基础操作命令",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "GLO-009",
+    "category": "multilingual_glossary",
+    "source": "The coordinator dispatches requests using an asynchronous event loop backed by Rust Tokio runtime.",
+    "protected_tokens": [
+      "coordinator",
+      "Rust Tokio"
+    ],
+    "allowed_variations": [
+      "协调器利用基于 Rust Tokio 运行时的异步事件循环分发请求"
+    ],
+    "key_semantics": "软件内核异步架构描述准确",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  },
+  {
+    "id": "GLO-010",
+    "category": "multilingual_glossary",
+    "source": "High DPI PerMonitorV2 mode ensures non-client window frames match the monitor's scaling factor.",
+    "protected_tokens": [
+      "PerMonitorV2",
+      "DPI"
+    ],
+    "allowed_variations": [
+      "高 DPI PerMonitorV2 模式确保非客户区窗口框架与显示器缩放因子精准匹配"
+    ],
+    "key_semantics": "Windows 桌面渲染与缩放模式专业术语",
+    "scoring_rules": {
+      "exact_token_match": true,
+      "no_semantic_inversion": true,
+      "no_hallucinated_facts": true
+    }
+  }
+]

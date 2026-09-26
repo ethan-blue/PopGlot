@@ -65,7 +65,7 @@ public partial class TranslationPanelWindow : Window
     private readonly System.Windows.Data.Binding? _resultCopyIconFillBinding;
 
     private CancellationTokenSource? _operation;
-    private CancellationTokenSource? _summaryOperation;
+    private readonly SummaryLifecycleCoordinator _summaryLifecycle = new();
     private bool _holdingSummary;
     private Func<CancellationToken, long, Task>? _retry;
     private byte[]? _screenshot;
@@ -222,6 +222,7 @@ public partial class TranslationPanelWindow : Window
     internal TextBlock StatusTextBlock => StatusText;
     internal TextBox StreamTextBox => TranslationTextBox;
     internal RichTextBox FinalRichBox => TranslationRichBox;
+    internal void AdoptSummaryOperation(CancellationTokenSource cts) => _summaryLifecycle.AdoptOperation(cts);
 
     // ================= Entry points =================
 
@@ -440,7 +441,10 @@ public partial class TranslationPanelWindow : Window
         StatusText.Text = string.IsNullOrWhiteSpace(_translation) ? "还没有译文" : "译文";
     }
 
-    private async void ShowSummary_Click(object sender, RoutedEventArgs e)
+    private async void ShowSummary_Click(object sender, RoutedEventArgs e) =>
+        await TriggerPanelSummaryAsync();
+
+    internal async Task TriggerPanelSummaryAsync()
     {
         var source = SourceInputBox.Text.Trim();
         if (source.Length == 0)
@@ -450,78 +454,31 @@ public partial class TranslationPanelWindow : Window
             return;
         }
 
-        if (_reading.HasSummary(source))
+        // R03: Probe capability before issuing request or throwing exceptions
+        var capability = RouteCapabilityService.EvaluateCurrent();
+        if (capability.State is RouteCapabilityState.Unsupported or RouteCapabilityState.NeedsConfiguration)
         {
-            PaintPanelSummary(_reading.SummaryText, _reading.SummaryNote);
+            StatusText.Text = capability.Reason;
+            ShowTranslationChoice.IsChecked = true;
             return;
         }
 
-        if (_summaryOperation is { IsCancellationRequested: false })
-        {
-            BeginPanelSummaryReading();
-            ShowSummaryChoice.IsEnabled = false;
-            return;
-        }
-
-        BeginPanelSummaryReading();
-        var operation = new CancellationTokenSource();
-        _summaryOperation = operation;
-        ShowSummaryChoice.IsEnabled = false;
-        try
-        {
-            var response = await _coordinator.RunTextTaskAsync(
-                source, SourceLanguage, TargetLanguage, TextTaskKind.Summarize, operation.Token);
-            if (operation.IsCancellationRequested || !ReferenceEquals(_summaryOperation, operation))
+        await _summaryLifecycle.ExecuteSummaryAsync(
+            _coordinator,
+            _reading,
+            source,
+            SourceLanguage,
+            TargetLanguage,
+            isHoldingSummary: () => _holdingSummary,
+            getCurrentSource: () => SourceInputBox.Text,
+            getCurrentTargetLanguage: () => TargetLanguage,
+            onStarting: () =>
             {
-                return;
-            }
-
-            var note = string.Join(
-                "\n",
-                new[] { response.Result.Explanation }
-                    .Concat(response.Result.Warnings)
-                    .Where(line => !string.IsNullOrWhiteSpace(line))
-                    .Select(line => line.Trim()));
-            var sameSource = string.Equals(SourceInputBox.Text.Trim(), source, StringComparison.Ordinal);
-            var show = _holdingSummary && sameSource;
-            _reading.RememberSummary(source, response.Result.TranslatedText, note, show);
-            if (!show)
-            {
-                if (_holdingSummary)
-                {
-                    ShowStoredTranslation();
-                }
-                return;
-            }
-
-            PaintPanelSummary(response.Result.TranslatedText, note);
-            StatusText.Text = ReadingRequestCopy.Finished(response.Diagnostics.ElapsedMs);
-            RouteText.Text = response.EngineLabel;
-        }
-        catch (OperationCanceledException)
-        {
-            if (_holdingSummary)
-            {
-                ShowStoredTranslation();
-                StatusText.Text = ReadingRequestCopy.SummaryCancelled;
-            }
-        }
-        catch (Exception ex)
-        {
-            if (_holdingSummary)
-            {
-                ShowStoredTranslation();
-                StatusText.Text = ex.Message;
-            }
-        }
-        finally
-        {
-            var stillCurrent = ReferenceEquals(_summaryOperation, operation);
-            if (stillCurrent)
-            {
-                _summaryOperation = null;
-            }
-            if (stillCurrent || _summaryOperation is null)
+                BeginPanelSummaryReading();
+                StatusText.Text = "正在整理要点（独立模型请求，可能产生额外服务费用）…";
+                ShowSummaryChoice.IsEnabled = false;
+            },
+            onSuccess: outcome =>
             {
                 if (_holdingSummary)
                 {
@@ -529,16 +486,42 @@ public partial class TranslationPanelWindow : Window
                     Progress.Visibility = Visibility.Collapsed;
                 }
                 ShowSummaryChoice.IsEnabled = true;
-            }
-            try
+
+                if (outcome.ElapsedMs == 0 && string.IsNullOrEmpty(outcome.EngineLabel))
+                {
+                    PaintPanelSummary(outcome.SummaryText, outcome.Notes);
+                    StatusText.Text = ReadingRequestCopy.Finished(0);
+                    return;
+                }
+
+                if (!outcome.IsCurrent)
+                {
+                    if (_holdingSummary)
+                    {
+                        ShowStoredTranslation();
+                    }
+                    return;
+                }
+
+                PaintPanelSummary(outcome.SummaryText, outcome.Notes);
+                StatusText.Text = ReadingRequestCopy.Finished(outcome.ElapsedMs);
+                RouteText.Text = outcome.EngineLabel;
+            },
+            onError: error =>
             {
-                operation.Dispose();
-            }
-            catch (ObjectDisposedException)
-            {
-                // Close already disposed this request.
-            }
-        }
+                if (_holdingSummary)
+                {
+                    ResultSkeleton.Visibility = Visibility.Collapsed;
+                    Progress.Visibility = Visibility.Collapsed;
+                }
+                ShowSummaryChoice.IsEnabled = true;
+
+                if (error.IsCurrent)
+                {
+                    ShowStoredTranslation();
+                    StatusText.Text = error.Message;
+                }
+            });
     }
 
     private void BeginPanelSummaryReading()
@@ -1464,7 +1447,7 @@ public partial class TranslationPanelWindow : Window
         CancelOperation();
         CancelSummary();
         _holdingSummary = false;
-        _reading.ShowTranslation();
+        _reading.ClearSummaryDisplay();
         _gate.ResetToIdle();
         SourceInputBox.Clear();
         SetTranslationContent(string.Empty);
@@ -1748,6 +1731,11 @@ public partial class TranslationPanelWindow : Window
         {
             return;
         }
+        CancelSummary();
+        if (_holdingSummary)
+        {
+            ShowStoredTranslation();
+        }
         PersistLanguagePair();
 
         // A screenshot re-runs the whole pipeline so a language change can pick a
@@ -1770,6 +1758,12 @@ public partial class TranslationPanelWindow : Window
 
     private async void SwapLangButton_Click(object sender, RoutedEventArgs e)
     {
+        CancelSummary();
+        if (_holdingSummary)
+        {
+            ShowStoredTranslation();
+        }
+
         var (source, target) = LanguageCatalog.Swap(SourceLanguage, TargetLanguage);
 
         // Move the finished translation into the source box first, so the
@@ -1914,18 +1908,35 @@ public partial class TranslationPanelWindow : Window
                 return;
             }
             e.Handled = true;
-            // C05 Esc ladder: the first Escape cancels a running request and
-            // keeps the partial result; the next one hides the panel with
-            // its session intact. Closing/destroying is never an Esc outcome.
-            if (_holdingSummary && _summaryOperation is { IsCancellationRequested: false })
+            // C05/R04 Esc ladder:
+            // When reading summary, cancel summary first; if translation is also running, next Esc cancels it; final Esc hides panel.
+            // When reading translation, cancel translation first; if summary is also running, next Esc cancels it; final Esc hides panel.
+            // Running requests always cancel before window hiding, keeping partial results intact.
+            if (_holdingSummary)
             {
-                CancelSummary();
-                return;
+                if (_summaryLifecycle.IsRunning)
+                {
+                    CancelSummary();
+                    return;
+                }
+                if (_operation is { IsCancellationRequested: false })
+                {
+                    CancelOperation();
+                    return;
+                }
             }
-            if (_operation is { IsCancellationRequested: false })
+            else
             {
-                CancelOperation();
-                return;
+                if (_operation is { IsCancellationRequested: false })
+                {
+                    CancelOperation();
+                    return;
+                }
+                if (_summaryLifecycle.IsRunning)
+                {
+                    CancelSummary();
+                    return;
+                }
             }
             Hide();
             return;
@@ -2164,20 +2175,7 @@ public partial class TranslationPanelWindow : Window
 
     private void CancelSummary()
     {
-        var operation = _summaryOperation;
-        _summaryOperation = null;
-        if (operation is null)
-        {
-            return;
-        }
-        try
-        {
-            operation.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-            // The summary request already completed and disposed its source.
-        }
+        _summaryLifecycle.Cancel();
     }
 
     private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();

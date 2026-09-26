@@ -79,3 +79,9 @@
    并把发布页标题设为 `PopGlot vX.Y.Z`。页面正文由
    `scripts/write-release-notes.ps1` 从 CHANGELOG 的对应小节生成，
    包含系统要求和校验命令，不另开一份发布说明。
+
+## 分发成熟度与发布形态边界
+
+有关便携绿色包（Level 1）的验证矩阵、自包含运行约定、特殊路径测试、只读目录弹性以及后续安装器/代码签名方案（Level 2 & Level 3），参见 [分发成熟度规范](file:///d:/Projects/GitProjects/PopGlot/docs/DISTRIBUTION_MATURITY.md)。
+
+
