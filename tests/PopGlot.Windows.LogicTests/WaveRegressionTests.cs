@@ -2646,4 +2646,68 @@ internal static class WaveRegressionTests
         Equal(true, VirtualizingPanel.GetIsVirtualizing(section.TextModelCombo), "IsVirtualizing should be true");
         Equal(VirtualizationMode.Recycling, VirtualizingPanel.GetVirtualizationMode(section.TextModelCombo), "VirtualizationMode should be Recycling");
     }
+
+    /// <summary>
+    /// C25: the offline help viewer must render the packaged help/ articles
+    /// locally, guard the catalog against doc drift, and land on the index.
+    /// Never network: content comes from BaseDirectory/help only.
+    /// </summary>
+    public static void HelpWindowRendersPackagedArticles()
+    {
+        EnsureApp();
+        var root = HelpWindow.ResolveHelpRoot();
+        True(root is not null, "the help root must resolve in the test host (packaged help/ or repo docs/help)");
+        True(Path.GetFullPath(root!).EndsWith("help", StringComparison.Ordinal),
+            $"the resolved help root must be the help directory itself; got '{root}'");
+
+        foreach (var (_, file) in HelpWindow.Articles)
+        {
+            var path = HelpWindow.ResolveArticlePath(file);
+            True(path is not null && File.Exists(path),
+                $"help article must ship on disk next to the binary: {file}");
+        }
+
+        var help = new HelpWindow();
+        try
+        {
+            var title = (TextBlock)help.FindName("ArticleTitle")!;
+            var viewer = (RichTextBox)help.FindName("ArticleViewer")!;
+            var list = (ListBox)help.FindName("ArticleList")!;
+            var meta = (TextBlock)help.FindName("ArticleMeta")!;
+
+            Equal(6, HelpWindow.Articles.Length, "the help catalog stays at its six documented articles");
+            True(ArticleListAllEnabled(list.Items), "every packaged article must be enabled when its file ships");
+            Equal("帮助首页", title.Text, "the window must open on the index article");
+            True(viewer.Document.Blocks.Count > 0, "the index article must render non-empty content blocks");
+            True(meta.Text!.Contains("不需要联网"), "the meta line must keep the offline promise");
+
+            list.SelectedIndex = HelpWindow.Articles.Length - 1;
+            help.UpdateLayout();
+            Equal("故障排查", title.Text, "nav selection must load the matching article");
+            True(viewer.Document.Blocks.Count > 0, "the troubleshooting article must render non-empty content blocks");
+
+            // 仓库内 .md 链接语法必须在渲染层剥壳：正文里不允许再出现
+            // 「](xxx.md)」这种 GitHub 语法残留。
+            True(!HelpWindow.StripLocalMarkdownLinks(
+                    File.ReadAllText(HelpWindow.ResolveArticlePath("index.md")!))
+                .Contains("]("),
+                "index article display text must not leak raw markdown link syntax");
+        }
+        finally
+        {
+            help.Close();
+        }
+
+        static bool ArticleListAllEnabled(System.Collections.IEnumerable items)
+        {
+            foreach (var item in items)
+            {
+                if (item is ListBoxItem { IsEnabled: false })
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
 }

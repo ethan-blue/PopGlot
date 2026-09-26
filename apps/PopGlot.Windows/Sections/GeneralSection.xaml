@@ -186,6 +186,29 @@
                             AutomationProperties.Name="重新显示新手引导"
                             Click="RestartOnboarding_Click" />
                 </Grid>
+
+                <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" Margin="0,12" SnapsToDevicePixels="True" Opacity="0.7" />
+
+                <!-- C25 离线帮助入口：本机文档，不联网。 -->
+                <Grid x:Name="HelpRowGrid">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="使用帮助" Style="{StaticResource RowTitle}" />
+                        <TextBlock Style="{StaticResource RowHint}"
+                                   Text="离线文档：快速上手、隐私边界、快捷键与引擎配置" />
+                    </StackPanel>
+                    <Button x:Name="OpenHelpButton" Grid.Column="1"
+                            Content="打开帮助"
+                            Style="{StaticResource GhostButton}"
+                            Height="26" Padding="10,3"
+                            Cursor="Hand"
+                            VerticalAlignment="Center"
+                            AutomationProperties.Name="打开离线使用帮助"
+                            Click="OpenHelp_Click" />
+                </Grid>
             </StackPanel>
         </Border>
 

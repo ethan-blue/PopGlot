@@ -372,7 +372,8 @@ internal static class Program
             ("star automation names follow the starred state on workbench and panel", WaveRegressionTests.StarAutomationNamesFollowStarredState),
             ("settings maximize button announces the state it will switch to", WaveRegressionTests.SettingsMaximizeAutomationNameFollowsWindowState),
             ("core reading controls carry exact automation names", WaveRegressionTests.CoreReadingControlsCarryExactAutomationNames),
-            ("hotkey recorders announce their row function and how to record", WaveRegressionTests.HotkeyRecordersAnnounceRowFunctionAndHowToRecord));
+            ("hotkey recorders announce their row function and how to record", WaveRegressionTests.HotkeyRecordersAnnounceRowFunctionAndHowToRecord),
+            ("help window renders packaged offline articles and honest fallbacks", WaveRegressionTests.HelpWindowRendersPackagedArticles));
 
         // E3 follow-ups: high-contrast seam and PerMonitorV2 DPI robustness.
         Run("dpi geometry dip pixel roundtrips stay within a pixel", WaveRegressionTests.DpiGeometryRoundtripsAreIdentity);
@@ -8123,6 +8124,9 @@ internal static class Program
         RenderAndSave(CreateProviderCataloguePreview(620, 760), 620, 760, Path.Combine(outDir, "provider_catalogue_compact_dark.png"), ThemePreference.Dark);
         RenderAndSave(new QuickSearchWindow(history, vocab), 560, 360, Path.Combine(outDir, "quick_search_dark.png"), ThemePreference.Dark);
         RenderAndSave(new QuickSearchWindow(history, vocab), 560, 360, Path.Combine(outDir, "quick_search_light.png"), ThemePreference.Light);
+        // C25 offline help viewer: both themes must paint the packaged docs.
+        RenderAndSave(new HelpWindow(), 780, 560, Path.Combine(outDir, "help_light.png"), ThemePreference.Light);
+        RenderAndSave(new HelpWindow(), 780, 560, Path.Combine(outDir, "help_dark.png"), ThemePreference.Dark);
         // T11: narrow content — the workbench must stack (input ≥160 DIP on
         // top, reader below) instead of squeezing side-by-side panes.
         var narrowMain = new MainWindow(ShellSettings.Default, history, vocab);

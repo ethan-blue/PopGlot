@@ -18,6 +18,13 @@
     <ProjectReference Include="..\..\apps\PopGlot.Windows\PopGlot.Windows.csproj" />
   </ItemGroup>
 
+  <!-- 与发布包同构：测试宿主输出也带 help/，让 HelpWindow 的测试走真实
+       BaseDirectory/help 路径而不是仓库回退。 -->
+  <ItemGroup>
+    <Content Include="..\..\docs\help\**\*.md" Link="help\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <Target Name="CopyRustCoreForTests" AfterTargets="Build">
     <Copy SourceFiles="$(RustTargetDir)\$(RustProfile)\popglot_ffi.dll" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>

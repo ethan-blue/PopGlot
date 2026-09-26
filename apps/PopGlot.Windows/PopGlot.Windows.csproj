@@ -22,6 +22,9 @@
     <None Include="Assets/popglot-mark-v5.svg" />
     <None Include="Assets/popglot-mark-selected-source.png" />
     <None Include="Assets/popglot-mark-v2.svg" />
+    <!-- C25 离线帮助：docs/help 随包分发到输出目录的 help/，供 HelpWindow 本机渲染。 -->
+    <Content Include="..\..\docs\help\**\*.md" Link="help\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <PropertyGroup>

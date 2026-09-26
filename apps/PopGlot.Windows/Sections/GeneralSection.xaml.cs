@@ -209,4 +209,12 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
         }
         main.RestartOnboarding();
     }
+
+    // C25：离线帮助查看器。纯本机渲染，FindProjectRoot 式回退保证开发与
+    // 测试宿主也能打开；找不到文档时窗口自身给出诚实降级，不联网。
+    private void OpenHelp_Click(object sender, RoutedEventArgs e)
+    {
+        var help = new HelpWindow { Owner = Window.GetWindow(this) };
+        help.Show();
+    }
 }
