@@ -29,6 +29,9 @@ internal sealed class ProviderProfile
         CredentialTarget = source.CredentialTarget;
         IsLocal = source.IsLocal;
         AllowLanEndpoints = source.AllowLanEndpoints;
+        LastTestOutcome = source.LastTestOutcome;
+        LastTestedAtUtc = source.LastTestedAtUtc;
+        LastTestFingerprint = source.LastTestFingerprint;
     }
 
     public ProviderProfile Clone() => new(this);
@@ -55,6 +58,15 @@ internal sealed class ProviderProfile
     /// configs deserialize as false so no existing permission widens.
     /// </summary>
     public bool AllowLanEndpoints { get; set; }
+
+    /// <summary>
+    /// Last explicit connection check. This is evidence tied to
+    /// <see cref="LastTestFingerprint"/>, not a promise that a remote service
+    /// will remain online forever. No credential or response body is stored.
+    /// </summary>
+    public string? LastTestOutcome { get; set; }
+    public DateTime? LastTestedAtUtc { get; set; }
+    public string? LastTestFingerprint { get; set; }
 
     public static ProviderProfile CreateOpenAi() => new()
     {

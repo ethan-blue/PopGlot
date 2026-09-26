@@ -1,5 +1,6 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Documents;
@@ -208,6 +209,21 @@ public partial class HelpWindow : Window
     }
 
     private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void MinimizeButton_Click(object sender, RoutedEventArgs e) =>
+        WindowState = WindowState.Minimized;
+
+    private void MaximizeButton_Click(object sender, RoutedEventArgs e)
+    {
+        WindowState = WindowState == WindowState.Maximized
+            ? WindowState.Normal
+            : WindowState.Maximized;
+        var maximized = WindowState == WindowState.Maximized;
+        Ui.SetIcon(MaximizeBtn, (System.Windows.Media.Geometry)FindResource(
+            maximized ? "IconCaptionRestore" : "IconCaptionMax"));
+        AutomationProperties.SetName(MaximizeBtn, maximized ? "还原" : "最大化");
+        MaximizeBtn.ToolTip = maximized ? "还原" : "最大化";
+    }
 
     private void HelpWindow_KeyDown(object sender, KeyEventArgs e)
     {

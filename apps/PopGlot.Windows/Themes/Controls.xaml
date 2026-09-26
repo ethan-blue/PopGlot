@@ -1187,8 +1187,8 @@
                         <!-- Editable mode (model pickers): free text with suggestion items.
                              Left inset matches the 12 DIP text/placeholder alignment used
                              by the Selection presenter and FormTextBox. -->
-                        <TextBox x:Name="PART_EditableTextBox" Margin="10,0,34,0" VerticalAlignment="Center"
-                                 Background="Transparent" BorderThickness="0" Padding="2,0"
+                        <TextBox x:Name="PART_EditableTextBox" Margin="12,0,34,0" VerticalAlignment="Center"
+                                 Background="Transparent" BorderThickness="0" Padding="0"
                                  FontSize="{TemplateBinding FontSize}" FontFamily="{TemplateBinding FontFamily}"
                                  Foreground="{TemplateBinding Foreground}"
                                  Visibility="Collapsed" />
@@ -1231,8 +1231,14 @@
                         </Popup>
                     </Grid>
                     <ControlTemplate.Triggers>
-                        <Trigger Property="HasItems" Value="False">
+                        <Trigger Property="Text" Value="">
                             <Setter TargetName="Placeholder" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                        <Trigger Property="HasItems" Value="False">
+                            <Setter TargetName="Chevron" Property="Visibility" Value="Collapsed" />
+                            <Setter TargetName="Toggle" Property="IsHitTestVisible" Value="False" />
+                            <Setter TargetName="PART_EditableTextBox" Property="Margin" Value="12,0" />
+                            <Setter TargetName="Placeholder" Property="Margin" Value="12,0" />
                         </Trigger>
                         <Trigger Property="IsEditable" Value="True">
                             <Setter TargetName="Selection" Property="Visibility" Value="Collapsed" />

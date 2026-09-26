@@ -48,8 +48,8 @@
             </Setter>
         </Style>
         <Style x:Key="EditorSectionCard" TargetType="Border">
-            <Setter Property="Padding" Value="16" />
-            <Setter Property="Margin" Value="0,0,0,14" />
+            <Setter Property="Padding" Value="14" />
+            <Setter Property="Margin" Value="0,0,0,10" />
             <Setter Property="CornerRadius" Value="{StaticResource CardRadius}" />
             <Setter Property="Background" Value="{DynamicResource SurfaceMutedBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
@@ -165,7 +165,7 @@
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="36"/><ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="150"/><ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="170"/><ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
                                             <Border Width="30" Height="30" CornerRadius="10" Background="{DynamicResource AccentSoftBrush}">
                                                 <Path Data="{StaticResource IconProvider}" Width="16" Height="16" Stretch="Uniform"
@@ -193,9 +193,14 @@
                                                 <TextBlock Text="{Binding StateText}" Margin="7,0,0,0"
                                                            Foreground="{Binding StateTextBrush}" FontSize="12" />
                                             </StackPanel>
-                                            <Button Grid.Column="3" Content="编辑" Padding="12,6" Tag="{Binding Id}"
-                                                    Style="{StaticResource GhostButton}" AutomationProperties.Name="编辑引擎"
-                                                    Click="EditProfile_Click" />
+                                            <StackPanel Grid.Column="3" Orientation="Horizontal">
+                                                <Button Content="测试" Padding="12,6" Tag="{Binding Id}"
+                                                        Style="{StaticResource GhostButton}" AutomationProperties.Name="测试引擎连接"
+                                                        Click="TestProfile_Click" />
+                                                <Button Content="编辑" Padding="12,6" Margin="6,0,0,0" Tag="{Binding Id}"
+                                                        Style="{StaticResource GhostButton}" AutomationProperties.Name="编辑引擎"
+                                                        Click="EditProfile_Click" />
+                                            </StackPanel>
                                         </Grid>
                                     </Border>
                                 </DataTemplate>
@@ -215,7 +220,7 @@
 
                     <!-- 底部留白：滚动到底时最后一个字段仍完整悬于固定操作栏
                          上方，不再贴着保存/取消按钮的下边缘。 -->
-                    <ScrollViewer x:Name="EditorScroll" Grid.Row="0" VerticalScrollBarVisibility="Auto" Padding="0,0,8,24">
+                    <ScrollViewer x:Name="EditorScroll" Grid.Row="0" VerticalScrollBarVisibility="Auto" Padding="0,0,8,16">
                         <StackPanel>
                             <StackPanel x:Name="PresetsPanel" Visibility="Collapsed">
                                 <TextBlock Text="选择服务商" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,16" />
@@ -280,8 +285,8 @@
 
                             <!-- 宽度上限 900：设置窗 960 下表单不再明显窄于
                                  可用区，两侧大空白消失；超宽屏仍居中限宽。 -->
-                            <StackPanel x:Name="ConfigFormPanel" MaxWidth="900" HorizontalAlignment="Stretch">
-                                <Grid x:Name="EditorHeaderGrid" Margin="2,0,2,18">
+                            <StackPanel x:Name="ConfigFormPanel" MaxWidth="820" HorizontalAlignment="Stretch">
+                                <Grid x:Name="EditorHeaderGrid" Margin="2,0,2,8">
                                     <StackPanel Orientation="Horizontal">
                                         <Border Width="44" Height="44" CornerRadius="12" Background="{DynamicResource AccentSoftBrush}"
                                                 BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1">
@@ -297,8 +302,8 @@
 
                                 <Border x:Name="ConnectionCard" Style="{StaticResource EditorSectionCard}">
                                     <StackPanel>
-                                        <TextBlock Text="连接信息" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,14" />
-                                        <Grid x:Name="IdentityFieldsGrid" Margin="0,0,0,14">
+                                        <TextBlock Text="连接信息" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,10" />
+                                        <Grid x:Name="IdentityFieldsGrid" Margin="0,0,0,10">
                                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                             <StackPanel x:Name="ServiceNamePanel">
@@ -337,11 +342,6 @@
                                     </StackPanel>
                                 </Border>
 
-                                <!-- A small dynamic spacer is used only when the first
-                                     viewport would otherwise show a severed card header.
-                                     It never participates once the card has useful room. -->
-                                <Border x:Name="InitialFoldSpacer" Height="0" />
-
                                 <Border x:Name="ModelCard" Style="{StaticResource EditorSectionCard}">
                                     <StackPanel>
                                         <Grid>
@@ -374,7 +374,8 @@
                                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                             <StackPanel x:Name="TextModelPanel">
                                                 <TextBlock Text="文字模型" Style="{StaticResource FieldLabel}"/>
-                                                <ComboBox x:Name="TextModelCombo" Style="{StaticResource EditorComboField}" IsEditable="True" FontFamily="{StaticResource MonoFontFamily}"/>
+                                                <ComboBox x:Name="TextModelCombo" Style="{StaticResource EditorComboField}" IsEditable="True" FontFamily="{StaticResource MonoFontFamily}"
+                                                          local:Ui.Placeholder="输入模型 ID，或先获取模型"/>
                                                 <!-- Text model recommendation chips -->
                                                 <WrapPanel x:Name="TextRecommendationChipsPanel" Margin="0,8,0,0" />
                                                 <!-- Text model recommendation reason & evidence -->
@@ -394,7 +395,8 @@
                                             </StackPanel>
                                             <StackPanel x:Name="VisionModelPanel" Grid.Column="2">
                                                 <TextBlock Text="图片模型（可选）" Style="{StaticResource FieldLabel}"/>
-                                                <ComboBox x:Name="VisionModelCombo" Style="{StaticResource EditorComboField}" IsEditable="True" FontFamily="{StaticResource MonoFontFamily}"/>
+                                                <ComboBox x:Name="VisionModelCombo" Style="{StaticResource EditorComboField}" IsEditable="True" FontFamily="{StaticResource MonoFontFamily}"
+                                                          local:Ui.Placeholder="输入图片模型 ID（可选）"/>
                                                 <!-- Vision model recommendation chips -->
                                                 <WrapPanel x:Name="VisionRecommendationChipsPanel" Margin="0,8,0,0" />
                                                 <!-- Vision model recommendation reason & evidence -->

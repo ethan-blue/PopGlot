@@ -2228,6 +2228,20 @@ internal static class Program
         var boldRuns = CollectInlines(boldDoc.Blocks).OfType<Run>().ToList();
         True(boldRuns.Any(r => r.Text == "普通粗体" && r.FontWeight == FontWeights.SemiBold),
             "natural-language bold must render as a semibold run without asterisks");
+
+        // Hard-wrapped prose is a display artifact, not three unrelated
+        // paragraphs. Blank lines still delimit real paragraphs.
+        var reflowDoc = new FlowDocument();
+        MarkdownPresenter.RenderToFlowDocument(
+            reflowDoc,
+            "这是第一行\n只是上一行的续写\n仍然属于同一段\n\n这是新段落",
+            Application.Current.Resources);
+        Equal(2, reflowDoc.Blocks.Count,
+            "adjacent prose lines must reflow while a blank line starts a new paragraph");
+        var firstReflow = (Paragraph)reflowDoc.Blocks.FirstBlock!;
+        var firstText = string.Concat(firstReflow.Inlines.OfType<Run>().Select(run => run.Text));
+        True(firstText.Contains("第一行 只是", StringComparison.Ordinal),
+            $"reflowed prose must insert a readable space, got: {firstText}");
     }
 
     private static IEnumerable<Inline> CollectInlines(BlockCollection blocks)
@@ -4565,6 +4579,16 @@ internal static class Program
         var (failText, failTone) = ServicesSection.DescribeProfileState(isLocal: false, hasKey: true, outcome: "fail");
         Equal("测试失败", failText);
         Equal(StatusTone.Error, failTone);
+
+        var profile = ProviderProfile.CreateOpenAi();
+        profile.TextModel = "model-a";
+        var originalFingerprint = ServicesSection.CreateProfileFingerprint(profile, hasKey: true);
+        profile.TextModel = "model-b";
+        var changedFingerprint = ServicesSection.CreateProfileFingerprint(profile, hasKey: true);
+        True(!string.Equals(originalFingerprint, changedFingerprint, StringComparison.Ordinal),
+            "changing a connection-bearing field must invalidate persisted verification evidence");
+        True(!originalFingerprint.Contains("model-a", StringComparison.Ordinal),
+            "the persisted fingerprint must not expose configuration text");
     }
 
     // ================= Fourth round: product-defect structural guards =================
@@ -6873,10 +6897,8 @@ internal static class Program
         True(xaml.Contains("ModelCatalogStatusText"), "model fetch feedback must stay next to the model fields");
         True(xaml.Contains("接口与网络") && xaml.Contains("请求定制"),
             "advanced settings must stay split into plain-language groups");
-        True(xaml.Contains("InitialFoldSpacer") && code.Contains("usefulHeaderHeight = 104"),
-            "the initial viewport must not expose a severed model-card header or radio row");
-        True(code.Contains("_foldAligned"),
-            "fold alignment must run once per editor open so it cannot starve later navigation");
+        True(!xaml.Contains("InitialFoldSpacer") && !code.Contains("AlignInitialFold"),
+            "the editor must not manufacture a blank band merely to align a card with the viewport");
         True(xaml.Contains("PresetLeftColumn") && xaml.Contains("PresetRightColumn") &&
              code.Contains("PresetRightColumn.Width = new GridLength(0)"),
             "compact provider choices must release the unused second column");
@@ -9190,7 +9212,6 @@ internal static class Program
         host.Arrange(new Rect(0, 0, previewWidth, previewHeight));
         host.UpdateLayout();
         afterEditorShown?.Invoke(section);
-        section.AlignInitialFold();
         host.UpdateLayout();
         AssertEditorStartsOnWholeCardBoundary(section);
         return new Window
@@ -9239,8 +9260,11 @@ internal static class Program
 
         var top = model.TranslatePoint(new Point(0, 0), scroll).Y;
         var visibleSlice = scroll.ViewportHeight - top;
-        True(visibleSlice <= 1 || visibleSlice >= 104 || top + model.ActualHeight <= scroll.ViewportHeight + 0.5,
-            $"the initial editor viewport must not expose a severed model-card header; visible slice was {visibleSlice:F1} DIP");
+        // The dense editor intentionally shows the next section instead of
+        // inserting a blank fold spacer. 80 DIP keeps its title, fetch action
+        // and preference row readable without pretending the card ends here.
+        True(visibleSlice <= 1 || visibleSlice >= 80 || top + model.ActualHeight <= scroll.ViewportHeight + 0.5,
+            $"the initial editor viewport must expose a useful model-card header; visible slice was {visibleSlice:F1} DIP");
     }
 
     private static Window CreateAdvancedServiceEditorPreview()

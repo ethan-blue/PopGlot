@@ -351,7 +351,7 @@ internal static partial class MarkdownPresenter
                     var headingText = trimmedLine[(hLevel + 1)..].Trim();
                     var headingPara = new Paragraph
                     {
-                        Margin = new Thickness(0, addParagraphSpacing || document.Blocks.Count > 0 ? 6 : 0, 0, 2),
+                        Margin = new Thickness(0, addParagraphSpacing || document.Blocks.Count > 0 ? 12 : 0, 0, 4),
                         FontFamily = uiFont,
                         FontWeight = FontWeights.SemiBold,
                     };
@@ -369,6 +369,23 @@ internal static partial class MarkdownPresenter
                 }
             }
 
+            var isBullet = trimmedLine.StartsWith("- ", StringComparison.Ordinal) ||
+                           trimmedLine.StartsWith("* ", StringComparison.Ordinal) ||
+                           trimmedLine.StartsWith("+ ", StringComparison.Ordinal);
+            var numberedMatch = Regex.Match(trimmedLine, @"^(\d+[\.\)])\s+(.*)$");
+
+            // Model output often contains display-wrapped prose as physical
+            // newlines. Reflow adjacent ordinary lines into one paragraph;
+            // blank lines, headings, lists and code still create real blocks.
+            if (!isBullet && !numberedMatch.Success && !addParagraphSpacing &&
+                document.Blocks.LastBlock is Paragraph previous &&
+                Equals(previous.Tag, "prose"))
+            {
+                previous.Inlines.Add(new Run(" "));
+                AppendFormattedSpans(previous.Inlines, trimmedLine, resources);
+                continue;
+            }
+
             var paragraph = new Paragraph
             {
                 // Zero margin and default (font-metric) line height: the
@@ -381,12 +398,12 @@ internal static partial class MarkdownPresenter
             };
 
             // Bullet points (- , * , + )
-            if (trimmedLine.StartsWith("- ", StringComparison.Ordinal) ||
-                trimmedLine.StartsWith("* ", StringComparison.Ordinal) ||
-                trimmedLine.StartsWith("+ ", StringComparison.Ordinal))
+            if (isBullet)
             {
                 var bulletContent = trimmedLine[2..].Trim();
-                var bulletDot = new Run(" • ")
+                paragraph.Margin = new Thickness(16, addParagraphSpacing ? 8 : 2, 0, 2);
+                paragraph.TextIndent = -14;
+                var bulletDot = new Run("• ")
                 {
                     FontWeight = FontWeights.Bold
                 };
@@ -395,8 +412,11 @@ internal static partial class MarkdownPresenter
                 AppendFormattedSpans(paragraph.Inlines, bulletContent, resources);
             }
             // Numbered lists (1. , 2) , etc.)
-            else if (Regex.Match(trimmedLine, @"^(\d+[\.\)])\s+(.*)$") is { Success: true } numMatch)
+            else if (numberedMatch.Success)
             {
+                var numMatch = numberedMatch;
+                paragraph.Margin = new Thickness(20, addParagraphSpacing ? 8 : 2, 0, 2);
+                paragraph.TextIndent = -20;
                 var numPrefix = numMatch.Groups[1].Value + " ";
                 var numContent = numMatch.Groups[2].Value.Trim();
                 var numRun = new Run(numPrefix)
@@ -409,7 +429,8 @@ internal static partial class MarkdownPresenter
             }
             else
             {
-                AppendFormattedSpans(paragraph.Inlines, line, resources);
+                paragraph.Tag = "prose";
+                AppendFormattedSpans(paragraph.Inlines, trimmedLine, resources);
             }
 
             document.Blocks.Add(paragraph);

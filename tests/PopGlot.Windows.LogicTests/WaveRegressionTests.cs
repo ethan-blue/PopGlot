@@ -2609,6 +2609,12 @@ internal static class WaveRegressionTests
         textCombo.ApplyTemplate();
         var popup = textCombo.Template?.FindName("PART_Popup", textCombo) as System.Windows.Controls.Primitives.Popup;
         True(popup != null, "PART_Popup must exist on TextModelCombo");
+        var chevron = textCombo.Template?.FindName("Chevron", textCombo) as FrameworkElement;
+        var toggle = textCombo.Template?.FindName("Toggle", textCombo) as FrameworkElement;
+        Equal(Visibility.Collapsed, chevron?.Visibility,
+            "an empty model list must not advertise a dropdown affordance");
+        Equal(false, toggle?.IsHitTestVisible,
+            "an empty model list must not open a blank popup when clicked");
 
         popup!.IsOpen = true;
         popup.UpdateLayout();
@@ -2680,6 +2686,10 @@ internal static class WaveRegressionTests
             Equal("帮助首页", title.Text, "the window must open on the index article");
             True(viewer.Document.Blocks.Count > 0, "the index article must render non-empty content blocks");
             True(meta.Text!.Contains("不需要联网"), "the meta line must keep the offline promise");
+            True(help.FindName("MinimizeBtn") is Button && help.FindName("MaximizeBtn") is Button,
+                "help must use the same complete caption controls as the other desktop windows");
+            True(viewer.Parent is Grid,
+                "the help reader must sit directly in the content grid without a second overlapping card frame");
 
             list.SelectedIndex = HelpWindow.Articles.Length - 1;
             help.UpdateLayout();

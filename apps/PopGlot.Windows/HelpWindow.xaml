@@ -6,6 +6,9 @@
         Icon="/PopGlot;component/Assets/PopGlot-v5.ico"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource CanvasBrush}" Foreground="{DynamicResource TextPrimaryBrush}"
+        UseLayoutRounding="True" SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType"
+        RenderOptions.ClearTypeHint="Enabled"
         KeyDown="HelpWindow_KeyDown">
 
     <WindowChrome.WindowChrome>
@@ -90,11 +93,19 @@
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
-            <!-- Caption controls (close only: this is a reader surface) -->
+            <!-- Same window controls as the rest of the desktop shell. -->
             <Grid Grid.Row="0" Background="Transparent">
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
                             WindowChrome.IsHitTestVisibleInChrome="True">
-                    <Button Style="{StaticResource CaptionCloseButton}"
+                    <Button x:Name="MinimizeBtn" Style="{StaticResource CaptionButton}"
+                            local:Ui.Icon="{StaticResource IconCaptionMin}"
+                            AutomationProperties.Name="最小化"
+                            ToolTip="最小化" Click="MinimizeButton_Click" />
+                    <Button x:Name="MaximizeBtn" Style="{StaticResource CaptionButton}"
+                            local:Ui.Icon="{StaticResource IconCaptionMax}"
+                            AutomationProperties.Name="最大化"
+                            ToolTip="最大化" Click="MaximizeButton_Click" />
+                    <Button x:Name="CloseBtn" Style="{StaticResource CaptionCloseButton}"
                             AutomationProperties.Name="关闭帮助"
                             local:Ui.Icon="{StaticResource IconCaptionClose}"
                             ToolTip="关闭帮助" Click="CloseButton_Click" />
@@ -111,17 +122,15 @@
                            Text="本机文档 · 不需要联网" />
             </StackPanel>
 
-            <Border Grid.Row="2" Margin="24,0,28,20"
-                    Background="{DynamicResource SurfaceBrush}"
-                    BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                    CornerRadius="{StaticResource CardRadius}">
-                <RichTextBox x:Name="ArticleViewer" Style="{StaticResource FlatRichTextBox}"
-                             FontSize="13.5" Padding="18,14"
-                             VerticalScrollBarVisibility="Auto"
-                             IsReadOnly="True" IsDocumentEnabled="True"
-                             AutomationProperties.Name="帮助文章正文"
-                             AutomationProperties.LiveSetting="Polite" />
-            </Border>
+            <RichTextBox x:Name="ArticleViewer" Grid.Row="2"
+                         Margin="24,0,28,20"
+                         Style="{StaticResource FlatRichTextBox}"
+                         Background="{DynamicResource CanvasBrush}"
+                         FontSize="13.5" Padding="0,8,8,8"
+                         VerticalScrollBarVisibility="Auto"
+                         IsReadOnly="True" IsDocumentEnabled="True"
+                         AutomationProperties.Name="帮助文章正文"
+                         AutomationProperties.LiveSetting="Polite" />
         </Grid>
     </Grid>
 </Window>
