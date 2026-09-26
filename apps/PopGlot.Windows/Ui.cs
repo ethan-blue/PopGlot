@@ -45,6 +45,24 @@ internal static class Ui
     public static void SetHasText(DependencyObject element, bool value) =>
         element.SetValue(HasTextProperty, value);
 
+    /// <summary>
+    /// True when an empty PasswordBox represents a credential already stored
+    /// in the vault. The template then renders a primary-colour mask instead
+    /// of a grey instructional watermark; no fake password enters the control.
+    /// </summary>
+    public static readonly DependencyProperty IsCredentialMaskProperty =
+        DependencyProperty.RegisterAttached(
+            "IsCredentialMask",
+            typeof(bool),
+            typeof(Ui),
+            new FrameworkPropertyMetadata(false));
+
+    public static bool GetIsCredentialMask(DependencyObject element) =>
+        (bool)element.GetValue(IsCredentialMaskProperty);
+
+    public static void SetIsCredentialMask(DependencyObject element, bool value) =>
+        element.SetValue(IsCredentialMaskProperty, value);
+
     private static void OnPlaceholderChanged(
         DependencyObject element,
         DependencyPropertyChangedEventArgs args)

@@ -2665,6 +2665,15 @@ internal static class WaveRegressionTests
             "masked credentials must still disclose that a new value exists, its length, and save state");
         keyField.Clear();
 
+        Ui.SetPlaceholder(keyField, "••••••••••••  已保存");
+        Ui.SetIsCredentialMask(keyField, true);
+        section.UpdateLayout();
+        Equal("••••••••••••  已保存", ((TextBlock)keyPlaceholder).Text,
+            "a stored credential must look like a mask, not an empty-field instruction");
+        Equal((Brush)Application.Current.Resources["TextPrimaryBrush"], ((TextBlock)keyPlaceholder).Foreground,
+            "the stored credential mask must use primary text colour instead of placeholder grey");
+        Ui.SetIsCredentialMask(keyField, false);
+
         InvokePrivate(section, "UpdateCredentialGating");
         Equal(true, section.TestConnectionButton.IsEnabled,
             "validation must remain clickable so an incomplete configuration gets an inline explanation");

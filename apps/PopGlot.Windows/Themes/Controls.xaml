@@ -1074,6 +1074,11 @@
                         <Trigger Property="local:Ui.HasText" Value="False">
                             <Setter TargetName="Placeholder" Property="Visibility" Value="Visible" />
                         </Trigger>
+                        <Trigger Property="local:Ui.IsCredentialMask" Value="True">
+                            <Setter TargetName="Placeholder" Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                            <Setter TargetName="Placeholder" Property="FontFamily" Value="{StaticResource MonoFontFamily}" />
+                            <Setter TargetName="Placeholder" Property="FontWeight" Value="SemiBold" />
+                        </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource AccentBorderBrush}" />
                         </Trigger>

@@ -859,7 +859,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
         else if (hasStoredKey)
         {
-            ApiKeyStateText.Text = "已保存密钥 · 留空表示继续使用";
+            ApiKeyStateText.Text = "已保存密钥 · 输入新值可替换";
             ApiKeyStateText.SetResourceReference(TextBlock.ForegroundProperty, "SuccessBrush");
         }
         else if (isLocal)
@@ -873,8 +873,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             ApiKeyStateText.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
         }
 
+        Ui.SetIsCredentialMask(ApiKeyPasswordBox, hasStoredKey && !hasTypedKey);
         Ui.SetPlaceholder(ApiKeyPasswordBox,
-            hasStoredKey ? "留空继续使用已保存密钥" :
+            hasStoredKey ? "••••••••••••  已保存" :
             isLocal ? "本地引擎可留空" : "请输入 API Key");
 
         FetchModelsButton.IsEnabled = allowed;
@@ -1132,7 +1133,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         var localTime = profile.LastTestedAtUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
         var (text, tone) = DescribeProfileState(
             ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl), HasStoredKey(profile), profile.LastTestOutcome);
-        SetTestResult(tone, $"{text} · {localTime}", "结果与当前保存配置一致；可随时重新验证。");
+        var summary = profile.LastTestOutcome == "ok"
+            ? $"上次验证成功 · {localTime}"
+            : $"上次验证失败 · {localTime}";
+        SetTestResult(tone, summary, $"保存记录：{text}。结果属于当前配置，可点击「验证连接」重新测试。");
     }
 
     /// <summary>Maps a raw test error to a session outcome code.</summary>
