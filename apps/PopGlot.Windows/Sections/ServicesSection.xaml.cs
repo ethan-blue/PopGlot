@@ -2399,7 +2399,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             RefreshProfilesList();
             ProfileChanged?.Invoke();
             StatusChanged?.Invoke(
-                profile is null ? "已设为默认引擎。" : $"「{profile.Name}」已设为默认引擎。",
+                profile is null ? "已切换引擎。" : $"已切换到「{profile.Name}」。",
                 StatusTone.Success);
         }
         catch (Exception exception)
@@ -2670,7 +2670,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             }
             else if (isFirstService && !canActivateForText)
             {
-                StatusChanged?.Invoke("已保存，未设为默认：请补全模型后再启用。", StatusTone.Warning);
+                StatusChanged?.Invoke("已保存；补全模型后才能使用。", StatusTone.Warning);
             }
             else
             {

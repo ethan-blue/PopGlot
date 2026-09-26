@@ -160,14 +160,14 @@ pub enum CompileError {
 }
 
 impl PromptTemplate {
-    /// Returns the built-in "忠实翻译" template.
+    /// Returns the built-in accurate translation template.
     #[must_use]
     pub fn builtin_faithful() -> Self {
         Self {
             id: BUILTIN_FAITHFUL_ID.to_owned(),
             schema_version: PROMPT_SCHEMA_VERSION,
-            name: "忠实翻译".to_owned(),
-            description: "保持原文信息、语气强度与结构，不增补背景，在不改变原意的前提下自然表达。".to_owned(),
+            name: "准确".to_owned(),
+            description: "保留原意、语气和结构。".to_owned(),
             instruction: "忠实传达原文含义，保持信息、否定、条件和语气强度。不增补背景，不把推测变成事实，不擅自省略。目标语言为 {{target_language}}；在不改变原意的前提下自然表达。".to_owned(),
             domain: String::new(),
             audience: String::new(),
@@ -180,14 +180,14 @@ impl PromptTemplate {
         }
     }
 
-    /// Returns the built-in "日常自然表达" template.
+    /// Returns the built-in natural translation template.
     #[must_use]
     pub fn builtin_natural() -> Self {
         Self {
             id: BUILTIN_NATURAL_ID.to_owned(),
             schema_version: PROMPT_SCHEMA_VERSION,
-            name: "日常自然表达".to_owned(),
-            description: "使用目标语言常见自然的表达，避免生硬逐词对应，保留人物关系与信息完整性。".to_owned(),
+            name: "自然".to_owned(),
+            description: "表达更像母语，不逐词硬译。".to_owned(),
             instruction: "使用目标语言常见而自然的表达，避免生硬逐词对应；保留人物关系、情绪、否定和信息完整性。不要为了流畅改写事实，不自动添加网络俚语或不符合原文的亲密语气。".to_owned(),
             domain: String::new(),
             audience: String::new(),
@@ -200,14 +200,14 @@ impl PromptTemplate {
         }
     }
 
-    /// Returns the built-in "正式书面" template.
+    /// Returns the built-in formal translation template.
     #[must_use]
     pub fn builtin_formal() -> Self {
         Self {
             id: BUILTIN_FORMAL_ID.to_owned(),
             schema_version: PROMPT_SCHEMA_VERSION,
-            name: "正式书面".to_owned(),
-            description: "使用自然、礼貌、正式但不过度客套的用语，保持原文承诺、责任主体与请求强度。".to_owned(),
+            name: "正式".to_owned(),
+            description: "适合邮件、文档和正式沟通。".to_owned(),
             instruction: "使用自然、礼貌、正式但不过度客套的 {{target_language}}。保持原文承诺、责任主体、金额、日期、条件与请求强度。原文没有称呼、结尾或承诺时不新增。领域：{{domain}}；受众：{{audience}}。".to_owned(),
             domain: String::new(),
             audience: String::new(),
@@ -492,7 +492,13 @@ mod tests {
 
     #[test]
     fn builtins_are_valid_and_compile_cleanly() {
-        for builtin in PromptTemplate::builtins() {
+        let builtins = PromptTemplate::builtins();
+        assert_eq!(
+            builtins.iter().map(|item| item.name.as_str()).collect::<Vec<_>>(),
+            ["准确", "自然", "正式"],
+            "built-in choices must use short, user-facing labels"
+        );
+        for builtin in builtins {
             assert!(builtin.is_built_in);
             builtin.validate().expect("built-in template must be valid");
 

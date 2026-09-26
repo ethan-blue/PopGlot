@@ -53,7 +53,7 @@
                                  local:Ui.Icon="{StaticResource IconProvider}"
                                  Checked="SubNav_Checked" Tag="Provider" Margin="0,2" />
                     <RadioButton x:Name="NavPrompt" Style="{StaticResource NavButton}"
-                                 GroupName="SettingsNav" Content="提示词"
+                                 GroupName="SettingsNav" Content="表达方式"
                                  local:Ui.Icon="{StaticResource IconTranslate}"
                                  Checked="SubNav_Checked" Tag="Prompt" Margin="0,2" />
                     <RadioButton x:Name="NavGeneral" Style="{StaticResource NavButton}"

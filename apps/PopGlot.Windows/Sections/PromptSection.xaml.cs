@@ -13,7 +13,8 @@ internal sealed record TemplateRow(
     string Meta,
     Visibility ActiveBadge,
     Visibility ViewButtonVisibility,
-    Visibility ActivateButtonVisibility);
+    Visibility ActivateButtonVisibility,
+    bool IsActive);
 
 /// <summary>
 /// Normalized snapshot of the prompt editor's five fields. The editor is dirty
@@ -190,7 +191,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
         CustomsList.ItemsSource = customs.Select(t => RowFor(t, isBuiltIn: false)).ToList();
 
         var quotaFull = customs.Count >= MaxCustomTemplates;
-        CustomQuotaText.Text = $"已保存 {customs.Count}/{MaxCustomTemplates} 个";
+        CustomQuotaText.Text = customs.Count == 0 ? string.Empty : $"{customs.Count} 条";
         AddTemplateButton.IsEnabled = !quotaFull;
         AddTemplateButton.ToolTip = quotaFull
             ? $"已达上限（{MaxCustomTemplates} 个），请先删除"
@@ -225,7 +226,8 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             meta,
             isActive ? Visibility.Visible : Visibility.Collapsed,
             isBuiltIn ? Visibility.Visible : Visibility.Collapsed,
-            isActive ? Visibility.Collapsed : Visibility.Visible);
+            isActive ? Visibility.Collapsed : Visibility.Visible,
+            isActive);
     }
 
     // ===================== Editor open/close =====================
@@ -256,7 +258,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             template.Name, template.Description, template.Instruction, template.Domain, template.Audience,
             template.Enabled);
 
-        EditorTitleText.Text = adding ? "新建自定义模板" : template.Name;
+        EditorTitleText.Text = adding ? "添加翻译规则" : template.Name;
         ReadOnlyBadge.Visibility = viewingBuiltin ? Visibility.Visible : Visibility.Collapsed;
         // 启用开关是自定义模板的产品能力：内置只读（不显示开关），与
         // 「设为当前翻译风格」是两回事——停用≠取消当前风格。
@@ -265,10 +267,10 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             ? "停用后不参与翻译"
             : "已停用，不参与翻译";
         EditorMetaText.Text = viewingBuiltin
-            ? $"内置模板 · 修订 {template.Revision} · 只读"
+            ? "内置规则，只能查看"
             : adding
-                ? "保存后可设为默认风格"
-                : $"自定义模板 · 修订 {template.Revision}";
+                ? "保存后可以直接选择使用"
+                : "自定义规则";
 
         ListHost.Visibility = Visibility.Collapsed;
         EditorForm.Visibility = Visibility.Visible;
@@ -397,8 +399,8 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             PaintLists();
             StatusChanged?.Invoke(
                 !template.Enabled
-                    ? $"已设为「{template.Name}」；模板停用中，翻译暂用「忠实翻译」"
-                    : $"已切换风格：{template.Name}",
+                    ? $"已选择「{template.Name}」，但它当前未启用，翻译会使用「准确」"
+                    : $"已选择：{template.Name}",
                 !template.Enabled ? StatusTone.Warning : StatusTone.Success);
         }
         catch (Exception exception)
@@ -462,7 +464,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             }
             StatusChanged?.Invoke(
                 wasActive
-                    ? "已删除模板，风格重置为「忠实翻译」"
+                    ? "已删除，翻译方式已切换为「准确」"
                     : "已删除模板",
                 StatusTone.Success);
         }
