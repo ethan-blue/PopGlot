@@ -44,6 +44,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     private ModelPreference _currentPreference = ModelPreference.Balanced;
     private IReadOnlyList<ModelDescriptor>? _cachedCatalogDescriptors;
 
+    // C21 证据溯源：目录是何时、从哪个主机采集的。空值表示没有目录事实，
+    // 此时证据 tooltip 只声明等级，绝不编造来源或时间。
+    private string? _catalogSourceHost;
+    private DateTime? _catalogFetchedAtUtc;
+
     /// <summary>Session-scoped connection-test outcomes by profile id ("ok"/"auth"/…).</summary>
     private readonly Dictionary<string, string> _testOutcomes = new();
 
@@ -772,6 +777,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         _loading = true;
         _visionTracker.Reset();
         _cachedCatalogDescriptors = null;
+        _catalogSourceHost = null;
+        _catalogFetchedAtUtc = null;
         try
         {
             ServiceNameTextBox.Text = profile.Name;
@@ -1277,6 +1284,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
         _loading = true;
         _cachedCatalogDescriptors = null;
+        _catalogSourceHost = null;
+        _catalogFetchedAtUtc = null;
         try
         {
             if (string.IsNullOrWhiteSpace(ServiceNameTextBox.Text) ||
@@ -1409,6 +1418,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             VisionEndpointTextBox.Text = endpoint;
         }
         _cachedCatalogDescriptors = null;
+        _catalogSourceHost = null;
+        _catalogFetchedAtUtc = null;
         UpdateModelSuggestions(providerType);
         RefreshRecommendations();
         ResetModelCatalogStatus();
@@ -1471,6 +1482,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     private void ApplyModelSuggestions(ModelCatalogResult result)
     {
         _cachedCatalogDescriptors = result.Models;
+        _catalogSourceHost = result.Endpoint.Host;
+        _catalogFetchedAtUtc = DateTime.UtcNow;
         var ids = result.Models.Select(model => model.Id).ToList();
         // Refreshing keeps the current selection; a pick that no longer
         // exists in the catalog is flagged, never silently replaced.
@@ -1622,9 +1635,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 MaxWidth = chipWidth,
                 Tag = modelId,
                 Style = style,
-                ToolTip = string.IsNullOrWhiteSpace(candidate.PrimaryReason)
-                    ? modelId
-                    : modelId + "\n" + candidate.PrimaryReason,
+                ToolTip = BuildEvidenceTooltip(candidate),
             };
 
             var label = isVision ? $"推荐图片模型 {modelId}" : $"推荐文字模型 {modelId}";
@@ -1686,6 +1697,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
         reasonRow.Visibility = Visibility.Visible;
         reasonText.Text = evaluation.PrimaryReason;
+        var traceability = BuildEvidenceTooltip(evaluation);
+        reasonText.ToolTip = traceability;
+        evidenceBadge.ToolTip = traceability;
+        evidenceBadgeText.ToolTip = traceability;
         UpdateEvidenceBadge(evidenceBadge, evidenceBadgeText, evidenceDot, evaluation.EvidenceSources);
     }
 
@@ -1765,6 +1780,26 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             return EvidenceBadgeTier.FamilyHeuristics;
         }
         return EvidenceBadgeTier.Unknown;
+    }
+
+    /// <summary>
+    /// C21 证据溯源 tooltip：等级 + 目录来源主机 + 采集时间（本机时区）。
+    /// 没有目录事实时只声明等级；证据永不混入猜测，缺失能力按未知处理。
+    /// </summary>
+    internal string BuildEvidenceTooltip(ModelCandidateEvaluation candidate)
+    {
+        var tier = ResolveEvidenceTier(candidate.EvidenceSources, candidate.BenchmarkEvidence is not null);
+        var lines = new List<string> { candidate.Model.Id ?? string.Empty, $"证据等级：{GetEvidenceBadgeText(tier)}" };
+        if (!string.IsNullOrWhiteSpace(_catalogSourceHost))
+        {
+            lines.Add($"目录来源：{_catalogSourceHost}");
+        }
+        if (_catalogFetchedAtUtc is { } fetchedAt)
+        {
+            lines.Add($"目录采集：{fetchedAt.ToLocalTime():yyyy-MM-dd HH:mm}（本机时间）");
+        }
+        lines.Add("缺证据的能力一律按未知处理，绝不猜测。");
+        return string.Join("\n", lines);
     }
 
     internal static string GetEvidenceBadgeText(EvidenceBadgeTier tier) => tier switch
