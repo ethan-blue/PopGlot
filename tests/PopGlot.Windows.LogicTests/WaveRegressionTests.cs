@@ -2598,9 +2598,66 @@ internal static class WaveRegressionTests
     {
         EnsureApp();
         var section = new ServicesSection();
+        section.LoadProfileIntoForm(new ProviderProfile
+        {
+            Id = "alignment-probe",
+            Name = "自定义引擎",
+            ApiBaseUrl = "https://example.invalid/v1",
+            TextEndpoint = "/chat/completions",
+            TextModel = "model-probe",
+            CredentialTarget = "PopGlot/tests/alignment-probe",
+        });
+        InvokePrivate(section, "ShowEditorForm", false);
         section.Measure(new Size(800, 600));
         section.Arrange(new Rect(0, 0, 800, 600));
         section.UpdateLayout();
+
+        // The watermark and real TextBoxView used to apply Padding through
+        // different layout paths (12 DIP vs 24 DIP), which is visible as a
+        // jumping insertion point when typing begins.
+        var nameField = section.ServiceNameTextBox;
+        nameField.Text = string.Empty;
+        nameField.ApplyTemplate();
+        section.UpdateLayout();
+        var placeholder = nameField.Template.FindName("Placeholder", nameField) as FrameworkElement;
+        True(placeholder != null, "FormTextBox must expose its placeholder for alignment checks");
+        var placeholderX = placeholder!.TranslatePoint(new Point(0, 0), nameField).X;
+        nameField.Text = "自定义引擎";
+        section.UpdateLayout();
+        var contentHost = nameField.Template.FindName("PART_ContentHost", nameField) as ScrollViewer;
+        var textView = contentHost?.Content as FrameworkElement;
+        True(textView != null, "FormTextBox must expose the live text view for alignment checks");
+        var textX = textView!.TranslatePoint(new Point(0, 0), nameField).X;
+        // WPF's internal TextBoxView reserves a 2 DIP caret/glyph bearing;
+        // the TextBlock glyph has the matching font bearing even though its
+        // element starts at the raw inset. The old defect was 15 DIP apart.
+        True(Math.Abs(placeholderX - textX) <= 2.1,
+            $"placeholder glyph and typed caret must share one visual x origin; placeholder={placeholderX:F1}, text={textX:F1}");
+
+        var keyField = section.ApiKeyPasswordBox;
+        keyField.Clear();
+        keyField.ApplyTemplate();
+        section.UpdateLayout();
+        var keyPlaceholder = keyField.Template.FindName("Placeholder", keyField) as FrameworkElement;
+        var keyHost = keyField.Template.FindName("PART_ContentHost", keyField) as ScrollViewer;
+        True(keyPlaceholder != null && keyHost?.Content is FrameworkElement,
+            "FormPasswordBox must expose both placeholder and secure text view");
+        var keyPlaceholderX = keyPlaceholder!.TranslatePoint(new Point(0, 0), keyField).X;
+        keyField.Password = "probe-secret";
+        section.UpdateLayout();
+        var secureTextX = ((FrameworkElement)keyHost!.Content).TranslatePoint(new Point(0, 0), keyField).X;
+        True(Math.Abs(keyPlaceholderX - secureTextX) <= 2.1,
+            $"password placeholder and typed caret must share one visual x origin; placeholder={keyPlaceholderX:F1}, text={secureTextX:F1}");
+        keyField.Clear();
+
+        InvokePrivate(section, "UpdateCredentialGating");
+        Equal(true, section.TestConnectionButton.IsEnabled,
+            "validation must remain clickable so an incomplete configuration gets an inline explanation");
+        section.TestConnectionButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Equal(Visibility.Visible, section.TestStatusPanel.Visibility,
+            "clicking validation with an incomplete configuration must render inline feedback");
+        True(section.TestSummaryText.Text.Contains("API Key", StringComparison.Ordinal),
+            "the inline validation result must name the missing credential");
 
         var textCombo = section.TextModelCombo;
         ArgumentNullException.ThrowIfNull(textCombo);

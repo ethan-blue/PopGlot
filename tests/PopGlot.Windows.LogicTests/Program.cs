@@ -6873,20 +6873,20 @@ internal static class Program
         True(xaml.Contains("x:Key=\"EditorTextField\""), "text fields need a shared editor size");
         var controls = File.ReadAllText(Path.Combine(appDir, "Themes", "Controls.xaml"));
         True(Regex.IsMatch(controls,
-                "x:Key=\"FormTextBox\"[\\s\\S]*?Property=\"Padding\" Value=\"12,0\""),
-            "single-line form fields share horizontal padding 12 and no vertical padding");
+                "x:Key=\"FormTextBox\"[\\s\\S]*?Property=\"local:Ui.ContentPadding\" Value=\"12,0\""),
+            "single-line form fields share one visual horizontal inset of 12");
         True(Regex.IsMatch(controls,
-                "x:Key=\"FormTextArea\"[\\s\\S]*?Property=\"Padding\" Value=\"12,10\"[\\s\\S]*?Property=\"VerticalContentAlignment\" Value=\"Top\""),
+                "x:Key=\"FormTextArea\"[\\s\\S]*?Property=\"local:Ui.ContentPadding\" Value=\"12,10\"[\\s\\S]*?Property=\"VerticalContentAlignment\" Value=\"Top\""),
             "multi-line fields keep their own top padding and top alignment");
         True(Regex.IsMatch(controls,
-                "x:Key=\"FormPasswordBox\"[\\s\\S]*?Property=\"Padding\" Value=\"12,0\""),
-            "password fields use the same single-line padding");
+                "x:Key=\"FormPasswordBox\"[\\s\\S]*?Property=\"local:Ui.ContentPadding\" Value=\"12,0\""),
+            "password fields use the same single visual inset");
         var editorField = Regex.Match(xaml, "x:Key=\"EditorTextField\"[\\s\\S]*?</Style>").Value;
-        True(editorField.Contains("FormTextBox") && !editorField.Contains("Property=\"Padding\""),
-            "the engine editor must inherit the shared single-line padding");
+        True(editorField.Contains("FormTextBox") && !editorField.Contains("ContentPadding"),
+            "the engine editor must inherit the shared single-line inset");
         var passwordField = Regex.Match(xaml, "x:Key=\"EditorPasswordField\"[\\s\\S]*?</Style>").Value;
-        True(passwordField.Contains("FormPasswordBox") && !passwordField.Contains("Property=\"Padding\""),
-            "the credential field must inherit the shared single-line padding");
+        True(passwordField.Contains("FormPasswordBox") && !passwordField.Contains("ContentPadding"),
+            "the credential field must inherit the shared single-line inset");
         True(xaml.Contains("x:Key=\"EditorComboField\""), "model fields need a shared editor size");
         True(xaml.Contains("x:Key=\"EditorPasswordField\""), "credential fields need a shared editor size");
         True(code.Contains("Grid.SetColumn(second, 2)"), "wide field pairs must restore into column 2");
@@ -6895,6 +6895,8 @@ internal static class Program
             "credential actions must stack without squeezing the key field");
         True(xaml.Contains("Click=\"FetchModels_Click\""), "the model section needs an explicit fetch action");
         True(xaml.Contains("ModelCatalogStatusText"), "model fetch feedback must stay next to the model fields");
+        True(code.Contains("var key = LoadStoredKey(profile)"),
+            "direct profile validation must use the same legacy-aware credential resolution as the configured state");
         True(xaml.Contains("接口与网络") && xaml.Contains("请求定制"),
             "advanced settings must stay split into plain-language groups");
         True(!xaml.Contains("InitialFoldSpacer") && !code.Contains("AlignInitialFold"),

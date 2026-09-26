@@ -91,6 +91,25 @@ internal static class Ui
     public static void SetCornerRadius(DependencyObject element, CornerRadius value) =>
         element.SetValue(CornerRadiusProperty, value);
 
+    /// <summary>
+    /// Visual inset for TextBox/PasswordBox templates. WPF's text view applies
+    /// Control.Padding internally, so reusing that property on the template
+    /// border double-insets the real caret while the watermark moves once.
+    /// Keeping the actual Padding at zero gives both layers one shared inset.
+    /// </summary>
+    public static readonly DependencyProperty ContentPaddingProperty =
+        DependencyProperty.RegisterAttached(
+            "ContentPadding",
+            typeof(Thickness),
+            typeof(Ui),
+            new FrameworkPropertyMetadata(new Thickness(0)));
+
+    public static Thickness GetContentPadding(DependencyObject element) =>
+        (Thickness)element.GetValue(ContentPaddingProperty);
+
+    public static void SetContentPadding(DependencyObject element, Thickness value) =>
+        element.SetValue(ContentPaddingProperty, value);
+
     /// <summary>Glyph shown ahead of a navigation item's label.</summary>
     public static readonly DependencyProperty IconProperty =
         DependencyProperty.RegisterAttached(

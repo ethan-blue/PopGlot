@@ -817,7 +817,8 @@
         <Setter Property="SelectionOpacity" Value="0.24" />
         <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
         <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="Padding" Value="11,9" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="local:Ui.ContentPadding" Value="11,9" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
         <Setter Property="FocusVisualStyle" Value="{x:Null}" />
         <Setter Property="local:Ui.CornerRadius" Value="{StaticResource ControlRadius}" />
@@ -831,7 +832,7 @@
                     <Border x:Name="Surface" Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
-                            Padding="{TemplateBinding Padding}"
+                            Padding="{Binding (local:Ui.ContentPadding), RelativeSource={RelativeSource TemplatedParent}}"
                             CornerRadius="{Binding (local:Ui.CornerRadius), RelativeSource={RelativeSource TemplatedParent}}"
                             SnapsToDevicePixels="True">
                         <Grid>
@@ -886,13 +887,13 @@
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="MinHeight" Value="40" />
         <Setter Property="Height" Value="40" />
-        <Setter Property="Padding" Value="12,0" />
+        <Setter Property="local:Ui.ContentPadding" Value="12,0" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
     <Style x:Key="FormTextArea" TargetType="TextBox" BasedOn="{StaticResource FormTextBox}">
         <Setter Property="MinHeight" Value="120" />
         <Setter Property="Height" Value="Auto" />
-        <Setter Property="Padding" Value="12,10" />
+        <Setter Property="local:Ui.ContentPadding" Value="12,10" />
         <Setter Property="VerticalContentAlignment" Value="Top" />
         <Setter Property="AcceptsReturn" Value="True" />
         <Setter Property="TextWrapping" Value="Wrap" />
@@ -945,7 +946,7 @@
     <Style x:Key="FlatTextBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
-        <Setter Property="Padding" Value="0" />
+        <Setter Property="local:Ui.ContentPadding" Value="0" />
         <!-- Borderless boxes are the multi-line work areas (workbench panes, panel
              body, history detail): text starts at the top-left, never centered. -->
         <Setter Property="VerticalContentAlignment" Value="Top" />
@@ -1036,7 +1037,8 @@
         <Setter Property="SelectionBrush" Value="{DynamicResource AccentBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
         <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="Padding" Value="11,9" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="local:Ui.ContentPadding" Value="11,9" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
         <Setter Property="FocusVisualStyle" Value="{x:Null}" />
         <Setter Property="local:Ui.CornerRadius" Value="{StaticResource ControlRadius}" />
@@ -1050,7 +1052,7 @@
                     <Border x:Name="Surface" Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
-                            Padding="{TemplateBinding Padding}"
+                            Padding="{Binding (local:Ui.ContentPadding), RelativeSource={RelativeSource TemplatedParent}}"
                             CornerRadius="{Binding (local:Ui.CornerRadius), RelativeSource={RelativeSource TemplatedParent}}"
                             SnapsToDevicePixels="True">
                         <Grid>
@@ -1095,7 +1097,7 @@
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="MinHeight" Value="40" />
         <Setter Property="Height" Value="40" />
-        <Setter Property="Padding" Value="12,0" />
+        <Setter Property="local:Ui.ContentPadding" Value="12,0" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
 

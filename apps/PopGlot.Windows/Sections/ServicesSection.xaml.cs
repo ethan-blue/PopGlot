@@ -852,10 +852,13 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             ? "获取服务商可用模型"
             : "请先填写 API Key（本地服务除外）";
 
-        TestConnectionButton.IsEnabled = allowed;
+        // Keep validation actionable. A disabled button looks broken and
+        // cannot explain what is missing; the click handler focuses the exact
+        // field and renders an inline reason without sending anything.
+        TestConnectionButton.IsEnabled = true;
         TestConnectionButton.ToolTip = allowed
             ? "发送短文本测试连接（不含截图）"
-            : "请先填写 API Key（本地服务除外）";
+            : "点击检查配置；尚缺 API Key（本地服务除外）";
 
         if (ClearKeyButton is not null)
         {
@@ -936,26 +939,31 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
     }
 
-    private static bool HasStoredKey(ProviderProfile profile)
+    private static string? LoadStoredKey(ProviderProfile profile)
     {
         try
         {
-            if (CredentialStore.HasApiKey(profile.CredentialTarget))
+            var profileKey = CredentialStore.LoadApiKey(profile.CredentialTarget);
+            if (!string.IsNullOrWhiteSpace(profileKey))
             {
-                return true;
+                return profileKey;
             }
             var activeId = ProfileManager.Load().ActiveProfileId;
             // A key saved before profiles existed stays at the legacy target
             // until edited; it still counts for the active profile.
-            return profile.Id == activeId &&
-                CredentialStore.HasApiKey(CredentialStore.DefaultTargetName);
+            return profile.Id == activeId
+                ? CredentialStore.LoadApiKey(CredentialStore.DefaultTargetName)
+                : null;
         }
         catch (Exception)
         {
             // The credential vault may be unavailable; report no key honestly.
-            return false;
+            return null;
         }
     }
+
+    private static bool HasStoredKey(ProviderProfile profile) =>
+        !string.IsNullOrWhiteSpace(LoadStoredKey(profile));
 
     /// <summary>
     /// Health state for one service. Brand colour never appears here — states
@@ -2082,7 +2090,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             {
                 return;
             }
-            var key = CredentialStore.LoadApiKey(profile.CredentialTarget);
+            var key = LoadStoredKey(profile);
             if (string.IsNullOrWhiteSpace(key) && !ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl))
             {
                 _testOutcomes[profile.Id] = "auth";
