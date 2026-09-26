@@ -1114,7 +1114,8 @@ internal static class Program
         True(!baselineWritten.HistoryEnabled,
             "V03: other saved fields must keep their NEW values after the rollback");
         True(isErrorWritten, "the registry failure is still an error");
-        True(statusWritten.Contains("已回滚"), "the message says what actually happened");
+        True(statusWritten.Contains("没有成功") && statusWritten.Contains("修复"),
+            "the message gives a plain-language retry action");
 
         // Rollback FAILED: the disk holds the NEW value — the baseline must
         // be the saved value, not the stale in-memory one.
@@ -1123,8 +1124,8 @@ internal static class Program
         True(baselineFailed.StartWithWindows,
             "V03: with a failed rollback the disk holds the new preference — the baseline must say so");
         True(isErrorFailed, "the double failure stays an error");
-        True(statusFailed.Contains("不一致") && statusFailed.Contains("重试"),
-            "the message must name the disk/OS mismatch and the retry path");
+        True(statusFailed.Contains("不同步") && statusFailed.Contains("修复"),
+            "the message must explain the uncertain state without registry jargon");
 
         // Two failing writes then a successful retry, through the same
         // execution step the save handler uses.

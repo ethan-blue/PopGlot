@@ -7,6 +7,7 @@
 pub mod benchmark;
 pub mod prompt_store;
 pub mod provider;
+pub mod provider_sdk;
 pub mod sse;
 pub mod streaming;
 

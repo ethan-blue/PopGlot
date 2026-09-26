@@ -185,17 +185,15 @@ internal sealed partial class HotkeyService : IDisposable
     }
 
     /// <summary>
-    /// Human-facing registration failure, classified by the real Win32
-    /// error code. 1409 (ERROR_HOTKEY_ALREADY_REGISTERED) may name another
-    /// program; anything else is reported as Windows refusing the
-    /// registration with its code — never a guessed owner, and never any
-    /// exception/system text that could carry unrelated content.
+    /// Human-facing shortcut failure. Internal Win32 codes stay in the
+    /// diagnostic layer; this text only names the affected action and the
+    /// next fact a non-technical user can act on.
     /// </summary>
     internal static string DescribeRegistrationFailure(
         HotkeyAction action, HotkeyBinding binding, int win32Error) =>
         win32Error == ErrorHotkeyAlreadyRegistered
             ? $"{ShellSettings.ActionName(action)}：{binding.DisplayName} 可能已被其他程序占用"
-            : $"{ShellSettings.ActionName(action)}：{binding.DisplayName} — Windows 拒绝注册（错误代码 {win32Error}）";
+            : $"{ShellSettings.ActionName(action)}：{binding.DisplayName} 暂时无法使用";
 
     /// <summary>
     /// Leaves the degraded state when a full set is live again, firing

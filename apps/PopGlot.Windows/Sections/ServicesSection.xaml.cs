@@ -324,7 +324,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             combo.IsDropDownOpen = false;
             if (combo == TextModelCombo || combo == VisionModelCombo)
             {
-                ModelCatalogStatusText.Text = "还没有模型列表。可直接输入模型 ID，或点击「获取模型」。";
+                ModelCatalogStatusText.Text = "可直接输入模型 ID，或刷新列表。";
                 ModelCatalogStatusText.Visibility = Visibility.Visible;
             }
             return;
@@ -815,9 +815,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             _ = CredentialStore.HasApiKey(CurrentCredentialTarget());
         }
-        catch (Exception exception)
+        catch (Exception)
         {
-            ApiKeyStateText.Text = $"无法读取密钥状态：{exception.Message}";
+            ApiKeyStateText.Text = string.Empty;
+            ApiKeyStateText.Visibility = Visibility.Collapsed;
             return;
         }
         UpdateCredentialGating();
@@ -852,35 +853,19 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         var hasKey = hasStoredKey || hasTypedKey;
         var allowed = isLocal || hasKey;
 
-        if (hasTypedKey)
-        {
-            ApiKeyStateText.Text = "已输入新密钥";
-            ApiKeyStateText.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
-        }
-        else if (hasStoredKey)
-        {
-            ApiKeyStateText.Text = "已保存密钥";
-            ApiKeyStateText.SetResourceReference(TextBlock.ForegroundProperty, "SuccessBrush");
-        }
-        else if (isLocal)
-        {
-            ApiKeyStateText.Text = "本地引擎无需 API Key";
-            ApiKeyStateText.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
-        }
-        else
-        {
-            ApiKeyStateText.Text = "尚未填写 API Key";
-            ApiKeyStateText.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
-        }
+        // The field already communicates all four states. A second line such
+        // as "saved key" only adds weight and can be mistaken for help text.
+        ApiKeyStateText.Text = string.Empty;
+        ApiKeyStateText.Visibility = Visibility.Collapsed;
 
         Ui.SetIsCredentialMask(ApiKeyPasswordBox, hasStoredKey && !hasTypedKey);
         Ui.SetPlaceholder(ApiKeyPasswordBox,
-            hasStoredKey ? "••••••••••••  已保存" :
+            hasStoredKey ? "••••••••••••" :
             isLocal ? "本地引擎可留空" : "请输入 API Key");
 
         FetchModelsButton.IsEnabled = allowed;
         FetchModelsButton.ToolTip = allowed
-            ? "获取服务商可用模型"
+            ? "刷新模型列表"
             : "请先填写 API Key（本地服务除外）";
 
         // Keep validation actionable. A disabled button looks broken and
@@ -888,14 +873,14 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         // field and renders an inline reason without sending anything.
         TestConnectionButton.IsEnabled = true;
         TestConnectionButton.ToolTip = allowed
-            ? "发送短文本测试连接（不含截图）"
+            ? "测试连接"
             : "点击检查配置；尚缺 API Key（本地服务除外）";
 
         if (ClearKeyButton is not null)
         {
             var canClear = hasStoredKey || hasTypedKey;
             ClearKeyButton.IsEnabled = canClear;
-            ClearKeyButton.ToolTip = canClear ? "清除当前引擎的 API Key" : "未配置密钥";
+            ClearKeyButton.ToolTip = canClear ? "清除密钥" : "没有可清除的密钥";
         }
     }
 
@@ -1124,19 +1109,18 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         var current = CreateProfileFingerprint(profile, HasStoredKey(profile));
         if (!string.Equals(current, profile.LastTestFingerprint, StringComparison.Ordinal))
         {
-            SetTestResult(StatusTone.Warning, "配置已变化 · 需要重新验证", "上一次结果属于旧配置。");
+            SetTestResult(StatusTone.Warning, "需要重新测试", "配置已经改变。");
             return;
         }
         _pendingTestOutcome = profile.LastTestOutcome;
         _pendingTestedAtUtc = profile.LastTestedAtUtc;
         _pendingTestFingerprint = profile.LastTestFingerprint;
-        var localTime = profile.LastTestedAtUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
         var (text, tone) = DescribeProfileState(
             ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl), HasStoredKey(profile), profile.LastTestOutcome);
         var summary = profile.LastTestOutcome == "ok"
-            ? $"上次验证成功 · {localTime}"
-            : $"上次验证失败 · {localTime}";
-        SetTestResult(tone, summary, $"保存记录：{text}。结果属于当前配置，可点击「验证连接」重新测试。");
+            ? "上次测试可用"
+            : "上次测试未通过";
+        SetTestResult(tone, summary, text);
     }
 
     /// <summary>Maps a raw test error to a session outcome code.</summary>
@@ -1367,21 +1351,21 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         var (type, baseUrl, endpoint, note) = preset switch
         {
             "openai" => (ProviderType.OpenAiCompatible, "https://api.openai.com/v1",
-                "/chat/completions", "已填入 OpenAI 接入地址，填 Key 后点「获取模型」。"),
+                "/chat/completions", "已填入 OpenAI 接入地址。"),
             "deepseek" => (ProviderType.OpenAiCompatible, "https://api.deepseek.com/v1",
-                "/chat/completions", "已填入 DeepSeek 接入地址，填 Key 后点「获取模型」。"),
+                "/chat/completions", "已填入 DeepSeek 接入地址。"),
             "gemini" => (ProviderType.GeminiGenerateContent, "https://generativelanguage.googleapis.com",
-                "/v1beta/models/{model}:generateContent", "已填入 Gemini 接入地址，填 Key 后点「获取模型」。"),
+                "/v1beta/models/{model}:generateContent", "已填入 Gemini 接入地址。"),
             "claude" => (ProviderType.AnthropicMessages, "https://api.anthropic.com",
-                "/v1/messages", "已填入 Claude 接入地址，填 Key 后点「获取模型」。"),
+                "/v1/messages", "已填入 Claude 接入地址。"),
             "zhipu" => (ProviderType.OpenAiCompatible, "https://open.bigmodel.cn/api/paas/v4",
-                "/chat/completions", "已填入 GLM 接入地址，填 Key 后点「获取模型」。"),
+                "/chat/completions", "已填入 GLM 接入地址。"),
             "ollama" => (ProviderType.OpenAiCompatible, "http://localhost:11434/v1",
-                "/chat/completions", "已应用 Ollama 预设，点「获取模型」拉取本地模型。"),
+                "/chat/completions", "已应用 Ollama 预设。"),
             "litellm" => (ProviderType.OpenAiCompatible, "http://localhost:4000",
-                "/chat/completions", "已填入 LiteLLM Proxy 预设，确认地址后点「获取模型」。"),
+                "/chat/completions", "已填入 LiteLLM Proxy 预设。"),
             _ => (ProviderType.OpenAiCompatible, string.Empty,
-                "/chat/completions", "填写协议、Base URL，再获取或输入模型。"),
+                "/chat/completions", "填写协议和请求地址，再刷新或输入模型。"),
         };
 
         _loading = true;
@@ -1543,20 +1527,20 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         if (string.IsNullOrWhiteSpace(typedKey) && !draft.TargetsLocalRuntime)
         {
             ApiKeyPasswordBox.Focus();
-            SetModelCatalogStatus("请先填写 API Key 再获取模型（本地服务除外）。", StatusTone.Warning);
+            SetModelCatalogStatus("需要 API Key。本地服务可以留空。", StatusTone.Warning);
             UpdateCredentialGating();
             return;
         }
 
         FetchModelsButton.IsEnabled = false;
-        FetchModelsButton.Content = "获取中…";
-        SetModelCatalogStatus("正在读取服务提供的模型列表…", StatusTone.Info);
+        FetchModelsButton.ToolTip = "正在刷新…";
+        SetModelCatalogStatus("正在刷新…", StatusTone.Info);
         try
         {
             var result = await ModelCatalogService.FetchAsync(draft, typedKey ?? string.Empty);
 
             SetModelCatalogStatus(
-                $"已获取 {result.Models.Count} 个模型。",
+                $"找到 {result.Models.Count} 个模型",
                 StatusTone.Success);
             var wasLoading = _loading;
             _loading = true;
@@ -1575,7 +1559,6 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
         finally
         {
-            FetchModelsButton.Content = "获取模型";
             UpdateCredentialGating();
         }
     }
@@ -1948,11 +1931,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         var message = exception.Message ?? string.Empty;
         if (exception is TaskCanceledException || message.Contains("timed out", StringComparison.OrdinalIgnoreCase))
         {
-            return "获取模型超时，请检查 Base URL 和网络连接。";
+            return "刷新超时，请检查请求地址和网络。";
         }
         if (exception is OperationCanceledException)
         {
-            return "已取消获取模型。";
+            return "已取消刷新。";
         }
         if (exception is HttpRequestException)
         {
@@ -2029,7 +2012,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     private async void TestConnection_Click(object sender, RoutedEventArgs e)
     {
         TestConnectionButton.IsEnabled = false;
-        SetTestResult(StatusTone.Info, "正在测试连接…", "仅发送一小段文本，不含截图。");
+        SetTestResult(StatusTone.Info, "正在测试…", null);
         try
         {
             var draft = BuildDraftSettings();
@@ -2039,28 +2022,20 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             if (string.IsNullOrWhiteSpace(typedKey) && !draft.TargetsLocalRuntime)
             {
                 ApiKeyPasswordBox.Focus();
-                SetTestResult(StatusTone.Warning, "请先填写 API Key", "填写 API Key 后即可验证连接（本地服务无需密钥）。");
+                SetTestResult(StatusTone.Warning, "需要 API Key", "填写后再试。本地服务可以留空。");
                 return;
             }
             if (string.IsNullOrWhiteSpace(draft.TextModel))
             {
                 TextModelCombo.Focus();
-                SetTestResult(StatusTone.Warning, "先选择文字模型", "点「获取模型」拉取列表，或手动输入模型名。");
+                SetTestResult(StatusTone.Warning, "需要文字模型", "刷新列表选择一个，或直接输入模型名。");
                 return;
             }
-            var response = await CoreBridge.TestConnectionDraftAsync(
+            _ = await CoreBridge.TestConnectionDraftAsync(
                 draft, string.IsNullOrWhiteSpace(typedKey) ? "local" : typedKey);
-            var host = Uri.TryCreate(draft.ApiBaseUrl, UriKind.Absolute, out var endpointUri)
-                ? endpointUri.Host
-                : draft.ApiBaseUrl;
-            var timestamp = DateTime.Now.ToString("HH:mm:ss");
             var testedAtUtc = DateTime.UtcNow;
             var fingerprint = CurrentDraftFingerprint();
-            SetTestResult(StatusTone.Success,
-                $"连接成功 · {host} · HTTP {response.Diagnostics.StatusCode} · {response.Diagnostics.ElapsedMs} ms" +
-                (string.IsNullOrWhiteSpace(draft.TextModel) ? "" : $" · {draft.TextModel}") +
-                $" · {timestamp}",
-                "草稿未保存，保存并设为默认后才用于翻译。");
+            SetTestResult(StatusTone.Success, "可用", null);
             _pendingTestOutcome = "ok";
             _pendingTestedAtUtc = testedAtUtc;
             _pendingTestFingerprint = fingerprint;
@@ -2074,11 +2049,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
         catch (Exception exception)
         {
-            var timestamp = DateTime.Now.ToString("HH:mm:ss");
             var outcome = ClassifyTestFailure(exception);
             var testedAtUtc = DateTime.UtcNow;
             var fingerprint = TryCurrentDraftFingerprint();
-            SetTestResult(StatusTone.Error, $"连接失败 · {timestamp}", DescribeTestFailure(exception) + "（设置未被修改）");
+            SetTestResult(StatusTone.Error, "未连接", DescribeTestFailure(exception));
             _pendingTestOutcome = outcome;
             _pendingTestedAtUtc = testedAtUtc;
             _pendingTestFingerprint = fingerprint;

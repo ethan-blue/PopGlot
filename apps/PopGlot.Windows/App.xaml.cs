@@ -1477,15 +1477,9 @@ public partial class App : Application
         {
             return;
         }
-        if (decision == HotkeyFailureDecision.Balloon)
-        {
-            Notify(
-                "快捷键注册失败",
-                $"{detail}。请在「设置 → 快捷键」中更换组合。",
-                Forms.ToolTipIcon.Warning);
-        }
-        // Same cycle with a changed detail: no new balloon, but every
-        // surface must describe the CURRENT failure, not the stale one.
+        // Keep this inside the app. A tray notification is too loud for a
+        // setting the user can fix in context, and exposes implementation
+        // language away from the relevant controls.
         _mainWindow?.ShowShortcutConflict(detail);
         UpdateTrayTooltip();
     }

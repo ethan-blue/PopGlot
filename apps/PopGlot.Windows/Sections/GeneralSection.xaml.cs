@@ -75,14 +75,16 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
     /// <summary>
     /// C07: paints the honest desired-vs-actual startup picture. The toggle
     /// is the DESIRE; the hint is what Windows will actually do, and the
-    ///「重新启用」button appears only when Task Manager disabled the entry.
+    /// repair button appears whenever the requested state is not effective.
     /// </summary>
     internal void UpdateStartupState(StartupState state)
     {
         StartupStateHint.Text = state.DescribeZh();
         StartupStateHint.Opacity = state.EffectiveEnabled || state.LastError is not null ? 1.0 : 0.85;
         StartupRepair.Visibility =
-            state.OsDisabled == true ? Visibility.Visible : Visibility.Collapsed;
+            state.DesiredEnabled && !state.EffectiveEnabled
+                ? Visibility.Visible
+                : Visibility.Collapsed;
     }
 
     // ================= Event handlers =================

@@ -2660,15 +2660,15 @@ internal static class WaveRegressionTests
         True(Math.Abs(keyPlaceholderX - secureTextX) <= 2.1,
             $"password placeholder and typed caret must share one visual x origin; placeholder={keyPlaceholderX:F1}, text={secureTextX:F1}");
         InvokePrivate(section, "UpdateCredentialGating");
-        Equal("已输入新密钥", section.ApiKeyStateText.Text,
-            "the key state should confirm the value without exposing length or editor jargon");
+        Equal(Visibility.Collapsed, section.ApiKeyStateText.Visibility,
+            "credential state must not add a heavy second line below the field");
         keyField.Clear();
 
         Ui.SetPlaceholder(keyField, "••••••••••••  已保存");
         Ui.SetIsCredentialMask(keyField, true);
         section.UpdateLayout();
         Equal("••••••••••••  已保存", ((TextBlock)keyPlaceholder).Text,
-            "a stored credential must look like a mask, not an empty-field instruction");
+            "the control helper must keep a stored credential visibly distinct from an empty field");
         Equal((Brush)Application.Current.Resources["TextPrimaryBrush"], ((TextBlock)keyPlaceholder).Foreground,
             "the stored credential mask must use primary text colour instead of placeholder grey");
         Ui.SetIsCredentialMask(keyField, false);

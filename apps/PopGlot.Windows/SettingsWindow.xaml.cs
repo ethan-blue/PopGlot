@@ -202,8 +202,8 @@ public partial class SettingsWindow : Window
                 GeneralSection.UpdateStartupState(after);
                 SetStatus(
                     after.EffectiveEnabled
-                        ? "已重新启用开机自动启动。"
-                        : "重新启用未生效：Windows 仍报告该启动项被禁用或写入被拒绝。请重试或检查安全软件。",
+                        ? "开机启动已修复。"
+                        : "开机启动仍未成功，请重试。",
                     after.EffectiveEnabled ? StatusTone.Success : StatusTone.Error);
             }
             finally
@@ -725,9 +725,9 @@ public partial class SettingsWindow : Window
                     ShellApplyFailureKind.InvalidHotkeys =>
                         $"{applyOutcome.ConflictDetail}未保存任何修改。",
                     ShellApplyFailureKind.HotkeyConflictRestored =>
-                        $"快捷键注册失败：{applyOutcome.ConflictDetail}。原快捷键仍正常生效，本次未保存任何修改，请更换组合后重试。",
+                        $"这个快捷键没有生效：{applyOutcome.ConflictDetail}。原来的快捷键仍可用，请换一个组合。",
                     ShellApplyFailureKind.HotkeyUnavailable =>
-                        $"快捷键注册失败：{applyOutcome.ConflictDetail}。且原快捷键也未能保持可用，本次未保存任何修改，请更换组合后重试。",
+                        $"快捷键没有生效：{applyOutcome.ConflictDetail}。请换一个组合后重试。",
                     _ => "设置未能生效。未保存任何修改。",
                 });
             }

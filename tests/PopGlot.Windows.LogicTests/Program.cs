@@ -5491,10 +5491,10 @@ internal static class Program
             True(!StartupRegistration.IsEnabled(), "IsEnabled must reflect the OS disable");
 
             // g) The user-facing wording distinguishes the states.
-            True(State(true, true, true).DescribeZh().Contains("Windows 已禁用"),
-                "an OS disable must be named as such");
-            True(State(true, true, false).DescribeZh().Contains("已生效"),
-                "a healthy registration must read as effective");
+            True(State(true, true, true).DescribeZh().Contains("Windows 关闭"),
+                "an OS disable must be explained without registry terminology");
+            True(State(true, true, false).DescribeZh().Contains("已开启"),
+                "a healthy startup state must use ordinary product language");
         }
         finally
         {
@@ -5507,15 +5507,16 @@ internal static class Program
         // Shell wiring: honest toggle, re-enable entry, background start.
         var appDir = Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows");
         var settingsSource = File.ReadAllText(Path.Combine(appDir, "SettingsWindow.xaml.cs"));
+        var startupSource = File.ReadAllText(Path.Combine(appDir, "StartupRegistration.cs"));
         True(!settingsSource.Contains("settings.StartWithWindows || StartupRegistration.IsEnabled()"),
             "the toggle must show the desire, never desire OR reality");
         True(settingsSource.Contains("RefreshStartupState"), "the settings page must paint the real state");
-        True(settingsSource.Contains("已回滚"), "a failed startup write must roll the preference back");
+        True(startupSource.Contains("开机启动没有成功"), "a failed startup write needs plain-language feedback");
         True(settingsSource.Contains("TrySet(true)"), "the re-enable button must be an explicit TrySet");
 
         var generalXaml = File.ReadAllText(Path.Combine(appDir, "Sections", "GeneralSection.xaml"));
         True(generalXaml.Contains("StartupStateHint"), "the general page needs a state hint row");
-        True(generalXaml.Contains("重新启用"), "the general page needs the explicit re-enable action");
+        True(generalXaml.Contains("Content=\"修复\""), "the general page needs a concise repair action");
 
         var appSource = File.ReadAllText(Path.Combine(appDir, "App.xaml.cs"));
         True(appSource.Contains("--background"), "sign-in starts must pass --background");
@@ -14006,7 +14007,7 @@ internal static class Program
                 var detail = "划词翻译：Ctrl+Alt+W 可能已被其他程序占用";
 
                 window.ShowShortcutConflict(detail);
-                True(status.Text.Contains("快捷键注册失败") && status.Text.Contains(detail),
+                True(status.Text.Contains("快捷键没有生效") && status.Text.Contains(detail),
                     $"the hotkey channel must carry the specific failure detail, got: {status.Text}");
 
                 // A config refresh must NOT displace the resident failure.
@@ -14018,12 +14019,12 @@ internal static class Program
                 True(status.Text.Contains(detail),
                     "the resident hotkey failure must outrank the config channels");
 
-                window.ShowShortcutConflict("截图翻译：Ctrl+Alt+Space 注册被 Windows 拒绝（错误代码 5）");
-                True(status.Text.Contains("错误代码 5"),
+                window.ShowShortcutConflict("截图翻译：Ctrl+Alt+Space 暂时无法使用");
+                True(status.Text.Contains("暂时无法使用"),
                     "a changed detail must refresh the channel within the same failure");
 
                 window.ClearShortcutConflict();
-                True(!status.Text.Contains("快捷键注册失败") && !status.Text.Contains("错误代码 5"),
+                True(!status.Text.Contains("快捷键没有生效") && !status.Text.Contains("暂时无法使用"),
                     $"clearing must remove the failure banner, got: {status.Text}");
                 True(status.Text.Contains("尚未配置翻译引擎") ||
                         status.Text.Contains("内置免费引擎") ||
@@ -14033,7 +14034,7 @@ internal static class Program
                 // A duplicate clear must be a no-op that never stomps the
                 // freshly painted base state.
                 window.ClearShortcutConflict();
-                True(!status.Text.Contains("快捷键注册失败"),
+                True(!status.Text.Contains("快捷键没有生效"),
                     "a duplicate clear must keep the fallback state intact");
             }
             finally
@@ -14085,10 +14086,10 @@ internal static class Program
                 .Invoke(window, new object[] { window, new RoutedEventArgs() });
 
             True(window.StatusTextBlock.Text.Contains("可能已被其他程序占用") &&
-                    window.StatusTextBlock.Text.Contains("原快捷键仍正常生效"),
+                    window.StatusTextBlock.Text.Contains("原来的快捷键仍可用"),
                 $"the probe conflict must be reported inline with the honest rollback statement, got: {window.StatusTextBlock.Text}");
-            True(window.StatusTextBlock.Text.Contains("未保存任何修改"),
-                "the probe failure must state that nothing was persisted");
+            True(!window.StatusTextBlock.Text.Contains("注册", StringComparison.Ordinal),
+                "the settings status must not expose implementation terminology");
             Equal(SettingsEditState.Dirty, window.EditState,
                 "a probe failure must stay retryable (Dirty), never stick in Saving");
             True(window.SaveButton.IsEnabled, "the save bar must return for a retry");
@@ -14097,13 +14098,13 @@ internal static class Program
             // status must not pretend the old hotkeys still work.
             outcome = ShellApplyOutcome.Failed(
                 ShellApplyFailureKind.HotkeyUnavailable,
-                "划词翻译：Ctrl+Alt+W 注册被 Windows 拒绝（错误代码 5）");
+                "划词翻译：Ctrl+Alt+W 暂时无法使用");
             typeof(SettingsWindow).GetMethod("Save_Click",
                     System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
                 .Invoke(window, new object[] { window, new RoutedEventArgs() });
 
-            True(window.StatusTextBlock.Text.Contains("错误代码 5") &&
-                    window.StatusTextBlock.Text.Contains("也未能保持可用"),
+            True(window.StatusTextBlock.Text.Contains("暂时无法使用") &&
+                    window.StatusTextBlock.Text.Contains("请换一个组合"),
                 $"the global-failure shape must stay honest about the restore, got: {window.StatusTextBlock.Text}");
             Equal(SettingsEditState.Dirty, window.EditState,
                 "the double failure must stay retryable too");
@@ -14174,8 +14175,10 @@ internal static class Program
             HotkeyAction.CaptureScreen,
             new HotkeyBinding(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x20),
             5);
-        True(refused.Contains("Windows 拒绝注册（错误代码 5）"),
-            $"any other error must report the real Win32 code: {refused}");
+        True(refused.Contains("暂时无法使用"),
+            $"non-conflict failures must use plain product copy: {refused}");
+        True(!refused.Contains("注册") && !refused.Contains("错误代码"),
+            $"implementation details must stay out of user-facing copy: {refused}");
         True(!refused.Contains("其他程序占用"),
             $"non-1409 errors must NOT claim an owner unconditionally: {refused}");
     }

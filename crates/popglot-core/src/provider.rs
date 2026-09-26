@@ -681,6 +681,10 @@ impl ProviderClient {
     pub fn new(limits: TransportLimits) -> Result<Self, ProviderError> {
         let mut builder = reqwest::Client::builder()
             .connect_timeout(limits.connect_timeout)
+            // Provider endpoints are explicit product configuration. Do not
+            // silently reroute API keys or private-runtime traffic through a
+            // machine-wide proxy; users who need a gateway configure its URL.
+            .no_proxy()
             .redirect(same_origin_redirect_policy())
             .user_agent(concat!("PopGlot/", env!("CARGO_PKG_VERSION")));
         if limits.accept_invalid_certs {
@@ -2927,6 +2931,7 @@ mod tests {
         });
 
         let client = reqwest::Client::builder()
+            .no_proxy()
             .redirect(same_origin_redirect_policy())
             .build()
             .expect("client");
@@ -2953,6 +2958,7 @@ mod tests {
         });
 
         let client = reqwest::Client::builder()
+            .no_proxy()
             .redirect(same_origin_redirect_policy())
             .build()
             .expect("client");

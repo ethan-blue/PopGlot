@@ -329,11 +329,15 @@
                                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                             <PasswordBox x:Name="ApiKeyPasswordBox" Style="{StaticResource EditorPasswordField}" local:Ui.Placeholder="留空保持现有密钥" />
                                             <StackPanel x:Name="KeyActionsPanel" Grid.Column="2" Orientation="Horizontal">
-                                                <Button x:Name="ClearKeyButton" Content="清除密钥" Style="{StaticResource GhostButton}" Height="40" Padding="12,6" Click="ClearApiKey_Click" />
-                                                <Button x:Name="TestConnectionButton" Content="验证连接" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Height="40" Padding="16,6" Click="TestConnection_Click" />
+                                                <Button x:Name="ClearKeyButton" Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconDelete}"
+                                                        Width="40" Height="40" Click="ClearApiKey_Click"
+                                                        AutomationProperties.Name="清除密钥" ToolTip="清除密钥" />
+                                                <Button x:Name="TestConnectionButton" Margin="6,0,0,0" Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconCheck}"
+                                                        Width="40" Height="40" Click="TestConnection_Click"
+                                                        AutomationProperties.Name="测试连接" ToolTip="测试连接" />
                                             </StackPanel>
                                         </Grid>
-                                        <TextBlock x:Name="ApiKeyStateText" Style="{StaticResource Caption}" Margin="2,7,0,0" />
+                                        <TextBlock x:Name="ApiKeyStateText" Style="{StaticResource Caption}" Margin="2,4,0,0" Visibility="Collapsed" />
                                         <StackPanel x:Name="TestStatusPanel" Orientation="Horizontal" Margin="2,8,0,0" Visibility="Collapsed">
                                             <Ellipse x:Name="TestStateDot" Width="6" Height="6" VerticalAlignment="Center" Fill="{DynamicResource TextTertiaryBrush}"/>
                                             <TextBlock x:Name="TestSummaryText" Margin="7,0,0,0" FontSize="12" TextTrimming="CharacterEllipsis"/>
@@ -348,8 +352,10 @@
                                             <StackPanel>
                                                 <TextBlock Text="使用模型" Style="{StaticResource EditorSectionTitle}" />
                                             </StackPanel>
-                                            <Button x:Name="FetchModelsButton" Content="获取模型" HorizontalAlignment="Right" VerticalAlignment="Top"
-                                                    Style="{StaticResource GhostButton}" Height="34" Padding="12,6" Click="FetchModels_Click" />
+                                            <Button x:Name="FetchModelsButton" HorizontalAlignment="Right" VerticalAlignment="Top"
+                                                    Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconRetry}"
+                                                    Width="34" Height="34" Click="FetchModels_Click"
+                                                    AutomationProperties.Name="刷新模型列表" ToolTip="刷新模型列表" />
                                         </Grid>
 
                                         <!-- Recommendation Preference -->
@@ -375,7 +381,7 @@
                                             <StackPanel x:Name="TextModelPanel">
                                                 <TextBlock Text="文字模型" Style="{StaticResource FieldLabel}"/>
                                                 <ComboBox x:Name="TextModelCombo" Style="{StaticResource EditorComboField}" IsEditable="True" FontFamily="{StaticResource MonoFontFamily}"
-                                                          local:Ui.Placeholder="输入模型 ID，或先获取模型"/>
+                                                          local:Ui.Placeholder="输入模型 ID，或刷新列表"/>
                                                 <!-- Text model recommendation chips -->
                                                 <WrapPanel x:Name="TextRecommendationChipsPanel" Margin="0,8,0,0" />
                                                 <!-- Text model recommendation reason & evidence -->

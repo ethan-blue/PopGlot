@@ -1048,7 +1048,7 @@ public partial class MainWindow : Window
     internal void ShowShortcutConflict(string conflict) =>
         SetResidentStatus(
             StatusChannel.Hotkey,
-            $"快捷键注册失败 — {conflict}。可在「设置 → 快捷键」更换组合。",
+            $"快捷键没有生效：{conflict}。请在设置里换一个组合。",
             StatusTone.Error);
 
     /// <summary>

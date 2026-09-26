@@ -23,25 +23,25 @@ internal sealed record StartupState(
 {
     /// <summary>One agreed wording for every settings surface that shows state.</summary>
     public string DescribeZh() => LastError is not null
-        ? $"启动状态未知：{LastError}"
+        ? "开机启动状态暂时无法确认"
         : (DesiredEnabled, RunEntryPresent, PathMatches, OsDisabled) switch
         {
             (_, _, _, null) =>
-                "无法读取启用状态；重新保存设置或点击「重新启用」",
+                "开机启动状态暂时无法确认",
             (_, false, _, _) when DesiredEnabled =>
-                "启动项缺失；重新保存设置可重建",
+                "开机启动未成功",
             (_, _, false, false) when DesiredEnabled =>
-                "启动项指向旧路径；重新保存即可修复",
+                "开机启动未成功",
             (_, _, _, true) when DesiredEnabled =>
-                "Windows 已禁用（任务管理器）；点击「重新启用」恢复",
+                "开机启动已被 Windows 关闭",
             (_, true, true, false) when DesiredEnabled =>
-                "已生效",
+                "已开启",
             (_, _, _, true) =>
-                "启动项存在，已被禁用",
+                "已关闭",
             (_, false, _, _) =>
-                "未开启",
+                "已关闭",
             _ =>
-                "启动项存在但偏好已关闭，保存时移除",
+                "已关闭",
         };
 }
 
@@ -425,11 +425,11 @@ internal static class StartupRegistration
             // field keeps its new value, matching what the disk actually
             // holds (the rollback wrote savedNew with the old startup flag).
             return (savedNew with { StartWithWindows = previous.StartWithWindows },
-                "开机启动项写入失败（可能被安全软件拦截），该偏好已回滚；其余设置已保存。",
+                "开机启动没有成功，其他设置已保存。可以点击“修复”重试。",
                 true);
         }
         return (savedNew,
-            "开机启动项写入失败，且偏好回滚写盘也失败：磁盘上的开机偏好已是新值，与系统启动项的实际状态不一致；可再次保存重试。其余设置已保存。",
+            "开机启动没有成功，当前状态可能不同步。其他设置已保存，请点击“修复”重试。",
             true);
     }
 

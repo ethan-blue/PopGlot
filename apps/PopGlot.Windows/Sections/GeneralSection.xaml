@@ -136,12 +136,12 @@
                     </StackPanel>
                     <StackPanel x:Name="StartupControlsPanel" Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Orientation="Horizontal">
                         <Button x:Name="StartupRepairButton"
-                                Content="重新启用"
+                                Content="修复"
                                 Style="{StaticResource GhostButton}"
                                 Height="26" Padding="10,2"
                                 Cursor="Hand"
                                 VerticalAlignment="Center"
-                                AutomationProperties.Name="重新启用开机自动启动"
+                                AutomationProperties.Name="修复开机启动"
                                 Visibility="Collapsed"
                                 Margin="0,0,10,0" />
                         <ToggleButton x:Name="StartWithWindowsToggle"

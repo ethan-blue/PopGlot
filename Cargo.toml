@@ -16,9 +16,11 @@ repository = "https://github.com/ethan-blue/PopGlot"
 [workspace.dependencies]
 base64 = "0.22"
 futures-util = "0.3"
+genai = { version = "=0.6.5", default-features = false }
 getrandom = "0.2"
 regex = "1.11"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest13 = { package = "reqwest", version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
