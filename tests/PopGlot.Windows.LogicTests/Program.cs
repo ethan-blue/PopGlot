@@ -219,6 +219,7 @@ internal static class Program
         await RunAsync("free engine transport boundary rejects oversize html and fakes", FreeEngineTransportBoundary);
         await RunAsync("coordinator free engine single shot emits reset and delta and writes history once", CoordinatorFreeSingleShotAsync);
         await RunAsync("long input plans into ordered segments", LongInputPlansIntoOrderedSegmentsAsync);
+        await RunAsync("c10 loopback benchmark 100 runs and 100 cancels", LoopbackBenchmarkHundredRunsAndCancellationAsync);
         await RunAsync("cancel between segments stops later requests", CancelBetweenSegmentsStopsLaterRequestsAsync);
         await RunAsync("segment failure keeps fragments as partial", SegmentFailureKeepsFragmentsAsPartialAsync);
         await RunAsync("incomplete segment stops session as partial", IncompleteSegmentStopsSessionAsPartialAsync);
@@ -5653,12 +5654,127 @@ internal static class Program
     }
 
     /// <summary>
+    /// C10 loopback benchmark: 100 completion runs + 100 cancellation runs
+    /// through the REAL coordinator over a mock executor. Honest scope —
+    /// this is the test-host component pipeline (request build → send →
+    /// stream → finalize), NOT the app-level hotkey→painted budget, which
+    /// scripts/measure-* own. The metrics are printed for the run record and
+    /// asserted against generous bounds so a regression cannot hide.
+    /// </summary>
+    private static async Task LoopbackBenchmarkHundredRunsAndCancellationAsync()
+    {
+        var history = new FakeHistoryRepository();
+        var executor = new FakeTranslationExecutor();
+        var coordinator = new TranslationCoordinator(history: history, executor: executor);
+
+        const string translated = "[译:C10 loopback]";
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            var tcs = new TaskCompletionSource<TranslationResponse>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    // Simulated TTFT; the real abort path is exercised by the
+                    // cancellation loop below via ct firing.
+                    await Task.Delay(5, ct);
+                    buffer.TryAppend(translated);
+                    buffer.Complete();
+                    tcs.SetResult(new TranslationResponse(
+                        new TranslationResult(translated, "", "", [], []),
+                        new ProviderDiagnostics(
+                            sessionId, ProviderType.OpenAiCompatible,
+                            "https://api.example.com", 1, 200, 5)));
+                }
+                catch (OperationCanceledException)
+                {
+                    // The native abort would complete the stream: surface
+                    // cancellation through the completion task exactly once.
+                    _ = tcs.TrySetCanceled();
+                }
+            });
+            return new TranslationStreamSession(buffer, tcs.Task);
+        };
+
+        var source = string.Concat(
+            Enumerable.Repeat("The build failed with a FileNotFoundError for config.json. ", 10));
+
+        // ---- 100 completion runs: P50 / P95 / max / failure rate ----
+        var latencies = new List<double>(100);
+        var failures = 0;
+        for (var run = 0; run < 100; run++)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            var session = await coordinator.TranslateTextAsync(
+                source, "en", "zh-CN", TranslationInputSource.Manual);
+            stopwatch.Stop();
+            if (session.Stage == TranslationSessionStage.Completed)
+            {
+                latencies.Add(stopwatch.Elapsed.TotalMilliseconds);
+            }
+            else
+            {
+                failures++;
+            }
+        }
+        latencies.Sort();
+        double Percentile(double p) => latencies.Count == 0
+            ? double.NaN
+            : latencies[Math.Min(latencies.Count - 1, (int)Math.Ceiling(p * latencies.Count) - 1)];
+        Console.WriteLine(
+            $"[C10 loopback x100] P50={Percentile(0.50):F1}ms P95={Percentile(0.95):F1}ms " +
+            $"max={latencies[^1]:F1}ms failures={failures}/100");
+        Equal(0, failures, "a mock loopback must complete every run");
+        True(Percentile(0.95) < 2000,
+            $"P95={Percentile(0.95):F1}ms must stay inside the generous 2s loopback bound");
+
+        // ---- 100 cancellation runs: cancel right after issue; every session
+        // must land on Cancelled quickly and never on Completed, and history
+        // must stay empty (partial sessions never persist). ----
+        var cancelLatencies = new List<double>(100);
+        var cancelWrongStage = 0;
+        for (var run = 0; run < 100; run++)
+        {
+            using var cts = new CancellationTokenSource();
+            var pending = coordinator.TranslateTextAsync(
+                source, "en", "zh-CN", TranslationInputSource.Manual, cts.Token);
+            cts.Cancel();
+            var stopwatch = Stopwatch.StartNew();
+            var session = await pending;
+            stopwatch.Stop();
+            if (session.Stage == TranslationSessionStage.Cancelled)
+            {
+                cancelLatencies.Add(stopwatch.Elapsed.TotalMilliseconds);
+            }
+            else
+            {
+                cancelWrongStage++;
+            }
+        }
+        cancelLatencies.Sort();
+        double CancelPercentile(double p) => cancelLatencies.Count == 0
+            ? double.NaN
+            : cancelLatencies[Math.Min(cancelLatencies.Count - 1, (int)Math.Ceiling(p * cancelLatencies.Count) - 1)];
+        Console.WriteLine(
+            $"[C10 cancel x100] P50={CancelPercentile(0.50):F1}ms P95={CancelPercentile(0.95):F1}ms " +
+            $"max={cancelLatencies[^1]:F1}ms wrong-stage={cancelWrongStage}/100");
+        Equal(0, cancelWrongStage, "every cancelled run must report Cancelled, never Completed");
+        True(CancelPercentile(0.95) < 2000,
+            $"cancel P95={CancelPercentile(0.95):F1}ms must stay inside the generous 2s bound");
+        // History is the completion/cancel double-check: exactly the 100
+        // completed runs persist once each, and no cancelled run persists.
+        Equal(100, history.Entries.Count,
+            "completed runs persist once; cancelled runs must never persist");
+    }
+
+    /// <summary>
     /// T12 acceptance: the budget gate refuses up front — an oversized atomic
     /// code block and a source needing too many segments fail with an
     /// actionable message BEFORE any request exists.
     /// </summary>
-    private static async Task BudgetRefusalSendsNothingAsync()
-    {
+    private static async Task BudgetRefusalSendsNothingAsync()    {
         var history = new FakeHistoryRepository();
         var executor = new FakeTranslationExecutor();
         var requestCount = 0;
@@ -9552,9 +9668,12 @@ internal static class Program
     private static readonly string? NameFilter =
         Environment.GetEnvironmentVariable("POPGLOT_TESTS_FILTER")?.Trim().ToLowerInvariant();
 
-    private static bool ShouldRun(string name) =>
-        NameFilter is null || NameFilter.Length == 0 ||
-        name.ToLowerInvariant().Contains(NameFilter, StringComparison.Ordinal);
+    private static bool ShouldRun(string name)
+    {
+        if (string.IsNullOrWhiteSpace(NameFilter)) return true;
+        var parts = NameFilter.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return parts.Any(p => name.Contains(p, StringComparison.OrdinalIgnoreCase));
+    }
 
     /// <summary>
     /// Registry of already-claimed test names. Names must be unique
