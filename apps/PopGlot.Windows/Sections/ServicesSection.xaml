@@ -329,7 +329,7 @@
                                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                             <PasswordBox x:Name="ApiKeyPasswordBox" Style="{StaticResource EditorPasswordField}" local:Ui.Placeholder="留空保持现有密钥" />
                                             <StackPanel x:Name="KeyActionsPanel" Grid.Column="2" Orientation="Horizontal">
-                                                <Button x:Name="ClearKeyButton" Content="清除" Style="{StaticResource GhostButton}" Height="40" Padding="12,6" Click="ClearApiKey_Click" />
+                                                <Button x:Name="ClearKeyButton" Content="清除密钥" Style="{StaticResource GhostButton}" Height="40" Padding="12,6" Click="ClearApiKey_Click" />
                                                 <Button x:Name="TestConnectionButton" Content="验证连接" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Height="40" Padding="16,6" Click="TestConnection_Click" />
                                             </StackPanel>
                                         </Grid>

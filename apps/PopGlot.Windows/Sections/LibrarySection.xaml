@@ -39,10 +39,10 @@
                         Content="导出" Padding="10,4" Margin="8,0,0,0"
                         Click="ExportMenuButton_Click" />
                 <Button x:Name="ClearCurrentButton" Style="{StaticResource GhostButton}"
-                        Margin="8,0,0,0" Content="清空" Padding="10,4"
+                        Margin="8,0,0,0" Content="清空全部" Padding="10,4"
                         Foreground="{DynamicResource DangerBrush}"
                         BorderBrush="{DynamicResource DangerBrush}"
-                        ToolTip="清空当前数据源记录（点击两次确认）" />
+                        ToolTip="清空当前列表" Click="ClearCurrent_Click" />
             </StackPanel>
         </Grid>
 

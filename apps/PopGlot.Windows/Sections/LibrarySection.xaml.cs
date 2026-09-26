@@ -52,7 +52,6 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
 
     private HistoryStore _history = null!;
     private VocabularyStore? _vocabulary;
-    private ConfirmButton? _clearCurrentConfirm;
     private LibraryMode _mode = LibraryMode.History;
     private IReadOnlyList<TranslationHistoryEntry> _allHistory = [];
     private IReadOnlyList<VocabularyWord> _allVocabulary = [];
@@ -79,7 +78,6 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         _rowsView = CollectionViewSource.GetDefaultView(_allRows);
         _rowsView.Filter = FilterRow;
         LibraryListBox.ItemsSource = _rowsView;
-        _clearCurrentConfirm = ConfirmButton.Attach(ClearCurrentButton, "确认清空？", ClearCurrent);
         _deleteArmTimer = new System.Windows.Threading.DispatcherTimer
         {
             Interval = TimeSpan.FromSeconds(DeleteArmSeconds),
@@ -529,6 +527,8 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             _mode == LibraryMode.History ? "历史记录" : "生词本");
 
     // ================= Export & clear =================
+
+    private void ClearCurrent_Click(object sender, RoutedEventArgs e) => ClearCurrent();
 
     private void ExportMenuButton_Click(object sender, RoutedEventArgs e)
     {

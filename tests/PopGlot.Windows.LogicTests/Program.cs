@@ -198,6 +198,7 @@ internal static class Program
         Run("page transitions have no text-damaging animations", NoTextDamagingPageTransitions);
         Run("text windows are opaque for ClearType", TextWindowsAreOpaque);
         Run("daily flows never open system dialogs", DailyFlowsUseInlineConfirmations);
+        RunSta("library clear all acts on the first click", LibraryClearAllActsOnFirstClick);
         Run("unready services cannot become the default", UnreadyServicesCannotBecomeDefault);
         Run("schema v4 factory profiles migrate out of configured services", SchemaV4MigratesPristineTemplates);
         Run("concurrent saves do not collide on temporary files", ProfileManagerConcurrentSavesDoNotClash);
@@ -4693,6 +4694,38 @@ internal static class Program
                 file.Replace('/', Path.DirectorySeparatorChar)));
             True(!source.Contains("MessageBox.Show", StringComparison.Ordinal),
                 $"{file} must resolve confirmations inline, not via system MessageBox");
+        }
+    }
+
+    private static void LibraryClearAllActsOnFirstClick()
+    {
+        EnsureApplication();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-library-clear-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var history = new HistoryStore(Path.Combine(dir, "history.json"));
+            Equal(HistoryAddResult.Stored, history.TryAdd(Entry("clear me", "清空"), enabled: true));
+            var section = new LibrarySection();
+            section.Initialize(history, new VocabularyStore(Path.Combine(dir, "vocabulary.json")));
+            section.ReloadHistory();
+
+            section.ClearCurrentButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+            Equal(0, history.Load().Count, "one click must clear the active list");
+            Equal("清空全部", section.ClearCurrentButton.Content,
+                "the clear action must not enter a hidden second-click state");
+
+            Equal(HistoryAddResult.Stored, history.TryAdd(Entry("clear in settings", "清空"), enabled: true));
+            var dataSection = new DataSection();
+            dataSection.Initialize(history, new VocabularyStore(Path.Combine(dir, "vocabulary.json")));
+            dataSection.ClearHistoryButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Equal(0, history.Load().Count,
+                "the data settings clear button must also act on the first click");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
         }
     }
 

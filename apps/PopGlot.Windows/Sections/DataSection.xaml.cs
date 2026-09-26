@@ -9,8 +9,6 @@ public partial class DataSection : System.Windows.Controls.UserControl
 {
     private HistoryStore _history = null!;
     private VocabularyStore? _vocabulary;
-    private ConfirmButton? _clearHistoryConfirm;
-    private ConfirmButton? _clearVocabularyConfirm;
 
     /// <summary>Raised when the section needs to show a status message in the footer.</summary>
     internal event Action<string, StatusTone>? StatusChanged;
@@ -21,38 +19,6 @@ public partial class DataSection : System.Windows.Controls.UserControl
     public DataSection()
     {
         InitializeComponent();
-        _clearHistoryConfirm = ConfirmButton.Attach(
-            ClearHistoryButton,
-            () => $"将清空 {HistoryCount()} 条历史记录",
-            ClearHistory);
-        _clearVocabularyConfirm = ConfirmButton.Attach(
-            ClearVocabularyButton,
-            () => $"将清空 {VocabularyCount()} 个生词",
-            ClearVocabulary);
-    }
-
-    private int HistoryCount()
-    {
-        try
-        {
-            return _history?.Load().Count ?? 0;
-        }
-        catch
-        {
-            return 0;
-        }
-    }
-
-    private int VocabularyCount()
-    {
-        try
-        {
-            return _vocabulary?.GetAll().Count ?? 0;
-        }
-        catch
-        {
-            return 0;
-        }
     }
 
     private Func<ShellSettings>? _settingsProvider;
@@ -79,12 +45,12 @@ public partial class DataSection : System.Windows.Controls.UserControl
 
     // ================= Event handlers =================
 
-    // The destructive actions run only through ConfirmButton's two-step click;
-    // wiring the buttons' Click here would wipe on the first click.
+    private void ClearHistory_Click(object sender, RoutedEventArgs e) => ClearHistory();
+
+    private void ClearVocabulary_Click(object sender, RoutedEventArgs e) => ClearVocabulary();
 
     private void ClearHistory()
     {
-        // The ConfirmButton wrapper already asked inline (two-step click).
         var cleared = _history.Clear();
         if (cleared)
         {

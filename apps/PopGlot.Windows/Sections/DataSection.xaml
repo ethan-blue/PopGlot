@@ -37,7 +37,8 @@
             </StackPanel>
             <Button x:Name="ClearHistoryButton" Grid.Column="1" Content="清空历史"
                     VerticalAlignment="Center"
-                    Style="{StaticResource DangerButton}" Padding="12,5" ToolTip="点击两次确认" />
+                    Style="{StaticResource DangerButton}" Padding="12,5" ToolTip="清空全部历史记录"
+                    Click="ClearHistory_Click" />
         </Grid>
 
         <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
@@ -54,7 +55,8 @@
             </StackPanel>
             <Button x:Name="ClearVocabularyButton" Grid.Column="1" Content="清空生词本"
                     VerticalAlignment="Center"
-                    Style="{StaticResource DangerButton}" Padding="12,5" ToolTip="点击两次确认" />
+                    Style="{StaticResource DangerButton}" Padding="12,5" ToolTip="清空全部生词"
+                    Click="ClearVocabulary_Click" />
         </Grid>
 
         <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,16" />

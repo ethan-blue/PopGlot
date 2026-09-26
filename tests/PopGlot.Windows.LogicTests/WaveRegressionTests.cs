@@ -2660,9 +2660,8 @@ internal static class WaveRegressionTests
         True(Math.Abs(keyPlaceholderX - secureTextX) <= 2.1,
             $"password placeholder and typed caret must share one visual x origin; placeholder={keyPlaceholderX:F1}, text={secureTextX:F1}");
         InvokePrivate(section, "UpdateCredentialGating");
-        True(section.ApiKeyStateText.Text.Contains("12 个字符", StringComparison.Ordinal) &&
-             section.ApiKeyStateText.Text.Contains("尚未保存", StringComparison.Ordinal),
-            "masked credentials must still disclose that a new value exists, its length, and save state");
+        Equal("已输入新密钥", section.ApiKeyStateText.Text,
+            "the key state should confirm the value without exposing length or editor jargon");
         keyField.Clear();
 
         Ui.SetPlaceholder(keyField, "••••••••••••  已保存");

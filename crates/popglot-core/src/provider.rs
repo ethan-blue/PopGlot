@@ -401,22 +401,6 @@ fn output_token_limit(request: &TranslationRequest) -> u32 {
     }
 }
 
-fn gemini_thinking_config(model: &str) -> Option<Value> {
-    let normalized = model.to_ascii_lowercase();
-    if normalized.starts_with("gemini-3") && normalized.contains("flash") {
-        // Flash translation is direct instruction following. Minimal thinking
-        // materially improves time-to-first-token without spending output
-        // budget on reasoning the user never sees.
-        Some(json!({"thinkingLevel": "minimal"}))
-    } else if normalized.starts_with("gemini-3") {
-        Some(json!({"thinkingLevel": "low"}))
-    } else if normalized.starts_with("gemini-2.5-flash") {
-        Some(json!({"thinkingBudget": 0}))
-    } else {
-        None
-    }
-}
-
 fn glm_thinking_config(model: &str) -> Option<Value> {
     let normalized = model.to_ascii_lowercase();
     if normalized.starts_with("glm-") {
@@ -1525,14 +1509,11 @@ impl TranslationProvider for GeminiGenerateContentProvider {
         };
         validate_model_path_segment(model)?;
         let endpoint = endpoint_template.replace("{model}", model);
-        let mut generation_config = json!({
+        let generation_config = json!({
             "temperature": 0.1,
             "maxOutputTokens": output_token_limit(request),
             "responseMimeType": "application/json",
         });
-        if let Some(thinking_config) = gemini_thinking_config(model) {
-            generation_config["thinkingConfig"] = thinking_config;
-        }
         Ok(PreparedProviderRequest {
             provider_type: self.provider_type(),
             endpoint,
@@ -2537,23 +2518,6 @@ mod tests {
         assert_eq!(output_token_limit(&text_request(&"a".repeat(300))), 856);
         assert_eq!(output_token_limit(&text_request(&"a".repeat(2_000))), 1_200);
         assert_eq!(output_token_limit(&vision_request()), 1_200);
-    }
-
-    #[test]
-    fn gemini_translation_uses_minimal_or_disabled_thinking_when_supported() {
-        assert_eq!(
-            gemini_thinking_config("gemini-3-flash-preview"),
-            Some(json!({"thinkingLevel": "minimal"}))
-        );
-        assert_eq!(
-            gemini_thinking_config("gemini-3.7-flash-high"),
-            Some(json!({"thinkingLevel": "minimal"}))
-        );
-        assert_eq!(
-            gemini_thinking_config("gemini-2.5-flash"),
-            Some(json!({"thinkingBudget": 0}))
-        );
-        assert_eq!(gemini_thinking_config("gemini-2.0-flash"), None);
     }
 
     #[test]

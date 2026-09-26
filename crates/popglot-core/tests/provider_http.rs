@@ -323,6 +323,33 @@ async fn gemini_sends_native_key_and_inline_data() {
 }
 
 #[tokio::test]
+async fn gemini_gateway_base_with_v1beta_does_not_duplicate_version_path() {
+    let server = MockServer::start(vec![MockResponse::ok(gemini_response())]);
+    let mut config = settings(ProviderType::GeminiGenerateContent, &server);
+    config.api_base_url = format!("{}/v1beta", server.base_url);
+    config.text_model = "gemini-3.7-flash-high".to_owned();
+
+    client()
+        .execute(
+            provider_for(config.provider_type).as_ref(),
+            &config,
+            "gemini-local-key",
+            "gemini-version-prefix-mock",
+            &TranslationRequest::text("test", LanguagePair::new("en", "zh-CN")),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("Gemini gateway response");
+
+    let request = server.requests().join("\n");
+    assert!(request.starts_with("POST /v1beta/models/gemini-3.7-flash-high:generateContent"));
+    assert!(!request.contains("/v1beta/v1beta/"));
+    let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).expect("request body"))
+        .expect("Gemini JSON body");
+    assert!(body["generationConfig"].get("thinkingConfig").is_none());
+}
+
+#[tokio::test]
 async fn transient_server_error_retries_once_then_succeeds() {
     let server = MockServer::start(vec![
         MockResponse {

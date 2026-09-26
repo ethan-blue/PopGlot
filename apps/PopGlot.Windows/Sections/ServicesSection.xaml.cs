@@ -854,12 +854,12 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
         if (hasTypedKey)
         {
-            ApiKeyStateText.Text = $"已输入新密钥 · {ApiKeyPasswordBox.Password.Length} 个字符 · 尚未保存";
+            ApiKeyStateText.Text = "已输入新密钥";
             ApiKeyStateText.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
         }
         else if (hasStoredKey)
         {
-            ApiKeyStateText.Text = "已保存密钥 · 输入新值可替换";
+            ApiKeyStateText.Text = "已保存密钥";
             ApiKeyStateText.SetResourceReference(TextBlock.ForegroundProperty, "SuccessBrush");
         }
         else if (isLocal)
@@ -1556,8 +1556,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             var result = await ModelCatalogService.FetchAsync(draft, typedKey ?? string.Empty);
 
             SetModelCatalogStatus(
-                $"已从 {result.Endpoint.Host} 获取 {result.Models.Count} 个模型（{result.ProviderKind}）· " +
-                $"图片输入 {DescribeCapabilityCounts(result.Models)} · {result.ElapsedMs} ms",
+                $"已获取 {result.Models.Count} 个模型。",
                 StatusTone.Success);
             var wasLoading = _loading;
             _loading = true;
@@ -1605,14 +1604,14 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             result.Models.All(model => model.Id != currentVision))
         {
             SetModelCatalogStatus(
-                $"警告：当前视觉模型「{currentVision}」不在最新列表中，可能已下线；保存前请确认。",
+                "当前图片模型不在列表中。",
                 StatusTone.Warning);
         }
         else if (!string.IsNullOrWhiteSpace(currentVision) &&
             result.Models.FirstOrDefault(model => model.Id == currentVision) is { VisionInput: CapabilityState.Unknown })
         {
             SetModelCatalogStatus(
-                $"视觉模型「{currentVision}」存在，但目录未声明图片输入能力；请以供应商文档或连接测试确认，系统不会根据名称猜测。",
+                "图片能力未标注，请按服务商说明确认。",
                 StatusTone.Warning);
         }
 
@@ -1924,14 +1923,6 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             EvidenceBadgeTier.FamilyHeuristics => ("系列推断", "SurfaceRaisedBrush", "TextSecondaryBrush", "BorderSubtleBrush"),
             _ => ("未声明", "SurfaceMutedBrush", "TextTertiaryBrush", "BorderSubtleBrush"),
         };
-    }
-
-    internal static string DescribeCapabilityCounts(IReadOnlyList<ModelDescriptor> models)
-    {
-        var supported = models.Count(model => model.VisionInput == CapabilityState.Supported);
-        var unsupported = models.Count(model => model.VisionInput == CapabilityState.Unsupported);
-        var unknown = models.Count - supported - unsupported;
-        return $"支持 {supported} / 不支持 {unsupported} / 未知 {unknown}";
     }
 
     private void ResetModelCatalogStatus()
@@ -2287,10 +2278,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             ApiKeyPasswordBox.Clear();
             SetTestResult(StatusTone.Info, string.Empty, null);
-            StatusChanged?.Invoke("已清空输入框。新增引擎保存后密钥才会写入本机凭据管理器。", StatusTone.Info);
+            StatusChanged?.Invoke("输入已清空。", StatusTone.Info);
         }
-        // Edit mode: the ConfirmButton wrapper asks the second click inline;
-        // running ClearKeyForCurrentProfile here too would wipe on the first.
+        // Edit mode keeps the destructive credential deletion behind the
+        // existing inline confirmation. "清空全部" in the data surfaces is
+        // the immediate action; deleting a saved key remains a separate risk.
     }
 
     private void ClearKeyForCurrentProfile()
@@ -2307,7 +2299,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             RefreshApiKeyState();
             RefreshProfilesList();
             ProfileChanged?.Invoke();
-            StatusChanged?.Invoke("该引擎的 API Key 已清除；未配置密钥且未允许免费引擎时不会出网。", StatusTone.Info);
+            StatusChanged?.Invoke("API Key 已清除。", StatusTone.Info);
         }
         catch (Exception exception)
         {
