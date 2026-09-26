@@ -48,6 +48,12 @@
 ## 执行日志（追加）
 
 - 2026-09-26：建立本检查点；B01 记录；状态矩阵核实完毕（C11 确认已被后续工作修复）。
+- 2026-09-26（第二轮，C12 真机验收）：**发现并修复两个真实生命周期泄漏**。
+  1. `MainWindow` 订阅 `ThemeService.ThemeChanged` 用内联 lambda 且从不退订——每构造一次主窗口即永久驻留一份引用（`af77afd` 修复，与其余四窗的对称退订模式对齐）。
+  2. `ServicesSection` 用 `DependencyPropertyDescriptor.AddValueChanged(TextModelCombo, …)` 且无处 `RemoveValueChanged`——静态监听表永久持有目标元素→整个设置窗（本轮压测实证 Settings 家族 200/200 残留）。修复已落地（对称 `RemoveValueChanged` on `Unloaded`；与并行会话的实现撞车后采纳其版本）。
+  3. **压测架落地**：`exe lifecycle-stress`（4 窗×200 真实 Show/Close、每圈泵队、WeakReference 判活、WS/句柄/线程/堆/订阅数采样、报告先于断言留档 `artifacts/lifecycle/`）+ `exe lifecycle-probe`（根因探针：裸窗 199/200 可回收=平台干净；不泵队自引用排队回调 50/50 残留、泵队后 1/50=排队回调必须泵队释放）。TTS 20 轮 Speak/Stop：`_synthesisCts` 置空、IsSpeaking=false ✅。
+  4. **已验证的家族结论**：Settings/QuickSearch 全合同 PASS（alive=0、订阅回基线、WS 平台 229→231MB、堆有界）；Main/Panel 与 QuickSearch 在后续轮次剩 1/200 幸存者——与并行会话 WIP 同时在树上运行造成测量移动目标（其排队回调异常触发产品熔断级联），**全量四家族 PASS 判定挂起，等树稳定后重跑 lifecycle-stress**。
+  5. **测量阻塞**：并行会话在同一工作树活跃编辑（TranslationCoordinator/OutboundPolicy/ProfileManager 等 WIP 会抛排队异常、触发产品熔断级联，且 Program.cs 存在双方交错的未提交 hunks）。本轮未提交 Program.cs/LifecycleStress.cs 以免吞并他人工作；待其落地后提交并重跑压测出最终判定。
 - 2026-09-26：**UI 重建截图审计完成**——跑 LogicTests 截图套件（287/0 通过）产出 `artifacts/screenshots/` 全套当前 UI 图，对照 handoff-2026-09-22 稿逐视图核查主工作台 / 引擎编辑器 / 提示词页 / 快捷键页 / 翻译浮窗 / 风格菜单：均已符合规格（顶栏唯一主按钮、分段 16 内边距、键帽规格、菜单勾选态、占位左对齐等），无重大偏差；handoff 主体已由此前波次 + `0d83948` + 前两轮打磨实现。
 - 2026-09-26：**C25 收尾**（`30e1bfc`）——应用内离线帮助查看器 HelpWindow：docs/help 随包分发（csproj Content 链接到输出 `help/`，测试宿主同构）、左目录右正文本机渲染（复用 MarkdownPresenter）、仓库 .md 链接语法剥壳、缺文档诚实降级不联网；入口在 设置→通用→「打开帮助」；LogicTests 新增目录防漂移测试 + 浅/深色截图。
 - 2026-09-26：**C20**（`407d2f6`）——Rust 分段长标识符保真 5 项测试：超预算无空格 token 硬切无损且有界、预算内不切、超限前置拒绝、星面字符切点不破坏码点、围栏块与硬切片段互不串段。cargo 215/0。
