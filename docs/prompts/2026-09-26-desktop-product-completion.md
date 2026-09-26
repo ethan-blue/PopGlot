@@ -85,6 +85,12 @@ un-*/logs/crash-20260926.log`）记录了压测翻动期间的成批 `InvalidOpe
   - 面板 `HandleSessionResultAsync` 盖 `SelectionReadMs`（取自 `_inputAcquisitionMs`）、渲染完成后盖 `PaintedLagMs`；
   - 契约测试 `TimelineStampsFirstDeltaAndStageBreakdown`：FirstDeltaMs>0、DescribeStages 可解析、手动输入不得谎报 selection 阶段。LogicTests 289/0。
   - **合并债**：分支与并行 WIP 改动同一批方法，等其落地后合并（冲突点：PumpStreamAsync/ApplyFinalResponse/HandleSessionResultAsync 附近）；合并前 C10 埋点不在 main 生效，诚实标注。
+- 2026-09-26（第十轮，并行 WIP 落地 + C17 落地）：
+  - **并行会话 WIP 已全部落地**（8 个 fix(ui) 提交 + `00fee03`/`2c7f1c3`/`dc9cdec`/`5c12e7e` 等），其中 **`5c12e7e` 已主动合并本会话的 C10 接线分支**——合并债清零，C10 埋点在 main 生效（两处 FirstDeltaMs 戳、SelectionReadMs、契约测试经合并验证完好）。
+  - **本地积压推送**：origin/main 从 c02c5e4 前进到 49112af（含并行会话全部 UI 修复 + C10 集成 + C17）。
+  - **稳定树终验**（worktree @ e66d518，LogicTests 296/0 先行）：lifecycle-stress 复跑——**Settings/Panel/QuickSearch/TTS 全部维持 ✅**（Settings alive=0 WS 230→240 平台、Panel WS 234→90 回落、QuickSearch WS 120→70 回落）；Main 主题订阅残留维持 E3 型复核挂账。
+  - **C17 落地**（`49112af`）：`TranslationError.ReasonCode`（由协调器分类派生的稳定串值）+ `FriendlyError` 改为 **kind-first**（结构化直查 headline，原消息词典降为 Unknown 兜底），面板/工作台渲染路径传入 session.Error.Kind；契约测试证明「ServerError 消息里含『网络』也判服务端错误」。LogicTests **297/0**、cargo 217/0。
+  - **C12 剩余开口不变**：Main 主题订阅 E3 型复核；Panel WS 波动已证噪声（阈值修正后 PASS 复现）。
 - 门禁记录：本轮所有提交前后共 3 次全量验证（cargo test --locked / fmt / clippy、C# Debug+Release 0 警告 0 错误、PureTests 26/0、LogicTests 286→287/0、隔离目录、真配置哈希不变、`no unsanctioned public network send` PASS）。
 - 2026-09-26：**C10 组件级基准**（`762f3ce`）——经真实协调器 + mock 执行器：100 次完成回环 P50=15.5ms / P95=16.2ms / max=16.3ms / 失败 0；100 次取消 P95≈0ms / 错阶段 0；以「完成写入历史恰 100 条、取消不写」作完成/取消交叉验证。LogicTests 288/0。诚实口径：测试宿主组件管线，非应用级 hotkey→painted 预算（归 scripts/measure-*）。
 - 2026-09-26（第十轮，分支收敛）：并行产品补全成果已固化为 `dc9cdec` 并快进 `main`，随后以合并提交 `5c12e7e` 接入 `polish/c10-timeline-wiring`；三处重叠文件由 Git 三方合并且无文本冲突。合并后 `verify.ps1` 全绿：Rust test/fmt/clippy、WPF 构建、PureTests 33/0、LogicTests 295/0；C10 `timeline stamps first delta and stage breakdown` 契约已在 `main` 生效。旧条目中的“合并债”至此解除；仍未闭合的是应用级 hotkey→shell-visible→sent 全链路实测，不得把组件基准表述为应用级预算。
