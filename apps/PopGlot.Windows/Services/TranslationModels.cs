@@ -139,7 +139,12 @@ internal sealed record TranslationSessionTiming(
     ulong OcrElapsedMs = 0,
     ulong RoutingElapsedMs = 0,
     ulong NetworkElapsedMs = 0,
-    ulong TotalElapsedMs = 0);
+    ulong TotalElapsedMs = 0,
+    // C10 结构化时间点（hotkey→shell→selection→sent→first-delta→painted 链的
+    // 已知环节；未知环节保持 0，绝不编造）。数值只进诊断行，不进用户文案。
+    ulong SelectionReadMs = 0,
+    ulong FirstDeltaMs = 0,
+    ulong PaintedLagMs = 0);
 
 /// <summary>
 /// 面向用户的秒级耗时文案（0.1.6 文案减法）：状态行只说"用时 X.X 秒"，
@@ -148,6 +153,30 @@ internal sealed record TranslationSessionTiming(
 /// </summary>
 internal static class TranslationElapsedText
 {
+    /// <summary>
+    /// C10 诊断行的阶段拆分：只输出非零环节，格式稳定可解析（key=value ms）。
+    /// 隐私边界与既有一致——只有毫秒数，没有文本、没有地址。
+    /// </summary>
+    public static string DescribeStages(TranslationSessionTiming timing)
+    {
+        var parts = new List<string>(6);
+        void Add(string key, ulong value)
+        {
+            if (value > 0)
+            {
+                parts.Add($"{key}={value}ms");
+            }
+        }
+        Add("selection", timing.SelectionReadMs);
+        Add("ocr", timing.OcrElapsedMs);
+        Add("routing", timing.RoutingElapsedMs);
+        Add("firstDelta", timing.FirstDeltaMs);
+        Add("network", timing.NetworkElapsedMs);
+        Add("painted", timing.PaintedLagMs);
+        Add("total", timing.TotalElapsedMs);
+        return parts.Count == 0 ? "stages=none" : string.Join(" ", parts);
+    }
+
     public static string ForMilliseconds(double totalMilliseconds) =>
         $"用时 {Math.Max(0, totalMilliseconds) / 1000.0:F1} 秒";
 }
