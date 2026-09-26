@@ -267,7 +267,13 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private void EditorScroll_ScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        if (Math.Abs(e.VerticalChange) < 0.5)
+        // ScrollChanged is routed. A model popup owns its own ScrollViewer;
+        // its event can bubble through the ComboBox's logical placement
+        // target. Closing on that event made the fetched model list disappear
+        // on the first wheel tick. Only movement of the editor page itself
+        // should dismiss transient dropdowns.
+        if (!ReferenceEquals(e.OriginalSource, EditorScroll) ||
+            Math.Abs(e.VerticalChange) < 0.5)
         {
             return;
         }
@@ -807,21 +813,20 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     {
         try
         {
-            var target = CurrentCredentialTarget();
-            ApiKeyStateText.Text = CredentialStore.HasApiKey(target)
-                ? "密钥已存入 Windows 凭据管理器；留空保持不变"
-                : "尚未配置密钥；本地模型无需密钥";
+            _ = CredentialStore.HasApiKey(CurrentCredentialTarget());
         }
         catch (Exception exception)
         {
             ApiKeyStateText.Text = $"无法读取密钥状态：{exception.Message}";
+            return;
         }
         UpdateCredentialGating();
     }
 
     private void UpdateCredentialGating()
     {
-        if (FetchModelsButton is null || TestConnectionButton is null)
+        if (FetchModelsButton is null || TestConnectionButton is null ||
+            ApiKeyPasswordBox is null || ApiKeyStateText is null)
         {
             return;
         }
@@ -843,9 +848,34 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
         }
 
-        var hasTypedKey = !string.IsNullOrWhiteSpace(ApiKeyPasswordBox?.Password);
+        var hasTypedKey = !string.IsNullOrWhiteSpace(ApiKeyPasswordBox.Password);
         var hasKey = hasStoredKey || hasTypedKey;
         var allowed = isLocal || hasKey;
+
+        if (hasTypedKey)
+        {
+            ApiKeyStateText.Text = $"已输入新密钥 · {ApiKeyPasswordBox.Password.Length} 个字符 · 尚未保存";
+            ApiKeyStateText.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
+        }
+        else if (hasStoredKey)
+        {
+            ApiKeyStateText.Text = "已保存密钥 · 留空表示继续使用";
+            ApiKeyStateText.SetResourceReference(TextBlock.ForegroundProperty, "SuccessBrush");
+        }
+        else if (isLocal)
+        {
+            ApiKeyStateText.Text = "本地引擎无需 API Key";
+            ApiKeyStateText.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+        }
+        else
+        {
+            ApiKeyStateText.Text = "尚未填写 API Key";
+            ApiKeyStateText.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+        }
+
+        Ui.SetPlaceholder(ApiKeyPasswordBox,
+            hasStoredKey ? "留空继续使用已保存密钥" :
+            isLocal ? "本地引擎可留空" : "请输入 API Key");
 
         FetchModelsButton.IsEnabled = allowed;
         FetchModelsButton.ToolTip = allowed

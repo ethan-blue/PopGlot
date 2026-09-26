@@ -2608,6 +2608,17 @@ internal static class WaveRegressionTests
             CredentialTarget = "PopGlot/tests/alignment-probe",
         });
         InvokePrivate(section, "ShowEditorForm", false);
+        var hostWindow = new Window
+        {
+            Width = 800,
+            Height = 600,
+            Left = -10000,
+            Top = -10000,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+            Content = section,
+        };
+        hostWindow.Show();
         section.Measure(new Size(800, 600));
         section.Arrange(new Rect(0, 0, 800, 600));
         section.UpdateLayout();
@@ -2648,6 +2659,10 @@ internal static class WaveRegressionTests
         var secureTextX = ((FrameworkElement)keyHost!.Content).TranslatePoint(new Point(0, 0), keyField).X;
         True(Math.Abs(keyPlaceholderX - secureTextX) <= 2.1,
             $"password placeholder and typed caret must share one visual x origin; placeholder={keyPlaceholderX:F1}, text={secureTextX:F1}");
+        InvokePrivate(section, "UpdateCredentialGating");
+        True(section.ApiKeyStateText.Text.Contains("12 个字符", StringComparison.Ordinal) &&
+             section.ApiKeyStateText.Text.Contains("尚未保存", StringComparison.Ordinal),
+            "masked credentials must still disclose that a new value exists, its length, and save state");
         keyField.Clear();
 
         InvokePrivate(section, "UpdateCredentialGating");
@@ -2673,12 +2688,27 @@ internal static class WaveRegressionTests
         Equal(false, toggle?.IsHitTestVisible,
             "an empty model list must not open a blank popup when clicked");
 
-        popup!.IsOpen = true;
-        popup.UpdateLayout();
+        textCombo.ItemsSource = Enumerable.Range(1, 40).Select(index => $"provider-model-{index:00}").ToList();
+        section.UpdateLayout();
+        Equal(Visibility.Visible, chevron?.Visibility,
+            "a fetched model list must advertise its dropdown affordance");
+        Equal(true, toggle?.IsHitTestVisible,
+            "a fetched model list must remain interactive");
+
+        textCombo.IsDropDownOpen = true;
+        popup!.UpdateLayout();
 
         var scrollViewer = textCombo.Template?.FindName("DropDownScrollViewer", textCombo) as ScrollViewer;
         True(scrollViewer != null, "DropDownScrollViewer must exist in ComboBox template for WPF wheel/arrow navigation");
-        popup.IsOpen = false;
+        scrollViewer!.LineDown();
+        scrollViewer.LineDown();
+        Equal(true, textCombo.IsDropDownOpen,
+            "scrolling inside the fetched model list must not close the dropdown");
+        textCombo.SelectedIndex = 24;
+        Equal("provider-model-25", textCombo.SelectedItem as string,
+            "models below the initial viewport must remain selectable");
+        textCombo.IsDropDownOpen = false;
+        hostWindow.Close();
     }
 
     /// <summary>
