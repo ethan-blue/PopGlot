@@ -2085,4 +2085,105 @@ mod tests {
             SegmentPlan::Rejected(SegmentRejectReason::OversizedCodeBlock)
         );
     }
+
+    // ==================== C20: long unbroken identifiers ====================
+
+    /// A no-space token far over budget (URL / minified bundle / hash) must
+    /// hard-cut into bounded chunks, reconstruct byte-for-byte, and respect
+    /// the segment ceiling. C20 fidelity: the identifier survives as the exact
+    /// byte sequence even when a cut lands mid-token.
+    #[test]
+    fn long_unbroken_identifier_hard_cuts_losslessly_within_bound() {
+        let token = format!("a1_.{}-9z", "x".repeat(4_900));
+        let source = format!("See {token} for details.");
+        assert!(source.chars().count() > MAX_SEGMENT_CHARS);
+        let plan = plan_translation_segments(&source, MAX_SEGMENT_CHARS, MAX_SEGMENTS);
+        let SegmentPlan::Segments(segments) = plan else {
+            panic!("expected segments, got {plan:?}");
+        };
+        assert!(segments.len() <= MAX_SEGMENTS);
+        for segment in &segments {
+            assert!(segment.chars().count() <= MAX_SEGMENT_CHARS);
+            assert!(!segment.is_empty(), "no padding segments");
+        }
+        assert_eq!(
+            segments.concat(),
+            source,
+            "the identifier must reconstruct byte-for-byte"
+        );
+    }
+
+    /// An identifier that fits the whole budget is never segmented at all —
+    /// a cut may only happen when a segment boundary genuinely requires one.
+    #[test]
+    fn identifier_within_budget_is_never_cut() {
+        let token = "C:/very_long_build_path/".repeat(30) + "gen.rs";
+        assert!(token.chars().count() < MAX_SEGMENT_CHARS);
+        assert_eq!(
+            plan_translation_segments(&token, MAX_SEGMENT_CHARS, MAX_SEGMENTS),
+            SegmentPlan::Single
+        );
+    }
+
+    /// A single giant token beyond MAX_SEGMENTS × budget refuses up front —
+    /// never silently truncated, never silently re-joined.
+    #[test]
+    fn giant_single_token_rejects_on_segment_count() {
+        let token = "v".repeat(MAX_SEGMENT_CHARS * (MAX_SEGMENTS + 1));
+        let plan = plan_translation_segments(&token, MAX_SEGMENT_CHARS, MAX_SEGMENTS);
+        assert_eq!(
+            plan,
+            SegmentPlan::Rejected(SegmentRejectReason::TooManySegments)
+        );
+    }
+
+    /// Astral-plane characters (surrogate pairs in UTF-16) and grapheme
+    /// clusters (flag emoji = two code points) inside a boundary-less run:
+    /// cuts land on char boundaries only, and reconstruction stays lossless.
+    #[test]
+    fn hard_cuts_stay_char_lossless_across_astral_characters() {
+        let source = "翻译🀄🚀内容🇨🇳".repeat(400);
+        let plan = plan_translation_segments(&source, MAX_SEGMENT_CHARS, MAX_SEGMENTS);
+        let SegmentPlan::Segments(segments) = plan else {
+            panic!("expected segments, got {plan:?}");
+        };
+        assert!(segments.len() <= MAX_SEGMENTS);
+        for segment in &segments {
+            assert!(segment.chars().count() <= MAX_SEGMENT_CHARS);
+        }
+        assert_eq!(
+            segments.concat(),
+            source,
+            "lossless even when cuts land between astral code points"
+        );
+    }
+
+    /// A fenced block adjacent to a boundary-less oversized token: the fence
+    /// stays intact inside one segment and the token's hard-cut fragments
+    /// live only in their own segments — never bleeding into the code atom.
+    #[test]
+    fn fenced_block_adjacent_to_boundary_less_token_stays_atomic() {
+        let code = "```json\n{\"k\": 1}\n```\n";
+        let token = "m".repeat(MAX_SEGMENT_CHARS + 300);
+        let source = format!("{code}{token}");
+        let plan = plan_translation_segments(&source, MAX_SEGMENT_CHARS, MAX_SEGMENTS);
+        let SegmentPlan::Segments(segments) = plan else {
+            panic!("expected segments, got {plan:?}");
+        };
+        assert_eq!(segments.concat(), source, "lossless reconstruction");
+        assert!(
+            segments
+                .iter()
+                .any(|segment| segment.contains("```json\n{\"k\": 1}\n```")),
+            "the fenced block must not be split across segments"
+        );
+        for segment in &segments {
+            if segment.contains("```json") {
+                assert!(
+                    !segment.contains("mmm"),
+                    "the token fragments must not share a segment with the code atom"
+                );
+            }
+        }
+    }
 }
