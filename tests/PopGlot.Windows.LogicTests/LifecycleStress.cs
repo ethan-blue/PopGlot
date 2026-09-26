@@ -93,9 +93,25 @@ internal static class LifecycleStress
             Application.Current.MainWindow = null;
         }
         PumpDispatcherAt(System.Windows.Threading.DispatcherPriority.SystemIdle);
+        // WPF idle tiers: Background -> ContextIdle -> ApplicationIdle ->
+        // SystemIdle. A SystemIdle frame never executes earlier ContextIdle/
+        // ApplicationIdle items — only a ContextIdle frame truly drains them.
+        PumpDispatcherAt(System.Windows.Threading.DispatcherPriority.ContextIdle);
         PumpDispatcher();
+        Application.Current?.Dispatcher.Invoke(
+            () => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
         ForceGc();
         var aliveAfterFinalGc = weakRefs.Count(static reference => reference.IsAlive);
+        var survivorCycle = -1;
+        for (var i = 0; i < weakRefs.Count; i++)
+        {
+            if (weakRefs[i].IsAlive)
+            {
+                survivorCycle = i + 1;
+                break;
+            }
+        }
+        Console.WriteLine($"[C12 {family}] survivor cycle: {survivorCycle}");
         var finalTheme = ThemeSubscriptionCount();
         process.Refresh();
 
