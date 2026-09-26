@@ -4723,8 +4723,10 @@ internal static class Program
             section.ClearCurrentButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
 
             Equal(0, history.Load().Count, "one click must clear the active list");
-            Equal("清空全部", section.ClearCurrentButton.Content,
-                "the clear action must not enter a hidden second-click state");
+            Equal("清空当前列表", AutomationProperties.GetName(section.ClearCurrentButton),
+                "the icon-only clear action must keep an accessible name");
+            True(section.ClearCurrentButton.Content is null,
+                "the clear action must stay icon-only instead of restoring a heavy text label");
 
             Equal(HistoryAddResult.Stored, history.TryAdd(Entry("clear in settings", "清空"), enabled: true));
             var dataSection = new DataSection();
@@ -8765,6 +8767,15 @@ internal static class Program
         RenderAndSave(new MainWindow(ShellSettings.Default, history, vocab), 960, 640, Path.Combine(outDir, "main_window_light.png"), ThemePreference.Light);
         RenderAndSave(new SettingsWindow(ShellSettings.Default, history, vocab), 960, 680, Path.Combine(outDir, "settings_dark.png"), ThemePreference.Dark);
         RenderAndSave(new SettingsWindow(ShellSettings.Default, history, vocab), 960, 680, Path.Combine(outDir, "settings_light.png"), ThemePreference.Light);
+        foreach (var theme in new[] { ThemePreference.Dark, ThemePreference.Light })
+        {
+            var generalPage = new SettingsWindow(ShellSettings.Default, history, vocab);
+            generalPage.ShowPage("General");
+            True(generalPage.NavGeneral.IsChecked == true,
+                "settings_general capture: the sidebar must highlight 通用 after ShowPage(\"General\")");
+            RenderAndSave(generalPage, 960, 760,
+                Path.Combine(outDir, $"settings_general_{theme.ToString().ToLowerInvariant()}.png"), theme);
+        }
         // The privacy page carries the destination consents (free engine,
         // cloud speech); it needs its own visual regression capture. The
         // programmatic ShowPage must also move the sidebar highlight — a

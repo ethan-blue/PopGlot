@@ -43,13 +43,13 @@
 
     <!-- Card-grouped desktop settings -->
     <StackPanel>
-        <TextBlock Text="通用" Style="{StaticResource PageTitle}" Margin="0,0,0,14" />
+        <TextBlock Text="通用" Style="{StaticResource PageTitle}" Margin="0,0,0,10" />
 
         <!-- ==================== 外观与启动 ==================== -->
         <TextBlock Text="外观与启动" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
-        <Border Background="{DynamicResource SurfaceBrush}"
-                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                CornerRadius="{StaticResource CardRadius}" Padding="16,14" Margin="0,0,0,20">
+        <Border Background="{DynamicResource SurfaceMutedBrush}"
+                BorderThickness="0" CornerRadius="{StaticResource CardRadius}"
+                Padding="12" Margin="0,0,0,16">
             <StackPanel>
                 <Grid x:Name="ThemeRowGrid">
                     <Grid.ColumnDefinitions>
@@ -159,7 +159,8 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="关闭主窗口时最小化到托盘" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="关闭到托盘" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="关闭窗口后仍可使用快捷键" Style="{StaticResource RowHint}" />
                     </StackPanel>
                     <ToggleButton x:Name="CloseToTrayToggle"
                                   AutomationProperties.Name="关闭主窗口时最小化到托盘" Grid.Column="1"
@@ -197,8 +198,7 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="使用帮助" Style="{StaticResource RowTitle}" />
-                        <TextBlock Style="{StaticResource RowHint}"
-                                   Text="离线文档：快速上手、隐私边界、快捷键与引擎配置" />
+                        <TextBlock Style="{StaticResource RowHint}" Text="快速上手与常见问题" />
                     </StackPanel>
                     <Button x:Name="OpenHelpButton" Grid.Column="1"
                             Content="打开帮助"
@@ -214,9 +214,9 @@
 
         <!-- ==================== 浮窗行为 ==================== -->
         <TextBlock Text="浮窗行为" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
-        <Border Background="{DynamicResource SurfaceBrush}"
-                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                CornerRadius="{StaticResource CardRadius}" Padding="16,14" Margin="0,0,0,20">
+        <Border Background="{DynamicResource SurfaceMutedBrush}"
+                BorderThickness="0" CornerRadius="{StaticResource CardRadius}"
+                Padding="12" Margin="0,0,0,16">
             <StackPanel>
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -224,7 +224,8 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="点击浮窗外部时自动隐藏" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="失焦隐藏" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="点击其他位置时收起浮窗" Style="{StaticResource RowHint}" />
                     </StackPanel>
                     <ToggleButton x:Name="CloseOnFocusLossToggle"
                                   AutomationProperties.Name="点击浮窗外部时自动隐藏" Grid.Column="1"
@@ -240,7 +241,7 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="译后自动复制" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="自动复制译文" Style="{StaticResource RowTitle}" />
                     </StackPanel>
                     <ToggleButton x:Name="AutoCopyToggle"
                                   AutomationProperties.Name="译后自动复制" Grid.Column="1"
@@ -252,9 +253,9 @@
 
         <!-- ==================== 翻译规则 ==================== -->
         <TextBlock Text="翻译规则" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
-        <Border Background="{DynamicResource SurfaceBrush}"
-                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                CornerRadius="{StaticResource CardRadius}" Padding="16,14" Margin="0,0,0,20">
+        <Border Background="{DynamicResource SurfaceMutedBrush}"
+                BorderThickness="0" CornerRadius="{StaticResource CardRadius}"
+                Padding="12" Margin="0,0,0,16">
             <StackPanel>
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -262,7 +263,7 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="显示详细解析" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="补充说明" Style="{StaticResource RowTitle}" />
                     </StackPanel>
                     <ToggleButton x:Name="IncludeExplanationToggle" Grid.Column="1"
                                   AutomationProperties.Name="显示详细解析"
@@ -278,7 +279,7 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="保留代码与变量名原文" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="保护代码与变量" Style="{StaticResource RowTitle}" />
                     </StackPanel>
                     <ToggleButton x:Name="ProtectTokensToggle" Grid.Column="1"
                             AutomationProperties.Name="保留代码与变量名原文"

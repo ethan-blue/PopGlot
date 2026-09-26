@@ -10,8 +10,12 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- Top ToolBar: title, mode switch, quick search, export and clear -->
-        <Grid Grid.Row="0" Margin="0,0,0,8">
+        <!-- Two-level toolbar: actions never compete with the search text. -->
+        <Grid Grid.Row="0" Margin="0,0,0,10">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBlock Text="资料库" Style="{StaticResource PageTitle}"
                            VerticalAlignment="Center" Margin="0,0,12,0" />
@@ -24,26 +28,27 @@
             </StackPanel>
 
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                <TextBox x:Name="LibrarySearchBox" Height="28" Width="200" MinWidth="130"
-                         FontSize="12.5" Padding="8,3" VerticalContentAlignment="Center"
-                         AutomationProperties.Name="搜索历史与生词"
-                         local:Ui.Placeholder="搜索原文或译文…"
-                         TextChanged="LibrarySearch_TextChanged" />
-                <Button x:Name="RetryVocabularyButton" Style="{StaticResource GhostButton}"
-                        Content="重试加载" Padding="10,4" Margin="8,0,0,0"
+                <Button x:Name="RetryVocabularyButton" Style="{StaticResource IconButton}"
+                        local:Ui.Icon="{StaticResource IconRetry}" Margin="0,0,4,0"
                         Visibility="Collapsed"
-                        ToolTip="重新读取生词本（读取失败不改动现有内容）"
+                        ToolTip="重新加载"
                         AutomationProperties.Name="重试加载生词本"
                         Click="RetryVocabularyButton_Click" />
-                <Button x:Name="ExportMenuButton" Style="{StaticResource GhostButton}"
-                        Content="导出" Padding="10,4" Margin="8,0,0,0"
+                <Button x:Name="ExportMenuButton" Style="{StaticResource IconButton}"
+                        local:Ui.Icon="{StaticResource IconExport}" Margin="0,0,4,0"
+                        ToolTip="导出" AutomationProperties.Name="导出当前列表"
                         Click="ExportMenuButton_Click" />
-                <Button x:Name="ClearCurrentButton" Style="{StaticResource GhostButton}"
-                        Margin="8,0,0,0" Content="清空全部" Padding="10,4"
+                <Button x:Name="ClearCurrentButton" Style="{StaticResource IconButton}"
+                        local:Ui.Icon="{StaticResource IconDelete}"
                         Foreground="{DynamicResource DangerBrush}"
-                        BorderBrush="{DynamicResource DangerBrush}"
-                        ToolTip="清空当前列表" Click="ClearCurrent_Click" />
+                        ToolTip="清空当前列表" AutomationProperties.Name="清空当前列表"
+                        Click="ClearCurrent_Click" />
             </StackPanel>
+            <TextBox x:Name="LibrarySearchBox" Grid.Row="1" Margin="0,8,0,0"
+                     Style="{StaticResource FormTextBox}"
+                     AutomationProperties.Name="搜索历史与生词"
+                     local:Ui.Placeholder="搜索原文或译文"
+                     TextChanged="LibrarySearch_TextChanged" />
         </Grid>
 
         <!-- ==================== Master–Detail Surface ==================== -->
@@ -53,7 +58,7 @@
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="320" MinWidth="220" MaxWidth="460" />
-                    <ColumnDefinition Width="4" />
+                    <ColumnDefinition Width="8" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
 
@@ -92,7 +97,7 @@
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding TitleOneLine}" />
-                                <Setter Property="Padding" Value="16,12" />
+                                <Setter Property="Padding" Value="12,9" />
                             </Style>
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
@@ -125,22 +130,30 @@
                     <!-- Master bottom summary line -->
                     <Border Grid.Row="1" Background="{DynamicResource SurfaceMutedBrush}"
                             BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
-                            Padding="16,8">
-                        <TextBlock x:Name="LibraryCountText" FontSize="12" Style="{StaticResource Metadata}"
+                            Padding="12,6">
+                        <TextBlock x:Name="LibraryCountText" Style="{StaticResource Metadata}"
                                    Foreground="{DynamicResource TextTertiaryBrush}"
                                    VerticalAlignment="Center" />
                     </Border>
                 </Grid>
 
                 <!-- ==================== Column Splitter ==================== -->
-                <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Stretch"
+                <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Stretch"
                               Cursor="SizeWE" ShowsPreview="False">
                     <GridSplitter.Style>
                         <Style TargetType="GridSplitter">
-                            <Setter Property="Background" Value="{DynamicResource BorderSubtleBrush}" />
+                            <Setter Property="Background" Value="Transparent" />
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="GridSplitter">
+                                        <Border Width="1" HorizontalAlignment="Center"
+                                                Background="{DynamicResource BorderSubtleBrush}" />
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
                             <Style.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+                                    <Setter Property="Opacity" Value="0.75" />
                                 </Trigger>
                             </Style.Triggers>
                         </Style>

@@ -340,8 +340,8 @@ internal static class Program
             settings: defaultSettings);
         Equal(RouteCapabilityState.Unknown, unknownResult.State, "custom proxy must evaluate to Unknown");
         Equal(RouteKind.UnknownModel, unknownResult.RouteKind, "route kind must be UnknownModel");
-        True(unknownResult.Reason.Contains("模型能力未知") && unknownResult.Reason.Contains("服务费用"),
-            "unknown model must mention unknown capability and potential fees");
+        Equal("可以尝试整理要点。", unknownResult.Reason,
+            "unknown models should stay honest without exposing implementation-heavy wording");
     }
 
     private static void DiagnosticsStayStructured()

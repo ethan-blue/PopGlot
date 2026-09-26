@@ -77,8 +77,8 @@
                     </StackPanel>
                 </Button>
                 <Button x:Name="RestoreSessionButton" Style="{StaticResource GhostButton}"
-                        Padding="10,6" Margin="0,0,8,0" Content="恢复暂存"
-                        ToolTip="恢复未完成或最近关闭的会话（最多 5 条）"
+                        Padding="10,6" Margin="0,0,8,0" Content="恢复"
+                        ToolTip="恢复上次暂存内容"
                         AutomationProperties.Name="恢复暂存会话"
                         Click="RestoreSession_Click" />
                 <Button x:Name="TranslateButton" Style="{StaticResource PrimaryButton}"

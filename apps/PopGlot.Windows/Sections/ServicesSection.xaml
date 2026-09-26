@@ -56,11 +56,11 @@
             <Setter Property="BorderThickness" Value="1" />
         </Style>
         <Style x:Key="EditorTextField" TargetType="TextBox" BasedOn="{StaticResource FormTextBox}">
-            <Setter Property="Height" Value="40" />
+            <Setter Property="Height" Value="36" />
             <Setter Property="MinWidth" Value="0" />
         </Style>
         <Style x:Key="EditorComboField" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
-            <Setter Property="Height" Value="40" />
+            <Setter Property="Height" Value="36" />
             <Setter Property="MinWidth" Value="0" />
         </Style>
         <Style x:Key="EditorPasswordField" TargetType="PasswordBox" BasedOn="{StaticResource FormPasswordBox}">
@@ -337,10 +337,10 @@
                                             <PasswordBox x:Name="ApiKeyPasswordBox" Style="{StaticResource EditorPasswordField}" local:Ui.Placeholder="留空保持现有密钥" />
                                             <StackPanel x:Name="KeyActionsPanel" Grid.Column="2" Orientation="Horizontal">
                                                 <Button x:Name="ClearKeyButton" Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconDelete}"
-                                                        Width="40" Height="40" Click="ClearApiKey_Click"
+                                                        Width="36" Height="36" Click="ClearApiKey_Click"
                                                         AutomationProperties.Name="清除密钥" ToolTip="清除密钥" />
                                                 <Button x:Name="TestConnectionButton" Margin="6,0,0,0" Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconCheck}"
-                                                        Width="40" Height="40" Click="TestConnection_Click"
+                                                        Width="36" Height="36" Click="TestConnection_Click"
                                                         AutomationProperties.Name="测试连接" ToolTip="测试连接" />
                                             </StackPanel>
                                         </Grid>

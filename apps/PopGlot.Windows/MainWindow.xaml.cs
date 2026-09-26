@@ -1231,7 +1231,7 @@ internal enum TranslationStyleSupport
 /// <summary>
 /// The shared global 文字翻译风格 (TEXT-translation style) selector (prompt
 /// templates) behind the main workbench, the floating panel and quick search.
-/// Lists the built-in 忠实/自然/正式 styles plus the custom list straight from
+/// Lists the built-in 准确/自然/正式 styles plus the custom list straight from
 /// the core's prompt store, switches the active template via CoreBridge, and
 /// offers the shared 管理提示词 entry (routed through each surface's existing
 /// open-settings callback). By contract a switch only persists: the NEXT
@@ -1283,7 +1283,7 @@ internal static class TranslationStyleMenu
     /// </summary>
     internal static string ShortLabel(PromptTemplateDto template) => template.Id switch
     {
-        FaithfulTemplateId => "忠实",
+        FaithfulTemplateId => "准确",
         NaturalTemplateId => "自然",
         FormalTemplateId => "正式",
         _ => string.IsNullOrWhiteSpace(template.Name) ? template.Id : template.Name,
