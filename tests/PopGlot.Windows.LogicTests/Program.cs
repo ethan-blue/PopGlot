@@ -27,10 +27,11 @@ internal static class Program
 {
     private static int _passed;
     private static int _failed;
+    internal static int ProgramFailureCount() => _failed;
     private static Application? _bootstrappedApp;
 
     [STAThread]
-    private static async Task<int> Main()
+    private static async Task<int> Main(string[] args)
     {
         // C00: the environment precondition runs before ANY initialization —
         // before the isolation bootstrap, WPF, the native core, hotkeys or
@@ -52,6 +53,27 @@ internal static class Program
         // Isolation FIRST: nothing below may see real user data, credentials,
         // or public network. A missing isolation bootstrap must fail the run.
         TestIsolation.Initialize();
+
+        // C12 真机验收架：独立时段执行（exe lifecycle-stress），不进常规套件。
+        if (Array.Exists(args, a => string.Equals(a, "lifecycle-probe", StringComparison.OrdinalIgnoreCase)))
+        {
+            RunStaBatch(("c12 root probe", LifecycleStress.RunRootProbe));
+            return ProgramFailureCount() == 0 ? 0 : 1;
+        }
+        if (Array.Exists(args, a => string.Equals(a, "lifecycle-stress", StringComparison.OrdinalIgnoreCase)))
+        {
+            Run("test isolation is active", TestIsolation.AssertActive);
+            Console.WriteLine("C12 lifecycle stress: 4 windows x 200 real open/close cycles + TTS token release audit...");
+            RunStaBatch(
+                ("c12 stress main window 200 open/close cycles", () => LifecycleStress.RunWindowFamily(LifecycleStress.WindowFamily.Main)),
+                ("c12 stress settings window 200 open/close cycles", () => LifecycleStress.RunWindowFamily(LifecycleStress.WindowFamily.Settings)),
+                ("c12 stress translation panel 200 open/close cycles", () => LifecycleStress.RunWindowFamily(LifecycleStress.WindowFamily.Panel)),
+                ("c12 stress quick search 200 open/close cycles", () => LifecycleStress.RunWindowFamily(LifecycleStress.WindowFamily.QuickSearch)),
+                ("c12 stress tts speak/stop 20 cycles releases tokens", () => LifecycleStress.RunTtsReleaseCheck()));
+            Console.WriteLine("C12 lifecycle stress complete; report in artifacts/lifecycle/.");
+            return ProgramFailureCount() == 0 ? 0 : 1;
+        }
+
         Run("test isolation is active", TestIsolation.AssertActive);
         Run("no real PopGlot instance conflicts with the suite", TestIsolation.AssertNoConflictingAppInstance);
         Run("default stores honor the active data root", DefaultStoresHonorActiveDataRoot);
@@ -3239,7 +3261,7 @@ internal static class Program
             "Null exception must return false");
     }
 
-    private static string FindProjectRoot()
+    internal static string FindProjectRoot()
     {
         var dir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
         while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Cargo.toml")))
@@ -8107,7 +8129,7 @@ internal static class Program
         return _staHarnessDispatcher!;
     }
 
-    private static void EnsureApplication()
+    internal static void EnsureApplication()
     {
         if (Application.Current is null)
         {
@@ -9742,7 +9764,7 @@ internal static class Program
     /// needs the bootstrapped Application must run on the very thread that
     /// created it.
     /// </summary>
-    private static void RunStaBatch(params (string Name, Action Test)[] tests)
+    internal static void RunStaBatch(params (string Name, Action Test)[] tests)
     {
         var selected = tests
             .Where(t => ClaimTestName(t.Name))
