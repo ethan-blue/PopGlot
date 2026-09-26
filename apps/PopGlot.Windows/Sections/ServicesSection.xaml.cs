@@ -535,16 +535,19 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                     _recommendationDebounce.Start();
                 }
             }));
-        System.ComponentModel.DependencyPropertyDescriptor
-            .FromProperty(ComboBox.TextProperty, typeof(ComboBox))
-            .AddValueChanged(TextModelCombo, (_, _) =>
+        // C12: Use DependencyPropertyDescriptor to capture programmatic .Text assignment
+        // and interactive editing, with symmetric RemoveValueChanged on Unloaded to prevent leaks.
+        var textDpd = System.ComponentModel.DependencyPropertyDescriptor.FromProperty(ComboBox.TextProperty, typeof(ComboBox));
+        void OnTextModelChanged(object? sender, EventArgs e)
+        {
+            if (UseTextModelForVisionCheckBox.IsChecked == true)
             {
-                if (UseTextModelForVisionCheckBox.IsChecked == true)
-                {
-                    VisionModelCombo.Text = TextModelCombo.Text;
-                    VisionModelCombo.ToolTip = "已开启「图文共用此模型」，图片输入将使用与文字相同的模型。如需独立指定，请取消勾选「图文共用此模型」开关。";
-                }
-            });
+                VisionModelCombo.Text = TextModelCombo.Text;
+                VisionModelCombo.ToolTip = "已开启「图文共用此模型」，图片输入将使用与文字相同的模型。如需独立指定，请取消勾选「图文共用此模型」开关。";
+            }
+        }
+        textDpd.AddValueChanged(TextModelCombo, OnTextModelChanged);
+        Unloaded += (_, _) => textDpd.RemoveValueChanged(TextModelCombo, OnTextModelChanged);
 
         void WatchToggle(System.Windows.Controls.Primitives.ToggleButton toggle)
         {
