@@ -250,6 +250,7 @@ internal static class Program
         await RunAsync("cancel between segments stops later requests", CancelBetweenSegmentsStopsLaterRequestsAsync);
         await RunAsync("segment failure keeps fragments as partial", SegmentFailureKeepsFragmentsAsPartialAsync);
         await RunAsync("incomplete segment stops session as partial", IncompleteSegmentStopsSessionAsPartialAsync);
+        await RunAsync("segmented output has one session byte budget", SegmentedOutputHasOneSessionByteBudgetAsync);
         await RunAsync("budget refusal sends nothing", BudgetRefusalSendsNothingAsync);
         Run("short source stays single and planner agrees across ffi", ShortSourceStaysSingleAndPlannerAgreesAcrossFfi);
         await RunAsync("coordinator vision failure with deltas does not fallback to OCR", CoordinatorVisionWithDeltaFailureDoesNotOcrFallbackAsync);
@@ -5983,6 +5984,47 @@ internal static class Program
             "an integrity-incomplete segment must not yield a Completed session");
         Equal(1, Volatile.Read(ref requestCount), "later segments must not run after an incomplete one");
         Equal(0, history.Entries.Count);
+    }
+
+    /// <summary>
+    /// An abnormal provider must not receive 4 MiB of retained output for
+    /// every input segment. The second oversized aggregate becomes Partial,
+    /// keeps only the completed prefix, stops later requests, and never enters
+    /// history.
+    /// </summary>
+    private static async Task SegmentedOutputHasOneSessionByteBudgetAsync()
+    {
+        var history = new FakeHistoryRepository();
+        var executor = new FakeTranslationExecutor();
+        var requestCount = 0;
+        var coordinator = new TranslationCoordinator(history: history, executor: executor);
+        var perSegmentOutput = new string('译', 750_000); // 2.25 MiB in UTF-8.
+
+        executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
+        {
+            Interlocked.Increment(ref requestCount);
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            buffer.TryAppend(perSegmentOutput);
+            buffer.Complete();
+            return new TranslationStreamSession(
+                buffer,
+                Task.FromResult(new TranslationResponse(
+                    new TranslationResult(perSegmentOutput, "", "", [], []),
+                    new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible,
+                        "https://api.example.com", 1, 200, 10))));
+        };
+
+        var source = string.Join("\n\n", Enumerable.Repeat(new string('q', 700), 4));
+        var session = await coordinator.TranslateTextAsync(
+            source, "en", "zh-CN", TranslationInputSource.Manual);
+
+        Equal(TranslationSessionStage.Partial, session.Stage);
+        Equal(1, session.Warnings.Count(warning => warning.Contains("4 MiB 上限")));
+        Equal(2, Volatile.Read(ref requestCount), "no third segment may be requested after aggregate overflow");
+        Equal(perSegmentOutput, session.TranslatedText, "the completed prefix is retained without truncation");
+        True(Encoding.UTF8.GetByteCount(session.TranslatedText) <= TranslationCoordinator.MaxTextSessionOutputBytes,
+            "retained session output must stay within the shared UTF-8 byte budget");
+        Equal(0, history.Entries.Count, "an over-budget partial result must not enter history");
     }
 
     /// <summary>

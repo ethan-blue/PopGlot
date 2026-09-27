@@ -37,6 +37,18 @@ internal interface ITranslationExecutor
         PromptAnchorSnapshot? preferenceAnchor) =>
         StreamText(apiKey, source, sourceLang, targetLang, sessionId, epoch, cancellationToken);
 
+    TranslationStreamSession StreamText(
+        string? apiKey,
+        string source,
+        string sourceLang,
+        string targetLang,
+        string sessionId,
+        long epoch,
+        CancellationToken cancellationToken,
+        PromptAnchorSnapshot? preferenceAnchor,
+        long maxResponseBytes) =>
+        StreamText(apiKey, source, sourceLang, targetLang, sessionId, epoch, cancellationToken, preferenceAnchor);
+
     TranslationStreamSession StreamTextDraft(
         ProviderSettings draftSettings,
         string apiKey,
@@ -59,6 +71,19 @@ internal interface ITranslationExecutor
         CancellationToken cancellationToken,
         PromptAnchorSnapshot? preferenceAnchor) =>
         StreamTextDraft(draftSettings, apiKey, source, sourceLang, targetLang, sessionId, epoch, cancellationToken);
+
+    TranslationStreamSession StreamTextDraft(
+        ProviderSettings draftSettings,
+        string apiKey,
+        string source,
+        string sourceLang,
+        string targetLang,
+        string sessionId,
+        long epoch,
+        CancellationToken cancellationToken,
+        PromptAnchorSnapshot? preferenceAnchor,
+        long maxResponseBytes) =>
+        StreamTextDraft(draftSettings, apiKey, source, sourceLang, targetLang, sessionId, epoch, cancellationToken, preferenceAnchor);
 
     TranslationStreamSession StreamVisionDraft(
         ProviderSettings draftSettings,
@@ -131,6 +156,25 @@ internal sealed class DefaultTranslationExecutor : ITranslationExecutor
             apiKey, source, sourceLang, targetLang, sessionId, sessionId, epoch, null, cancellationToken,
             preferenceAnchor);
 
+    public TranslationStreamSession StreamText(
+        string? apiKey,
+        string source,
+        string sourceLang,
+        string targetLang,
+        string sessionId,
+        long epoch,
+        CancellationToken cancellationToken,
+        PromptAnchorSnapshot? preferenceAnchor,
+        long maxResponseBytes)
+    {
+        var buffer = new TranslationStreamBuffer(
+            sessionId, sessionId, epoch,
+            maxBytes: Math.Clamp(maxResponseBytes, 1, TranslationStreamBuffer.DefaultMaxBytes));
+        return CoreBridge.TranslateTextStream(
+            apiKey, source, sourceLang, targetLang, sessionId, sessionId, epoch, buffer, cancellationToken,
+            preferenceAnchor);
+    }
+
     public TranslationStreamSession StreamTextDraft(
         ProviderSettings draftSettings,
         string apiKey,
@@ -156,6 +200,26 @@ internal sealed class DefaultTranslationExecutor : ITranslationExecutor
         CoreBridge.TranslateTextDraftStream(
             draftSettings, apiKey, source, sourceLang, targetLang, sessionId, sessionId, epoch, null, cancellationToken,
             preferenceAnchor);
+
+    public TranslationStreamSession StreamTextDraft(
+        ProviderSettings draftSettings,
+        string apiKey,
+        string source,
+        string sourceLang,
+        string targetLang,
+        string sessionId,
+        long epoch,
+        CancellationToken cancellationToken,
+        PromptAnchorSnapshot? preferenceAnchor,
+        long maxResponseBytes)
+    {
+        var buffer = new TranslationStreamBuffer(
+            sessionId, sessionId, epoch,
+            maxBytes: Math.Clamp(maxResponseBytes, 1, TranslationStreamBuffer.DefaultMaxBytes));
+        return CoreBridge.TranslateTextDraftStream(
+            draftSettings, apiKey, source, sourceLang, targetLang, sessionId, sessionId, epoch, buffer,
+            cancellationToken, preferenceAnchor);
+    }
 
     public TranslationStreamSession StreamVisionDraft(
         ProviderSettings draftSettings,
@@ -186,6 +250,13 @@ internal sealed class DefaultTranslationExecutor : ITranslationExecutor
 /// </summary>
 internal sealed class TranslationCoordinator
 {
+    /// <summary>
+    /// Hard UTF-8 budget for the translated text retained by one text
+    /// translation session. A provider response is already limited to 4 MiB;
+    /// segmented input must not multiply that allowance by the segment count.
+    /// </summary>
+    internal const long MaxTextSessionOutputBytes = TranslationStreamBuffer.DefaultMaxBytes;
+
     private readonly IHistoryRepository? _history;
     private readonly IVocabularyRepository? _vocabulary;
     private readonly ITranslationExecutor _executor;
@@ -1264,7 +1335,7 @@ internal sealed class TranslationCoordinator
         {
             var single = CreateTextStream(
                 segments[0], sourceLang, targetLang, textRuntimeSettings, textApiKey,
-                session.SessionId, epoch, preferenceAnchor, cancellationToken);
+                session.SessionId, epoch, preferenceAnchor, MaxTextSessionOutputBytes, cancellationToken);
             return await PumpStreamAsync(
                 single, session, epoch, startTimestampTicks, progress, onStageChanged,
                 textPrefix: string.Empty, cancellationToken);
@@ -1275,6 +1346,7 @@ internal sealed class TranslationCoordinator
         sessionCts.CancelAfter(SessionDeadline);
 
         var merged = new StringBuilder();
+        long mergedBytes = 0;
         var explanations = new List<string>();
         var warnings = new List<string>();
         ulong networkMs = 0;
@@ -1283,9 +1355,18 @@ internal sealed class TranslationCoordinator
         {
             sessionCts.Token.ThrowIfCancellationRequested();
             var segmentTicks = Stopwatch.GetTimestamp();
+            var remainingOutputBytes = MaxTextSessionOutputBytes - mergedBytes;
+            if (remainingOutputBytes <= 0)
+            {
+                warnings.Add(
+                    $"本次翻译已达到 {MaxTextSessionOutputBytes / 1024 / 1024} MiB 输出上限；" +
+                    $"已保留前 {index} 段，后续内容未继续请求。");
+                throw new SegmentSessionException(
+                    BuildSegmentResponse(merged, explanations, warnings, networkMs));
+            }
             var streamSession = CreateTextStream(
                 segments[index], sourceLang, targetLang, textRuntimeSettings, textApiKey,
-                session.SessionId, epoch, preferenceAnchor, sessionCts.Token);
+                session.SessionId, epoch, preferenceAnchor, remainingOutputBytes, sessionCts.Token);
 
             TranslationResponse segmentResponse;
             try
@@ -1296,21 +1377,23 @@ internal sealed class TranslationCoordinator
             }
             catch (OperationCanceledException)
             {
-                // Fragments already translated stay visible; the outer cancel
-                // handler reports them.
-                session.TranslatedText = merged.ToString();
+                // Keep the current bounded fragment as well as earlier
+                // completed segments. It remains visible but is never saved.
+                session.TranslatedText = merged + streamSession.Buffer.GetAccumulatedText();
                 throw;
             }
             catch (Exception)
             {
                 // Completed fragments must remain visible as a Partial, never
                 // vanish into a Failed-with-no-body state.
-                session.TranslatedText = merged.ToString();
-                if (merged.Length > 0)
+                var currentFragment = streamSession.Buffer.GetAccumulatedText();
+                var visiblePartial = merged + currentFragment;
+                session.TranslatedText = visiblePartial;
+                if (visiblePartial.Length > 0)
                 {
-                    warnings.Add($"第 {index + 1} 段翻译失败，仅保留已完成片段。");
+                    warnings.Add($"第 {index + 1} 段翻译失败，仅保留已返回片段。");
                     throw new SegmentSessionException(
-                        BuildSegmentResponse(merged, explanations, warnings, networkMs));
+                        BuildSegmentResponse(new StringBuilder(visiblePartial), explanations, warnings, networkMs));
                 }
                 throw;
             }
@@ -1332,7 +1415,18 @@ internal sealed class TranslationCoordinator
             var segmentText = !string.IsNullOrWhiteSpace(result.TranslatedText)
                 ? result.TranslatedText
                 : streamSession.Buffer.GetAccumulatedText();
+            var segmentBytes = Encoding.UTF8.GetByteCount(segmentText);
+            if (segmentBytes > MaxTextSessionOutputBytes - mergedBytes)
+            {
+                warnings.Add(
+                    $"第 {index + 1} 段输出使本次翻译超过 {MaxTextSessionOutputBytes / 1024 / 1024} MiB 上限；" +
+                    $"已保留前 {index} 段，后续内容未继续请求。");
+                session.TranslatedText = merged.ToString();
+                throw new SegmentSessionException(
+                    BuildSegmentResponse(merged, explanations, warnings, networkMs));
+            }
             merged.Append(segmentText);
+            mergedBytes += segmentBytes;
             session.TranslatedText = merged.ToString();
 
             // A visibly incomplete segment ends the session as Partial: the
@@ -1356,6 +1450,7 @@ internal sealed class TranslationCoordinator
         string sessionId,
         long epoch,
         PromptAnchorSnapshot? preferenceAnchor,
+        long maxResponseBytes,
         CancellationToken cancellationToken)
     {
         if (textRuntimeSettings is not null &&
@@ -1370,7 +1465,8 @@ internal sealed class TranslationCoordinator
                 sessionId,
                 epoch,
                 cancellationToken,
-                preferenceAnchor);
+                preferenceAnchor,
+                maxResponseBytes);
         }
         return _executor.StreamText(
             textApiKey,
@@ -1380,7 +1476,8 @@ internal sealed class TranslationCoordinator
             sessionId,
             epoch,
             cancellationToken,
-            preferenceAnchor);
+            preferenceAnchor,
+            maxResponseBytes);
     }
 
     private static TranslationResponse BuildSegmentResponse(

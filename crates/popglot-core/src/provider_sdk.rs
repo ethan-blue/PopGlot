@@ -290,6 +290,120 @@ mod tests {
     }
 
     #[test]
+    fn output_budget_uses_each_protocols_native_wire_field() {
+        let request = TranslationRequest::text(
+            "x".repeat(800),
+            popglot_domain::LanguagePair::new("en", "zh-CN"),
+        );
+        assert_eq!(output_token_limit(&request), 1_200);
+
+        for (kind, pointer) in [
+            (ProviderType::OpenAiCompatible, "/max_tokens"),
+            (ProviderType::OpenAiResponses, "/max_output_tokens"),
+            (ProviderType::AnthropicMessages, "/max_tokens"),
+            (
+                ProviderType::GeminiGenerateContent,
+                "/generationConfig/maxOutputTokens",
+            ),
+        ] {
+            let settings = ProviderSettings {
+                provider_type: kind,
+                text_model: "custom-model".to_owned(),
+                text_endpoint: if kind == ProviderType::GeminiGenerateContent {
+                    "/v1beta/models/{model}:generateContent".to_owned()
+                } else {
+                    "/gateway/custom".to_owned()
+                },
+                ..ProviderSettings::default()
+            };
+            let prepared = crate::provider::provider_for(kind)
+                .prepare(&settings, &request)
+                .unwrap();
+            assert_eq!(
+                prepared.body.pointer(pointer).and_then(Value::as_u64),
+                Some(1_200)
+            );
+        }
+    }
+
+    #[test]
+    fn text_and_vision_requests_use_their_own_model_and_endpoint() {
+        let settings = ProviderSettings {
+            provider_type: ProviderType::OpenAiCompatible,
+            text_model: "text-model".to_owned(),
+            vision_model: "vision-model".to_owned(),
+            text_endpoint: "/text-route".to_owned(),
+            vision_endpoint: "/vision-route".to_owned(),
+            ..ProviderSettings::default()
+        };
+        let text_request =
+            TranslationRequest::text("hello", popglot_domain::LanguagePair::new("en", "zh-CN"));
+        let vision_request = TranslationRequest::vision(
+            ImageInput::Bytes {
+                media_type: "image/png".to_owned(),
+                data: vec![1, 2, 3],
+            },
+            popglot_domain::LanguagePair::new("auto", "zh-CN"),
+        );
+
+        let text = prepare(
+            ProviderType::OpenAiCompatible,
+            &settings,
+            &text_request,
+            None,
+        )
+        .unwrap();
+        let vision = prepare(
+            ProviderType::OpenAiCompatible,
+            &settings,
+            &vision_request,
+            None,
+        )
+        .unwrap();
+        assert_eq!(text.body["model"], "text-model");
+        assert_eq!(text.endpoint, "/text-route");
+        assert!(!text.contains_image);
+        assert_eq!(vision.body["model"], "vision-model");
+        assert_eq!(vision.endpoint, "/vision-route");
+        assert!(vision.contains_image);
+    }
+
+    #[test]
+    fn maximum_image_still_fits_the_request_body_budget() {
+        for kind in [
+            ProviderType::OpenAiCompatible,
+            ProviderType::OpenAiResponses,
+            ProviderType::AnthropicMessages,
+            ProviderType::GeminiGenerateContent,
+        ] {
+            let settings = ProviderSettings {
+                provider_type: kind,
+                vision_model: "vision-model".to_owned(),
+                vision_endpoint: if kind == ProviderType::GeminiGenerateContent {
+                    "/v1beta/models/{model}:generateContent".to_owned()
+                } else {
+                    "/gateway/vision".to_owned()
+                },
+                ..ProviderSettings::default()
+            };
+            let request = TranslationRequest::vision(
+                ImageInput::Bytes {
+                    media_type: "image/png".to_owned(),
+                    data: vec![0; crate::provider::MAX_IMAGE_BYTES],
+                },
+                popglot_domain::LanguagePair::new("auto", "zh-CN"),
+            );
+            let prepared = prepare(kind, &settings, &request, None).unwrap();
+            let serialized = serde_json::to_vec(&prepared.body).unwrap();
+            assert!(
+                serialized.len() <= crate::provider::MAX_REQUEST_BYTES,
+                "{kind:?} encoded {} bytes for the maximum image",
+                serialized.len()
+            );
+        }
+    }
+
+    #[test]
     fn bound_clients_build_with_popglot_owned_transport() {
         let http_client = reqwest13::Client::builder()
             .redirect(reqwest13::redirect::Policy::none())
