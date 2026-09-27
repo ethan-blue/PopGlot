@@ -491,6 +491,8 @@ public partial class TranslationPanelWindow : Window
                 {
                     PaintPanelSummary(outcome.SummaryText, outcome.Notes);
                     StatusText.Text = ReadingRequestCopy.Finished(0);
+                    var activeName = ProfileManager.Load().TryGetActiveProfile()?.Name;
+                    RouteText.Text = string.IsNullOrEmpty(activeName) ? "要点" : $"{activeName} · 要点";
                     return;
                 }
 
@@ -505,7 +507,7 @@ public partial class TranslationPanelWindow : Window
 
                 PaintPanelSummary(outcome.SummaryText, outcome.Notes);
                 StatusText.Text = ReadingRequestCopy.Finished(outcome.ElapsedMs);
-                RouteText.Text = outcome.EngineLabel;
+                RouteText.Text = string.IsNullOrEmpty(outcome.EngineLabel) ? "要点" : $"{outcome.EngineLabel} · 要点";
             },
             onError: error =>
             {
@@ -542,9 +544,29 @@ public partial class TranslationPanelWindow : Window
         Progress.Visibility = Visibility.Collapsed;
         ResultSkeleton.Visibility = Visibility.Collapsed;
         StreamIndicator.Visibility = Visibility.Collapsed;
-        TranslationRichBox.Visibility = Visibility.Collapsed;
-        TranslationTextBox.Visibility = Visibility.Visible;
         TranslationTextBox.Text = text;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            TranslationRichBox.Visibility = Visibility.Collapsed;
+            TranslationTextBox.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            try
+            {
+                MarkdownPresenter.RenderToFlowDocument(
+                    TranslationRichBox.Document,
+                    text,
+                    Application.Current?.Resources ?? Resources);
+                TranslationRichBox.Visibility = Visibility.Visible;
+                TranslationTextBox.Visibility = Visibility.Collapsed;
+            }
+            catch
+            {
+                TranslationRichBox.Visibility = Visibility.Collapsed;
+                TranslationTextBox.Visibility = Visibility.Visible;
+            }
+        }
         ExplanationText.Text = note;
         ExplanationBox.Visibility = string.IsNullOrWhiteSpace(note)
             ? Visibility.Collapsed
@@ -1057,7 +1079,7 @@ public partial class TranslationPanelWindow : Window
         var settings = _shellSettings();
         if (_gate.ShouldTriggerAutoCopy(settings.CopyTranslationAutomatically))
         {
-            var clean = MarkdownPresenter.ToPlainText(_translation);
+            var clean = MarkdownPresenter.ToPlainText(_translation, preserveListStructure: true);
             await TrySetClipboardAsync(clean);
         }
         if (StatusText.Text == ReadingRequestCopy.SummaryWhileTranslating)
@@ -1393,7 +1415,7 @@ public partial class TranslationPanelWindow : Window
         {
             return;
         }
-        var clean = MarkdownPresenter.ToPlainText(text);
+        var clean = MarkdownPresenter.ToPlainText(text, preserveListStructure: true);
         if (await TrySetClipboardAsync(clean))
         {
             StatusText.Text = _holdingSummary ? "已复制要点" : "已复制译文到剪贴板";

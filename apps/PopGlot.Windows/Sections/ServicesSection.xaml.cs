@@ -1,7 +1,7 @@
 using System.Net.Http;
-using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -57,6 +57,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     private string? _pendingTestOutcome;
     private DateTime? _pendingTestedAtUtc;
     private string? _pendingTestFingerprint;
+    private long _editorRevision;
+    private bool _testInProgress;
+    internal Func<ProviderSettings, string, Task<TranslationResponse>> ConnectionTestExecutor { get; set; } =
+        (draft, key) => CoreBridge.TestConnectionDraftAsync(draft, key);
 
     /// <summary>
     /// Tracks vision model state across toggles of the shared-model checkbox.
@@ -526,25 +530,24 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             return;
         }
+        _editorRevision++;
         var dirty = HasEditorChanges(CaptureEditorState(), _editorBaseline);
-        if (_editorDirty == dirty)
-        {
-            return;
-        }
+        var dirtyChanged = _editorDirty != dirty;
         _editorDirty = dirty;
         UpdateEditorDirtyBadge();
-        if (dirty && _pendingTestFingerprint is not null)
+        if (_pendingTestFingerprint is not null)
         {
             var currentFingerprint = TryCurrentDraftFingerprint();
-            if (!string.Equals(currentFingerprint, _pendingTestFingerprint, StringComparison.Ordinal))
+            if (!string.Equals(currentFingerprint, _pendingTestFingerprint, StringComparison.Ordinal) ||
+                !string.IsNullOrEmpty(ApiKeyPasswordBox.Password))
             {
                 _pendingTestOutcome = null;
                 _pendingTestedAtUtc = null;
                 _pendingTestFingerprint = null;
-                SetTestResult(StatusTone.Warning, "配置已变化 · 需要重新验证", "保存前重新测试，避免把旧结果误认为当前配置可用。");
+                SetTestResult(StatusTone.Warning, "配置已变化，请重新测试", null);
             }
         }
-        EditorDirtyChanged?.Invoke();
+        if (dirtyChanged) EditorDirtyChanged?.Invoke();
     }
 
     internal void ClearEditorDirty()
@@ -731,6 +734,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     internal void LoadProfileIntoForm(ProviderProfile profile)
     {
+        _editorRevision++;
         var wasLoading = _loading;
         _loading = true;
         _visionTracker.Reset();
@@ -861,8 +865,25 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
         Ui.SetIsCredentialMask(ApiKeyPasswordBox, hasStoredKey && !hasTypedKey);
         Ui.SetPlaceholder(ApiKeyPasswordBox,
-            hasStoredKey ? "••••••••••••" :
+            hasStoredKey ? "••••••••••••  已保存" :
             isLocal ? "本地引擎可留空" : "请输入 API Key");
+
+        if (hasStoredKey && !hasTypedKey)
+        {
+            AutomationProperties.SetName(ApiKeyPasswordBox, "API Key (已保存)");
+        }
+        else if (hasStoredKey && hasTypedKey)
+        {
+            AutomationProperties.SetName(ApiKeyPasswordBox, "API Key (正在替换已保存密钥)");
+        }
+        else if (!hasStoredKey && hasTypedKey)
+        {
+            AutomationProperties.SetName(ApiKeyPasswordBox, "API Key (未保存)");
+        }
+        else
+        {
+            AutomationProperties.SetName(ApiKeyPasswordBox, isLocal ? "API Key (本地引擎可留空)" : "API Key (未填写)");
+        }
 
         FetchModelsButton.IsEnabled = allowed;
         FetchModelsButton.ToolTip = allowed
@@ -872,7 +893,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         // Keep validation actionable. A disabled button looks broken and
         // cannot explain what is missing; the click handler focuses the exact
         // field and renders an inline reason without sending anything.
-        TestConnectionButton.IsEnabled = true;
+        TestConnectionButton.IsEnabled = !_testInProgress;
         TestConnectionButton.ToolTip = allowed
             ? "测试连接"
             : "点击检查配置；尚缺 API Key（本地服务除外）";
@@ -881,7 +902,13 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             var canClear = hasStoredKey || hasTypedKey;
             ClearKeyButton.IsEnabled = canClear;
-            ClearKeyButton.ToolTip = canClear ? "清除密钥" : "没有可清除的密钥";
+            ClearKeyButton.ToolTip = (hasStoredKey && hasTypedKey)
+                ? "清除正在输入的密钥（恢复已保存密钥）"
+                : hasStoredKey
+                    ? "清除已保存的密钥"
+                    : hasTypedKey
+                        ? "清除已输入的密钥"
+                        : "没有可清除的密钥";
         }
     }
 
@@ -1004,11 +1031,14 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
         return outcome switch
         {
-            "ok" => ("文字连接已验证", StatusTone.Success),
-            "auth" => ("鉴权失败", StatusTone.Error),
-            "rate" => ("限流", StatusTone.Warning),
-            "endpoint" => ("接口不存在", StatusTone.Error),
-            "unreachable" => isLocal ? ("本地不可达", StatusTone.Error) : ("服务不可达", StatusTone.Error),
+            "ok" => ("上次成功", StatusTone.Success),
+            "auth" => ("密钥无效", StatusTone.Error),
+            "model" => ("模型不可用", StatusTone.Error),
+            "endpoint" => ("地址错误", StatusTone.Error),
+            "rate" => ("无额度/限流", StatusTone.Warning),
+            "timeout" => ("超时", StatusTone.Error),
+            "protocol" => ("协议响应异常", StatusTone.Error),
+            "unreachable" => isLocal ? ("本地不可达", StatusTone.Error) : ("地址错误", StatusTone.Error),
             null => ("已配置 · 尚未验证", StatusTone.Info),
             _ => ("测试失败", StatusTone.Error),
         };
@@ -1031,58 +1061,45 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         if (profile.LastTestedAtUtc is not null && persistedMatches && outcome is not null)
         {
             var when = profile.LastTestedAtUtc.Value.ToLocalTime().ToString("MM-dd HH:mm");
-            text = outcome == "ok" ? $"验证成功 · {when}" : $"{text} · {when}";
+            text = outcome == "ok" ? $"上次成功 · {when}" : $"{text} · {when}";
         }
         return (text, tone);
     }
 
     internal static string CreateProfileFingerprint(ProviderProfile profile, bool hasKey) =>
-        CreateConnectionFingerprint(
-            profile.ProviderType,
-            profile.ApiBaseUrl,
-            profile.TextEndpoint,
-            profile.TextModel,
-            profile.ExtraHeaders,
-            profile.AnthropicVersion,
-            profile.AllowInsecureTls,
+        ProfileVerification.EvidenceFingerprint(
+            profile,
             hasKey || ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl));
-
-    private static string CreateConnectionFingerprint(
-        ProviderType providerType,
-        string baseUrl,
-        string textEndpoint,
-        string textModel,
-        IReadOnlyDictionary<string, string> headers,
-        string anthropicVersion,
-        bool allowInsecureTls,
-        bool credentialAvailable)
-    {
-        var headerText = string.Join("\n", headers
-            .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(pair => $"{pair.Key.Trim().ToLowerInvariant()}:{pair.Value.Trim()}"));
-        var material = string.Join("\n",
-            providerType,
-            baseUrl.Trim().TrimEnd('/').ToLowerInvariant(),
-            textEndpoint.Trim(),
-            textModel.Trim(),
-            headerText,
-            anthropicVersion.Trim(),
-            allowInsecureTls,
-            credentialAvailable);
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
-    }
 
     private string CurrentDraftFingerprint()
     {
         var draft = BuildDraftSettings();
-        var hasCredential = draft.TargetsLocalRuntime ||
-            !string.IsNullOrWhiteSpace(ApiKeyPasswordBox.Password) ||
-            (!string.IsNullOrWhiteSpace(_editingProfileId) &&
-             ProfileManager.Load().Profiles.FirstOrDefault(p => p.Id == _editingProfileId) is { } saved &&
-             HasStoredKey(saved));
-        return CreateConnectionFingerprint(
-            draft.ProviderType, draft.ApiBaseUrl, draft.TextEndpoint, draft.TextModel,
-            draft.ExtraHeaders, draft.AnthropicVersion, draft.AllowInsecureTls, hasCredential);
+        var typedKey = !string.IsNullOrWhiteSpace(ApiKeyPasswordBox.Password);
+        ProviderProfile? saved = null;
+        if (!string.IsNullOrWhiteSpace(_editingProfileId))
+        {
+            saved = ProfileManager.Load().Profiles.FirstOrDefault(p => p.Id == _editingProfileId);
+        }
+
+        var hasCredential = draft.TargetsLocalRuntime || typedKey || (saved is not null && HasStoredKey(saved));
+        var revision = saved?.CredentialRevision ?? 0;
+        if (typedKey)
+        {
+            revision++;
+        }
+
+        var probe = new ProviderProfile
+        {
+            ProviderType = draft.ProviderType,
+            ApiBaseUrl = draft.ApiBaseUrl,
+            TextEndpoint = draft.TextEndpoint,
+            TextModel = draft.TextModel,
+            ExtraHeaders = new Dictionary<string, string>(draft.ExtraHeaders, StringComparer.OrdinalIgnoreCase),
+            AnthropicVersion = draft.AnthropicVersion,
+            AllowInsecureTls = draft.AllowInsecureTls,
+            CredentialRevision = revision,
+        };
+        return ProfileVerification.EvidenceFingerprint(probe, hasCredential);
     }
 
     private string? TryCurrentDraftFingerprint()
@@ -1122,40 +1139,14 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         var (text, tone) = DescribeProfileState(
             ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl), HasStoredKey(profile), profile.LastTestOutcome);
         var summary = profile.LastTestOutcome == "ok"
-            ? "上次测试可用"
+            ? "上次成功"
             : "上次测试未通过";
         SetTestResult(tone, summary, text);
     }
 
     /// <summary>Maps a raw test error to a session outcome code.</summary>
-    internal static string ClassifyTestFailure(Exception exception)
-    {
-        var message = exception.Message ?? string.Empty;
-        if (message.Contains("401", StringComparison.Ordinal) ||
-            message.Contains("鉴权失败", StringComparison.Ordinal))
-        {
-            return "auth";
-        }
-        if (message.Contains("429", StringComparison.Ordinal))
-        {
-            return "rate";
-        }
-        if (message.Contains("404", StringComparison.Ordinal))
-        {
-            return "endpoint";
-        }
-        if (message.Contains("超时", StringComparison.Ordinal) ||
-            message.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("未知的主机", StringComparison.Ordinal) ||
-            message.Contains("No such host", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("SSL", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("TLS", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("网络访问未启用", StringComparison.Ordinal))
-        {
-            return "unreachable";
-        }
-        return "fail";
-    }
+    internal static string ClassifyTestFailure(Exception exception) =>
+        ConnectionTestDiagnostics.Classify(exception);
 
     /// <summary>
     /// Readiness gate for becoming the default text service. Returns null
@@ -1544,8 +1535,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             var result = await ModelCatalogService.FetchAsync(draft, typedKey ?? string.Empty);
 
             SetModelCatalogStatus(
-                $"找到 {result.Models.Count} 个模型",
-                StatusTone.Success);
+                ModelCatalogMessages.DescribeLoad(result.Models.Count),
+                StatusTone.Info);
             var wasLoading = _loading;
             _loading = true;
             try
@@ -1577,6 +1568,18 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         // exists in the catalog is flagged, never silently replaced.
         var currentText = TextModelCombo.Text;
         var currentVision = VisionModelCombo.Text;
+        if (ids.Count == 0)
+        {
+            TextModelCombo.ItemsSource = null;
+            VisionModelCombo.ItemsSource = null;
+            TextModelCombo.Text = currentText;
+            VisionModelCombo.Text = currentVision;
+            TextModelCombo.IsDropDownOpen = false;
+            VisionModelCombo.IsDropDownOpen = false;
+            RefreshRecommendations();
+            return;
+        }
+
         TextModelCombo.ItemsSource = ids;
         VisionModelCombo.ItemsSource = ids;
         TextModelCombo.Text = currentText;
@@ -2015,6 +2018,23 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private async void TestConnection_Click(object sender, RoutedEventArgs e)
     {
+        if (_testInProgress)
+        {
+            return;
+        }
+
+        var gateId = string.IsNullOrWhiteSpace(_editingProfileId) ? "draft-editor" : _editingProfileId;
+        if (!ConnectionTestRunner.TryEnter(gateId))
+        {
+            SetTestResult(StatusTone.Warning, "这个引擎正在测试", "请等这次结束再试。");
+            return;
+        }
+
+        _testInProgress = true;
+        var testedRevision = _editorRevision;
+        var testedProfileId = _editingProfileId;
+        string? testedFingerprint = null;
+        bool IsCurrentTest() => testedRevision == _editorRevision && testedProfileId == _editingProfileId;
         TestConnectionButton.IsEnabled = false;
         SetTestResult(StatusTone.Info, "正在测试…", null);
         try
@@ -2023,6 +2043,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             var typedKey = string.IsNullOrWhiteSpace(ApiKeyPasswordBox.Password)
                 ? CredentialStore.LoadApiKey(CurrentCredentialTarget())
                 : ApiKeyPasswordBox.Password.Trim();
+            if (ProfileVerification.IsMaskNotAKey(typedKey))
+            {
+                typedKey = null;
+            }
+
             if (string.IsNullOrWhiteSpace(typedKey) && !draft.TargetsLocalRuntime)
             {
                 ApiKeyPasswordBox.Focus();
@@ -2035,44 +2060,67 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 SetTestResult(StatusTone.Warning, "需要文字模型", "刷新列表选择一个，或直接输入模型名。");
                 return;
             }
-            _ = await CoreBridge.TestConnectionDraftAsync(
+            testedFingerprint = CurrentDraftFingerprint();
+            _ = await ConnectionTestExecutor(
                 draft, string.IsNullOrWhiteSpace(typedKey) ? "local" : typedKey);
+            if (!IsCurrentTest())
+            {
+                if (testedProfileId == _editingProfileId)
+                    SetTestResult(StatusTone.Warning, "配置已变化，请重新测试", null);
+                return;
+            }
             var testedAtUtc = DateTime.UtcNow;
-            var fingerprint = CurrentDraftFingerprint();
-            SetTestResult(StatusTone.Success, "可用", null);
+            var fingerprint = testedFingerprint;
+            SetTestResult(
+                StatusTone.Success,
+                "上次成功",
+                "这次只检查了文字生成，不包括图片和流式输出。");
             _pendingTestOutcome = "ok";
             _pendingTestedAtUtc = testedAtUtc;
             _pendingTestFingerprint = fingerprint;
-            if (_editingProfileId is not null)
+            if (testedProfileId is not null && string.IsNullOrWhiteSpace(ApiKeyPasswordBox.Password))
             {
-                _testOutcomes[_editingProfileId] = "ok";
-                await PersistTestEvidenceWhenDraftMatchesSavedAsync(
-                    _editingProfileId, "ok", testedAtUtc, fingerprint);
+                await PersistEditorEvidenceAsync(testedProfileId, "ok", testedAtUtc, fingerprint);
                 RefreshProfilesList();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            if (IsCurrentTest())
+            {
+                SetTestResult(StatusTone.Warning, "已取消", null);
             }
         }
         catch (Exception exception)
         {
+            if (!IsCurrentTest())
+            {
+                if (testedProfileId == _editingProfileId)
+                    SetTestResult(StatusTone.Warning, "配置已变化，请重新测试", null);
+                return;
+            }
             var outcome = ClassifyTestFailure(exception);
             var testedAtUtc = DateTime.UtcNow;
-            var fingerprint = TryCurrentDraftFingerprint();
-            SetTestResult(StatusTone.Error, "未连接", DescribeTestFailure(exception));
+            var fingerprint = testedFingerprint;
+            SetTestResult(
+                StatusTone.Error,
+                ConnectionTestDiagnostics.ShortLabel(outcome),
+                DescribeTestFailure(exception));
             _pendingTestOutcome = outcome;
             _pendingTestedAtUtc = testedAtUtc;
             _pendingTestFingerprint = fingerprint;
-            if (_editingProfileId is not null)
+            if (testedProfileId is not null &&
+                fingerprint is not null &&
+                string.IsNullOrWhiteSpace(ApiKeyPasswordBox.Password))
             {
-                _testOutcomes[_editingProfileId] = outcome;
-                if (fingerprint is not null)
-                {
-                    await PersistTestEvidenceWhenDraftMatchesSavedAsync(
-                        _editingProfileId, outcome, testedAtUtc, fingerprint);
-                }
+                await PersistEditorEvidenceAsync(testedProfileId, outcome, testedAtUtc, fingerprint);
                 RefreshProfilesList();
             }
         }
         finally
         {
+            _testInProgress = false;
+            ConnectionTestRunner.Exit(gateId);
             UpdateCredentialGating();
         }
     }
@@ -2084,62 +2132,89 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             return;
         }
         var button = (Button)sender;
+        if (ConnectionTestRunner.IsInFlight(profileId))
+        {
+            StatusChanged?.Invoke("这个引擎正在测试。请等这次结束再试。", StatusTone.Warning);
+            return;
+        }
+
+        var config = ProfileManager.Load();
+        var profile = config.Profiles.FirstOrDefault(item => item.Id == profileId);
+        if (profile is null)
+        {
+            return;
+        }
+        var key = LoadStoredKey(profile);
+        if (ProfileVerification.IsMaskNotAKey(key))
+        {
+            key = null;
+        }
+        if (string.IsNullOrWhiteSpace(key) && !ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl))
+        {
+            _testOutcomes[profile.Id] = "auth";
+            StatusChanged?.Invoke($"引擎「{profile.Name}」缺少 API Key，请先编辑补全。", StatusTone.Warning);
+            RefreshProfilesList();
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(profile.TextModel))
+        {
+            StatusChanged?.Invoke($"引擎「{profile.Name}」尚未配置文字模型。", StatusTone.Warning);
+            return;
+        }
+
         button.IsEnabled = false;
+        var profileName = profile.Name;
         try
         {
-            var config = ProfileManager.Load();
-            var profile = config.Profiles.FirstOrDefault(item => item.Id == profileId);
-            if (profile is null)
+            StatusChanged?.Invoke($"正在测试「{profileName}」的文字生成…", StatusTone.Info);
+            var completion = await ConnectionTestRunner.RunListTestAsync(profileId, async captured =>
             {
-                return;
+                var liveKey = LoadStoredKey(captured);
+                if (ProfileVerification.IsMaskNotAKey(liveKey))
+                {
+                    throw new InvalidOperationException("密钥无效");
+                }
+
+                var settings = captured.ToProviderSettings(CoreBridge.GetSettings());
+                await CoreBridge.TestConnectionDraftAsync(
+                    settings, string.IsNullOrWhiteSpace(liveKey) ? "local" : liveKey);
+                return "ok";
+            });
+
+            var label = ConnectionTestDiagnostics.ShortLabel(
+                completion.Apply is VerificationApplyResult.Stale or VerificationApplyResult.Missing
+                    ? "stale"
+                    : completion.Outcome);
+            if (completion.Apply == VerificationApplyResult.Applied)
+            {
+                _testOutcomes[profileId] = completion.Outcome;
             }
-            var key = LoadStoredKey(profile);
-            if (string.IsNullOrWhiteSpace(key) && !ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl))
+            else
             {
-                _testOutcomes[profile.Id] = "auth";
-                StatusChanged?.Invoke($"引擎「{profile.Name}」缺少 API Key，请先编辑补全。", StatusTone.Warning);
-                RefreshProfilesList();
-                return;
-            }
-            if (string.IsNullOrWhiteSpace(profile.TextModel))
-            {
-                StatusChanged?.Invoke($"引擎「{profile.Name}」尚未配置文字模型。", StatusTone.Warning);
-                return;
+                _testOutcomes.Remove(profileId);
             }
 
-            StatusChanged?.Invoke($"正在测试「{profile.Name}」…", StatusTone.Info);
-            var settings = profile.ToProviderSettings(CoreBridge.GetSettings());
-            var outcome = "ok";
-            StatusTone tone;
-            string message;
-            try
-            {
-                var response = await CoreBridge.TestConnectionDraftAsync(
-                    settings, string.IsNullOrWhiteSpace(key) ? "local" : key);
-                tone = StatusTone.Success;
-                message = $"「{profile.Name}」可用 · {response.Diagnostics.ElapsedMs} ms";
-            }
-            catch (Exception exception)
-            {
-                outcome = ClassifyTestFailure(exception);
-                tone = StatusTone.Error;
-                message = $"「{profile.Name}」未连接：{DescribeTestFailure(exception)}";
-            }
-
-            var testedAtUtc = DateTime.UtcNow;
-            profile.LastTestOutcome = outcome;
-            profile.LastTestedAtUtc = testedAtUtc;
-            profile.LastTestFingerprint = CreateProfileFingerprint(
-                profile, !string.IsNullOrWhiteSpace(key) || ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl));
-            await ProfileManager.SaveAsync(config);
-            _testOutcomes[profile.Id] = outcome;
             RefreshProfilesList();
             ProfileChanged?.Invoke();
+            var tone = completion.Apply == VerificationApplyResult.Applied && completion.Outcome == "ok"
+                ? StatusTone.Success
+                : completion.Apply == VerificationApplyResult.Applied
+                    ? StatusTone.Error
+                    : StatusTone.Warning;
+            var message = completion.Apply switch
+            {
+                VerificationApplyResult.Applied when completion.Outcome == "ok" =>
+                    $"「{profileName}」上次成功。这次只检查了文字生成。",
+                VerificationApplyResult.Applied => $"「{profileName}」{label}",
+                VerificationApplyResult.Busy => "这个引擎正在测试。请等这次结束再试。",
+                VerificationApplyResult.Cancelled => "测试已取消，没有写入配置。",
+                _ => $"「{profileName}」的配置已变化，这次结果没有写入。",
+            };
             StatusChanged?.Invoke(message, tone);
         }
-        catch (Exception exception)
+        catch (Exception)
         {
-            StatusChanged?.Invoke($"测试失败：{exception.Message}", StatusTone.Error);
+            StatusChanged?.Invoke("测试失败。请稍后重试。", StatusTone.Error);
         }
         finally
         {
@@ -2147,24 +2222,23 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
     }
 
-    private static async Task PersistTestEvidenceWhenDraftMatchesSavedAsync(
-        string profileId, string outcome, DateTime testedAtUtc, string fingerprint)
+    private static Task PersistEditorEvidenceAsync(
+        string profileId, string outcome, DateTime testedAtUtc, string draftFingerprint)
     {
         var config = ProfileManager.Load();
         var profile = config.Profiles.FirstOrDefault(item => item.Id == profileId);
         if (profile is null)
         {
-            return;
+            return Task.CompletedTask;
         }
-        var savedFingerprint = CreateProfileFingerprint(profile, HasStoredKey(profile));
-        if (!string.Equals(savedFingerprint, fingerprint, StringComparison.Ordinal))
+
+        var lease = ProfileVerification.Capture(profile, ProfileVerification.CredentialAvailable(profile));
+        if (!string.Equals(lease.EvidenceFingerprint, draftFingerprint, StringComparison.Ordinal))
         {
-            return;
+            return Task.CompletedTask;
         }
-        profile.LastTestOutcome = outcome;
-        profile.LastTestedAtUtc = testedAtUtc;
-        profile.LastTestFingerprint = fingerprint;
-        await ProfileManager.SaveAsync(config);
+
+        return Task.Run(() => ProfileManager.TryPatchVerification(lease, outcome, testedAtUtc));
     }
 
     /// <summary>Structured two-line test result: state dot + summary, bounded detail.</summary>
@@ -2175,12 +2249,16 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             : Visibility.Visible;
         TestStateDot.Fill = ToneBrush(tone);
         TestSummaryText.Text = summary;
-        TestSummaryText.Foreground = tone switch
+        var (textBrushKey, bgBrushKey, borderBrushKey) = tone switch
         {
-            StatusTone.Success => (Brush)FindResource("SuccessBrush"),
-            StatusTone.Error => (Brush)FindResource("DangerBrush"),
-            _ => (Brush)FindResource("TextSecondaryBrush"),
+            StatusTone.Success => ("SuccessBrush", "SuccessSoftBrush", "BorderSubtleBrush"),
+            StatusTone.Error => ("DangerBrush", "DangerSoftBrush", "DangerBrush"),
+            StatusTone.Warning => ("WarningBrush", "WarningSoftBrush", "WarningBrush"),
+            _ => ("TextSecondaryBrush", "SurfaceMutedBrush", "BorderSubtleBrush"),
         };
+        TestSummaryText.SetResourceReference(TextBlock.ForegroundProperty, textBrushKey);
+        TestStatusPanel.SetResourceReference(Border.BackgroundProperty, bgBrushKey);
+        TestStatusPanel.SetResourceReference(Border.BorderBrushProperty, borderBrushKey);
         TestDetailText.Text = detail ?? string.Empty;
         TestDetailText.Visibility = string.IsNullOrEmpty(detail) ? Visibility.Collapsed : Visibility.Visible;
     }
@@ -2272,8 +2350,45 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             var target = profile is not null && !string.IsNullOrWhiteSpace(profile.CredentialTarget)
                 ? profile.CredentialTarget
                 : CredentialStore.DefaultTargetName;
-            CredentialStore.SaveApiKey(string.Empty, target);
+            string? previousKey = null;
+            var hadPreviousKey = false;
+            try
+            {
+                previousKey = CredentialStore.LoadApiKey(target);
+                hadPreviousKey = !string.IsNullOrEmpty(previousKey);
+            }
+            catch (Exception)
+            {
+                StatusChanged?.Invoke("清除 API Key 失败。原来的密钥还在。", StatusTone.Error);
+                return;
+            }
+
+            CredentialStore.DeleteApiKey(target);
+            try
+            {
+                if (profile is not null && !ProfileManager.NoteCredentialChanged(profile.Id))
+                {
+                    TryRestoreCredential(target, previousKey, hadPreviousKey);
+                    StatusChanged?.Invoke("清除 API Key 失败。原来的密钥还在。", StatusTone.Error);
+                    return;
+                }
+            }
+            catch (Exception)
+            {
+                TryRestoreCredential(target, previousKey, hadPreviousKey);
+                StatusChanged?.Invoke("清除 API Key 失败。原来的密钥还在。", StatusTone.Error);
+                return;
+            }
+
             ApiKeyPasswordBox.Clear();
+            _pendingTestOutcome = null;
+            _pendingTestedAtUtc = null;
+            _pendingTestFingerprint = null;
+            if (_editingProfileId is not null)
+            {
+                _testOutcomes.Remove(_editingProfileId);
+            }
+            SetTestResult(StatusTone.Info, string.Empty, null);
             RefreshApiKeyState();
             RefreshProfilesList();
             ProfileChanged?.Invoke();
@@ -2525,6 +2640,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             }
             var draft = BuildProfileFromForm(name);
             var config = ProfileManager.Load();
+            var pendingOutcome = _pendingTestOutcome;
+            var pendingTestedAtUtc = _pendingTestedAtUtc;
+            var pendingFingerprint = _pendingTestFingerprint;
 
             // The final profile id and credential target are decided FIRST.
             // Only then is the key written — to this profile's own target, so
@@ -2561,28 +2679,33 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             var existingIndex = config.Profiles.FindIndex(p => p.Id == profileId);
             var existingProfile = existingIndex >= 0 ? config.Profiles[existingIndex] : null;
             var wasActive = existingIndex >= 0 && config.Profiles[existingIndex].Id == config.ActiveProfileId;
+            draft.CredentialRevision = (existingProfile?.CredentialRevision ?? 0) + (keyWritten ? 1 : 0);
 
             var credentialAvailable = ProviderSettings.IsLocalBaseUrl(draft.ApiBaseUrl) || keyWritten || hadPreviousKey;
-            var savedFingerprint = CreateProfileFingerprint(draft, credentialAvailable);
-            if (string.Equals(_pendingTestFingerprint, savedFingerprint, StringComparison.Ordinal) &&
-                _pendingTestedAtUtc is not null && !string.IsNullOrWhiteSpace(_pendingTestOutcome))
+            VerificationLease? pendingLease = null;
+            if (pendingFingerprint is not null && pendingTestedAtUtc is not null)
             {
-                draft.LastTestOutcome = _pendingTestOutcome;
-                draft.LastTestedAtUtc = _pendingTestedAtUtc;
-                draft.LastTestFingerprint = _pendingTestFingerprint;
+                pendingLease = new VerificationLease(
+                    profileId,
+                    ProfileVerification.ConnectionVersion(draft),
+                    draft.CredentialRevision,
+                    pendingFingerprint);
             }
-            else if (existingProfile is not null &&
-                     string.Equals(existingProfile.LastTestFingerprint, savedFingerprint, StringComparison.Ordinal))
+
+            var evidence = ProfileVerification.Decide(
+                pendingLease,
+                pendingOutcome,
+                pendingTestedAtUtc,
+                existingProfile,
+                draft,
+                keyWritten,
+                credentialAvailable);
+            draft.LastTestOutcome = evidence.Outcome;
+            draft.LastTestedAtUtc = evidence.TestedAtUtc;
+            draft.LastTestFingerprint = evidence.Fingerprint;
+            if (evidence.Outcome is null)
             {
-                draft.LastTestOutcome = existingProfile.LastTestOutcome;
-                draft.LastTestedAtUtc = existingProfile.LastTestedAtUtc;
-                draft.LastTestFingerprint = existingProfile.LastTestFingerprint;
-            }
-            else
-            {
-                draft.LastTestOutcome = null;
-                draft.LastTestedAtUtc = null;
-                draft.LastTestFingerprint = null;
+                _testOutcomes.Remove(profileId);
             }
             if (existingIndex >= 0)
             {
@@ -2617,6 +2740,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 {
                     TryRestoreCredential(credentialTarget, previousKey, hadPreviousKey);
                 }
+                _pendingTestOutcome = null;
+                _pendingTestedAtUtc = null;
+                _pendingTestFingerprint = null;
+                _testOutcomes.Remove(profileId);
+                SetTestResult(StatusTone.Warning, "保存失败", "密钥已恢复，之前的验证标记没有保留。");
                 _editingProfileId = null;
                 throw;
             }

@@ -148,15 +148,35 @@
 
                     <Button x:Name="EngineHealthButton" Grid.Column="1" Style="{StaticResource GhostButton}"
                             VerticalAlignment="Center"
-                            Padding="10,4" AutomationProperties.Name="翻译引擎快速切换"
+                            Padding="8,4" MaxWidth="220" AutomationProperties.Name="翻译引擎快速切换"
                             ToolTip="切换文字与图片引擎"
                             Click="EngineHealthButton_Click">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <Border x:Name="EngineDot" Width="7" Height="7" CornerRadius="3.5"
-                                    Background="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center" />
-                            <TextBlock x:Name="EngineSummary" Margin="8,0,6,0"
+                                    Background="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="Testing">
+                                                <DataTrigger.EnterActions>
+                                                    <BeginStoryboard x:Name="BreatheStory">
+                                                        <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                                             From="1.0" To="0.3" Duration="0:0:0.8" />
+                                                        </Storyboard>
+                                                    </BeginStoryboard>
+                                                </DataTrigger.EnterActions>
+                                                <DataTrigger.ExitActions>
+                                                    <StopStoryboard BeginStoryboardName="BreatheStory" />
+                                                </DataTrigger.ExitActions>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                            </Border>
+                            <TextBlock x:Name="EngineSummary" Margin="6,0,4,0"
                                        Style="{StaticResource Metadata}"
-                                       VerticalAlignment="Center" MaxWidth="320"
+                                       VerticalAlignment="Center" MaxWidth="158"
                                        TextTrimming="CharacterEllipsis"
                                        ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                        Foreground="{DynamicResource TextSecondaryBrush}"

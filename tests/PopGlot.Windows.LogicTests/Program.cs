@@ -199,6 +199,7 @@ internal static class Program
         Run("text windows are opaque for ClearType", TextWindowsAreOpaque);
         Run("daily flows never open system dialogs", DailyFlowsUseInlineConfirmations);
         RunSta("library clear all acts on the first click", LibraryClearAllActsOnFirstClick);
+        RunSta("library preserves saved markdown and disables empty actions", LibrarySavedMarkdown);
         Run("unready services cannot become the default", UnreadyServicesCannotBecomeDefault);
         Run("schema v4 factory profiles migrate out of configured services", SchemaV4MigratesPristineTemplates);
         Run("concurrent saves do not collide on temporary files", ProfileManagerConcurrentSavesDoNotClash);
@@ -294,6 +295,7 @@ internal static class Program
             ("vision direct pre notice retires on ocr fallback stage", VisionDirectPreNoticeRetiresOnOcrFallbackStage),
             ("translation panel component lifecycle and stream contracts", TranslationPanelComponentLifecycleAndStreamContracts),
             ("markdown visual rendering separates code from natural language", MarkdownVisualSeparatesCodeFromNaturalLanguage),
+            ("markdown presenter nine acceptance fixtures conform", MarkdownPresenterNineAcceptanceFixturesConform),
             ("markdown code fidelity probes keep copy byte-exact", MarkdownCodeFidelityProbes),
             ("primary button text uses primary text brush", PrimaryButtonTextUsesPrimaryTextBrush),
             ("three entries copy the same agreed plain text", ThreeEntriesCopyTheSameAgreedText),
@@ -343,6 +345,7 @@ internal static class Program
             ("summary reading does not cancel or cover the translation", SummaryReadingDoesNotCancelOrCoverTheTranslation));
         await RunStaAsync("summary late arrival does not overwrite new input or language", SummaryLateArrivalDoesNotOverwriteCurrentSection);
         await RunStaAsync("summary failure isolates and preserves existing translation", SummaryFailurePreservesTranslation);
+        await RunStaAsync("connection test discards results after draft edits", ConnectionTestDiscardsStaleResult);
         await RunStaAsync("R02 workbench three exits and in-place continuation", R02WorkbenchThreeExitsAndInPlaceContinuation);
         await RunStaAsync("R03 summary route capability honesty and upfront notice", R03SummaryRouteCapabilityHonesty);
         await RunStaAsync("R04 core interaction escape precedence and accessibility contracts", R04InteractionAndAccessibilityContracts);
@@ -1516,6 +1519,19 @@ internal static class Program
 
         // Mixed prose keeps code verbatim while surrounding text is cleaned.
         Equal("调用 getUserName() 获取名字", MarkdownPresenter.ToPlainText("调用 `getUserName()` 获取名字"));
+        Equal("[x](y)", MarkdownPresenter.ToPlainText("`[x](y)`"), "link rewriting must not inspect inline code");
+        Equal("文档 (https://example.com/a_(b))", MarkdownPresenter.ToPlainText("[文档](https://example.com/a_(b))"),
+            "balanced URL parentheses stay inside the link target");
+        Equal("1. first\n2) second\n  - nested\n", MarkdownPresenter.ToPlainText("1. first\n2) second\n  - nested\n", preserveListStructure: true),
+            "clipboard text retains ordered markers and nested indentation");
+        Equal("first\nsecond", MarkdownPresenter.ToPlainText("1. first\n2. second"),
+            "speech/plain reading removes list markers");
+        Equal("first\nsecond", MarkdownPresenter.ToPlainText("first\\\nsecond"),
+            "a Markdown hard-break marker is consumed by copying");
+        Equal("first\\\\\nsecond", MarkdownPresenter.ToPlainText("first\\\\\nsecond"),
+            "an escaped literal backslash remains intact");
+        Equal("name\tvalue\nbold\tcode", MarkdownPresenter.ToPlainText("name | value\n--- | ---\n**bold** | `code`"),
+            "tables without outer pipes copy as cell-separated rows without delimiter syntax");
 
         // Fenced code: fences go, content (indentation, tabs, blank lines,
         // identifiers, the block's own final newline) stays byte-for-byte.
@@ -2231,19 +2247,17 @@ internal static class Program
         True(boldRuns.Any(r => r.Text == "普通粗体" && r.FontWeight == FontWeights.SemiBold),
             "natural-language bold must render as a semibold run without asterisks");
 
-        // Hard-wrapped prose is a display artifact, not three unrelated
-        // paragraphs. Blank lines still delimit real paragraphs.
+        // Rendering has no source provenance: preserve supplied line breaks.
         var reflowDoc = new FlowDocument();
         MarkdownPresenter.RenderToFlowDocument(
             reflowDoc,
             "这是第一行\n只是上一行的续写\n仍然属于同一段\n\n这是新段落",
             Application.Current.Resources);
-        Equal(2, reflowDoc.Blocks.Count,
-            "adjacent prose lines must reflow while a blank line starts a new paragraph");
+        Equal(4, reflowDoc.Blocks.Count,
+            "rendering must preserve line boundaries without guessing their source");
         var firstReflow = (Paragraph)reflowDoc.Blocks.FirstBlock!;
         var firstText = string.Concat(firstReflow.Inlines.OfType<Run>().Select(run => run.Text));
-        True(firstText.Contains("第一行 只是", StringComparison.Ordinal),
-            $"reflowed prose must insert a readable space, got: {firstText}");
+        Equal("这是第一行", firstText, "the first line must not absorb subsequent lines");
 
         var ruleDoc = new FlowDocument();
         MarkdownPresenter.RenderToFlowDocument(
@@ -2254,6 +2268,116 @@ internal static class Program
             "a Markdown thematic break must render as one visual rule between two paragraphs");
         True(ruleDoc.Blocks.Skip(1).First() is BlockUIContainer,
             "thematic-break syntax must not appear as a prose paragraph");
+    }
+
+    private static void MarkdownPresenterNineAcceptanceFixturesConform()
+    {
+        EnsureApplication();
+
+        // 1. 三段邮件，末尾有署名 -> 三段正文与署名独立，不粘连
+        var emailDoc = new FlowDocument();
+        MarkdownPresenter.RenderToFlowDocument(
+            emailDoc,
+            "尊敬的客户：\n\n感谢您的来信。这是第一段正文说明。\n\n这是第二段正文分析。\n\n这是第三段正文跟进。\n\n此致\n敬礼！\n\n技术支持团队",
+            Application.Current.Resources);
+        True(emailDoc.Blocks.Count >= 6, $"three-paragraph email with salutation, closing and signature must preserve blocks, got {emailDoc.Blocks.Count}");
+        var lastBlock = emailDoc.Blocks.LastBlock as Paragraph;
+        var lastText = string.Concat(lastBlock?.Inlines.OfType<Run>().Select(r => r.Text) ?? Array.Empty<string>());
+        Equal("技术支持团队", lastText.Trim(), "signature must remain independent and not collapsed into previous text");
+
+        // 2. 单换行分隔的对话、地址或诗行 -> 有意义的独立行保留
+        var dialogueDoc = new FlowDocument();
+        MarkdownPresenter.RenderToFlowDocument(
+            dialogueDoc,
+            "Alice: Are you ready to begin?\nBob: Yes, let's start now.",
+            Application.Current.Resources);
+        Equal(2, dialogueDoc.Blocks.Count, "dialogue lines must stay separate paragraphs and not reflow into one");
+
+        var poemDoc = new FlowDocument();
+        MarkdownPresenter.RenderToFlowDocument(
+            poemDoc,
+            "白日依山尽，\n黄河入海流。\n欲穷千里目，\n更上一层楼。",
+            Application.Current.Resources);
+        Equal(4, poemDoc.Blocks.Count, "short poem/verse lines must retain their line breaks and not collapse");
+
+        // 3. 标题、正文、三条编号步骤 -> 层级保留，步骤一项一行
+        var stepsDoc = new FlowDocument();
+        MarkdownPresenter.RenderToFlowDocument(
+            stepsDoc,
+            "## 安装步骤\n\n请按照以下流程操作：\n\n1. 下载安装包\n2. 解压到本地\n3. 启动程序",
+            Application.Current.Resources);
+        Equal(5, stepsDoc.Blocks.Count, "heading, prose and 3 numbered steps must maintain their 5 distinct blocks");
+        var listBlocks = stepsDoc.Blocks.OfType<Paragraph>().Where(p => Equals(p.Tag, "list")).ToList();
+        Equal(3, listBlocks.Count, "numbered steps must be recognized as distinct list paragraphs");
+
+        // 4. Unrepaired OCR is not silently rewritten by the display layer.
+        var ocrDoc = new FlowDocument();
+        MarkdownPresenter.RenderToFlowDocument(
+            ocrDoc,
+            "这是一段在扫描识别过程中被物理页面\n边界强行截断的连续文本，在阅读时应当\n作为同一个自然段展示。\n\n这是经过空行分隔的第二个段落，\n同样存在跨行扫描断句。",
+            Application.Current.Resources);
+        Equal(5, ocrDoc.Blocks.Count, "renderer must preserve all supplied lines; only translation or explicit cleanup may repair OCR wraps");
+
+        foreach (var source in new[] { "北京市朝阳区\n建国路 88 号", "白日依山尽\n黄河入海流", "first line\nsecond line" })
+        {
+            var doc = new FlowDocument();
+            MarkdownPresenter.RenderToFlowDocument(doc, source, Application.Current.Resources);
+            Equal(2, doc.Blocks.Count, "unpunctuated semantic lines must not collapse");
+            var rendered = string.Join("\n", doc.Blocks.OfType<Paragraph>()
+                .Select(p => new TextRange(p.ContentStart, p.ContentEnd).Text.TrimEnd('\r', '\n')));
+            Equal(MarkdownPresenter.ToPlainText(source), rendered, "display and plain copy must retain identical line boundaries");
+        }
+        var escapedCells = MarkdownPresenter.SplitTableRow(@"| a\|b | `x\|y` | last |");
+        Equal(3, escapedCells.Count, "escaped pipes must not split table cells");
+        Equal("a|b", escapedCells[0], "escaped natural pipe must retain its value");
+        Equal("`x|y`", escapedCells[1], "escaped code pipe must retain its value");
+        Equal(3, MarkdownPresenter.SplitTableRow(@"| a\\|b | c |").Count,
+            "an even number of backslashes must not escape a delimiter");
+
+        // 5. 无空行的连续长文 -> 仅在合理语义边界分段，内容无增删
+        var sentenceDoc = new FlowDocument();
+        MarkdownPresenter.RenderToFlowDocument(
+            sentenceDoc,
+            "项目的第一阶段已经顺利完成。\n接下来我们将进入第二阶段的性能优化工作。\n预计下周会发布测试版本。",
+            Application.Current.Resources);
+        Equal(3, sentenceDoc.Blocks.Count, "consecutive sentences ending with full stops must stay distinct and not collapse into one blob");
+
+        // 6. 中文、英文及混合代码围栏 -> 段落清晰，代码字节与缩进不变
+        var mixedCodeDoc = new FlowDocument();
+        MarkdownPresenter.RenderToFlowDocument(
+            mixedCodeDoc,
+            "这是前置说明：\n\n```python\ndef test():\n    return 42\n```\n\n这是后置结论。",
+            Application.Current.Resources);
+        Equal(3, mixedCodeDoc.Blocks.Count, "mixed prose and code fence must produce 3 distinct blocks");
+        True(mixedCodeDoc.Blocks.Skip(1).First() is BlockUIContainer, "code fence must render as a container block");
+
+        // 7. Markdown 表格、嵌套列表、链接 -> 结构及链接目标不变
+        var tableLinkDoc = new FlowDocument();
+        MarkdownPresenter.RenderToFlowDocument(
+            tableLinkDoc,
+            "| 引擎 | 状态 | 延迟 |\n| :--- | :---: | ---: |\n| DeepSeek | 正常 | 120ms |\n| OpenAI | 正常 | 240ms |\n\n访问官网：[PopGlot](https://popglot.example.com)",
+            Application.Current.Resources);
+        Equal(2, tableLinkDoc.Blocks.Count, "table and link prose must produce 2 distinct blocks");
+        True(tableLinkDoc.Blocks.FirstBlock is BlockUIContainer, "Markdown table must render as BlockUIContainer");
+        var linkPara = tableLinkDoc.Blocks.LastBlock as Paragraph;
+        var hyperlinks = linkPara?.Inlines.OfType<Hyperlink>().ToList() ?? new List<Hyperlink>();
+        Equal(1, hyperlinks.Count, "Markdown link must render as Hyperlink");
+        Equal("https://popglot.example.com/", hyperlinks[0].NavigateUri.AbsoluteUri, "Hyperlink must target correct safe URL");
+
+        // 8. 单词、短语、单句 -> 不额外分段，不产生前言或总结
+        var shortDoc = new FlowDocument();
+        MarkdownPresenter.RenderToFlowDocument(
+            shortDoc,
+            "hello",
+            Application.Current.Resources);
+        Equal(1, shortDoc.Blocks.Count, "single word input must produce exactly 1 paragraph");
+
+        // 9. 相同译文经过流式、终态、历史、复制和导出 -> 各阶段结构一致
+        var sampleText = "尊敬的客户：\n\n- 步骤一\n- 步骤二\n\n祝商祺\n支持团队";
+        var plain = MarkdownPresenter.ToPlainText(sampleText);
+        True(plain.Contains("尊敬的客户：", StringComparison.Ordinal), "plain text must preserve greeting");
+        True(plain.Contains("步骤一", StringComparison.Ordinal) && plain.Contains("步骤二", StringComparison.Ordinal), "plain text must preserve steps");
+        True(plain.Contains("祝商祺", StringComparison.Ordinal) && plain.Contains("支持团队", StringComparison.Ordinal), "plain text must preserve signature");
     }
 
     private static IEnumerable<Inline> CollectInlines(BlockCollection blocks)
@@ -4571,6 +4695,36 @@ internal static class Program
     /// must read as a warning while "usable" reads as success — the brand
     /// accent never stands in for health.
     /// </summary>
+    private static async Task ConnectionTestDiscardsStaleResult()
+    {
+        EnsureApplication();
+        foreach (var fail in new[] { false, true })
+        {
+            var section = new ServicesSection();
+            section.EditorForm.Visibility = Visibility.Visible;
+            var profile = ProviderProfile.CreateOpenAi();
+            profile.ApiBaseUrl = "http://127.0.0.1:11434/v1";
+            profile.TextModel = "original-model";
+            section.LoadProfileIntoForm(profile);
+            var pending = new TaskCompletionSource<TranslationResponse>();
+            var sends = 0;
+            section.ConnectionTestExecutor = (_, _) => { sends++; return pending.Task; };
+            section.TestConnectionButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Equal(1, sends);
+            section.BaseUrlTextBox.Text = "http://127.0.0.1:11434/Changed";
+            section.ApiKeyPasswordBox.Password = "synthetic-test-only";
+            True(!section.TestConnectionButton.IsEnabled, "editing must not re-enable an in-flight test");
+            section.TestConnectionButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Equal(1, sends, "duplicate clicks must not create another request");
+            if (fail) pending.SetException(new InvalidOperationException("synthetic failure"));
+            else pending.SetResult(null!);
+            await Task.Yield();
+            Equal("配置已变化，请重新测试", section.TestSummaryText.Text,
+                "old success and failure must never be assigned to the edited configuration");
+            True(section.TestConnectionButton.IsEnabled, "the edited configuration must remain retryable");
+        }
+    }
+
     private static void ServiceHealthStatesAreExplicit()
     {
         var (localText, _) = ServicesSection.DescribeProfileState(isLocal: true, hasKey: false, outcome: null);
@@ -4585,7 +4739,7 @@ internal static class Program
         Equal(StatusTone.Info, untestedTone);
 
         var (okText, okTone) = ServicesSection.DescribeProfileState(isLocal: false, hasKey: true, outcome: "ok");
-        Equal("文字连接已验证", okText);
+        Equal("上次成功", okText);
         Equal(StatusTone.Success, okTone);
 
         var (failText, failTone) = ServicesSection.DescribeProfileState(isLocal: false, hasKey: true, outcome: "fail");
@@ -4601,6 +4755,11 @@ internal static class Program
             "changing a connection-bearing field must invalidate persisted verification evidence");
         True(!originalFingerprint.Contains("model-a", StringComparison.Ordinal),
             "the persisted fingerprint must not expose configuration text");
+        profile.ApiBaseUrl = "https://gateway.example/API";
+        var upperPath = ServicesSection.CreateProfileFingerprint(profile, true);
+        profile.ApiBaseUrl = "https://gateway.example/api";
+        True(upperPath != ServicesSection.CreateProfileFingerprint(profile, true),
+            "case-sensitive endpoint paths must not share verification evidence");
     }
 
     // ================= Fourth round: product-defect structural guards =================
@@ -4706,6 +4865,39 @@ internal static class Program
             True(!source.Contains("MessageBox.Show", StringComparison.Ordinal),
                 $"{file} must resolve confirmations inline, not via system MessageBox");
         }
+    }
+
+    private static void LibrarySavedMarkdown()
+    {
+        EnsureApplication();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-library-reading-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            const string markdown = "# 标题\n\n- 第一项\n- 第二项\n\n```rust\n  let value = 1;  \n```";
+            var history = new HistoryStore(Path.Combine(dir, "history.json"));
+            history.TryAdd(Entry("saved article", markdown), enabled: true);
+            var section = new LibrarySection();
+            section.Initialize(history, new VocabularyStore(Path.Combine(dir, "vocabulary.json")));
+            section.ReloadHistory();
+            section.LibraryListBox.SelectedIndex = 0;
+            var document = section.DetailTranslation.Document;
+            True(document.Blocks.Count > 1, "saved Markdown must render as structured blocks");
+            True(!new TextRange(document.ContentStart, document.ContentEnd).Text.Contains("# 标题"),
+                "heading markers should not appear in the reading view");
+            Equal(markdown, history.Load()[0].Translation, "rendering must not rewrite saved content");
+            var captureDir = Path.Combine(FindProjectRoot(), "artifacts", "screenshots");
+            Directory.CreateDirectory(captureDir);
+            var preview = new Border { Child = section, Padding = new Thickness(16) };
+            preview.SetResourceReference(Border.BackgroundProperty, "SurfaceBrush");
+            RenderAndSave(new Window { Content = preview }, 880, 620,
+                Path.Combine(captureDir, "library_saved_markdown_light.png"), ThemePreference.Light);
+            True(section.ExportMenuButton.IsEnabled, "a populated collection can be exported");
+            section.ClearCurrentButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            True(!section.ClearCurrentButton.IsEnabled && !section.ExportMenuButton.IsEnabled,
+                "empty collections must not offer ineffective actions");
+        }
+        finally { Directory.Delete(dir, recursive: true); }
     }
 
     private static void LibraryClearAllActsOnFirstClick()
@@ -6950,6 +7142,9 @@ internal static class Program
         }
         True(xaml.Contains("x:Key=\"EditorTextField\""), "text fields need a shared editor size");
         var controls = File.ReadAllText(Path.Combine(appDir, "Themes", "Controls.xaml"));
+        var editableModel = Regex.Match(controls, "<TextBox x:Name=\"PART_EditableTextBox\"[\\s\\S]*?/>").Value;
+        True(editableModel.Contains("local:Ui.ContentPadding=\"0\""),
+            "editable model must not add implicit text-box padding to the shared placeholder inset");
         True(Regex.IsMatch(controls,
                 "x:Key=\"FormTextBox\"[\\s\\S]*?Property=\"local:Ui.ContentPadding\" Value=\"12,0\""),
             "single-line form fields share one visual horizontal inset of 12");
@@ -8343,10 +8538,18 @@ internal static class Program
                 var blockedBefore = TestIsolation.BlockedPublicSends;
                 var diskBefore = ProfileManager.Load();
                 var menu = window.BuildEngineSwitchMenu();
+                Equal(248d, menu.Width, "engine switch popup stays within the compact fixed width");
+                True(menu.Background == System.Windows.Media.Brushes.Transparent,
+                    "the native context-menu surface stays transparent around the rounded template");
                 // The current-route marker is unique PER SECTION: exactly one
                 // text engine and one image engine carry the (当前) mark.
-                var textSection = menu.Items.OfType<System.Windows.Controls.MenuItem>().TakeWhile(item => $"{item.Header}" != "图片引擎");
-                var visionSection = menu.Items.OfType<System.Windows.Controls.MenuItem>().SkipWhile(item => $"{item.Header}" != "图片引擎");
+                static string HeaderText(System.Windows.Controls.MenuItem item) => item.Header switch
+                {
+                    System.Windows.Controls.TextBlock text => text.Text,
+                    _ => $"{item.Header}",
+                };
+                var textSection = menu.Items.OfType<System.Windows.Controls.MenuItem>().TakeWhile(item => HeaderText(item) != "图片");
+                var visionSection = menu.Items.OfType<System.Windows.Controls.MenuItem>().SkipWhile(item => HeaderText(item) != "图片");
                 var textMarks = textSection
                     .Count(item => item.Icon is not null || $"{item.Header}".Contains("（当前）"));
                 var visionMarks = visionSection
@@ -8364,8 +8567,17 @@ internal static class Program
                 // named with the unified free-engine wording (EngineWording
                 // is the single source of truth for user-visible terms).
                 True(menu.Items.OfType<System.Windows.Controls.MenuItem>()
-                        .Any(item => $"{item.Header}" == $"重新检测{EngineWording.FreeEngineName}"),
-                    "free-engine probing must be an explicit menu action");
+                        .Any(item => HeaderText(item) == "检测" && $"{item.ToolTip}".StartsWith("重新检测", StringComparison.Ordinal)),
+                    "the concise probe action keeps an explanatory tooltip");
+                True(menu.Items.OfType<System.Windows.Controls.MenuItem>()
+                        .Where(item => item.Header is System.Windows.Controls.TextBlock)
+                        .All(item => ((System.Windows.Controls.TextBlock)item.Header).TextTrimming == System.Windows.TextTrimming.CharacterEllipsis &&
+                                     ((System.Windows.Controls.TextBlock)item.Header).Width == 164 &&
+                                     !string.IsNullOrWhiteSpace(item.ToolTip as string)),
+                    "long model labels use ellipsis while full names remain in tooltips");
+                True(menu.Items.OfType<System.Windows.Controls.MenuItem>()
+                        .Any(item => HeaderText(item) == "Google · 未测" || HeaderText(item).StartsWith("Google · ", StringComparison.Ordinal)),
+                    "the free route uses a short provider label instead of repeating 'free engine' and 'text only'");
             }
             finally
             {

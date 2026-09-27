@@ -16,9 +16,9 @@
             <Setter Property="Padding" Value="12" />
             <Setter Property="Margin" Value="0,0,0,8" />
             <Setter Property="CornerRadius" Value="{DynamicResource CardRadius}" />
-            <Setter Property="Background" Value="{DynamicResource SurfaceMutedBrush}" />
+            <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderThickness" Value="0" />
         </Style>
         <Style x:Key="PromptTextField" TargetType="TextBox" BasedOn="{StaticResource FormTextBox}">
             <Setter Property="Height" Value="36" />
@@ -86,13 +86,9 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <TextBlock x:Name="ActiveTemplateDescription" Style="{StaticResource Caption}"
+                        <TextBlock x:Name="ActiveTemplateDescription" Visibility="Collapsed" Style="{StaticResource Caption}"
                                    Margin="0,6,0,0" />
 
-                        <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" Margin="0,14,0,12" />
-                        <TextBlock Text="要点" Style="{StaticResource SectionTitle}" />
-                        <TextBlock Text="内容较多时列出重点，内容较短时整理成一段。"
-                                   Style="{StaticResource Caption}" Margin="0,4,0,0" />
 
                         <!-- Values remain named for compatibility with the editor state model,
                              but revision/type metadata is not useful in the normal product view. -->
@@ -162,7 +158,7 @@
                                                     <Button Tag="{Binding Id}" Style="{StaticResource IconButton}"
                                                             local:Ui.Icon="{StaticResource IconDelete}" Margin="4,0,0,0"
                                                             AutomationProperties.Name="删除翻译规则"
-                                                            ToolTip="点击两次确认"
+                                                            ToolTip="删除规则"
                                                             Click="DeleteTemplate_Click" />
                                                 </StackPanel>
                                             </Grid>
@@ -213,7 +209,7 @@
                     </Grid.RowDefinitions>
 
                     <Grid Grid.Row="0" Margin="0,0,0,12">
-                        <Button Content="← 返回模板列表" Style="{StaticResource GhostButton}" Padding="8,5"
+                        <Button Content="返回" Style="{StaticResource GhostButton}" Padding="8,5"
                                 HorizontalAlignment="Left" AutomationProperties.Name="返回模板列表"
                                 Click="BackToList_Click" />
                     </Grid>
@@ -242,7 +238,7 @@
                                 <!-- 模板信息 -->
                                 <Border Style="{StaticResource PromptSectionCard}">
                                     <StackPanel>
-                                        <TextBlock Text="模板信息" Style="{StaticResource PromptSectionTitle}" Margin="0,0,0,12" />
+                                        <TextBlock Text="基本信息" Style="{StaticResource PromptSectionTitle}" Margin="0,0,0,12" />
                                         <Grid x:Name="NameDescriptionGrid">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*" MinWidth="0" />

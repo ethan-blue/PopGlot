@@ -32,6 +32,7 @@ internal sealed class ProviderProfile
         LastTestOutcome = source.LastTestOutcome;
         LastTestedAtUtc = source.LastTestedAtUtc;
         LastTestFingerprint = source.LastTestFingerprint;
+        CredentialRevision = source.CredentialRevision;
     }
 
     public ProviderProfile Clone() => new(this);
@@ -67,6 +68,13 @@ internal sealed class ProviderProfile
     public string? LastTestOutcome { get; set; }
     public DateTime? LastTestedAtUtc { get; set; }
     public string? LastTestFingerprint { get; set; }
+
+    /// <summary>
+    /// Increments when this engine's saved credential is written or cleared.
+    /// Not a key and not a hash of a key. Verification evidence is valid only
+    /// for the revision captured when the test started.
+    /// </summary>
+    public int CredentialRevision { get; set; }
 
     public static ProviderProfile CreateOpenAi() => new()
     {
@@ -162,6 +170,7 @@ internal sealed class ProviderProfile
             SupportsText = SupportsText,
             SupportsVision = SupportsVision,
             AllowInsecureTls = AllowInsecureTls || baseSettings.AllowInsecureTls,
+            AllowLanEndpoints = AllowLanEndpoints || baseSettings.AllowLanEndpoints,
         };
 }
 
@@ -1081,5 +1090,71 @@ internal static class ProfileManager
             // Fall through to the legacy target.
         }
         return CredentialStore.DefaultTargetName;
+    }
+
+    /// <summary>
+    /// Patches verification fields on the latest saved config. A missing engine
+    /// is not reinserted. A connection or credential revision mismatch leaves
+    /// the latest config untouched.
+    /// </summary>
+    public static VerificationApplyResult TryPatchVerification(
+        VerificationLease lease,
+        string outcome,
+        DateTime testedAtUtc)
+    {
+        if (string.IsNullOrWhiteSpace(lease.ProfileId) || string.IsNullOrWhiteSpace(outcome))
+        {
+            return VerificationApplyResult.Stale;
+        }
+
+        lock (Gate)
+        {
+            var config = Load();
+            var profile = config.Profiles.FirstOrDefault(item => item.Id == lease.ProfileId);
+            if (profile is null)
+            {
+                return VerificationApplyResult.Missing;
+            }
+
+            if (profile.CredentialRevision != lease.CredentialRevision ||
+                !string.Equals(
+                    ProfileVerification.ConnectionVersion(profile),
+                    lease.ConnectionVersion,
+                    StringComparison.Ordinal))
+            {
+                return VerificationApplyResult.Stale;
+            }
+
+            profile.LastTestOutcome = outcome;
+            profile.LastTestedAtUtc = testedAtUtc;
+            profile.LastTestFingerprint = lease.EvidenceFingerprint;
+            Save(config);
+            return VerificationApplyResult.Applied;
+        }
+    }
+
+    /// <summary>
+    /// Drops verification evidence and advances the credential revision after
+    /// the vault write has already succeeded. Throws when the config cannot
+    /// be saved, leaving the previous cache in place.
+    /// </summary>
+    public static bool NoteCredentialChanged(string profileId)
+    {
+        lock (Gate)
+        {
+            var config = Load();
+            var profile = config.Profiles.FirstOrDefault(item => item.Id == profileId);
+            if (profile is null)
+            {
+                return false;
+            }
+
+            profile.CredentialRevision++;
+            profile.LastTestOutcome = null;
+            profile.LastTestedAtUtc = null;
+            profile.LastTestFingerprint = null;
+            Save(config);
+            return true;
+        }
     }
 }

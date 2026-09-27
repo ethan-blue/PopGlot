@@ -9,6 +9,9 @@ public partial class DataSection : System.Windows.Controls.UserControl
 {
     private HistoryStore _history = null!;
     private VocabularyStore? _vocabulary;
+    private Guid? _historyUndoId;
+    private Guid? _vocabularyUndoId;
+    private readonly System.Windows.Threading.DispatcherTimer _undoTimer;
 
     /// <summary>Raised when the section needs to show a status message in the footer.</summary>
     internal event Action<string, StatusTone>? StatusChanged;
@@ -19,6 +22,10 @@ public partial class DataSection : System.Windows.Controls.UserControl
     public DataSection()
     {
         InitializeComponent();
+        _undoTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _undoTimer.Tick += (_, _) => RefreshUndoButtons();
+        Loaded += (_, _) => { RefreshUndoButtons(); _undoTimer.Start(); };
+        Unloaded += (_, _) => _undoTimer.Stop();
     }
 
     private Func<ShellSettings>? _settingsProvider;
@@ -43,6 +50,14 @@ public partial class DataSection : System.Windows.Controls.UserControl
 
     internal ToggleButton HistoryEnabled => HistoryEnabledToggle;
 
+    private void RefreshUndoButtons()
+    {
+        UndoHistoryButton.Visibility = _historyUndoId is { } historyId &&
+            LibraryUndoJournal.IsAvailable(historyId, DateTime.UtcNow) ? Visibility.Visible : Visibility.Collapsed;
+        UndoVocabularyButton.Visibility = _vocabularyUndoId is { } vocabularyId &&
+            LibraryUndoJournal.IsAvailable(vocabularyId, DateTime.UtcNow) ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     // ================= Event handlers =================
 
     private void ClearHistory_Click(object sender, RoutedEventArgs e) => ClearHistory();
@@ -51,14 +66,20 @@ public partial class DataSection : System.Windows.Controls.UserControl
 
     private void ClearHistory()
     {
-        var cleared = _history.Clear();
-        if (cleared)
+        if (!_history.TryClear(out var removed))
         {
-            App.SharedSessionStore.Clear();
+            UndoHistoryButton.Visibility = Visibility.Collapsed;
+            StatusChanged?.Invoke("清空历史失败。请确认文件可写后重试。", StatusTone.Error);
+            return;
         }
-        StatusChanged?.Invoke(
-            cleared ? "历史记录与暂存会话已清空。" : "清空历史失败：文件正被占用。",
-            cleared ? StatusTone.Info : StatusTone.Error);
+
+        if (removed.Count > 0)
+        {
+            _historyUndoId = LibraryUndoJournal.OfferHistory(removed, DateTime.UtcNow).Id;
+            UndoHistoryButton.Visibility = Visibility.Visible;
+        }
+
+        StatusChanged?.Invoke("历史记录已清空。", StatusTone.Info);
         DataCleared?.Invoke();
     }
 
@@ -68,10 +89,82 @@ public partial class DataSection : System.Windows.Controls.UserControl
         {
             return;
         }
-        var cleared = _vocabulary.Clear();
-        StatusChanged?.Invoke(
-            cleared ? "生词本已清空。" : "清空生词本失败：文件正被占用。",
-            cleared ? StatusTone.Info : StatusTone.Error);
+
+        if (!_vocabulary.TryClear(out var removed))
+        {
+            UndoVocabularyButton.Visibility = Visibility.Collapsed;
+            StatusChanged?.Invoke("清空生词本失败。请确认文件可写后重试。", StatusTone.Error);
+            return;
+        }
+
+        if (removed.Count > 0)
+        {
+            _vocabularyUndoId = LibraryUndoJournal.OfferVocabulary(removed, DateTime.UtcNow).Id;
+            UndoVocabularyButton.Visibility = Visibility.Visible;
+        }
+
+        StatusChanged?.Invoke("生词本已清空。", StatusTone.Info);
+        DataCleared?.Invoke();
+    }
+
+    private void UndoHistory_Click(object sender, RoutedEventArgs e)
+    {
+        if (_historyUndoId is not { } id || LibraryUndoJournal.Take(id, DateTime.UtcNow) is not { } ticket)
+        {
+            UndoHistoryButton.Visibility = Visibility.Collapsed;
+            StatusChanged?.Invoke("撤销已失效。", StatusTone.Warning);
+            return;
+        }
+
+        UndoHistoryButton.Visibility = Visibility.Collapsed;
+        if (!_history.InsertMissing(ticket.HistoryItems, out var inserted, out var remaining))
+        {
+            _historyUndoId = LibraryUndoJournal.OfferHistory(remaining.Count > 0 ? remaining : ticket.HistoryItems, DateTime.UtcNow).Id;
+            UndoHistoryButton.Visibility = Visibility.Visible;
+            StatusChanged?.Invoke("撤销没有写回。请确认历史文件可写后重试。", StatusTone.Error);
+            return;
+        }
+
+        if (remaining.Count > 0)
+        {
+            _historyUndoId = LibraryUndoJournal.OfferHistory(remaining, DateTime.UtcNow).Id;
+            UndoHistoryButton.Visibility = Visibility.Visible;
+            StatusChanged?.Invoke($"已恢复 {inserted} 条，{remaining.Count} 条因容量限制待恢复。清理历史后可再次撤销。", StatusTone.Warning);
+            DataCleared?.Invoke();
+            return;
+        }
+
+        if (inserted == 0)
+        {
+            StatusChanged?.Invoke("这些记录已存在，无需恢复。", StatusTone.Info);
+            return;
+        }
+
+        StatusChanged?.Invoke("已恢复刚才清空的历史。", StatusTone.Success);
+        DataCleared?.Invoke();
+    }
+
+    private void UndoVocabulary_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vocabulary is null ||
+            _vocabularyUndoId is not { } id ||
+            LibraryUndoJournal.Take(id, DateTime.UtcNow) is not { } ticket)
+        {
+            UndoVocabularyButton.Visibility = Visibility.Collapsed;
+            StatusChanged?.Invoke("撤销已失效。", StatusTone.Warning);
+            return;
+        }
+
+        UndoVocabularyButton.Visibility = Visibility.Collapsed;
+        if (!_vocabulary.InsertMissing(ticket.VocabularyItems, out var inserted) || inserted == 0)
+        {
+            _vocabularyUndoId = LibraryUndoJournal.OfferVocabulary(ticket.VocabularyItems, DateTime.UtcNow).Id;
+            UndoVocabularyButton.Visibility = Visibility.Visible;
+            StatusChanged?.Invoke("撤销没有写回。请确认生词本文件可写后重试。", StatusTone.Error);
+            return;
+        }
+
+        StatusChanged?.Invoke("已恢复刚才清空的生词。", StatusTone.Success);
         DataCleared?.Invoke();
     }
 

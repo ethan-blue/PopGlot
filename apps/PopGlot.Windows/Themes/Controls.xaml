@@ -886,7 +886,7 @@
          centers PART_ContentHost, and vertical padding inside a 40 DIP field
          clips the glyphs. Multi-line text uses FormTextArea. -->
     <Style x:Key="FormTextBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
-        <Setter Property="Background" Value="{DynamicResource SurfaceRaisedBrush}" />
+        <Setter Property="Background" Value="{DynamicResource InputBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="MinHeight" Value="36" />
@@ -1101,7 +1101,7 @@
 
     <!-- Same single-line metrics as FormTextBox, for credential fields. -->
     <Style x:Key="FormPasswordBox" TargetType="PasswordBox" BasedOn="{StaticResource {x:Type PasswordBox}}">
-        <Setter Property="Background" Value="{DynamicResource SurfaceRaisedBrush}" />
+        <Setter Property="Background" Value="{DynamicResource InputBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="MinHeight" Value="36" />
@@ -1200,6 +1200,7 @@
                              by the Selection presenter and FormTextBox. -->
                         <TextBox x:Name="PART_EditableTextBox" Margin="12,0,34,0" VerticalAlignment="Center"
                                  Background="Transparent" BorderThickness="0" Padding="0"
+                                 local:Ui.ContentPadding="0"
                                  FontSize="{TemplateBinding FontSize}" FontFamily="{TemplateBinding FontFamily}"
                                  Foreground="{TemplateBinding Foreground}"
                                  Visibility="Collapsed" />
@@ -1298,7 +1299,7 @@
 
     <Style x:Key="LanguagePickerComboBox" TargetType="ComboBox">
         <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
-        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="FontSize" Value="13" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="Height" Value="28" />
         <Setter Property="Cursor" Value="Hand" />
@@ -1734,21 +1735,28 @@
         <Setter Property="SnapsToDevicePixels" Value="True" />
         <Setter Property="OverridesDefaultStyle" Value="True" />
         <Setter Property="Grid.IsSharedSizeScope" Value="True" />
-        <Setter Property="HasDropShadow" Value="True" />
-        <Setter Property="MinWidth" Value="160" />
+        <Setter Property="HasDropShadow" Value="False" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="MinWidth" Value="100" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ContextMenu">
-                    <Border Background="{DynamicResource SurfaceRaisedBrush}"
-                            BorderBrush="{DynamicResource BorderSubtleBrush}"
-                            BorderThickness="1"
-                            CornerRadius="10"
-                            Padding="4">
-                        <Border.Effect>
-                            <DropShadowEffect BlurRadius="16" ShadowDepth="4" Opacity="0.3" Color="{DynamicResource ShadowColor}" />
-                        </Border.Effect>
-                        <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle" />
-                    </Border>
+                    <!-- Transparent margin around the Border gives DropShadowEffect room to smoothly fade to 0 opacity without rectangular window clipping -->
+                    <Grid Margin="10,4,10,12" Background="Transparent">
+                        <Border Background="{DynamicResource SurfaceRaisedBrush}"
+                                BorderBrush="{DynamicResource BorderSubtleBrush}"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="4"
+                                SnapsToDevicePixels="True">
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="12" ShadowDepth="3" Opacity="0.18" Color="{DynamicResource ShadowColor}" />
+                            </Border.Effect>
+                            <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle" />
+                        </Border>
+                    </Grid>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>

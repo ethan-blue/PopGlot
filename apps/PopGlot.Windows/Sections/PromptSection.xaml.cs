@@ -82,6 +82,9 @@ public partial class PromptSection : System.Windows.Controls.UserControl
     private Button? _armedDeleteButton;
     private object? _armedOriginalContent;
     private string? _armedOriginalToolTip;
+    private double _armedOriginalWidth;
+    private double _armedOriginalMinWidth;
+    private string? _armedOriginalAutomationName;
     private bool? _compact;
     private readonly DispatcherTimer _previewDebounce;
     private readonly DispatcherTimer _deleteArmTimer;
@@ -430,7 +433,16 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             // 各自原状，解除时精确恢复，绝不把一处按钮的文案搬到另一处。
             _armedOriginalContent = button.Content;
             _armedOriginalToolTip = button.ToolTip as string;
+            _armedOriginalWidth = button.Width;
+            _armedOriginalMinWidth = button.MinWidth;
+            _armedOriginalAutomationName = System.Windows.Automation.AutomationProperties.GetName(button);
+            if (button.Width <= 40)
+            {
+                button.Width = 86;
+                button.MinWidth = 86;
+            }
             button.Content = "确认删除";
+            System.Windows.Automation.AutomationProperties.SetName(button, "确认删除翻译规则");
             button.SetResourceReference(Button.BackgroundProperty, "DangerSoftBrush");
             button.SetResourceReference(Button.ForegroundProperty, "DangerBrush");
             button.ToolTip = "再次点击确认删除；历史版本一并删除，3 秒后自动还原。";
@@ -495,10 +507,14 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             button.Content = _armedOriginalContent;
         }
         button.ToolTip = _armedOriginalToolTip;
+        button.Width = _armedOriginalWidth;
+        button.MinWidth = _armedOriginalMinWidth;
+        System.Windows.Automation.AutomationProperties.SetName(button, _armedOriginalAutomationName);
         button.ClearValue(Button.BackgroundProperty);
         button.ClearValue(Button.ForegroundProperty);
         _armedOriginalContent = null;
         _armedOriginalToolTip = null;
+        _armedOriginalAutomationName = null;
     }
 
     // ===================== Save =====================

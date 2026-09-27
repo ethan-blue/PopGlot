@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Media;
 
 namespace PopGlot.Windows.Services;
@@ -13,6 +15,9 @@ namespace PopGlot.Windows.Services;
 /// </summary>
 internal static partial class MarkdownPresenter
 {
+    // .NET balancing groups handle nested URL parentheses and escaped
+    // delimiters while reserving the final ')' for the Markdown link close.
+    private const string MarkdownLinkPattern = @"\[(?<text>(?:\\.|[^\]])+)\]\((?<url>(?:\\.|[^()\\]|(?<depth>\()|(?<-depth>\)))*(?(depth)(?!)))\)";
     // Auto-spacing between CJK and English/numbers (Pangu spacing algorithm)
     [GeneratedRegex(@"([\u4e00-\u9fa5\u3040-\u30ff])([a-zA-Z0-9_\$#@`])")]
     private static partial Regex CjkToLatinRegex();
@@ -145,7 +150,7 @@ internal static partial class MarkdownPresenter
         close.Marker == open.Marker &&
         close.RunLength >= open.RunLength;
 
-    public static string ToPlainText(string? markdown)
+    public static string ToPlainText(string? markdown, bool preserveListStructure = false)
     {
         if (string.IsNullOrWhiteSpace(markdown))
         {
@@ -200,8 +205,36 @@ internal static partial class MarkdownPresenter
                 continue;
             }
 
+            if (IsTableLine(line) && hasNewline)
+            {
+                var nextEnd = normalized.IndexOf('\n', position);
+                var delimiter = (nextEnd >= 0 ? normalized[position..nextEnd] : normalized[position..]).Trim();
+                if (IsTableDelimiterLine(delimiter))
+                {
+                    var tableRows = new List<string> { line, delimiter };
+                    position = nextEnd >= 0 ? nextEnd + 1 : normalized.Length;
+                    while (position < normalized.Length)
+                    {
+                        var end = normalized.IndexOf('\n', position);
+                        var row = (end >= 0 ? normalized[position..end] : normalized[position..]).Trim();
+                        if (!IsTableLine(row)) break;
+                        tableRows.Add(row);
+                        position = end >= 0 ? end + 1 : normalized.Length;
+                    }
+                    for (var rowIndex = 0; rowIndex < tableRows.Count; rowIndex++)
+                    {
+                        if (rowIndex == 1) continue; // alignment syntax
+                        if (sb.Length > 0 && sb[^1] != '\n') sb.Append('\n');
+                        sb.Append(string.Join("\t", SplitTableRow(tableRows[rowIndex]).Select(PlainTableCell)));
+                        if (rowIndex + 1 < tableRows.Count) sb.Append('\n');
+                    }
+                    continue;
+                }
+            }
+
             var trimmed = line.TrimStart();
             var prose = line;
+            var outputPrefix = string.Empty;
             // Headings: # , ## , etc.
             if (trimmed.StartsWith('#'))
             {
@@ -217,6 +250,8 @@ internal static partial class MarkdownPresenter
                      trimmed.StartsWith("* ", StringComparison.Ordinal) ||
                      trimmed.StartsWith("+ ", StringComparison.Ordinal))
             {
+                var marker = trimmed[..1];
+                outputPrefix = preserveListStructure ? line[..(line.Length - trimmed.Length)] + marker + " " : string.Empty;
                 prose = trimmed[2..].Trim();
             }
             // Ordered list: 1. , 2) , etc.
@@ -225,13 +260,35 @@ internal static partial class MarkdownPresenter
                 var match = Regex.Match(trimmed, @"^\d+[\.\)]\s+(.*)$");
                 if (match.Success)
                 {
+                    outputPrefix = preserveListStructure
+                        ? line[..(line.Length - trimmed.Length)] + match.Groups[0].Value[..match.Groups[0].Value.IndexOfAny([' ', '\t'])] + " "
+                        : string.Empty;
                     prose = match.Groups[1].Value.Trim();
+                }
+                else if (trimmed.StartsWith('>'))
+                {
+                    outputPrefix = preserveListStructure ? "> " : string.Empty;
+                    prose = trimmed.Length > 1 && trimmed[1] == ' ' ? trimmed[2..].Trim() : trimmed[1..].Trim();
                 }
             }
 
             // Prose lines keep display hygiene (no trailing whitespace) but
             // nothing beyond the line itself is ever trimmed away.
-            sb.Append(TransformNaturalSegments(prose, static segment => StripNaturalEmphasis(segment)).TrimEnd());
+            var formatted = TransformNaturalSegments(prose, static segment =>
+            {
+                // Link conversion is a prose operation. Inline-code spans are
+                // removed from the transform stream and copied verbatim.
+                var linksExpanded = Regex.Replace(segment, MarkdownLinkPattern, match =>
+                {
+                    var label = match.Groups["text"].Value;
+                    var url = match.Groups["url"].Value;
+                    return label.Equals(url, StringComparison.OrdinalIgnoreCase) ? url : $"{label} ({url})";
+                });
+                return StripNaturalEmphasis(linksExpanded);
+            });
+            if (hasNewline && EndsWithMarkdownHardBreak(prose))
+                formatted = formatted[..^1];
+            sb.Append(outputPrefix).Append(formatted.TrimEnd());
             if (hasNewline)
             {
                 sb.Append('\n');
@@ -293,6 +350,7 @@ internal static partial class MarkdownPresenter
         var position = 0;
         FenceMatch? openFence = null;
         bool addParagraphSpacing = false;
+        string? lastProseLine = null;
         var codeStart = 0;
         string? codeLanguage = null;
 
@@ -317,6 +375,7 @@ internal static partial class MarkdownPresenter
                 {
                     openFence = null;
                     FlushCodeBlock(normalized[codeStart..lineStart]);
+                    lastProseLine = null;
                     continue;
                 }
                 // Code content is captured by offsets; nothing per-line here.
@@ -329,6 +388,7 @@ internal static partial class MarkdownPresenter
                 openFence = fence;
                 codeLanguage = fence.InfoString.Length > 0 ? fence.InfoString : null;
                 codeStart = position;
+                lastProseLine = null;
                 continue;
             }
 
@@ -336,14 +396,13 @@ internal static partial class MarkdownPresenter
             if (string.IsNullOrWhiteSpace(line))
             {
                 addParagraphSpacing = document.Blocks.Count > 0;
+                lastProseLine = null;
                 continue;
             }
 
             var trimmedLine = line.TrimStart();
 
-            // Markdown thematic breaks are layout, not content. Rendering
-            // the raw "---" made packaged help and model-formatted results
-            // look unfinished and could be mistaken for translated text.
+            // Markdown thematic breaks are layout, not content.
             var thematicCandidate = trimmedLine.Trim();
             if (thematicCandidate is "---" or "***" or "___")
             {
@@ -356,6 +415,7 @@ internal static partial class MarkdownPresenter
                 rule.SetResourceReference(Border.BackgroundProperty, "BorderSubtleBrush");
                 document.Blocks.Add(new BlockUIContainer(rule));
                 addParagraphSpacing = false;
+                lastProseLine = null;
                 continue;
             }
 
@@ -383,8 +443,65 @@ internal static partial class MarkdownPresenter
                     AppendFormattedSpans(headingPara.Inlines, headingText, resources);
                     document.Blocks.Add(headingPara);
                     addParagraphSpacing = false;
+                    lastProseLine = null;
                     continue;
                 }
+            }
+
+            // Markdown Table: lines starting with '|' and followed by a delimiter line '| :--- | ---: |'
+            if (IsTableLine(trimmedLine))
+            {
+                var nextPos = lineEnd >= 0 ? lineEnd + 1 : normalized.Length;
+                if (nextPos < normalized.Length)
+                {
+                    var nextEnd = normalized.IndexOf('\n', nextPos);
+                    var nextLine = (nextEnd >= 0 ? normalized[nextPos..nextEnd] : normalized[nextPos..]).Trim();
+                    if (IsTableDelimiterLine(nextLine))
+                    {
+                        var tableLines = new List<string> { trimmedLine, nextLine };
+                        var curPos = nextEnd >= 0 ? nextEnd + 1 : normalized.Length;
+                        while (curPos < normalized.Length)
+                        {
+                            var e = normalized.IndexOf('\n', curPos);
+                            var l = (e >= 0 ? normalized[curPos..e] : normalized[curPos..]).Trim();
+                            if (string.IsNullOrWhiteSpace(l) || !IsTableLine(l))
+                            {
+                                break;
+                            }
+                            tableLines.Add(l);
+                            curPos = e >= 0 ? e + 1 : normalized.Length;
+                        }
+                        position = curPos;
+                        var tableBlock = CreateTableBlock(tableLines, uiFont, resources);
+                        document.Blocks.Add(tableBlock);
+                        addParagraphSpacing = false;
+                        lastProseLine = null;
+                        continue;
+                    }
+                }
+            }
+
+            // Blockquotes: > ...
+            if (trimmedLine.StartsWith('>'))
+            {
+                var quoteContent = trimmedLine.Length > 1 && trimmedLine[1] == ' '
+                    ? trimmedLine[2..].Trim()
+                    : trimmedLine[1..].Trim();
+                var quotePara = new Paragraph
+                {
+                    Margin = new Thickness(0, addParagraphSpacing || document.Blocks.Count > 0 ? 8 : 2, 0, 4),
+                    Padding = new Thickness(10, 2, 0, 2),
+                    BorderThickness = new Thickness(3, 0, 0, 0),
+                    FontFamily = uiFont,
+                    FontStyle = FontStyles.Italic,
+                    Tag = "blockquote",
+                };
+                quotePara.SetResourceReference(Block.BorderBrushProperty, "AccentBrush");
+                AppendFormattedSpans(quotePara.Inlines, quoteContent, resources);
+                document.Blocks.Add(quotePara);
+                addParagraphSpacing = false;
+                lastProseLine = null;
+                continue;
             }
 
             var isBullet = trimmedLine.StartsWith("- ", StringComparison.Ordinal) ||
@@ -392,66 +509,82 @@ internal static partial class MarkdownPresenter
                            trimmedLine.StartsWith("+ ", StringComparison.Ordinal);
             var numberedMatch = Regex.Match(trimmedLine, @"^(\d+[\.\)])\s+(.*)$");
 
-            // Model output often contains display-wrapped prose as physical
-            // newlines. Reflow adjacent ordinary lines into one paragraph;
-            // blank lines, headings, lists and code still create real blocks.
-            if (!isBullet && !numberedMatch.Success && !addParagraphSpacing &&
-                document.Blocks.LastBlock is Paragraph previous &&
-                Equals(previous.Tag, "prose"))
-            {
-                previous.Inlines.Add(new Run(" "));
-                AppendFormattedSpans(previous.Inlines, trimmedLine, resources);
-                continue;
-            }
+            var indentSpaces = line.Length - trimmedLine.Length;
+            var nestLevel = Math.Clamp(indentSpaces / 2, 0, 5);
 
-            var paragraph = new Paragraph
-            {
-                // Zero margin and default (font-metric) line height: the
-                // streaming TextBox layer this replaces has neither forced
-                // spacing nor a custom LineHeight, so the stream→final swap
-                // must not change the card's height. Forced 22px lines and
-                // per-paragraph margins were the layout jump.
-                Margin = new Thickness(0, addParagraphSpacing ? 6 : 0, 0, 0),
-                FontFamily = uiFont,
-            };
-
-            // Bullet points (- , * , + )
             if (isBullet)
             {
                 var bulletContent = trimmedLine[2..].Trim();
-                paragraph.Margin = new Thickness(16, addParagraphSpacing ? 8 : 2, 0, 2);
-                paragraph.TextIndent = -14;
+                var bulletPara = new Paragraph
+                {
+                    Margin = new Thickness(16 + nestLevel * 16, addParagraphSpacing ? 8 : 2, 0, 2),
+                    TextIndent = -14,
+                    FontFamily = uiFont,
+                    Tag = "list",
+                };
                 var bulletDot = new Run("• ")
                 {
                     FontWeight = FontWeights.Bold
                 };
                 bulletDot.SetResourceReference(TextElement.ForegroundProperty, "AccentBrush");
-                paragraph.Inlines.Add(bulletDot);
-                AppendFormattedSpans(paragraph.Inlines, bulletContent, resources);
+                bulletPara.Inlines.Add(bulletDot);
+                AppendFormattedSpans(bulletPara.Inlines, bulletContent, resources);
+                document.Blocks.Add(bulletPara);
+                addParagraphSpacing = false;
+                lastProseLine = null;
+                continue;
             }
-            // Numbered lists (1. , 2) , etc.)
-            else if (numberedMatch.Success)
+
+            if (numberedMatch.Success)
             {
-                var numMatch = numberedMatch;
-                paragraph.Margin = new Thickness(20, addParagraphSpacing ? 8 : 2, 0, 2);
-                paragraph.TextIndent = -20;
-                var numPrefix = numMatch.Groups[1].Value + " ";
-                var numContent = numMatch.Groups[2].Value.Trim();
+                var numPrefix = numberedMatch.Groups[1].Value + " ";
+                var numContent = numberedMatch.Groups[2].Value.Trim();
+                var numPara = new Paragraph
+                {
+                    Margin = new Thickness(20 + nestLevel * 16, addParagraphSpacing ? 8 : 2, 0, 2),
+                    TextIndent = -20,
+                    FontFamily = uiFont,
+                    Tag = "list",
+                };
                 var numRun = new Run(numPrefix)
                 {
                     FontWeight = FontWeights.SemiBold
                 };
                 numRun.SetResourceReference(TextElement.ForegroundProperty, "AccentBrush");
-                paragraph.Inlines.Add(numRun);
-                AppendFormattedSpans(paragraph.Inlines, numContent, resources);
-            }
-            else
-            {
-                paragraph.Tag = "prose";
-                AppendFormattedSpans(paragraph.Inlines, trimmedLine, resources);
+                numPara.Inlines.Add(numRun);
+                AppendFormattedSpans(numPara.Inlines, numContent, resources);
+                document.Blocks.Add(numPara);
+                addParagraphSpacing = false;
+                lastProseLine = null;
+                continue;
             }
 
+            // 1. Markdown hard break: previous line ended with two or more spaces or a backslash
+            if (lastProseLine != null && (lastProseLine.EndsWith("  ", StringComparison.Ordinal) || EndsWithMarkdownHardBreak(lastProseLine)) &&
+                document.Blocks.LastBlock is Paragraph prevHard && Equals(prevHard.Tag, "prose"))
+            {
+                if (EndsWithMarkdownHardBreak(lastProseLine) && prevHard.Inlines.LastInline is Run endingRun && endingRun.Text.EndsWith('\\'))
+                    endingRun.Text = endingRun.Text[..^1];
+                prevHard.Inlines.Add(new LineBreak());
+                AppendFormattedSpans(prevHard.Inlines, trimmedLine, resources);
+                lastProseLine = trimmedLine;
+                continue;
+            }
+
+            // The renderer cannot distinguish OCR wraps from addresses or verse.
+            // Preserve the model's line boundaries; semantic reflow belongs to
+            // translation (or an explicit user action), never a display heuristic.
+
+            // 3. Independent paragraph or structured line (dialogue, email greeting/closing, sentences)
+            var paragraph = new Paragraph
+            {
+                Margin = new Thickness(0, addParagraphSpacing ? 6 : 0, 0, 0),
+                FontFamily = uiFont,
+                Tag = "prose",
+            };
+            AppendFormattedSpans(paragraph.Inlines, trimmedLine, resources);
             document.Blocks.Add(paragraph);
+            lastProseLine = trimmedLine;
             addParagraphSpacing = false;
         }
 
@@ -470,41 +603,50 @@ internal static partial class MarkdownPresenter
     {
         var monoFont = (FontFamily)(resources["MonoFontFamily"] ?? new FontFamily("Cascadia Mono, Consolas"));
 
-        // Structure first: split on code spans / bold / protected tokens, then
-        // apply Pangu spacing per natural-language segment only. Spacing the
-        // whole line up front used to push spaces INSIDE code spans and paths.
-        var pattern = @"(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|⟦PG_\d{4}⟧)";
+        // Structure first: split on links / code spans / bold / protected tokens, then
+        // apply Pangu spacing per natural-language segment only.
+        var pattern = $"({MarkdownLinkPattern}|`[^`]+`|\\*\\*[^*]+\\*\\*|__[^_]+__|⟦PG_\\d{{4}}⟧)";
         var parts = Regex.Split(text, pattern);
 
-        // Plan the pieces as plain text first so Pangu spacing can cross the
-        // seam between a natural segment and an adjacent token (使用`ls`命令
-        // renders as 使用 ls 命令) without ever touching token contents.
-        var pieces = new List<(PieceKind Kind, string Text)>();
+        var pieces = new List<FormattedPiece>();
         foreach (var part in parts)
         {
             if (string.IsNullOrEmpty(part)) continue;
             if (part.StartsWith('`') && part.EndsWith('`') && part.Length >= 2)
             {
-                pieces.Add((PieceKind.Code, part[1..^1]));
+                pieces.Add(new FormattedPiece(PieceKind.Code, part[1..^1]));
             }
             else if ((part.StartsWith("**", StringComparison.Ordinal) && part.EndsWith("**", StringComparison.Ordinal) && part.Length >= 4) ||
                      (part.StartsWith("__", StringComparison.Ordinal) && part.EndsWith("__", StringComparison.Ordinal) && part.Length >= 4))
             {
-                pieces.Add((PieceKind.Bold, part[2..^2]));
+                pieces.Add(new FormattedPiece(PieceKind.Bold, part[2..^2]));
             }
             else if (part.StartsWith("⟦PG_", StringComparison.Ordinal) && part.EndsWith('⟧'))
             {
-                pieces.Add((PieceKind.Token, part));
+                pieces.Add(new FormattedPiece(PieceKind.Token, part));
+            }
+            else if (part.StartsWith('[') && part.EndsWith(')'))
+            {
+                var match = Regex.Match(part, "^" + MarkdownLinkPattern + "$" );
+                if (match.Success)
+                {
+                    pieces.Add(new FormattedPiece(PieceKind.Link, match.Groups["text"].Value, match.Groups["url"].Value));
+                }
+                else
+                {
+                    pieces.Add(new FormattedPiece(PieceKind.Natural, part));
+                }
             }
             else
             {
-                pieces.Add((PieceKind.Natural, part));
+                pieces.Add(new FormattedPiece(PieceKind.Natural, part));
             }
         }
 
         for (var index = 0; index < pieces.Count; index++)
         {
-            var (kind, pieceText) = pieces[index];
+            var piece = pieces[index];
+            var (kind, pieceText, extra) = piece;
             if (kind is PieceKind.Natural or PieceKind.Bold)
             {
                 var spaced = FormatPangu(pieceText);
@@ -538,6 +680,49 @@ internal static partial class MarkdownPresenter
                     var run = new Run(spaced);
                     run.SetResourceReference(TextElement.ForegroundProperty, "TextPrimaryBrush");
                     inlines.Add(run);
+                }
+            }
+            else if (kind == PieceKind.Link)
+            {
+                var linkText = pieceText;
+                var rawUrl = extra?.Trim() ?? string.Empty;
+                if (Uri.TryCreate(rawUrl, UriKind.Absolute, out var uri) &&
+                    (uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+                     uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+                {
+                    var linkRun = new Run(FormatPangu(linkText))
+                    {
+                        TextDecorations = TextDecorations.Underline,
+                    };
+                    var hyperlink = new Hyperlink(linkRun)
+                    {
+                        NavigateUri = uri,
+                        ToolTip = uri.AbsoluteUri,
+                        Cursor = Cursors.Hand,
+                    };
+                    hyperlink.SetResourceReference(Hyperlink.ForegroundProperty, "AccentBrush");
+                    hyperlink.RequestNavigate += (_, e) =>
+                    {
+                        try
+                        {
+                            if (e.Uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+                                e.Uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                            {
+                                Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true });
+                            }
+                        }
+                        catch
+                        {
+                        }
+                        e.Handled = true;
+                    };
+                    inlines.Add(hyperlink);
+                }
+                else
+                {
+                    var safeRun = new Run(pieceText);
+                    safeRun.SetResourceReference(TextElement.ForegroundProperty, "TextPrimaryBrush");
+                    inlines.Add(safeRun);
                 }
             }
             else if (kind == PieceKind.Code)
@@ -576,12 +761,15 @@ internal static partial class MarkdownPresenter
         }
     }
 
+    private readonly record struct FormattedPiece(PieceKind Kind, string Text, string? Extra = null);
+
     private enum PieceKind
     {
         Natural,
         Code,
         Bold,
         Token,
+        Link,
     }
 
     // The character classes mirror FormatPangu's CJK↔Latin regexes so seams
@@ -595,14 +783,14 @@ internal static partial class MarkdownPresenter
         !char.IsWhiteSpace(left) && !char.IsWhiteSpace(right) &&
         ((IsCjkish(left) && IsLatinish(right)) || (IsLatinish(left) && IsCjkish(right)));
 
-    private static char LastContentChar((PieceKind Kind, string Text) piece) => piece.Kind switch
+    private static char LastContentChar(FormattedPiece piece) => piece.Kind switch
     {
         PieceKind.Code => piece.Text.Length > 0 ? piece.Text[^1] : '`',
         PieceKind.Token => piece.Text.Length > 0 ? piece.Text[^1] : ' ',
         _ => piece.Text.Length > 0 ? piece.Text[^1] : ' ',
     };
 
-    private static char FirstContentChar((PieceKind Kind, string Text) piece) => piece.Kind switch
+    private static char FirstContentChar(FormattedPiece piece) => piece.Kind switch
     {
         PieceKind.Code => piece.Text.Length > 0 ? piece.Text[0] : '`',
         _ => piece.Text.Length > 0 ? piece.Text[0] : ' ',
@@ -690,4 +878,221 @@ internal static partial class MarkdownPresenter
         outerBorder.Child = grid;
         return outerBorder;
     }
+
+    private static bool IsTableLine(string line)
+    {
+        var t = line.Trim();
+        return SplitTableRow(t).Count > 1;
+    }
+
+    private static bool IsTableDelimiterLine(string line)
+    {
+        var t = line.Trim();
+        var cells = SplitTableRow(t);
+        if (cells.Count == 0) return false;
+        foreach (var cell in cells)
+        {
+            var c = cell.Trim();
+            if (!Regex.IsMatch(c, @"^:?-{3,}:?$"))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static Block CreateTableBlock(
+        List<string> tableLines,
+        FontFamily uiFont,
+        ResourceDictionary resources)
+    {
+        var border = new Border
+        {
+            Margin = new Thickness(0, 8, 0, 8),
+            CornerRadius = new CornerRadius(6),
+            BorderThickness = new Thickness(1),
+            SnapsToDevicePixels = true,
+        };
+        border.SetResourceReference(Border.BorderBrushProperty, "BorderSubtleBrush");
+        border.SetResourceReference(Border.BackgroundProperty, "InputBrush");
+
+        var headerCells = SplitTableRow(tableLines[0]);
+        var colCount = headerCells.Count;
+        if (colCount == 0)
+        {
+            var fallback = new Paragraph { FontFamily = uiFont };
+            fallback.Inlines.Add(new Run(string.Join("\n", tableLines)));
+            return fallback;
+        }
+
+        var alignments = new TextAlignment[colCount];
+        if (tableLines.Count > 1)
+        {
+            var alignCells = SplitTableRow(tableLines[1]);
+            for (var c = 0; c < colCount; c++)
+            {
+                if (c < alignCells.Count)
+                {
+                    var ac = alignCells[c].Trim();
+                    if (ac.StartsWith(':') && ac.EndsWith(':'))
+                    {
+                        alignments[c] = TextAlignment.Center;
+                    }
+                    else if (ac.EndsWith(':'))
+                    {
+                        alignments[c] = TextAlignment.Right;
+                    }
+                    else
+                    {
+                        alignments[c] = TextAlignment.Left;
+                    }
+                }
+                else
+                {
+                    alignments[c] = TextAlignment.Left;
+                }
+            }
+        }
+
+        var grid = new Grid();
+        for (var c = 0; c < colCount; c++)
+        {
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        }
+
+        var rowCount = tableLines.Count - 1; // 1 header + (N - 2) data rows
+        for (var r = 0; r < rowCount; r++)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        }
+
+        var headerBg = new Border
+        {
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            CornerRadius = new CornerRadius(5, 5, 0, 0),
+        };
+        headerBg.SetResourceReference(Border.BackgroundProperty, "SurfaceMutedBrush");
+        headerBg.SetResourceReference(Border.BorderBrushProperty, "BorderSubtleBrush");
+        Grid.SetRow(headerBg, 0);
+        Grid.SetColumnSpan(headerBg, colCount);
+        grid.Children.Add(headerBg);
+
+        for (var c = 0; c < colCount; c++)
+        {
+            var cellBorder = new Border
+            {
+                Padding = new Thickness(10, 6, 10, 6),
+                BorderThickness = new Thickness(0, 0, c < colCount - 1 ? 1 : 0, 0),
+            };
+            cellBorder.SetResourceReference(Border.BorderBrushProperty, "BorderSubtleBrush");
+
+            var cellText = new TextBlock
+            {
+                FontFamily = uiFont,
+                FontWeight = FontWeights.SemiBold,
+                TextAlignment = alignments[c],
+                TextWrapping = TextWrapping.Wrap,
+            };
+            cellText.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
+            var headerParagraph = new Paragraph();
+            AppendFormattedSpans(headerParagraph.Inlines, headerCells[c], resources);
+            foreach (var inline in headerParagraph.Inlines.ToList())
+            {
+                headerParagraph.Inlines.Remove(inline);
+                cellText.Inlines.Add(inline);
+            }
+            cellBorder.Child = cellText;
+
+            Grid.SetRow(cellBorder, 0);
+            Grid.SetColumn(cellBorder, c);
+            grid.Children.Add(cellBorder);
+        }
+
+        for (var r = 2; r < tableLines.Count; r++)
+        {
+            var gridRow = r - 1;
+            var dataCells = SplitTableRow(tableLines[r]);
+
+            for (var c = 0; c < colCount; c++)
+            {
+                var isLastRow = gridRow == rowCount - 1;
+                var cellBorder = new Border
+                {
+                    Padding = new Thickness(10, 5, 10, 5),
+                    BorderThickness = new Thickness(0, 0, c < colCount - 1 ? 1 : 0, isLastRow ? 0 : 1),
+                };
+                cellBorder.SetResourceReference(Border.BorderBrushProperty, "BorderSubtleBrush");
+
+                var cellContent = c < dataCells.Count ? dataCells[c] : string.Empty;
+                var cellText = new TextBlock
+                {
+                    FontFamily = uiFont,
+                    TextAlignment = alignments[c],
+                    TextWrapping = TextWrapping.Wrap,
+                };
+                cellText.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
+
+                var cellPara = new Paragraph();
+                AppendFormattedSpans(cellPara.Inlines, cellContent, resources);
+                foreach (var inline in cellPara.Inlines.ToList())
+                {
+                    cellPara.Inlines.Remove(inline);
+                    cellText.Inlines.Add(inline);
+                }
+
+                cellBorder.Child = cellText;
+                Grid.SetRow(cellBorder, gridRow);
+                Grid.SetColumn(cellBorder, c);
+                grid.Children.Add(cellBorder);
+            }
+        }
+
+        border.Child = grid;
+        return new BlockUIContainer(border);
+    }
+
+    internal static List<string> SplitTableRow(string rowLine)
+    {
+        var trimmed = rowLine.Trim();
+        if (trimmed.StartsWith('|')) trimmed = trimmed[1..];
+        if (trimmed.EndsWith('|')) trimmed = trimmed[..^1];
+        var result = new List<string>();
+        var cell = new StringBuilder();
+        for (var i = 0; i < trimmed.Length; i++)
+        {
+            if (trimmed[i] == '|')
+            {
+                var slashCount = 0;
+                for (var j = i - 1; j >= 0 && trimmed[j] == '\\'; j--) slashCount++;
+                if (slashCount % 2 == 1)
+                {
+                    cell.Length--; // Only consume the escape for this pipe.
+                    cell.Append('|');
+                    continue;
+                }
+                result.Add(cell.ToString().Trim());
+                cell.Clear();
+            }
+            else
+            {
+                cell.Append(trimmed[i]);
+            }
+        }
+        result.Add(cell.ToString().Trim());
+        return result;
+    }
+
+    private static bool EndsWithMarkdownHardBreak(string line)
+    {
+        var slashes = 0;
+        for (var i = line.Length - 1; i >= 0 && line[i] == '\\'; i--) slashes++;
+        return slashes % 2 == 1;
+    }
+
+    private static string PlainTableCell(string cell) => TransformNaturalSegments(cell, static segment =>
+    {
+        var unwrapped = Regex.Replace(segment, @"(\*\*|__)(?<content>.*?)\1", match => match.Groups["content"].Value);
+        return StripNaturalEmphasis(unwrapped);
+    });
+
 }

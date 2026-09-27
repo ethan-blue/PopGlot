@@ -85,15 +85,25 @@ internal sealed partial class HistoryStore : IHistoryRepository
             {
                 while (reader.TryRead(out var request))
                 {
-                    if (request.IsClear)
+                    var ok = true;
+                    try
                     {
-                        DeleteDiskFile();
+                        if (request.IsClear)
+                        {
+                            ok = DeleteDiskFile();
+                        }
+                        else if (request.Json is not null)
+                        {
+                            ok = WriteSnapshotToDisk(request.Json);
+                        }
                     }
-                    else if (request.Json is not null)
+                    catch (Exception exception) when (
+                        exception is IOException or UnauthorizedAccessException)
                     {
-                        WriteSnapshotToDisk(request.Json);
+                        ok = false;
                     }
-                    request.Completion?.TrySetResult(true);
+
+                    request.Completion?.TrySetResult(ok);
                 }
             }
         }
@@ -102,7 +112,7 @@ internal sealed partial class HistoryStore : IHistoryRepository
         }
     }
 
-    private void DeleteDiskFile()
+    private bool DeleteDiskFile()
     {
         try
         {
@@ -110,17 +120,22 @@ internal sealed partial class HistoryStore : IHistoryRepository
             {
                 File.Delete(_path);
             }
+
+            return true;
         }
         catch (IOException)
         {
+            return false;
         }
         catch (UnauthorizedAccessException)
         {
+            return false;
         }
     }
 
-    private void WriteSnapshotToDisk(string json)
+    private bool WriteSnapshotToDisk(string json)
     {
+        var temporaryPath = _path + ".tmp";
         try
         {
             var directory = Path.GetDirectoryName(_path);
@@ -128,7 +143,6 @@ internal sealed partial class HistoryStore : IHistoryRepository
             {
                 Directory.CreateDirectory(directory);
             }
-            var temporaryPath = _path + ".tmp";
             // Write to the temporary file with exclusive access, flush it all
             // the way to disk, then swap it in atomically — a crash mid-write
             // leaves the previous snapshot intact instead of a torn file.
@@ -140,11 +154,31 @@ internal sealed partial class HistoryStore : IHistoryRepository
                 stream.Flush(flushToDisk: true);
             }
             File.Move(temporaryPath, _path, overwrite: true);
+            return true;
         }
         catch (IOException)
         {
+            TryDeleteTemp(temporaryPath);
+            return false;
         }
         catch (UnauthorizedAccessException)
+        {
+            TryDeleteTemp(temporaryPath);
+            return false;
+        }
+    }
+
+    private static void TryDeleteTemp(string temporaryPath)
+    {
+        try
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
         {
         }
     }
@@ -289,36 +323,204 @@ internal sealed partial class HistoryStore : IHistoryRepository
         }
     }
 
-    public bool Remove(Guid id)
+    public bool Remove(Guid id) => TryRemove(id, out _);
+
+    /// <summary>
+    /// Removes one entry and waits for the disk write. On failure the in-memory
+    /// list is restored and <paramref name="removed"/> is null.
+    /// </summary>
+    public bool TryRemove(Guid id, out TranslationHistoryEntry? removed)
     {
+        removed = null;
+        TaskCompletionSource<bool> tcs;
+        List<TranslationHistoryEntry> previous;
+        List<TranslationHistoryEntry> next;
         lock (_gate)
         {
+            var hit = _entries.FirstOrDefault(entry => entry.Id == id);
+            if (hit is null)
+            {
+                return false;
+            }
+
             try
             {
-                var remaining = _entries.Where(entry => entry.Id != id).ToList();
-                var json = JsonSerializer.Serialize(remaining, JsonOptions);
-                _entries = remaining;
-                _persistChannel.Writer.TryWrite(new HistoryPersistRequest(json, false, null));
-                return true;
+                next = _entries.Where(entry => entry.Id != id).ToList();
+                var json = JsonSerializer.Serialize(next, JsonOptions);
+                previous = _entries;
+                _entries = next;
+                tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _persistChannel.Writer.TryWrite(new HistoryPersistRequest(json, false, tcs));
+                removed = hit;
             }
             catch
             {
                 return false;
             }
         }
+
+        if (!WaitForPersist(tcs))
+        {
+            lock (_gate)
+            {
+                if (ReferenceEquals(_entries, next))
+                {
+                    _entries = previous;
+                }
+            }
+
+            removed = null;
+            return false;
+        }
+
+        return true;
     }
 
     internal string FilePath => _path;
 
-    public bool Clear()
+    public bool Clear() => TryClear(out _);
+
+    /// <summary>
+    /// Clears history and waits for the file delete. A failed delete restores
+    /// the previous entries and does not report them as removed.
+    /// </summary>
+    public bool TryClear(out IReadOnlyList<TranslationHistoryEntry> removed)
     {
+        removed = [];
+        TaskCompletionSource<bool> tcs;
+        List<TranslationHistoryEntry> previous;
         lock (_gate)
         {
+            if (_entries.Count == 0)
+            {
+                return true;
+            }
+
+            previous = _entries;
             _entries = [];
-            _persistChannel.Writer.TryWrite(new HistoryPersistRequest(null, true, null));
+            tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _persistChannel.Writer.TryWrite(new HistoryPersistRequest(null, true, tcs));
+        }
+
+        if (!WaitForPersist(tcs))
+        {
+            lock (_gate)
+            {
+                if (_entries.Count == 0)
+                {
+                    _entries = previous;
+                }
+            }
+
+            return false;
+        }
+
+        removed = previous;
+        return true;
+    }
+
+    /// <summary>
+    /// Puts back entries whose ids are absent. Rows already present, including
+    /// ones added or edited after the delete, are left as they are.
+    /// </summary>
+    public bool InsertMissing(IReadOnlyList<TranslationHistoryEntry> items, out int inserted)
+        => InsertMissing(items, out inserted, out _);
+
+    public bool InsertMissing(
+        IReadOnlyList<TranslationHistoryEntry> items,
+        out int inserted,
+        out IReadOnlyList<TranslationHistoryEntry> remaining)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        inserted = 0;
+        remaining = [];
+        TaskCompletionSource<bool>? tcs = null;
+        List<TranslationHistoryEntry>? previous = null;
+        List<TranslationHistoryEntry>? next = null;
+        var deferred = new List<TranslationHistoryEntry>();
+        lock (_gate)
+        {
+            var ids = _entries.Select(entry => entry.Id).ToHashSet();
+            var adding = new List<TranslationHistoryEntry>();
+            foreach (var item in items)
+            {
+                if (item is null || ids.Contains(item.Id))
+                {
+                    continue;
+                }
+
+                if (!CanPersist(item))
+                {
+                    deferred.Add(item);
+                    continue;
+                }
+
+                if (_entries.Count + adding.Count >= MaxEntries)
+                {
+                    deferred.Add(item);
+                    continue;
+                }
+
+                adding.Add(item);
+                ids.Add(item.Id);
+            }
+
+            if (adding.Count == 0)
+            {
+                remaining = deferred;
+                return true;
+            }
+
+            next = _entries.Concat(adding).OrderByDescending(entry => entry.CreatedAt).ToList();
+            string json;
+            try
+            {
+                json = JsonSerializer.Serialize(next, JsonOptions);
+                if (Encoding.UTF8.GetByteCount(json) > MaxFileBytes)
+                {
+                    remaining = items.Where(item => !_entries.Any(entry => entry.Id == item.Id)).ToArray();
+                    return false;
+                }
+            }
+            catch
+            {
+                remaining = items.Where(item => !_entries.Any(entry => entry.Id == item.Id)).ToArray();
+                return false;
+            }
+
+            previous = _entries;
+            _entries = next;
+            inserted = adding.Count;
+            tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _persistChannel.Writer.TryWrite(new HistoryPersistRequest(json, false, tcs));
+        }
+
+        if (tcs is null)
+        {
             return true;
         }
+
+        if (!WaitForPersist(tcs))
+        {
+            lock (_gate)
+            {
+                if (ReferenceEquals(_entries, next))
+                {
+                    _entries = previous;
+                }
+            }
+
+            inserted = 0;
+            remaining = items;
+            return false;
+        }
+
+        remaining = deferred;
+        return true;
     }
+
+    private static bool WaitForPersist(TaskCompletionSource<bool> tcs) =>
+        tcs.Task.Wait(TimeSpan.FromSeconds(5)) && tcs.Task.Result;
 
     /// <summary>
     /// Replaces all history entries with the provided valid entries.

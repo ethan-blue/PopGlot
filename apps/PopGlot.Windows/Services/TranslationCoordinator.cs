@@ -462,7 +462,9 @@ internal sealed class TranslationCoordinator
                 session.PromptSupport = promptSnapshot is not null || session.PromptTemplateId is not null
                     ? TranslationPromptSupport.Applied
                     : TranslationPromptSupport.Unknown;
-                session.PipelineLabel = isLocal ? EngineWording.LocalModelName : DescribeProvider(textRuntimeSettings?.ProviderType ?? settings.ProviderType);
+                session.PipelineLabel = !string.IsNullOrWhiteSpace(textRoute?.Profile.Name)
+                    ? textRoute.Profile.Name
+                    : (isLocal ? EngineWording.LocalModelName : DescribeProvider(textRuntimeSettings?.ProviderType ?? settings.ProviderType));
 
                 response = await TranslateProviderTextAsync(
                     trimmed,
@@ -652,12 +654,13 @@ internal sealed class TranslationCoordinator
         var routes = _executor.ResolveRoutes();
         var textRoute = routes.Text;
         var apiKey = textRoute is null ? null : _executor.LoadApiKey(textRoute.CredentialTarget);
-        if (textRoute is null && !settings.TargetsLocalRuntime)
+        var routeSettings = textRoute?.Profile.ToProviderSettings(settings);
+        var isLocal = routeSettings?.TargetsLocalRuntime ?? settings.TargetsLocalRuntime;
+        if (textRoute is null && !isLocal)
         {
             throw new InvalidOperationException("请先在设置中配置模型引擎，再使用要点。免费引擎不能整理要点。");
         }
-        var routeSettings = textRoute?.Profile.ToProviderSettings(settings);
-        return await _executor.RunTextTaskAsync(
+        var response = await _executor.RunTextTaskAsync(
             apiKey,
             snapshot.Identity.Source,
             snapshot.Identity.SourceLanguage,
@@ -665,6 +668,10 @@ internal sealed class TranslationCoordinator
             snapshot.Identity.TaskKind,
             cancellationToken,
             routeSettings);
+        var engineLabel = !string.IsNullOrWhiteSpace(textRoute?.Profile.Name)
+            ? textRoute.Profile.Name
+            : (isLocal ? EngineWording.LocalModelName : DescribeProvider(routeSettings?.ProviderType ?? settings.ProviderType));
+        return response with { OverrideEngineLabel = engineLabel };
     }
 
     public async Task<TranslationResponse> RunTextTaskAsync(

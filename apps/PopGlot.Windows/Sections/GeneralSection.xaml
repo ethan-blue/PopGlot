@@ -224,7 +224,7 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="失焦隐藏" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="自动收起浮窗" Style="{StaticResource RowTitle}" />
                         <TextBlock Text="点击其他位置时收起浮窗" Style="{StaticResource RowHint}" />
                     </StackPanel>
                     <ToggleButton x:Name="CloseOnFocusLossToggle"

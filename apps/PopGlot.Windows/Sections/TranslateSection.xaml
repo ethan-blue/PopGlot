@@ -49,7 +49,7 @@
         <!-- Top ToolBar: Workbench title left, primary actions right -->
         <Grid Grid.Row="1" Margin="0,0,0,8">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="翻译工作台" Style="{StaticResource PageTitle}"
+                <TextBlock Text="翻译" Style="{StaticResource PageTitle}"
                            FontWeight="SemiBold" VerticalAlignment="Center" />
             </StackPanel>
 
@@ -354,7 +354,7 @@
                             <RadioButton x:Name="ShowTranslationChoice" Content="译文" GroupName="WorkbenchReading"
                                          Style="{StaticResource SegmentChoice}" IsChecked="True"
                                          AutomationProperties.Name="显示译文"
-                                         ToolTip="翻译结果。说明附在译文下面，不用再单独解释。"
+                                         ToolTip="查看译文"
                                          Click="ShowTranslation_Click" />
                             <RadioButton x:Name="ShowSummaryChoice" Content="要点" GroupName="WorkbenchReading"
                                          Style="{StaticResource SegmentChoice}" Margin="0"

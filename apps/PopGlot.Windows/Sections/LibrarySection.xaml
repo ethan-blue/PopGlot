@@ -15,6 +15,7 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBlock Text="资料库" Style="{StaticResource PageTitle}"
@@ -49,21 +50,58 @@
                      AutomationProperties.Name="搜索历史与生词"
                      local:Ui.Placeholder="搜索原文或译文"
                      TextChanged="LibrarySearch_TextChanged" />
+            <StackPanel Grid.Row="2">
+            <Border x:Name="LibraryUndoBar" Margin="0,8,0,0" Padding="10,6"
+                    Visibility="Collapsed"
+                    Background="{DynamicResource SurfaceRaisedBrush}"
+                    BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
+                    CornerRadius="{StaticResource ControlRadius}">
+                <DockPanel LastChildFill="False">
+                    <TextBlock x:Name="LibraryUndoText" DockPanel.Dock="Left" Style="{StaticResource Caption}"
+                               VerticalAlignment="Center" Text="已删除" />
+                    <Button x:Name="LibraryUndoButton" DockPanel.Dock="Right" Margin="8,0,0,0"
+                            Style="{StaticResource GhostButton}" Content="撤销" Padding="10,2"
+                            ToolTip="恢复刚才删除的条目" AutomationProperties.Name="撤销刚才的删除"
+                            Click="LibraryUndo_Click" />
+                </DockPanel>
+            </Border>
+            <Border x:Name="LibraryExportBar" Margin="0,8,0,0" Padding="10,6"
+                    Visibility="Collapsed"
+                    Background="{DynamicResource SurfaceRaisedBrush}"
+                    BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
+                    CornerRadius="{StaticResource ControlRadius}">
+                <DockPanel LastChildFill="False">
+                    <TextBlock DockPanel.Dock="Left" Style="{StaticResource Caption}" VerticalAlignment="Center" Text="已导出" />
+                    <Button x:Name="DismissExportButton" DockPanel.Dock="Right" Margin="8,0,0,0"
+                            Style="{StaticResource GhostButton}" Content="关闭" Padding="10,2"
+                            ToolTip="关闭导出提示" AutomationProperties.Name="关闭导出提示"
+                            Click="DismissExport_Click" />
+                    <Button x:Name="OpenExportFolderButton" DockPanel.Dock="Right" Margin="8,0,0,0"
+                            Style="{StaticResource GhostButton}" Content="打开所在文件夹" Padding="10,2"
+                            ToolTip="打开导出文件所在的文件夹" AutomationProperties.Name="打开导出文件夹"
+                            Click="OpenExportFolder_Click" />
+                    <Button x:Name="OpenExportFileButton" DockPanel.Dock="Right" Margin="8,0,0,0"
+                            Style="{StaticResource GhostButton}" Content="打开文件" Padding="10,2"
+                            ToolTip="打开刚导出的文件" AutomationProperties.Name="打开导出文件"
+                            Click="OpenExportFile_Click" />
+                </DockPanel>
+            </Border>
+            </StackPanel>
         </Grid>
 
         <!-- ==================== Master–Detail Surface ==================== -->
         <Border Grid.Row="1" Background="{DynamicResource SurfaceBrush}"
                 BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
                 CornerRadius="{StaticResource CardRadius}">
-            <Grid>
+            <Grid x:Name="LibrarySplitGrid" SizeChanged="LibrarySplitGrid_SizeChanged">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="320" MinWidth="220" MaxWidth="460" />
-                    <ColumnDefinition Width="8" />
-                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition x:Name="ListColumn" Width="320" MinWidth="220" MaxWidth="460" />
+                    <ColumnDefinition x:Name="SplitterColumn" Width="8" />
+                    <ColumnDefinition x:Name="DetailColumn" Width="*" />
                 </Grid.ColumnDefinitions>
 
                 <!-- ==================== Master Column: List ==================== -->
-                <Grid Grid.Column="0">
+                <Grid x:Name="ListPane" Grid.Column="0">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
@@ -138,7 +176,7 @@
                 </Grid>
 
                 <!-- ==================== Column Splitter ==================== -->
-                <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Stretch"
+                <GridSplitter x:Name="LibrarySplitter" Grid.Column="1" Width="8" HorizontalAlignment="Stretch"
                               Cursor="SizeWE" ShowsPreview="False">
                     <GridSplitter.Style>
                         <Style TargetType="GridSplitter">
@@ -161,7 +199,18 @@
                 </GridSplitter>
 
                 <!-- ==================== Detail Column: Property List Inspector ==================== -->
-                <Grid Grid.Column="2" Background="{DynamicResource CanvasBrush}">
+                <Grid x:Name="DetailPane" Grid.Column="2" Background="{DynamicResource CanvasBrush}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Button x:Name="LibraryBackButton" Grid.Row="0" HorizontalAlignment="Left"
+                            Margin="12,8,0,0" Padding="10,2" Visibility="Collapsed"
+                            Style="{StaticResource GhostButton}" Content="返回列表"
+                            ToolTip="返回资料列表，保留当前选中项"
+                            AutomationProperties.Name="返回资料列表"
+                            Click="LibraryBack_Click" />
+                    <Grid Grid.Row="1">
                     <!-- Nothing selected placeholder -->
                     <StackPanel x:Name="DetailPlaceholder" HorizontalAlignment="Center" VerticalAlignment="Center">
                         <TextBlock Text="未选择条目" Style="{StaticResource SectionTitle}"
@@ -234,9 +283,11 @@
                                 <Border Background="{DynamicResource InputBrush}"
                                         BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
                                         CornerRadius="{StaticResource ControlRadius}" Padding="12,10">
-                                    <TextBlock x:Name="DetailTranslation" FontSize="14.5" LineHeight="22"
-                                               TextWrapping="Wrap"
-                                               Foreground="{DynamicResource TextPrimaryBrush}" />
+                                    <RichTextBox x:Name="DetailTranslation"
+                                                 Style="{StaticResource FlatRichTextBox}"
+                                                 IsReadOnly="True" IsDocumentEnabled="True"
+                                                 VerticalScrollBarVisibility="Disabled"
+                                                 AutomationProperties.Name="已保存的译文" />
                                 </Border>
 
                                 <!-- Explanation Property Block -->
@@ -251,18 +302,21 @@
                         <Border Grid.Row="1" Background="{DynamicResource SurfaceMutedBrush}"
                                 BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
                                 Padding="12,8">
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                <Button Style="{StaticResource GhostButton}" Content="朗读"
-                                        Padding="12,4" Click="CardSpeak_Click" />
-                                <Button Style="{StaticResource GhostButton}" Margin="6,0,0,0"
-                                        Content="复制译文" Padding="12,4" Click="CardCopy_Click" />
+                            <WrapPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconSpeaker}"
+                                        ToolTip="朗读" AutomationProperties.Name="朗读所选记录" Click="CardSpeak_Click" />
+                                <Button Style="{StaticResource IconButton}" Margin="6,0,0,0"
+                                        local:Ui.Icon="{StaticResource IconCopy}" ToolTip="复制译文"
+                                        AutomationProperties.Name="复制所选译文" Click="CardCopy_Click" />
                                 <Button Style="{StaticResource GhostButton}" Margin="6,0,0,0"
                                         Content="载入工作台" Padding="12,4" Click="CardLoad_Click" />
                                 <Button x:Name="CardDeleteButton" Style="{StaticResource DangerButton}" Margin="6,0,0,0"
                                         Content="删除" Padding="12,4" Click="CardDelete_Click"
-                                        ToolTip="删除此条记录（点击两次确认）" />
-                            </StackPanel>
+                                        ToolTip="删除此条记录，可短时撤销"
+                                        AutomationProperties.Name="删除此条记录" />
+                            </WrapPanel>
                         </Border>
+                    </Grid>
                     </Grid>
                 </Grid>
             </Grid>

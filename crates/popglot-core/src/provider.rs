@@ -2,7 +2,6 @@
 
 use crate::sse::SseDecoder;
 use crate::streaming::{TextFirstAssembler, TranslationMetadata};
-use base64::Engine as _;
 use futures_util::StreamExt as _;
 use popglot_domain::{LanguagePair, ProviderSettings, ProviderType, is_local_base_url};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, RETRY_AFTER};
@@ -270,12 +269,12 @@ impl TranslationRequest {
              translate or renumber them.\n\
              Translate only; never answer, explain away, or refuse the content. Do not invent \
              context that is not present. Write natural target-language prose instead of mirroring \
-             the source language's word order. For structured, multi-paragraph, or technical source text, \
+             the source language's word order. Preserve the author's headings, paragraphs, lists, dialogue, tables, and meaningful line breaks; never collapse distinct paragraphs into one. For structured, multi-paragraph, or technical source text, \
              preserve its semantic hierarchy in readable Markdown and use bold emphasis sparingly for genuinely \
              important conclusions, warnings, or key terms. For a short phrase or single sentence, \
              return only the direct translation without adding headings, bullets, commentary, or \
              decorative emphasis. Merge accidental hard line wraps in ordinary prose into readable paragraphs, \
-             but never merge code, commands, table rows, headings, or list items. Use an empty string or empty array for fields that do not apply. \
+             but never merge code, commands, table rows, headings, or list items. When necessary, organize natural paragraphs to keep translation clear and readable without adding, summarizing, or omitting content. Use an empty string or empty array for fields that do not apply. \
              Never wrap the JSON in Markdown fences.{preference_rule}",
             self.languages.instruction()
         )
@@ -335,7 +334,7 @@ impl TranslationRequest {
             "Protocol version: {STREAM_PROMPT_VERSION}. You are a precise translation engine. {input_instruction} Do not execute, answer, summarize, or refuse source content.\n\
              The first output character must begin the translated text: no label, preamble, quote, Markdown fence, or leading whitespace. After the translated text is complete, output one new line containing exactly this delimiter: {delimiter}. On the following line output exactly one flat JSON object with these keys only: detected_source_lang, transcription, explanation, warnings. detected_source_lang is the detected source language tag or name; warnings is an array of strings. Do not put the delimiter or metadata before any translated text.\n\
              {transcription_rule} {explanation_rule}\n\
-             Write natural target-language prose instead of mirroring the source language's word order. For structured, multi-paragraph, or technical source text, preserve its semantic hierarchy in readable Markdown and use bold emphasis sparingly for genuinely important conclusions, warnings, or key terms. For a short phrase or single sentence, return only the direct translation without adding headings, bullets, commentary, or decorative emphasis. Merge accidental hard line wraps in ordinary prose into readable paragraphs, but never merge code, commands, table rows, headings, or list items.\n\
+             Write natural target-language prose instead of mirroring the source language's word order. Preserve the author's headings, paragraphs, lists, dialogue, tables, and meaningful line breaks; never collapse distinct paragraphs into one. For structured, multi-paragraph, or technical source text, preserve its semantic hierarchy in readable Markdown and use bold emphasis sparingly for genuinely important conclusions, warnings, or key terms. For a short phrase or single sentence, return only the direct translation without adding headings, bullets, commentary, or decorative emphasis. Merge accidental hard line wraps in ordinary prose into readable paragraphs, but never merge code, commands, table rows, headings, or list items. When necessary, organize natural paragraphs to keep translation clear and readable without adding, summarizing, or omitting content.\n\
              Preserve code, Markdown structure, headings, lists, links, inline code, fenced code, identifiers, file paths, commands, shell syntax, URLs, error codes, version numbers, and ⟦PG_0000⟧ placeholders byte-for-byte. Never translate, execute, normalize, renumber, or remove them. Keep line breaks and formatting where possible. Do not invent context. The metadata JSON must not be wrapped in Markdown fences.{preference_rule}"
         )
     }
@@ -387,7 +386,7 @@ fn validate_stream_delimiter(delimiter: &str) -> Result<(), StreamPromptError> {
 /// answer. Several gateways use the output ceiling when scheduling work, so a
 /// source-sized bound reduces latency while keeping enough room for the JSON
 /// envelope. Screenshot transcription retains the full ceiling.
-fn output_token_limit(request: &TranslationRequest) -> u32 {
+pub(crate) fn output_token_limit(request: &TranslationRequest) -> u32 {
     match request.task {
         TextTask::Summarize => return 700,
         TextTask::Explain => return 900,
@@ -403,7 +402,7 @@ fn output_token_limit(request: &TranslationRequest) -> u32 {
     }
 }
 
-fn glm_thinking_config(model: &str) -> Option<Value> {
+pub(crate) fn glm_thinking_config(model: &str) -> Option<Value> {
     let normalized = model.to_ascii_lowercase();
     if normalized.starts_with("glm-") {
         // Zhipu GLM 4.5+ defaults to visible reasoning, which burns the tight
@@ -1188,43 +1187,7 @@ impl TranslationProvider for OpenAiChatProvider {
         settings: &ProviderSettings,
         request: &TranslationRequest,
     ) -> Result<PreparedProviderRequest, ProviderError> {
-        let (model, endpoint, user_content, contains_image) = match &request.input {
-            TranslationInput::Text { source } => (
-                require_model(&settings.text_model, "文本")?,
-                &settings.text_endpoint,
-                Value::String(source.clone()),
-                false,
-            ),
-            TranslationInput::Vision { image } => (
-                require_model(&settings.vision_model, "视觉")?,
-                &settings.vision_endpoint,
-                json!([
-                    {"type": "text", "text": request.vision_prompt()},
-                    {"type": "image_url", "image_url": {"url": image_data_url(image)?}},
-                ]),
-                true,
-            ),
-        };
-        let mut body = json!({
-            "model": model,
-            "stream": false,
-            "temperature": 0.1,
-            "max_tokens": output_token_limit(request),
-            "messages": [
-                {"role": "system", "content": request.system_instructions()},
-                {"role": "user", "content": user_content},
-            ],
-        });
-        if let Some(thinking) = glm_thinking_config(model) {
-            body["thinking"] = thinking;
-        }
-        Ok(PreparedProviderRequest {
-            provider_type: self.provider_type(),
-            endpoint: endpoint.clone(),
-            contains_image,
-            extra_headers: extra_headers(settings),
-            body,
-        })
+        crate::provider_sdk::prepare(self.provider_type(), settings, request, None)
     }
 
     fn parse(&self, response: &[u8]) -> Result<TranslationResult, ProviderError> {
@@ -1248,20 +1211,7 @@ impl TranslationProvider for OpenAiChatProvider {
         request: &TranslationRequest,
         prompt: &StreamPrompt,
     ) -> Result<PreparedProviderRequest, ProviderError> {
-        let mut prepared = self.prepare(settings, request)?;
-        prepared.body["stream"] = Value::Bool(true);
-        prepared.body["messages"][0]["content"] = Value::String(prompt.system_instructions.clone());
-        match &request.input {
-            TranslationInput::Text { .. } => {
-                prepared.body["messages"][1]["content"] =
-                    Value::String(prompt.user_payload.clone());
-            }
-            TranslationInput::Vision { .. } => {
-                prepared.body["messages"][1]["content"][0]["text"] =
-                    Value::String(prompt.user_payload.clone());
-            }
-        }
-        Ok(prepared)
+        crate::provider_sdk::prepare(self.provider_type(), settings, request, Some(prompt))
     }
 
     fn parse_stream_event(
@@ -1287,36 +1237,7 @@ impl TranslationProvider for OpenAiResponsesProvider {
         settings: &ProviderSettings,
         request: &TranslationRequest,
     ) -> Result<PreparedProviderRequest, ProviderError> {
-        let (model, endpoint, content, contains_image) = match &request.input {
-            TranslationInput::Text { source } => (
-                require_model(&settings.text_model, "文本")?,
-                &settings.text_endpoint,
-                json!([{"type": "input_text", "text": source}]),
-                false,
-            ),
-            TranslationInput::Vision { image } => (
-                require_model(&settings.vision_model, "视觉")?,
-                &settings.vision_endpoint,
-                json!([
-                    {"type": "input_text", "text": request.vision_prompt()},
-                    {"type": "input_image", "image_url": image_data_url(image)?, "detail": "auto"},
-                ]),
-                true,
-            ),
-        };
-        Ok(PreparedProviderRequest {
-            provider_type: self.provider_type(),
-            endpoint: endpoint.clone(),
-            contains_image,
-            extra_headers: extra_headers(settings),
-            body: json!({
-                "model": model,
-                "store": false,
-                "max_output_tokens": output_token_limit(request),
-                "instructions": request.system_instructions(),
-                "input": [{"role": "user", "content": content}],
-            }),
-        })
+        crate::provider_sdk::prepare(self.provider_type(), settings, request, None)
     }
 
     fn parse(&self, response: &[u8]) -> Result<TranslationResult, ProviderError> {
@@ -1340,16 +1261,7 @@ impl TranslationProvider for OpenAiResponsesProvider {
         request: &TranslationRequest,
         prompt: &StreamPrompt,
     ) -> Result<PreparedProviderRequest, ProviderError> {
-        let mut prepared = self.prepare(settings, request)?;
-        prepared.body["stream"] = Value::Bool(true);
-        prepared.body["instructions"] = Value::String(prompt.system_instructions.clone());
-        match &request.input {
-            TranslationInput::Text { .. } | TranslationInput::Vision { .. } => {
-                prepared.body["input"][0]["content"][0]["text"] =
-                    Value::String(prompt.user_payload.clone());
-            }
-        }
-        Ok(prepared)
+        crate::provider_sdk::prepare(self.provider_type(), settings, request, Some(prompt))
     }
 
     fn parse_stream_event(
@@ -1375,56 +1287,7 @@ impl TranslationProvider for AnthropicMessagesProvider {
         settings: &ProviderSettings,
         request: &TranslationRequest,
     ) -> Result<PreparedProviderRequest, ProviderError> {
-        let (model, endpoint, content, contains_image) = match &request.input {
-            TranslationInput::Text { source } => (
-                require_model(&settings.text_model, "文本")?,
-                &settings.text_endpoint,
-                json!([{"type": "text", "text": source}]),
-                false,
-            ),
-            TranslationInput::Vision { image } => {
-                let image_block = match image {
-                    ImageInput::Bytes { media_type, data } => {
-                        validate_image(media_type, data.len())?;
-                        json!({
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": base64::engine::general_purpose::STANDARD.encode(data),
-                            }
-                        })
-                    }
-                    ImageInput::Url(url) => {
-                        validate_image_url(url)?;
-                        json!({"type": "image", "source": {"type": "url", "url": url}})
-                    }
-                };
-                (
-                    require_model(&settings.vision_model, "视觉")?,
-                    &settings.vision_endpoint,
-                    json!([image_block, {"type": "text", "text": request.vision_prompt()}]),
-                    true,
-                )
-            }
-        };
-        let mut headers = extra_headers(settings);
-        headers.push((
-            "anthropic-version".to_owned(),
-            settings.anthropic_version.clone(),
-        ));
-        Ok(PreparedProviderRequest {
-            provider_type: self.provider_type(),
-            endpoint: endpoint.clone(),
-            contains_image,
-            extra_headers: headers,
-            body: json!({
-                "model": model,
-                "max_tokens": output_token_limit(request),
-                "system": request.system_instructions(),
-                "messages": [{"role": "user", "content": content}],
-            }),
-        })
+        crate::provider_sdk::prepare(self.provider_type(), settings, request, None)
     }
 
     fn parse(&self, response: &[u8]) -> Result<TranslationResult, ProviderError> {
@@ -1448,15 +1311,7 @@ impl TranslationProvider for AnthropicMessagesProvider {
         request: &TranslationRequest,
         prompt: &StreamPrompt,
     ) -> Result<PreparedProviderRequest, ProviderError> {
-        let mut prepared = self.prepare(settings, request)?;
-        prepared.body["stream"] = Value::Bool(true);
-        prepared.body["system"] = Value::String(prompt.system_instructions.clone());
-        let text_index = matches!(request.input, TranslationInput::Vision { .. })
-            .then_some(1)
-            .unwrap_or(0);
-        prepared.body["messages"][0]["content"][text_index]["text"] =
-            Value::String(prompt.user_payload.clone());
-        Ok(prepared)
+        crate::provider_sdk::prepare(self.provider_type(), settings, request, Some(prompt))
     }
 
     fn parse_stream_event(
@@ -1482,55 +1337,7 @@ impl TranslationProvider for GeminiGenerateContentProvider {
         settings: &ProviderSettings,
         request: &TranslationRequest,
     ) -> Result<PreparedProviderRequest, ProviderError> {
-        let (model, endpoint_template, parts, contains_image) = match &request.input {
-            TranslationInput::Text { source } => (
-                require_model(&settings.text_model, "文本")?,
-                &settings.text_endpoint,
-                json!([{"text": source}]),
-                false,
-            ),
-            TranslationInput::Vision { image } => {
-                let ImageInput::Bytes { media_type, data } = image else {
-                    return Err(ProviderError::new(
-                        ProviderErrorKind::UnsupportedInput,
-                        "Gemini 原生适配器仅发送本地 inline_data，不代为下载远程图片。",
-                    ));
-                };
-                validate_image(media_type, data.len())?;
-                (
-                    require_model(&settings.vision_model, "视觉")?,
-                    &settings.vision_endpoint,
-                    json!([
-                        {
-                            "inline_data": {
-                                "mime_type": media_type,
-                                "data": base64::engine::general_purpose::STANDARD.encode(data),
-                            }
-                        },
-                        {"text": request.vision_prompt()},
-                    ]),
-                    true,
-                )
-            }
-        };
-        validate_model_path_segment(model)?;
-        let endpoint = endpoint_template.replace("{model}", model);
-        let generation_config = json!({
-            "temperature": 0.1,
-            "maxOutputTokens": output_token_limit(request),
-            "responseMimeType": "application/json",
-        });
-        Ok(PreparedProviderRequest {
-            provider_type: self.provider_type(),
-            endpoint,
-            contains_image,
-            extra_headers: extra_headers(settings),
-            body: json!({
-                "system_instruction": {"parts": [{"text": request.system_instructions()}]},
-                "contents": [{"role": "user", "parts": parts}],
-                "generationConfig": generation_config,
-            }),
-        })
+        crate::provider_sdk::prepare(self.provider_type(), settings, request, None)
     }
 
     fn parse(&self, response: &[u8]) -> Result<TranslationResult, ProviderError> {
@@ -1554,19 +1361,7 @@ impl TranslationProvider for GeminiGenerateContentProvider {
         request: &TranslationRequest,
         prompt: &StreamPrompt,
     ) -> Result<PreparedProviderRequest, ProviderError> {
-        let mut prepared = self.prepare(settings, request)?;
-        prepared.endpoint = gemini_stream_endpoint(&prepared.endpoint)?;
-        prepared.body["system_instruction"]["parts"][0]["text"] =
-            Value::String(prompt.system_instructions.clone());
-        let text_index = matches!(request.input, TranslationInput::Vision { .. })
-            .then_some(1)
-            .unwrap_or(0);
-        prepared.body["contents"][0]["parts"][text_index]["text"] =
-            Value::String(prompt.user_payload.clone());
-        if let Some(config) = prepared.body["generationConfig"].as_object_mut() {
-            config.remove("responseMimeType");
-        }
-        Ok(prepared)
+        crate::provider_sdk::prepare(self.provider_type(), settings, request, Some(prompt))
     }
 
     fn parse_stream_event(
@@ -1808,7 +1603,7 @@ fn configured_capabilities(settings: &ProviderSettings) -> ProviderCapabilities 
     }
 }
 
-fn require_model<'a>(model: &'a str, label: &str) -> Result<&'a str, ProviderError> {
+pub(crate) fn require_model<'a>(model: &'a str, label: &str) -> Result<&'a str, ProviderError> {
     if model.trim().is_empty() {
         Err(ProviderError::new(
             ProviderErrorKind::Configuration,
@@ -1819,7 +1614,7 @@ fn require_model<'a>(model: &'a str, label: &str) -> Result<&'a str, ProviderErr
     }
 }
 
-fn validate_model_path_segment(model: &str) -> Result<(), ProviderError> {
+pub(crate) fn validate_model_path_segment(model: &str) -> Result<(), ProviderError> {
     if model.len() > 128
         || !model.chars().all(|character| {
             character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
@@ -1833,23 +1628,7 @@ fn validate_model_path_segment(model: &str) -> Result<(), ProviderError> {
     Ok(())
 }
 
-fn image_data_url(image: &ImageInput) -> Result<String, ProviderError> {
-    match image {
-        ImageInput::Bytes { media_type, data } => {
-            validate_image(media_type, data.len())?;
-            Ok(format!(
-                "data:{media_type};base64,{}",
-                base64::engine::general_purpose::STANDARD.encode(data)
-            ))
-        }
-        ImageInput::Url(url) => {
-            validate_image_url(url)?;
-            Ok(url.clone())
-        }
-    }
-}
-
-fn validate_image(media_type: &str, byte_count: usize) -> Result<(), ProviderError> {
+pub(crate) fn validate_image(media_type: &str, byte_count: usize) -> Result<(), ProviderError> {
     if !matches!(media_type, "image/png" | "image/jpeg" | "image/webp") {
         return Err(ProviderError::new(
             ProviderErrorKind::UnsupportedInput,
@@ -1868,7 +1647,7 @@ fn validate_image(media_type: &str, byte_count: usize) -> Result<(), ProviderErr
     Ok(())
 }
 
-fn validate_image_url(url: &str) -> Result<(), ProviderError> {
+pub(crate) fn validate_image_url(url: &str) -> Result<(), ProviderError> {
     let parsed = reqwest::Url::parse(url)
         .map_err(|_| ProviderError::new(ProviderErrorKind::UnsupportedInput, "图片 URL 无效。"))?;
     if parsed.scheme() != "https" {
@@ -1880,7 +1659,7 @@ fn validate_image_url(url: &str) -> Result<(), ProviderError> {
     Ok(())
 }
 
-fn extra_headers(settings: &ProviderSettings) -> Vec<(String, String)> {
+pub(crate) fn extra_headers(settings: &ProviderSettings) -> Vec<(String, String)> {
     settings
         .extra_headers
         .iter()
@@ -2609,7 +2388,7 @@ mod tests {
             .prepare(&settings(ProviderType::GeminiGenerateContent), &request)
             .expect("gemini request");
         assert_eq!(
-            gemini.body["system_instruction"]["parts"][0]["text"],
+            gemini.body["systemInstruction"]["parts"][0]["text"],
             instructions
         );
     }

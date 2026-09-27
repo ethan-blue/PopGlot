@@ -540,8 +540,6 @@ dependencies = [
 [[package]]
 name = "genai"
 version = "0.6.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d12aba7e9dc2c4d54654566dc3dc8383b5cb52e0cfc5754989afe0480d933e3"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -1169,7 +1167,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "popglot-core"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
@@ -1189,7 +1187,7 @@ dependencies = [
 
 [[package]]
 name = "popglot-domain"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "regex",
  "serde",
@@ -1199,7 +1197,7 @@ dependencies = [
 
 [[package]]
 name = "popglot-ffi"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "base64 0.22.1",
  "popglot-core",

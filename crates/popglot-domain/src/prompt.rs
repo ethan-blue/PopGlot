@@ -494,7 +494,10 @@ mod tests {
     fn builtins_are_valid_and_compile_cleanly() {
         let builtins = PromptTemplate::builtins();
         assert_eq!(
-            builtins.iter().map(|item| item.name.as_str()).collect::<Vec<_>>(),
+            builtins
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
             ["准确", "自然", "正式"],
             "built-in choices must use short, user-facing labels"
         );

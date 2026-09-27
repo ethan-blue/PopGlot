@@ -154,7 +154,7 @@ PopGlot 遵循「明确归因、保全上下文、提供可行下一步」的设
 
 ### 导出字段白名单 (Strict Whitelist)
 导出的诊断信息仅包含排查技术故障所必需的元数据，严格执行字段白名单：
-- **应用版本** (`app_version`)：如 `0.1.10`；
+- **应用版本** (`app_version`)：如 `0.1.11`；
 - **操作系统信息** (`os_version`)：如 `Microsoft Windows NT 10.0.19045.0`；
 - **事件时间戳** (`timestamp_utc`)：ISO 8601 UTC 标准时间；
 - **错误代码** (`error_code` / `hresult`)：标准十六进制系统或 HTTP 错误码（如 `0x80004005` 或 `401`）；

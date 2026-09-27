@@ -644,6 +644,8 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
                 {
                     PaintSummary(outcome.SummaryText, outcome.Notes);
                     TranslateStatus.Text = ReadingRequestCopy.Finished(0);
+                    var activeName = ProfileManager.Load().TryGetActiveProfile()?.Name;
+                    TranslateEngineBadge.Text = string.IsNullOrEmpty(activeName) ? "要点" : $"{activeName} · 要点";
                     return;
                 }
 
@@ -658,7 +660,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
                 PaintSummary(outcome.SummaryText, outcome.Notes);
                 TranslateStatus.Text = ReadingRequestCopy.Finished(outcome.ElapsedMs);
-                TranslateEngineBadge.Text = outcome.EngineLabel;
+                TranslateEngineBadge.Text = string.IsNullOrEmpty(outcome.EngineLabel) ? "要点" : $"{outcome.EngineLabel} · 要点";
             },
             onError: error =>
             {
@@ -717,9 +719,30 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         TranslateProgress.Visibility = Visibility.Collapsed;
         TranslateStreamResult.Visibility = Visibility.Collapsed;
         TranslateStreamIndicator.Visibility = Visibility.Collapsed;
-        TranslateRichResult.Visibility = Visibility.Collapsed;
         TranslateResult.Text = text;
-        TranslateResult.Visibility = Visibility.Visible;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            TranslateRichResult.Visibility = Visibility.Collapsed;
+            TranslateResult.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            try
+            {
+                MarkdownPresenter.RenderToFlowDocument(
+                    TranslateRichResult.Document,
+                    text,
+                    Application.Current?.Resources ?? Resources,
+                    resultActionsEnabled: true);
+                TranslateRichResult.Visibility = Visibility.Visible;
+                TranslateResult.Visibility = Visibility.Collapsed;
+            }
+            catch
+            {
+                TranslateRichResult.Visibility = Visibility.Collapsed;
+                TranslateResult.Visibility = Visibility.Visible;
+            }
+        }
         TranslateExplanation.Text = note;
         TranslateExplanationBox.Visibility = string.IsNullOrWhiteSpace(note)
             ? Visibility.Collapsed
@@ -1183,12 +1206,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     internal void RefreshAfterSettingsChanged()
     {
         RefreshStyleSelector();
-        if (!_currentState.IsProgressVisible &&
-            !_currentState.IsStreamLayerVisible &&
-            string.IsNullOrWhiteSpace(_currentState.FinalText))
-        {
-            UpdateServiceAvailability();
-        }
+        UpdateServiceAvailability();
         UpdateSummaryCapabilityVisuals();
     }
 
@@ -1255,26 +1273,35 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         }
         UpdateSummaryCapabilityVisuals();
 
-        if (!hasUserEngine && _currentState.Phase == TranslateUiPhase.Idle && string.IsNullOrWhiteSpace(_currentState.FinalText))
+        if (!_holdingSummary && !_currentState.IsProgressVisible && !_currentState.IsStreamLayerVisible)
         {
-            TranslateEngineBadge.Text = hasFallbackRoute ? EngineWording.FreePublicTranslationName : "未配置";
-            TranslateStatus.Text = hasFallbackRoute ? $"当前使用{EngineWording.FreePublicTranslationName}" : "未配置引擎，请前往设置接入";
-        }
-        else if (hasUserEngine && _currentState.Phase == TranslateUiPhase.Idle && string.IsNullOrWhiteSpace(_currentState.FinalText))
-        {
-            // Settings changed the engine while we were idle: the badge must
-            // name the engine that will actually run next, never a stale one.
-            try
+            if (!hasUserEngine)
             {
-                var config = ProfileManager.Load();
-                var active = config.TryGetActiveProfile();
-                TranslateEngineBadge.Text = active?.Name ?? (config.PreferFreeEngine ? EngineWording.FreePublicTranslationName : "未配置");
+                TranslateEngineBadge.Text = hasFallbackRoute ? EngineWording.FreePublicTranslationName : "未配置";
+                if (_currentState.Phase == TranslateUiPhase.Idle && string.IsNullOrWhiteSpace(_currentState.FinalText))
+                {
+                    TranslateStatus.Text = hasFallbackRoute ? $"当前使用{EngineWording.FreePublicTranslationName}" : "未配置引擎，请前往设置接入";
+                }
             }
-            catch
+            else
             {
-                TranslateEngineBadge.Text = "未配置";
+                // Settings changed the engine: the badge must name the engine
+                // that will actually run next, never a stale one.
+                try
+                {
+                    var config = ProfileManager.Load();
+                    var active = config.TryGetActiveProfile();
+                    TranslateEngineBadge.Text = active?.Name ?? (config.PreferFreeEngine ? EngineWording.FreePublicTranslationName : "未配置");
+                }
+                catch
+                {
+                    TranslateEngineBadge.Text = "未配置";
+                }
+                if (_currentState.Phase == TranslateUiPhase.Idle && string.IsNullOrWhiteSpace(_currentState.FinalText))
+                {
+                    TranslateStatus.Text = "就绪";
+                }
             }
-            TranslateStatus.Text = "就绪";
         }
     }
 
@@ -1588,7 +1615,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     {
         // Same formatter as the floating panel and quick search so every
         // entry point copies the identical agreed plain text.
-        var clean = MarkdownPresenter.ToPlainText(TranslateResult.Text);
+        var clean = MarkdownPresenter.ToPlainText(TranslateResult.Text, preserveListStructure: true);
         if (await Helpers.CopyToClipboardAsync(clean))
         {
             TranslateStatus.Text = _holdingSummary ? "已复制要点。" : "已复制译文。";
@@ -1658,6 +1685,9 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         menu.Items.Add(clearItem);
 
         menu.PlacementTarget = RestoreSessionButton;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        menu.HorizontalOffset = -10;
+        menu.VerticalOffset = -2;
         menu.IsOpen = true;
     }
 

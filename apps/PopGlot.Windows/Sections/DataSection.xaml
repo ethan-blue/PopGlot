@@ -33,12 +33,19 @@
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="清空翻译历史" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}"
-                           Text="不可恢复" />
+                           Text="清空后可短时撤销" />
             </StackPanel>
-            <Button x:Name="ClearHistoryButton" Grid.Column="1" Content="清空历史"
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+            <Button x:Name="UndoHistoryButton" Content="撤销" Margin="0,0,8,0"
+                    Visibility="Collapsed"
+                    Style="{StaticResource GhostButton}" Padding="12,5"
+                    ToolTip="恢复刚才清空的历史" AutomationProperties.Name="撤销清空历史"
+                    Click="UndoHistory_Click" />
+            <Button x:Name="ClearHistoryButton" Content="清空历史"
                     VerticalAlignment="Center"
                     Style="{StaticResource DangerButton}" Padding="12,5" ToolTip="清空全部历史记录"
                     Click="ClearHistory_Click" />
+            </StackPanel>
         </Grid>
 
         <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
@@ -51,12 +58,19 @@
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="清空生词本" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}"
-                           Text="不可恢复" />
+                           Text="清空后可短时撤销" />
             </StackPanel>
-            <Button x:Name="ClearVocabularyButton" Grid.Column="1" Content="清空生词本"
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+            <Button x:Name="UndoVocabularyButton" Content="撤销" Margin="0,0,8,0"
+                    Visibility="Collapsed"
+                    Style="{StaticResource GhostButton}" Padding="12,5"
+                    ToolTip="恢复刚才清空的生词" AutomationProperties.Name="撤销清空生词本"
+                    Click="UndoVocabulary_Click" />
+            <Button x:Name="ClearVocabularyButton" Content="清空生词本"
                     VerticalAlignment="Center"
                     Style="{StaticResource DangerButton}" Padding="12,5" ToolTip="清空全部生词"
                     Click="ClearVocabulary_Click" />
+            </StackPanel>
         </Grid>
 
         <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,16" />

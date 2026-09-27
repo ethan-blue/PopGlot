@@ -51,9 +51,9 @@
             <Setter Property="Padding" Value="12" />
             <Setter Property="Margin" Value="0,0,0,8" />
             <Setter Property="CornerRadius" Value="{StaticResource CardRadius}" />
-            <Setter Property="Background" Value="{DynamicResource SurfaceMutedBrush}" />
+            <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderThickness" Value="0" />
         </Style>
         <Style x:Key="EditorTextField" TargetType="TextBox" BasedOn="{StaticResource FormTextBox}">
             <Setter Property="Height" Value="36" />
@@ -339,17 +339,24 @@
                                                 <Button x:Name="ClearKeyButton" Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconDelete}"
                                                         Width="36" Height="36" Click="ClearApiKey_Click"
                                                         AutomationProperties.Name="清除密钥" ToolTip="清除密钥" />
-                                                <Button x:Name="TestConnectionButton" Margin="6,0,0,0" Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconCheck}"
+                                                <Button x:Name="TestConnectionButton" Margin="6,0,0,0" Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconTest}"
                                                         Width="36" Height="36" Click="TestConnection_Click"
                                                         AutomationProperties.Name="测试连接" ToolTip="测试连接" />
                                             </StackPanel>
                                         </Grid>
                                         <TextBlock x:Name="ApiKeyStateText" Style="{StaticResource Caption}" Margin="2,4,0,0" Visibility="Collapsed" />
-                                        <StackPanel x:Name="TestStatusPanel" Orientation="Horizontal" Margin="2,8,0,0" Visibility="Collapsed">
-                                            <Ellipse x:Name="TestStateDot" Width="6" Height="6" VerticalAlignment="Center" Fill="{DynamicResource TextTertiaryBrush}"/>
-                                            <TextBlock x:Name="TestSummaryText" Margin="7,0,0,0" FontSize="12" TextTrimming="CharacterEllipsis"/>
-                                        </StackPanel>
-                                        <TextBlock x:Name="TestDetailText" Style="{StaticResource Caption}" Margin="16,3,0,0" TextWrapping="Wrap" Visibility="Collapsed" />
+                                        <Border x:Name="TestStatusPanel" CornerRadius="6" Padding="10,8" Margin="0,8,0,0"
+                                                Background="{DynamicResource SurfaceMutedBrush}"
+                                                BorderBrush="{DynamicResource BorderSubtleBrush}"
+                                                BorderThickness="1" Visibility="Collapsed">
+                                            <StackPanel>
+                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <Ellipse x:Name="TestStateDot" Width="7" Height="7" VerticalAlignment="Center" Fill="{DynamicResource TextTertiaryBrush}"/>
+                                                    <TextBlock x:Name="TestSummaryText" Margin="8,0,0,0" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                                </StackPanel>
+                                                <TextBlock x:Name="TestDetailText" Style="{StaticResource Caption}" Margin="15,4,0,0" TextWrapping="Wrap" Visibility="Collapsed" />
+                                            </StackPanel>
+                                        </Border>
                                     </StackPanel>
                                 </Border>
 

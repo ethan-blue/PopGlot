@@ -604,12 +604,13 @@ internal static partial class CoreBridge
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(source);
         var settings = GetSettings();
-        if ((settings.SafeDevMode || !settings.NetworkEnabled) && !settings.TargetsLocalRuntime)
+        var effectiveSettings = routeSettings ?? settings;
+        if ((settings.SafeDevMode || !settings.NetworkEnabled) && !effectiveSettings.TargetsLocalRuntime)
         {
             throw new InvalidOperationException(
                 "安全离线模式或网络访问已禁用；要点需要已配置的本地或在线模型。");
         }
-        var usesConfiguredProvider = !string.IsNullOrWhiteSpace(apiKey) || settings.TargetsLocalRuntime;
+        var usesConfiguredProvider = !string.IsNullOrWhiteSpace(apiKey) || effectiveSettings.TargetsLocalRuntime;
         if (!usesConfiguredProvider)
         {
             throw new InvalidOperationException("请先配置模型服务，再使用要点。");
@@ -1597,11 +1598,12 @@ internal sealed record ProviderDiagnostics(
 
 internal sealed record TranslationResponse(
     TranslationResult Result,
-    ProviderDiagnostics Diagnostics)
+    ProviderDiagnostics Diagnostics,
+    string? OverrideEngineLabel = null)
 {
     public bool IsFreeEngine =>
         string.Equals(Diagnostics.RequestId, FreeTranslateService.RequestId, StringComparison.Ordinal);
 
-    public string EngineLabel => IsFreeEngine ? "免费引擎" : Diagnostics.ProviderType.ToString();
+    public string EngineLabel => OverrideEngineLabel ?? (IsFreeEngine ? "免费引擎" : Diagnostics.ProviderType.ToString());
 }
 

@@ -525,6 +525,7 @@ public partial class MainWindow : Window
         // unknown) follows the same engine picture as the footer; repaint it
         // on every engine-state refresh so it never claims the wrong route.
         TranslateSection.RefreshStyleSelector();
+        TranslateSection.RefreshAfterSettingsChanged();
     }
 
     private static bool UsesFreeEngine(ProviderSettings settings, bool hasKey, FreeEngineConsent consent) =>
@@ -554,7 +555,9 @@ public partial class MainWindow : Window
             var paintsFooter = IsActiveRouteFreeEngine();
             if (force && paintsFooter)
             {
-                EngineSummary.Text = $"{EngineWording.ActiveFreeEngineName()} · 检测中…";
+                EngineSummary.Text = EngineWording.ActiveFreeEngineName();
+                EngineDot.Tag = "Testing";
+                EngineDot.SetResourceReference(Border.BackgroundProperty, "AccentBrush");
             }
             var health = await FreeTranslateService.GetHealthAsync(force, authorization);
             if (!System.Windows.Application.Current.Dispatcher.CheckAccess())
@@ -565,15 +568,16 @@ public partial class MainWindow : Window
             {
                 return;
             }
+            EngineDot.Tag = null;
             if (health.Ok)
             {
-                EngineSummary.Text = $"{EngineWording.ActiveFreeEngineName()}可用 · {health.LatencyMs} ms";
+                EngineSummary.Text = EngineWording.ActiveFreeEngineName();
                 EngineDot.SetResourceReference(Border.BackgroundProperty, "SuccessBrush");
-                EngineHealthButton.ToolTip = $"{EngineWording.ActiveFreeEngineName()}可用 · 点击重新检测";
+                EngineHealthButton.ToolTip = $"{EngineWording.ActiveFreeEngineName()}可用 · 延迟 {health.LatencyMs} ms · 点击重新检测";
             }
             else
             {
-                EngineSummary.Text = $"{EngineWording.ActiveFreeEngineName()}不可用";
+                EngineSummary.Text = EngineWording.ActiveFreeEngineName();
                 EngineDot.SetResourceReference(Border.BackgroundProperty, "WarningBrush");
                 EngineHealthButton.ToolTip =
                     $"{EngineWording.ActiveFreeEngineName()}不可用：{health.Error} · 可在引擎菜单改选另一条免费引擎";
@@ -592,7 +596,8 @@ public partial class MainWindow : Window
         {
             return; // window may be gone; RefreshEngineStatus will repaint next time
         }
-        EngineSummary.Text = $"{EngineWording.ActiveFreeEngineName()}未检测";
+        EngineDot.Tag = null;
+        EngineSummary.Text = EngineWording.ActiveFreeEngineName();
         EngineDot.SetResourceReference(Border.BackgroundProperty, "TextSecondaryBrush");
         EngineHealthButton.ToolTip = denial is null
             ? $"{EngineWording.ActiveFreeEngineName()}未检测 · 点击重新检测"
@@ -646,6 +651,7 @@ public partial class MainWindow : Window
         {
             menu = BuildEngineSwitchMenu();
         }
+
         catch (Exception exception)
         {
             SetStatus($"无法加载引擎列表：{exception.Message}", StatusTone.Error);
@@ -655,6 +661,8 @@ public partial class MainWindow : Window
         menu.PlacementTarget = anchor;
         menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
         menu.PlacementRectangle = new Rect(0, 0, anchor.ActualWidth, anchor.ActualHeight);
+        menu.HorizontalOffset = -10;
+        menu.VerticalOffset = -2;
         menu.IsOpen = true;
     }
 
@@ -668,10 +676,19 @@ public partial class MainWindow : Window
     {
         var config = ProfileManager.Load();
         var menu = new ContextMenu();
+        // Keep the popup aligned with the compact footer control even when a
+        // provider exposes a very long model id. Long labels are ellipsized;
+        // their complete value stays available from the item tooltip/name.
+        menu.Width = 248;
+        menu.MaxWidth = 248;
+        menu.Background = Brushes.Transparent;
+        menu.BorderBrush = Brushes.Transparent;
+        menu.BorderThickness = new Thickness(0);
+        menu.Padding = new Thickness(0);
         var activeId = config.TryGetActiveProfile()?.Id;
         var currentVisionId = config.VisionProfileId;
 
-        menu.Items.Add(MakeMenuHeader("文字引擎"));
+        menu.Items.Add(MakeMenuHeader("文字"));
         var textProfiles = config.Profiles.Where(p => p.SupportsText).ToList();
         if (textProfiles.Count == 0)
         {
@@ -681,12 +698,15 @@ public partial class MainWindow : Window
         {
             var id = profile.Id;
             var isActive = profile.Id == activeId;
+            var label = $"{profile.Name} · {profile.TextModel}";
             var item = new MenuItem
             {
-                Header = $"{profile.Name} · {profile.TextModel}",
+                Header = MakeCompactMenuLabel(label),
+                ToolTip = label,
                 FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
                 Icon = isActive ? MakeActiveCheck() : null,
             };
+            System.Windows.Automation.AutomationProperties.SetName(item, label);
             item.Click += (_, _) => SwitchTextEngine(id);
             menu.Items.Add(item);
         }
@@ -694,6 +714,7 @@ public partial class MainWindow : Window
         // 两条公共文字线路，用户显式选一条。失败不会悄悄改发到另一条。
         // 探测结果按线路分开记；没探测过就显示「未检测」。
         var selectedFree = ShellSettingsStore.Load().FreeEngineProvider;
+        menu.Items.Add(MakeMenuHeader("免费"));
         foreach (var provider in new[] { FreeEngineProvider.Google, FreeEngineProvider.MyMemory })
         {
             var chosen = provider;
@@ -701,23 +722,25 @@ public partial class MainWindow : Window
             var freeState = FreeHealthLabel(chosen);
             var item = new MenuItem
             {
-                Header = $"{EngineWording.NameFor(chosen)} · {freeState} · 仅文字",
+                Header = MakeCompactMenuLabel($"{FreeProviderShortName(chosen)} · {ShortHealthLabel(freeState)}"),
                 FontWeight = freeActive ? FontWeights.SemiBold : FontWeights.Normal,
                 Icon = freeActive ? MakeActiveCheck() : null,
                 ToolTip = chosen == FreeEngineProvider.MyMemory
                     ? "Google 线路不可用时改用这一条。文本发往 api.mymemory.translated.net，不发截图。"
                     : "文本发往 translate.googleapis.com / clients5.google.com，不发截图。",
             };
+            System.Windows.Automation.AutomationProperties.SetName(
+                item, $"{EngineWording.NameFor(chosen)} · {freeState} · 仅文字");
             item.Click += async (_, _) => await SwitchToFreeEngineAsync(chosen);
             menu.Items.Add(item);
         }
 
         menu.Items.Add(new Separator());
-        menu.Items.Add(MakeMenuHeader("图片引擎"));
+        menu.Items.Add(MakeMenuHeader("图片"));
         var followActive = string.IsNullOrEmpty(currentVisionId);
         var visionFollow = new MenuItem
         {
-            Header = "跟随文字引擎",
+            Header = "跟随文字",
             FontWeight = followActive ? FontWeights.SemiBold : FontWeights.Normal,
             Icon = followActive ? MakeActiveCheck() : null,
         };
@@ -728,38 +751,72 @@ public partial class MainWindow : Window
         {
             var id = profile.Id;
             var isActive = profile.Id == currentVisionId;
+            var label = $"{profile.Name} · {profile.VisionModel}";
             var item = new MenuItem
             {
-                Header = $"{profile.Name} · {profile.VisionModel}",
+                Header = MakeCompactMenuLabel(label),
+                ToolTip = label,
                 FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
                 Icon = isActive ? MakeActiveCheck() : null,
             };
+            System.Windows.Automation.AutomationProperties.SetName(item, label);
             item.Click += (_, _) => SwitchVisionEngine(id);
             menu.Items.Add(item);
         }
 
         menu.Items.Add(new Separator());
-        var manage = new MenuItem { Header = "管理引擎…" };
+        var manage = new MenuItem { Header = "管理" };
+        System.Windows.Automation.AutomationProperties.SetName(manage, "管理引擎");
         manage.Click += (_, _) => OpenSettings?.Invoke();
         menu.Items.Add(manage);
-        var reprobe = new MenuItem { Header = $"重新检测{EngineWording.ActiveFreeEngineName()}" };
+        var reprobe = new MenuItem { Header = "检测", ToolTip = $"重新检测{EngineWording.ActiveFreeEngineName()}" };
+        System.Windows.Automation.AutomationProperties.SetName(reprobe, "重新检测免费引擎");
         reprobe.Click += async (_, _) => await UpdateFreeEngineHealthAsync(force: true);
         menu.Items.Add(reprobe);
 
         return menu;
     }
 
-    private static TextBlock MakeActiveCheck()
+    private static FrameworkElement MakeActiveCheck()
     {
-        var check = new TextBlock
+        var geom = Application.Current?.TryFindResource("IconCheck") as Geometry
+            ?? Geometry.Parse("M 9.5,17.5 L 4,12 L 5.25,10.75 L 9.5,15 L 18.75,5.75 L 20,7 Z");
+        var path = new System.Windows.Shapes.Path
         {
-            Text = "✓",
-            FontSize = 13,
-            FontWeight = FontWeights.Bold,
+            Data = geom,
+            Width = 12,
+            Height = 12,
+            Stretch = Stretch.Uniform,
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Center,
         };
-        check.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
-        return check;
+        path.SetResourceReference(System.Windows.Shapes.Path.FillProperty, "AccentBrush");
+        return path;
     }
+
+    private static TextBlock MakeCompactMenuLabel(string text) => new()
+    {
+        Text = text,
+        Width = 164,
+        TextTrimming = TextTrimming.CharacterEllipsis,
+        VerticalAlignment = VerticalAlignment.Center,
+        ToolTip = text,
+    };
+
+    private static string FreeProviderShortName(FreeEngineProvider provider) => provider switch
+    {
+        FreeEngineProvider.MyMemory => "MyMemory",
+        _ => "Google",
+    };
+
+    private static string ShortHealthLabel(string label) => label switch
+    {
+        "未检测" => "未测",
+        "检测中" => "检测中",
+        "可用" => "可用",
+        "不可用" => "不可用",
+        _ => label,
+    };
 
     private static System.Windows.Controls.MenuItem MakeMenuHeader(string text)
     {
@@ -1411,7 +1468,8 @@ internal static class TranslationStyleMenu
         }
 
         var menu = new ContextMenu();
-        menu.Items.Add(MakeHeader("文字翻译风格"));
+        menu.MinWidth = 100;
+        menu.MaxWidth = 135;
         var builtInCount = 0;
         foreach (var template in templates.Where(t => t.Enabled && t.IsBuiltIn))
         {
@@ -1436,7 +1494,7 @@ internal static class TranslationStyleMenu
         }
 
         menu.Items.Add(new Separator());
-        var manage = new MenuItem { Header = "管理提示词…" };
+        var manage = new MenuItem { Header = "管理" };
         manage.Click += (_, _) => managePrompts();
         menu.Items.Add(manage);
         return menu;
@@ -1448,6 +1506,8 @@ internal static class TranslationStyleMenu
         menu.PlacementTarget = anchor;
         menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
         menu.PlacementRectangle = new Rect(0, 0, anchor.ActualWidth, anchor.ActualHeight);
+        menu.HorizontalOffset = -10;
+        menu.VerticalOffset = -2;
         menu.IsOpen = true;
     }
 
@@ -1463,7 +1523,7 @@ internal static class TranslationStyleMenu
         try
         {
             await CoreBridge.SetActivePromptTemplateAsync(templateId);
-            ReportOnUi(reportStatus, "已切换文字翻译风格，下一次文字翻译时生效。");
+            ReportOnUi(reportStatus, "下次翻译生效");
             return true;
         }
         catch (Exception exception)
@@ -1571,16 +1631,21 @@ internal static class TranslationStyleMenu
         return item;
     }
 
-    private static TextBlock MakeActiveCheck()
+    private static FrameworkElement MakeActiveCheck()
     {
-        var check = new TextBlock
+        var geom = Application.Current?.TryFindResource("IconCheck") as Geometry
+            ?? Geometry.Parse("M 9.5,17.5 L 4,12 L 5.25,10.75 L 9.5,15 L 18.75,5.75 L 20,7 Z");
+        var path = new System.Windows.Shapes.Path
         {
-            Text = "✓",
-            FontSize = 13,
-            FontWeight = FontWeights.Bold,
+            Data = geom,
+            Width = 12,
+            Height = 12,
+            Stretch = Stretch.Uniform,
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Center,
         };
-        check.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
-        return check;
+        path.SetResourceReference(System.Windows.Shapes.Path.FillProperty, "AccentBrush");
+        return path;
     }
 
     private static MenuItem MakeHeader(string text)

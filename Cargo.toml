@@ -5,9 +5,13 @@ members = [
     "crates/popglot-ffi",
 ]
 resolver = "3"
+exclude = ["vendor/genai"]
+
+[patch.crates-io]
+genai = { path = "vendor/genai" }
 
 [workspace.package]
-version = "0.1.10"
+version = "0.1.11"
 edition = "2024"
 license = "MIT"
 authors = ["PopGlot Contributors"]

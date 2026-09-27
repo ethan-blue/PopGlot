@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -29,7 +30,7 @@ internal sealed record LibraryRow(
     /// </summary>
     public string TitleOneLine => OneLine(Title);
 
-    public string DetailOneLine => OneLine(Detail);
+    public string DetailOneLine => OneLine(MarkdownPresenter.ToPlainText(Detail));
 
     private static string OneLine(string text)
     {
@@ -58,13 +59,11 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
     private readonly ObservableCollection<LibraryRow> _allRows = [];
     private readonly ICollectionView _rowsView;
 
-    // 两步删除的武装态：条目按钮与 Delete 键共享同一把锁。任何一次单击/
-    // 单次按键都永远无法直接删除一条记录；超时、切换选中、切换模式或列表
-    // 刷新都会解除武装。
-    private const int DeleteArmSeconds = 3;
-    private LibraryRow? _deleteArmRow;
-    private DateTime _deleteArmUntilUtc;
-    private readonly System.Windows.Threading.DispatcherTimer _deleteArmTimer;
+    private Guid? _undoTicketId;
+    private string? _exportPath;
+    private bool _narrowLibrary;
+    private bool _narrowShowDetail;
+    private readonly System.Windows.Threading.DispatcherTimer _undoTimer;
 
     /// <summary>Raised when the user wants to load an entry into the workbench.</summary>
     internal event Action<string, string, string?, string?, string?, string?>? LoadToTranslate;
@@ -78,11 +77,11 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         _rowsView = CollectionViewSource.GetDefaultView(_allRows);
         _rowsView.Filter = FilterRow;
         LibraryListBox.ItemsSource = _rowsView;
-        _deleteArmTimer = new System.Windows.Threading.DispatcherTimer
+        _undoTimer = new System.Windows.Threading.DispatcherTimer
         {
-            Interval = TimeSpan.FromSeconds(DeleteArmSeconds),
+            Interval = TimeSpan.FromSeconds(1),
         };
-        _deleteArmTimer.Tick += (_, _) => DisarmDelete();
+        _undoTimer.Tick += (_, _) => RefreshUndoBar();
     }
 
     private bool FilterRow(object item)
@@ -214,7 +213,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         {
             return;
         }
-        DisarmDelete();
+        RefreshUndoBar();
         _mode = ModeVocabulary.IsChecked == true ? LibraryMode.Vocabulary : LibraryMode.History;
         if (_mode == LibraryMode.Vocabulary)
         {
@@ -283,6 +282,10 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         var visibleCount = _rowsView.Cast<LibraryRow>().Count();
         var totalCount = _mode == LibraryMode.History ? _allHistory.Count : _allVocabulary.Count;
 
+        // These commands act on the whole selected collection, not the filter.
+        ClearCurrentButton.IsEnabled = totalCount > 0;
+        ExportMenuButton.IsEnabled = totalCount > 0;
+
         LibraryEmptyText.Visibility = visibleCount == 0 ? Visibility.Visible : Visibility.Collapsed;
         LibraryCountText.Text = string.IsNullOrEmpty(query)
             ? (_mode == LibraryMode.History
@@ -334,17 +337,21 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
 
     private void LibraryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        // 选中变化立即解除删除武装：先点 A 的「删除」再选 B，第二次点击
-        // 绝不能变成删除 B 的一击路径。
-        DisarmDelete();
         if (SelectedRow() is { } row)
         {
+            if (_narrowLibrary)
+            {
+                _narrowShowDetail = true;
+            }
             ShowDetail(row);
+            ApplyLibraryLayout();
         }
         else
         {
+            _narrowShowDetail = false;
             DetailPlaceholder.Visibility = Visibility.Visible;
             DetailScroll.Visibility = Visibility.Collapsed;
+            ApplyLibraryLayout();
         }
     }
 
@@ -357,7 +364,17 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         DetailKind.Text = $"{row.Kind} · {row.Timestamp}";
         DetailLanguagePair.Text = row.LanguagePair;
         DetailSource.Text = row.Source;
-        DetailTranslation.Text = row.Translation;
+        try
+        {
+            MarkdownPresenter.RenderToFlowDocument(DetailTranslation.Document, row.Translation,
+                Application.Current?.Resources ?? Resources);
+        }
+        catch
+        {
+            DetailTranslation.Document.Blocks.Clear();
+            DetailTranslation.Document.Blocks.Add(new System.Windows.Documents.Paragraph(
+                new System.Windows.Documents.Run(row.Translation)));
+        }
         DetailExplanation.Text = row.Explanation;
         DetailExplanation.Visibility = string.IsNullOrWhiteSpace(row.Explanation)
             ? Visibility.Collapsed
@@ -379,7 +396,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             e.Handled = true;
             if (SelectedRow() is { } row)
             {
-                RequestDeleteRow(row);
+                DeleteRowNow(row);
             }
         }
     }
@@ -391,7 +408,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         if (SelectedRow() is { } row)
         {
             TtsService.Speak(
-                _mode == LibraryMode.Vocabulary ? row.Source : row.Translation,
+                _mode == LibraryMode.Vocabulary ? row.Source : MarkdownPresenter.ToPlainText(row.Translation),
                 _mode == LibraryMode.Vocabulary
                     ? row.Word?.SourceLanguage ?? "auto"
                     : row.History?.TargetLanguage ?? "zh-CN");
@@ -403,7 +420,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         // Same shared formatter as the translate surfaces: the stored raw
         // text leaves as the agreed plain text, not damaged or raw markup.
         if (SelectedRow() is { } row &&
-            await Helpers.CopyToClipboardAsync(MarkdownPresenter.ToPlainText(row.Translation)))
+            await Helpers.CopyToClipboardAsync(MarkdownPresenter.ToPlainText(row.Translation, preserveListStructure: true)))
         {
             StatusChanged?.Invoke("已复制译文。", StatusTone.Info);
         }
@@ -421,74 +438,40 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
     {
         if (SelectedRow() is { } row)
         {
-            RequestDeleteRow(row);
+            DeleteRowNow(row);
         }
     }
 
-    /// <summary>
-    /// 两步删除入口（条目按钮与 Delete 键共用）：第一次请求只武装
-    /// （3 秒内可确认），再次请求同一行才真正删除。超时、换行、切模式
-    /// 都解除武装 — 删除永远不可能被一次点击/一次按键完成。
-    /// </summary>
-    private void RequestDeleteRow(LibraryRow row)
+    private void DeleteRowNow(LibraryRow row)
     {
-        if (_deleteArmRow is { } armed &&
-            armed.Id == row.Id &&
-            DateTime.UtcNow <= _deleteArmUntilUtc)
-        {
-            DisarmDelete();
-            DeleteRow(row);
-            return;
-        }
-        ArmDelete(row);
-    }
-
-    private void ArmDelete(LibraryRow row)
-    {
-        _deleteArmRow = row;
-        _deleteArmUntilUtc = DateTime.UtcNow.AddSeconds(DeleteArmSeconds);
-        _deleteArmTimer.Stop();
-        _deleteArmTimer.Start();
-        CardDeleteButton.Content = "确认删除？";
-        CardDeleteButton.SetResourceReference(System.Windows.Controls.Control.BackgroundProperty, "DangerSoftBrush");
-        CardDeleteButton.SetResourceReference(System.Windows.Controls.Control.ForegroundProperty, "DangerBrush");
-        StatusChanged?.Invoke($"再点一次「删除」或再按 Delete 确认删除该条（{DeleteArmSeconds} 秒后自动取消）。", StatusTone.Info);
-    }
-
-    private void DisarmDelete()
-    {
-        _deleteArmTimer.Stop();
-        _deleteArmRow = null;
-        if (CardDeleteButton is null)
-        {
-            return;
-        }
-        CardDeleteButton.Content = "删除";
-        CardDeleteButton.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
-        CardDeleteButton.ClearValue(System.Windows.Controls.Control.ForegroundProperty);
-    }
-
-    private void DeleteRow(LibraryRow row)
-    {
-        DisarmDelete();
         var currentIndex = LibraryListBox.SelectedIndex;
         if (_mode == LibraryMode.History)
         {
-            var removed = _history.Remove(row.Id);
+            if (!_history.TryRemove(row.Id, out var removed) || removed is null)
+            {
+                StatusChanged?.Invoke("没有删除。请确认历史文件可写后重试。", StatusTone.Error);
+                return;
+            }
+
+            var ticket = LibraryUndoJournal.OfferHistory([removed], DateTime.UtcNow);
+            ShowUndo(ticket, "已删除 1 条历史。");
             ReloadHistory();
             SelectAdjacentAfterDelete(currentIndex);
-            StatusChanged?.Invoke(
-                removed ? "已删除该条记录。" : "未保存到本机，请重试。",
-                removed ? StatusTone.Info : StatusTone.Error);
+            StatusChanged?.Invoke("已删除该条记录。", StatusTone.Info);
         }
         else if (_vocabulary is not null)
         {
-            var removed = _vocabulary.Remove(row.Id);
+            if (!_vocabulary.TryTake(row.Id, out var removed) || removed is null)
+            {
+                StatusChanged?.Invoke("没有删除。请确认生词本文件可写后重试。", StatusTone.Error);
+                return;
+            }
+
+            var ticket = LibraryUndoJournal.OfferVocabulary([removed], DateTime.UtcNow);
+            ShowUndo(ticket, "已删除 1 条生词。");
             ReloadVocabulary();
             SelectAdjacentAfterDelete(currentIndex);
-            StatusChanged?.Invoke(
-                removed ? "已从生词本移除该词条。" : "未保存到本机，请重试。",
-                removed ? StatusTone.Info : StatusTone.Error);
+            StatusChanged?.Invoke("已从生词本移除该词条。", StatusTone.Info);
         }
     }
 
@@ -510,7 +493,6 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
     /// </summary>
     internal void SelectLatestRowOrNothing()
     {
-        DisarmDelete();
         if (LibraryListBox.Items.Count == 0 || LibraryListBox.SelectedIndex >= 0)
         {
             return;
@@ -546,6 +528,8 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         }
         menu.PlacementTarget = ExportMenuButton;
         menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        menu.HorizontalOffset = -10;
+        menu.VerticalOffset = -2;
         menu.IsOpen = true;
     }
 
@@ -556,42 +540,55 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         return item;
     }
 
-    private async void ExportHistory(string format)
+    private void ExportHistory(string format)
     {
         try
         {
-            var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-            var path = System.IO.Path.Combine(
-                desktop, $"PopGlot_History_{DateTime.Now:yyyyMMdd_HHmm}.{format}");
             var content = format == "csv" ? _history.ExportToCsv() : _history.ExportToMarkdown();
-            await System.IO.File.WriteAllTextAsync(path, content, System.Text.Encoding.UTF8);
-            StatusChanged?.Invoke($"已导出历史记录到桌面：{System.IO.Path.GetFileName(path)}", StatusTone.Success);
+            var written = ExportFileWriter.WriteExclusive(
+                Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                "PopGlot_History",
+                format,
+                content,
+                DateTime.Now);
+            ShowExport(written.FullPath);
+            StatusChanged?.Invoke("已导出。", StatusTone.Success);
         }
         catch (Exception exception)
         {
-            StatusChanged?.Invoke($"导出历史记录失败：{exception.Message}", StatusTone.Error);
+            HideExport();
+            StatusChanged?.Invoke(ExportFileWriter.DescribeWriteFailure(exception), StatusTone.Error);
         }
     }
 
-    private async void ExportVocabulary(string format)
+    private void ExportVocabulary(string format)
     {
-        if (_vocabulary is null) return;
+        if (_vocabulary is null)
+        {
+            return;
+        }
+
         try
         {
-            var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-            var (name, content) = format switch
+            var (stem, extension, content) = format switch
             {
-                "anki" => ($"PopGlot_Anki_Export_{DateTime.Now:yyyyMMdd_HHmm}.tsv", _vocabulary.ExportToAnkiTsv()),
-                "md" => ($"PopGlot_Vocabulary_{DateTime.Now:yyyyMMdd_HHmm}.md", _vocabulary.ExportToMarkdown()),
-                _ => ($"PopGlot_Vocabulary_{DateTime.Now:yyyyMMdd_HHmm}.csv", _vocabulary.ExportToCsv()),
+                "anki" => ("PopGlot_Anki_Export", "tsv", _vocabulary.ExportToAnkiTsv()),
+                "md" => ("PopGlot_Vocabulary", "md", _vocabulary.ExportToMarkdown()),
+                _ => ("PopGlot_Vocabulary", "csv", _vocabulary.ExportToCsv()),
             };
-            var path = System.IO.Path.Combine(desktop, name);
-            await System.IO.File.WriteAllTextAsync(path, content, System.Text.Encoding.UTF8);
-            StatusChanged?.Invoke($"已导出生词本到桌面：{System.IO.Path.GetFileName(path)}", StatusTone.Success);
+            var written = ExportFileWriter.WriteExclusive(
+                Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                stem,
+                extension,
+                content,
+                DateTime.Now);
+            ShowExport(written.FullPath);
+            StatusChanged?.Invoke("已导出。", StatusTone.Success);
         }
         catch (Exception exception)
         {
-            StatusChanged?.Invoke($"导出生词本失败：{exception.Message}", StatusTone.Error);
+            HideExport();
+            StatusChanged?.Invoke(ExportFileWriter.DescribeWriteFailure(exception), StatusTone.Error);
         }
     }
 
@@ -599,19 +596,217 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
     {
         if (_mode == LibraryMode.History)
         {
-            var cleared = _history.Clear();
-            StatusChanged?.Invoke(
-                cleared ? "历史记录已清空。" : "清空历史失败：文件正被占用。",
-                cleared ? StatusTone.Info : StatusTone.Error);
+            if (!_history.TryClear(out var removed))
+            {
+                StatusChanged?.Invoke("清空历史失败。请确认文件可写后重试。", StatusTone.Error);
+                return;
+            }
+
+            if (removed.Count > 0)
+            {
+                var ticket = LibraryUndoJournal.OfferHistory(removed, DateTime.UtcNow);
+                ShowUndo(ticket, $"已清空 {removed.Count} 条历史。");
+            }
+
+            StatusChanged?.Invoke("历史记录已清空。", StatusTone.Info);
             ReloadHistory();
         }
         else if (_vocabulary is not null)
         {
-            var cleared = _vocabulary.Clear();
-            StatusChanged?.Invoke(
-                cleared ? "生词本已清空。" : "清空生词本失败：文件正被占用。",
-                cleared ? StatusTone.Info : StatusTone.Error);
+            if (!_vocabulary.TryClear(out var removed))
+            {
+                StatusChanged?.Invoke("清空生词本失败。请确认文件可写后重试。", StatusTone.Error);
+                return;
+            }
+
+            if (removed.Count > 0)
+            {
+                var ticket = LibraryUndoJournal.OfferVocabulary(removed, DateTime.UtcNow);
+                ShowUndo(ticket, $"已清空 {removed.Count} 条生词。");
+            }
+
+            StatusChanged?.Invoke("生词本已清空。", StatusTone.Info);
             ReloadVocabulary();
+        }
+    }
+
+    private void ShowUndo(LibraryUndoTicket ticket, string text)
+    {
+        _undoTicketId = ticket.Id;
+        LibraryUndoText.Text = text;
+        LibraryUndoBar.Visibility = Visibility.Visible;
+        _undoTimer.Start();
+    }
+
+    private void RefreshUndoBar()
+    {
+        if (LibraryUndoBar is null)
+        {
+            return;
+        }
+
+        var current = _undoTicketId is { } id
+            ? LibraryUndoJournal.Current(DateTime.UtcNow)
+            : null;
+        if (current is null || _undoTicketId != current.Id)
+        {
+            _undoTicketId = null;
+            LibraryUndoBar.Visibility = Visibility.Collapsed;
+            _undoTimer.Stop();
+        }
+    }
+
+    private void LibraryUndo_Click(object sender, RoutedEventArgs e)
+    {
+        if (_undoTicketId is not { } id)
+        {
+            RefreshUndoBar();
+            return;
+        }
+
+        var ticket = LibraryUndoJournal.Take(id, DateTime.UtcNow);
+        RefreshUndoBar();
+        if (ticket is null)
+        {
+            StatusChanged?.Invoke("撤销已失效。", StatusTone.Warning);
+            return;
+        }
+
+        if (ticket.Surface == LibrarySurface.History)
+        {
+            if (!_history.InsertMissing(ticket.HistoryItems, out var inserted) || inserted == 0)
+            {
+                var again = LibraryUndoJournal.OfferHistory(ticket.HistoryItems, DateTime.UtcNow);
+                ShowUndo(again, "撤销没有写回。");
+                StatusChanged?.Invoke("撤销没有写回。请确认历史文件可写后重试。", StatusTone.Error);
+                return;
+            }
+
+            ReloadHistory();
+            StatusChanged?.Invoke("已恢复刚才删除的历史。", StatusTone.Success);
+            return;
+        }
+
+        if (_vocabulary is null ||
+            !_vocabulary.InsertMissing(ticket.VocabularyItems, out var restored) ||
+            restored == 0)
+        {
+            var again = LibraryUndoJournal.OfferVocabulary(ticket.VocabularyItems, DateTime.UtcNow);
+            ShowUndo(again, "撤销没有写回。");
+            StatusChanged?.Invoke("撤销没有写回。请确认生词本文件可写后重试。", StatusTone.Error);
+            return;
+        }
+
+        ReloadVocabulary();
+        StatusChanged?.Invoke("已恢复刚才删除的生词。", StatusTone.Success);
+    }
+
+    private void LibrarySplitGrid_SizeChanged(object sender, SizeChangedEventArgs e) => ApplyLibraryLayout();
+
+    private void LibraryBack_Click(object sender, RoutedEventArgs e)
+    {
+        _narrowShowDetail = false;
+        ApplyLibraryLayout();
+        if (LibraryListBox.SelectedItem is not null)
+        {
+            LibraryListBox.ScrollIntoView(LibraryListBox.SelectedItem);
+        }
+    }
+
+    /// <summary>
+    /// Wide windows keep the 320 DIP list. Narrow windows show either the list
+    /// or the detail, with a way back that keeps the selection.
+    /// </summary>
+    private void ApplyLibraryLayout()
+    {
+        if (LibrarySplitGrid is null || ListColumn is null || DetailColumn is null)
+        {
+            return;
+        }
+
+        var width = LibrarySplitGrid.ActualWidth;
+        if (width <= 0)
+        {
+            return;
+        }
+
+        _narrowLibrary = width < 560;
+        if (!_narrowLibrary)
+        {
+            _narrowShowDetail = false;
+            ListPane.Visibility = Visibility.Visible;
+            DetailPane.Visibility = Visibility.Visible;
+            LibrarySplitter.Visibility = Visibility.Visible;
+            LibraryBackButton.Visibility = Visibility.Collapsed;
+            ListColumn.Width = new GridLength(320);
+            ListColumn.MinWidth = 220;
+            SplitterColumn.Width = new GridLength(8);
+            DetailColumn.Width = new GridLength(1, GridUnitType.Star);
+            return;
+        }
+
+        LibrarySplitter.Visibility = Visibility.Collapsed;
+        SplitterColumn.Width = new GridLength(0);
+        ListColumn.MinWidth = 0;
+        if (_narrowShowDetail && LibraryListBox.SelectedItem is not null)
+        {
+            ListPane.Visibility = Visibility.Collapsed;
+            DetailPane.Visibility = Visibility.Visible;
+            ListColumn.Width = new GridLength(0);
+            DetailColumn.Width = new GridLength(1, GridUnitType.Star);
+            LibraryBackButton.Visibility = Visibility.Visible;
+            return;
+        }
+
+        ListPane.Visibility = Visibility.Visible;
+        DetailPane.Visibility = Visibility.Collapsed;
+        ListColumn.Width = new GridLength(1, GridUnitType.Star);
+        DetailColumn.Width = new GridLength(0);
+        LibraryBackButton.Visibility = Visibility.Collapsed;
+    }
+
+    private void ShowExport(string path)
+    {
+        _exportPath = path;
+        LibraryExportBar.Visibility = Visibility.Visible;
+    }
+
+    private void HideExport()
+    {
+        _exportPath = null;
+        if (LibraryExportBar is not null)
+        {
+            LibraryExportBar.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void DismissExport_Click(object sender, RoutedEventArgs e) => HideExport();
+
+    private void OpenExportFile_Click(object sender, RoutedEventArgs e) => OpenExport(file: true);
+
+    private void OpenExportFolder_Click(object sender, RoutedEventArgs e) => OpenExport(file: false);
+
+    private void OpenExport(bool file)
+    {
+        if (string.IsNullOrWhiteSpace(_exportPath) || !System.IO.File.Exists(_exportPath))
+        {
+            HideExport();
+            StatusChanged?.Invoke("找不到刚导出的文件。", StatusTone.Warning);
+            return;
+        }
+
+        try
+        {
+            var target = file ? _exportPath : System.IO.Path.GetDirectoryName(_exportPath);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = target ?? _exportPath,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception)
+        {
+            StatusChanged?.Invoke("无法打开导出的文件。", StatusTone.Error);
         }
     }
 }

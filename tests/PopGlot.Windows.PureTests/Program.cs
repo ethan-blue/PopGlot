@@ -98,6 +98,13 @@ internal static class Program
         Run("R08 user data migration and recovery service package roundtrip and safety guards", UserDataBackupAndRecoverySafetyGuards);
         Run("R09 summary lifecycle coordinator isolates requests and manages generation recency", SummaryLifecycleCoordinatorGenerationAndCancellation);
         Run("R11 distribution maturity specifications and packaging invariants", DistributionMaturityAndPackagingInvariants);
+        await RunAsync("list connection test patches only a matching engine", ListConnectionTestPatchesMatchingEngineOnly);
+        Run("history export does not replace an existing file", HistoryExportDoesNotReplaceExistingFile);
+        await RunAsync("concurrent exports keep the original bytes", ConcurrentExportsKeepOriginalBytes);
+        Run("failed export removes the partial file", FailedExportRemovesPartialFile);
+        Run("library undo restores only the removed rows", LibraryUndoRestoresOnlyRemovedRows);
+        Run("library undo is not offered when the write fails", LibraryUndoIsNotOfferedWhenWriteFails);
+        Run("long history search records size and elapsed time", LongHistorySearchRecordsSizeAndElapsedTime);
 
         Console.WriteLine($"\nPopGlot pure tests: {_passed} passed, {_failed} failed, " +
                           $"{Interlocked.Read(ref refusedSends)} send attempts refused.");
@@ -1819,6 +1826,473 @@ internal static string FindProjectRoot()
         True(releaseYml.Contains("--self-contained true"), "release.yml must enforce --self-contained true");
         True(releaseYml.Contains("PopGlot.Windows.csproj") && releaseYml.Contains("Cargo.toml") && releaseYml.Contains("CHANGELOG.md"),
             "release.yml must validate 4-way consistency across manifests");
+    }
+
+    private static async Task ListConnectionTestPatchesMatchingEngineOnly()
+    {
+        var previousOverride = ProfileManager.ConfigPathOverride;
+        var directory = Path.Combine(Path.GetTempPath(), "popglot-verify-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        ProfileManager.ResetForTests();
+        ProfileManager.ConfigPathOverride = Path.Combine(directory, "product-config.json");
+        ConnectionTestRunner.ResetForTests();
+        const string secret = "synthetic-alpha-not-a-real-key";
+        const string untouchedTarget = "PopGlot/provider/untouched-sentinel";
+        CredentialStore.SaveApiKey("sentinel-stays", untouchedTarget);
+        try
+        {
+            var alpha = ProviderProfile.CreateOpenAi();
+            alpha.Id = "alpha";
+            alpha.Name = "Alpha";
+            alpha.TextModel = "model-a";
+            alpha.ApiBaseUrl = "https://alpha.example/v1";
+            alpha.CredentialTarget = "PopGlot/provider/alpha";
+            alpha.CredentialRevision = 2;
+            var beta = ProviderProfile.CreateDeepSeek();
+            beta.Id = "beta";
+            beta.Name = "Beta";
+            beta.TextModel = "model-b";
+            beta.ApiBaseUrl = "https://beta.example/v1";
+            beta.CredentialTarget = "PopGlot/provider/beta";
+            beta.CredentialRevision = 1;
+            ProfileManager.Save(new CoreProductConfig
+            {
+                ActiveProfileId = "alpha",
+                Profiles = [alpha, beta],
+            });
+            CredentialStore.SaveApiKey(secret, alpha.CredentialTarget);
+            CredentialStore.SaveApiKey("synthetic-beta-not-a-real-key", beta.CredentialTarget);
+
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var task = ConnectionTestRunner.RunListTestAsync("alpha", async _ =>
+            {
+                started.TrySetResult();
+                return await release.Task.ConfigureAwait(false);
+            });
+            True(await Task.WhenAny(started.Task, Task.Delay(3000)) == started.Task, "the delayed executor must start");
+
+            var during = ProfileManager.Load();
+            var edited = during.Profiles.First(item => item.Id == "alpha");
+            edited.TextModel = "model-a-new";
+            edited.ApiBaseUrl = "https://alpha.example/v2";
+            edited.CredentialRevision = 3;
+            during.Profiles.First(item => item.Id == "beta").Name = "Beta renamed";
+            during.ActiveProfileId = "beta";
+            ProfileManager.Save(during);
+            release.TrySetResult("ok");
+            var stale = await task;
+            Equal(VerificationApplyResult.Stale, stale.Apply, "a changed model, address, and key revision must reject the result");
+            var afterEdit = ProfileManager.Load();
+            var alphaAfter = afterEdit.Profiles.First(item => item.Id == "alpha");
+            Equal("model-a-new", alphaAfter.TextModel);
+            Equal("https://alpha.example/v2", alphaAfter.ApiBaseUrl);
+            Equal(3, alphaAfter.CredentialRevision);
+            True(alphaAfter.LastTestOutcome is null, "a stale success must not mark the edited engine");
+            Equal("Beta renamed", afterEdit.Profiles.First(item => item.Id == "beta").Name);
+            Equal("beta", afterEdit.ActiveProfileId);
+
+            alphaAfter.TextModel = "model-a";
+            alphaAfter.ApiBaseUrl = "https://alpha.example/v1";
+            alphaAfter.CredentialRevision = 2;
+            afterEdit.ActiveProfileId = "alpha";
+            ProfileManager.Save(afterEdit);
+
+            var failStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var failRelease = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var failTask = ConnectionTestRunner.RunListTestAsync("alpha", async _ =>
+            {
+                failStarted.TrySetResult();
+                await failRelease.Task.ConfigureAwait(false);
+                throw new InvalidOperationException("HTTP 401");
+            });
+            True(await Task.WhenAny(failStarted.Task, Task.Delay(3000)) == failStarted.Task, "the failing executor must start");
+            var failedDuring = ProfileManager.Load();
+            failedDuring.Profiles.First(item => item.Id == "alpha").TextModel = "kept-model";
+            ProfileManager.Save(failedDuring);
+            failRelease.TrySetResult("unused");
+            var failed = await failTask;
+            Equal(VerificationApplyResult.Stale, failed.Apply, "a stale failure must not be written");
+            Equal("kept-model", ProfileManager.Load().Profiles.First(item => item.Id == "alpha").TextModel);
+            True(ProfileManager.Load().Profiles.First(item => item.Id == "alpha").LastTestOutcome is null,
+                "a stale failure must not leave a healthy or failed mark");
+
+            var deletedDuring = ProfileManager.Load();
+            deletedDuring.Profiles.RemoveAll(item => item.Id == "alpha");
+            deletedDuring.ActiveProfileId = "beta";
+            ProfileManager.Save(deletedDuring);
+            var deleted = await ConnectionTestRunner.RunListTestAsync("alpha", _ => Task.FromResult("ok"));
+            Equal(VerificationApplyResult.Missing, deleted.Apply);
+            True(ProfileManager.Load().Profiles.All(item => item.Id != "alpha"), "a deleted engine must stay deleted");
+
+            var restored = ProfileManager.Load();
+            var alphaAgain = alpha.Clone();
+            alphaAgain.TextModel = "model-a";
+            alphaAgain.CredentialRevision = 2;
+            alphaAgain.LastTestOutcome = null;
+            restored.Profiles.Insert(0, alphaAgain);
+            restored.ActiveProfileId = "alpha";
+            ProfileManager.Save(restored);
+
+            var hold = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var first = ConnectionTestRunner.RunListTestAsync("alpha", _ => hold.Task);
+            var second = await ConnectionTestRunner.RunListTestAsync("beta", _ => Task.FromResult("ok"));
+            var blocked = await ConnectionTestRunner.RunListTestAsync("alpha", _ => Task.FromResult("ok"));
+            Equal(VerificationApplyResult.Busy, blocked.Apply, "the same engine cannot send a second test");
+            Equal(VerificationApplyResult.Applied, second.Apply, "a different engine may finish while the first is in flight");
+            hold.TrySetResult("ok");
+            var firstResult = await first;
+            Equal(VerificationApplyResult.Applied, firstResult.Apply);
+            var both = ProfileManager.Load();
+            Equal("ok", both.Profiles.First(item => item.Id == "alpha").LastTestOutcome);
+            Equal("ok", both.Profiles.First(item => item.Id == "beta").LastTestOutcome);
+            Equal("model-a", both.Profiles.First(item => item.Id == "alpha").TextModel);
+            Equal("Beta renamed", both.Profiles.First(item => item.Id == "beta").Name);
+
+            var cancellationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var cancellationRelease = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var cancelledRun = ConnectionTestRunner.RunListTestAsync("alpha", async _ =>
+                {
+                    cancellationStarted.TrySetResult();
+                    return await cancellationRelease.Task.ConfigureAwait(false);
+                }, cancellation.Token);
+                True(await Task.WhenAny(cancellationStarted.Task, Task.Delay(3000)) == cancellationStarted.Task,
+                    "the cancellable connection request must enter execution");
+                cancellation.Cancel();
+                cancellationRelease.TrySetResult("ok");
+                var cancelled = await cancelledRun;
+                Equal(VerificationApplyResult.Cancelled, cancelled.Apply,
+                    "a late successful response after cancellation must not be applied");
+                True(!ConnectionTestRunner.IsInFlight("alpha"), "cancellation must release the in-flight guard");
+                True(ProfileManager.Load().Profiles.First(item => item.Id == "alpha").LastTestOutcome == "ok",
+                    "the previous result remains unchanged after late cancellation");
+            }
+
+            var saved = ProfileManager.Load().Profiles.First(item => item.Id == "alpha");
+            var prospective = ProfileVerification.CaptureForProspectiveCredential(saved);
+            var unsaved = ProfileManager.TryPatchVerification(prospective, "ok", DateTime.UtcNow);
+            Equal(VerificationApplyResult.Stale, unsaved, "an unsaved key test must not stamp the saved engine");
+            Equal(2, ProfileManager.Load().Profiles.First(item => item.Id == "alpha").CredentialRevision);
+
+            var draft = saved.Clone();
+            draft.CredentialRevision = saved.CredentialRevision + 1;
+            var tested = ProfileVerification.Decide(
+                prospective,
+                "ok",
+                DateTime.UtcNow,
+                saved,
+                draft,
+                keyWritten: true,
+                credentialAvailable: true);
+            Equal("ok", tested.Outcome, "saving after a test of the new key keeps that test's evidence");
+            Equal(prospective.EvidenceFingerprint, tested.Fingerprint);
+            var replaced = ProfileVerification.Decide(null, null, null, saved, draft, keyWritten: true, credentialAvailable: true);
+            True(replaced.Outcome is null, "an untested replacement must drop the old success mark");
+
+            True(ProfileVerification.IsMaskNotAKey("••••••••••••"), "the mask must not be treated as a key");
+            True(!ProfileVerification.IsMaskNotAKey(secret), "a real synthetic key is not a mask");
+            var catalog = ModelCatalogMessages.DescribeLoad(3);
+            True(catalog.Length <= 24, "catalog success should be a short status, not a protocol explanation");
+            True(!catalog.Contains("可用", StringComparison.Ordinal), "a catalog load must not say the engine is usable");
+            True(catalog.Contains("目录", StringComparison.Ordinal), "a catalog load must say it only read the catalog");
+
+            var json = File.ReadAllText(ProfileManager.ConfigPathOverride!);
+            True(!json.Contains(secret, StringComparison.Ordinal), "the config file must not store the key");
+            var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(secret)));
+            True(!json.Contains(hash, StringComparison.Ordinal), "the config file must not store a key hash");
+            True(!saved.LastTestFingerprint!.Contains(secret, StringComparison.Ordinal), "evidence must not contain the key");
+            Equal("sentinel-stays", CredentialStore.LoadApiKey(untouchedTarget));
+        }
+        finally
+        {
+            CredentialStore.DeleteApiKey("PopGlot/provider/alpha");
+            CredentialStore.DeleteApiKey("PopGlot/provider/beta");
+            CredentialStore.DeleteApiKey(untouchedTarget);
+            ConnectionTestRunner.ResetForTests();
+            ProfileManager.ResetForTests();
+            ProfileManager.ConfigPathOverride = previousOverride;
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    private static void HistoryExportDoesNotReplaceExistingFile()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "popglot-export-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var historyDirectory = Path.Combine(directory, "history");
+        Directory.CreateDirectory(historyDirectory);
+        try
+        {
+            var history = new HistoryStore(Path.Combine(historyDirectory, "history.json"));
+            history.TryAdd(new TranslationHistoryEntry(
+                Guid.NewGuid(),
+                DateTimeOffset.UtcNow,
+                "workbench",
+                "=1+1",
+                "译文",
+                "",
+                []), true);
+            var csv = history.ExportToCsv();
+            True(csv.Contains("'=1+1", StringComparison.Ordinal), "formula cells stay neutralized");
+            var stamp = new DateTime(2026, 9, 26, 12, 34, 56);
+            var original = Path.Combine(directory, "PopGlot_History_20260926_123456.csv");
+            var originalBytes = new byte[] { 9, 8, 7, 6 };
+            File.WriteAllBytes(original, originalBytes);
+            var first = ExportFileWriter.WriteExclusive(directory, "PopGlot_History", "csv", csv, stamp);
+            var second = ExportFileWriter.WriteExclusive(directory, "PopGlot_History", "csv", csv, stamp);
+            True(first.FullPath != original && second.FullPath != original, "neither export may reuse the existing path");
+            True(first.FullPath != second.FullPath, "two exports in the same second need two files");
+            True(File.ReadAllBytes(original).AsSpan().SequenceEqual(originalBytes), "the original bytes stay");
+            Equal(csv, File.ReadAllText(first.FullPath));
+            Equal(csv, File.ReadAllText(second.FullPath));
+            True(!first.FileName.Contains(directory, StringComparison.Ordinal), "the returned name is not a full path");
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    private static async Task ConcurrentExportsKeepOriginalBytes()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "popglot-export-race-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        ExportFileWriter.ResetForTests();
+        try
+        {
+            var stamp = new DateTime(2026, 9, 26, 8, 0, 0);
+            var original = Path.Combine(directory, "PopGlot_History_20260926_080000.md");
+            var originalBytes = new byte[] { 1, 2, 3, 4 };
+            File.WriteAllBytes(original, originalBytes);
+            var first = Task.Run(() => ExportFileWriter.WriteExclusive(directory, "PopGlot_History", "md", "one", stamp));
+            var second = Task.Run(() => ExportFileWriter.WriteExclusive(directory, "PopGlot_History", "md", "two", stamp));
+            await Task.WhenAll(first, second);
+            True(first.Result.FullPath != second.Result.FullPath, "concurrent exports must create two files");
+            True(File.ReadAllBytes(original).AsSpan().SequenceEqual(originalBytes), "the original file is not replaced");
+            True(File.Exists(first.Result.FullPath) && File.Exists(second.Result.FullPath), "both new files exist");
+            var bodies = new[] { File.ReadAllText(first.Result.FullPath), File.ReadAllText(second.Result.FullPath) };
+            True(bodies.Contains("one") && bodies.Contains("two"), "each export keeps the bytes it wrote");
+        }
+        finally
+        {
+            ExportFileWriter.ResetForTests();
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    private static void FailedExportRemovesPartialFile()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "popglot-export-fail-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            ExportFileWriter.WriterOverride = (path, _) =>
+            {
+                File.WriteAllBytes(path, [9]);
+                throw new UnauthorizedAccessException("denied");
+            };
+            var stamp = new DateTime(2026, 9, 26, 1, 2, 3);
+            IOException? error = null;
+            try
+            {
+                ExportFileWriter.WriteExclusive(directory, "PopGlot_History", "csv", "body", stamp);
+            }
+            catch (IOException exception)
+            {
+                error = exception;
+            }
+
+            True(error is not null, "a failed write must not report success");
+            True(error!.Message.Contains("只读", StringComparison.Ordinal) ||
+                 error.Message.Contains("可写", StringComparison.Ordinal),
+                "the failure must be a short actionable message");
+            True(!error.Message.Contains(directory, StringComparison.Ordinal), "the status must not keep the directory path");
+            True(!Directory.EnumerateFiles(directory).Any(path => File.ReadAllBytes(path).Length == 1),
+                "a failed write must not leave the partial file");
+
+            var missing = Path.Combine(directory, "missing");
+            IOException? missingError = null;
+            try
+            {
+                ExportFileWriter.WriteExclusive(missing, "PopGlot_History", "csv", "body", stamp);
+            }
+            catch (IOException exception)
+            {
+                missingError = exception;
+            }
+
+            True(missingError is not null && missingError.Message.Contains("不存在", StringComparison.Ordinal),
+                "a missing folder must say the folder is unavailable");
+        }
+        finally
+        {
+            ExportFileWriter.ResetForTests();
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    private static void LibraryUndoRestoresOnlyRemovedRows()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "popglot-undo-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        LibraryUndoJournal.ResetForTests();
+        try
+        {
+            var history = new HistoryStore(Path.Combine(directory, "history.json"));
+            var kept = HistoryRow("kept", "原文保留");
+            var removed = HistoryRow("removed", "原文删除");
+            var added = HistoryRow("added", "之后新增");
+            Equal(HistoryAddResult.Stored, history.TryAdd(kept, true));
+            Equal(HistoryAddResult.Stored, history.TryAdd(removed, true));
+            True(history.TryRemove(removed.Id, out var taken) && taken is not null, "delete must persist before undo is possible");
+            Equal(HistoryAddResult.Stored, history.TryAdd(added, true));
+            var edited = HistoryRow("kept-edited", "原文保留");
+            edited = kept with { Translation = "后来改过的译文" };
+            Equal(HistoryAddResult.Stored, history.TryAdd(edited, true));
+            True(history.InsertMissing([taken!], out var inserted) && inserted == 1, "undo inserts the removed row");
+            var rows = history.Load();
+            True(rows.Any(row => row.Id == removed.Id && row.Source == "原文删除"), "the removed row comes back");
+            True(rows.Any(row => row.Id == added.Id), "a row added after the delete stays");
+            True(rows.Any(row => row.Id == edited.Id && row.Translation == "后来改过的译文"),
+                "a later edit is not replaced by the undo snapshot");
+            True(rows.Count(row => row.Id == kept.Id) == 1, "the original kept row is still there once");
+
+            var capacityStore = new HistoryStore(Path.Combine(directory, "capacity-history.json"));
+            var capacityRows = Enumerable.Range(0, 200).Select(index => HistoryRow("capacity-" + index, "capacity row " + index)).ToArray();
+            foreach (var capacityRow in capacityRows)
+                Equal(HistoryAddResult.Stored, capacityStore.TryAdd(capacityRow, true));
+            True(capacityStore.TryClear(out var capacityRemoved) && capacityRemoved.Count == 200,
+                "capacity fixture clears its full history snapshot");
+            var later = HistoryRow("later-capacity-row", "newer row remains");
+            Equal(HistoryAddResult.Stored, capacityStore.TryAdd(later, true));
+            True(capacityStore.InsertMissing(capacityRemoved, out var capacityInserted, out var capacityRemaining),
+                "partial undo persistence succeeds within the configured capacity");
+            Equal(199, capacityInserted, "undo restores only the available slots");
+            Equal(1, capacityRemaining.Count, "unrestored history stays in the undo ticket");
+            True(capacityStore.Load().Any(row => row.Id == later.Id), "partial undo does not evict a later row");
+
+            var vocabPath = Path.Combine(directory, "vocab.json");
+            var vocab = new VocabularyStore(vocabPath);
+            vocab.ToggleStar("stay", "留下", sourceLang: "en", targetLang: "zh-CN");
+            vocab.ToggleStar("gone", "删除", sourceLang: "en", targetLang: "zh-CN");
+            var gone = vocab.GetAll().First(word => word.Word == "gone");
+            True(vocab.TryTake(gone.Id, out var takenWord) && takenWord is not null, "the wordbook delete must persist");
+            vocab.ToggleStar("later", "新增", sourceLang: "en", targetLang: "zh-CN");
+            True(vocab.InsertMissing([takenWord!], out var restored) && restored == 1, "the removed word is inserted back");
+            var words = vocab.GetAll();
+            True(words.Any(word => word.Word == "gone") && words.Any(word => word.Word == "later") && words.Any(word => word.Word == "stay"),
+                "vocabulary undo restores only the removed word");
+
+            var ticket = LibraryUndoJournal.OfferHistory([removed], DateTime.UtcNow);
+            var otherTicket = LibraryUndoJournal.OfferVocabulary([
+                new VocabularyWord(Guid.NewGuid(), DateTimeOffset.UtcNow, "undo-vocab", "恢复", "", "", "en", "zh-CN", [])
+            ], DateTime.UtcNow);
+            True(LibraryUndoJournal.Take(ticket.Id, DateTime.UtcNow) is not null,
+                "offering a vocabulary undo must not invalidate the still-live history undo");
+            True(LibraryUndoJournal.Take(otherTicket.Id, DateTime.UtcNow) is not null,
+                "independent undo tickets can be consumed in either order");
+            ticket = LibraryUndoJournal.OfferHistory([removed], DateTime.UtcNow);
+            True(LibraryUndoJournal.Current(DateTime.UtcNow) is not null, "a fresh undo ticket is visible");
+            LibraryUndoJournal.ResetForTests();
+            True(LibraryUndoJournal.Current(DateTime.UtcNow) is null, "a restart drops the in-memory undo");
+            True(LibraryUndoJournal.Take(ticket.Id, DateTime.UtcNow) is null, "an expired ticket cannot be taken after reset");
+            True(!File.Exists(Path.Combine(directory, "undo.json")), "undo is not written beside the library files");
+        }
+        finally
+        {
+            LibraryUndoJournal.ResetForTests();
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    private static void LibraryUndoIsNotOfferedWhenWriteFails()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "popglot-undo-fail-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        LibraryUndoJournal.ResetForTests();
+        try
+        {
+            var path = Path.Combine(directory, "history.json");
+            var history = new HistoryStore(path);
+            var row = HistoryRow("locked", "还在");
+            Equal(HistoryAddResult.Stored, history.TryAdd(row, true));
+            history.Flush();
+            File.SetAttributes(path, FileAttributes.ReadOnly);
+            True(!history.TryRemove(row.Id, out var removed) && removed is null, "a read-only history file must not report a delete");
+            True(history.Load().Any(item => item.Id == row.Id), "the row stays when the write fails");
+            True(!history.TryClear(out var cleared) && cleared.Count == 0, "a read-only clear must not report removed rows");
+            True(history.Load().Count == 1, "the clear rolls back");
+            True(LibraryUndoJournal.Current(DateTime.UtcNow) is null, "a failed write does not create an undo ticket");
+
+            var vocabPath = Path.Combine(directory, "vocab.json");
+            File.WriteAllText(vocabPath, "{not-json");
+            var vocab = new VocabularyStore(vocabPath);
+            True(!vocab.TryClear(out _), "a corrupt wordbook stays read-only");
+            True(LibraryUndoJournal.Current(DateTime.UtcNow) is null, "a refused clear is not undoable");
+        }
+        finally
+        {
+            try
+            {
+                var path = Path.Combine(directory, "history.json");
+                if (File.Exists(path))
+                {
+                    File.SetAttributes(path, FileAttributes.Normal);
+                }
+            }
+            catch { }
+            LibraryUndoJournal.ResetForTests();
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    private static void LongHistorySearchRecordsSizeAndElapsedTime()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "popglot-search-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var history = new HistoryStore(Path.Combine(directory, "history.json"));
+            for (var i = 0; i < 200; i++)
+            {
+                var source = i == 199 ? "unique-needle-token at the oldest edge" : new string('x', 80) + " row " + i.ToString();
+                Equal(HistoryAddResult.Stored, history.TryAdd(HistoryRow("row" + i.ToString(), source), true),
+                    "the store must accept row " + i.ToString());
+            }
+
+            var started = System.Diagnostics.Stopwatch.StartNew();
+            var found = history.Search("unique-needle-token", maxResults: 5);
+            started.Stop();
+            Equal(1, found.Count, "the long search must find the planted row");
+            True(started.Elapsed < TimeSpan.FromSeconds(2),
+                "search of " + history.Load().Count.ToString() + " rows took " + started.ElapsedMilliseconds.ToString() + " ms");
+            Console.WriteLine(
+                "MEASURE history-search count=" + history.Load().Count.ToString() +
+                " elapsedMs=" + started.ElapsedMilliseconds.ToString());
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    private static TranslationHistoryEntry HistoryRow(string id, string source) => new(
+        GuidFrom(id),
+        DateTimeOffset.UtcNow,
+        "workbench",
+        source,
+        "译文",
+        "",
+        []);
+
+    private static Guid GuidFrom(string text)
+    {
+        var bytes = new byte[16];
+        var raw = System.Text.Encoding.UTF8.GetBytes(text);
+        Array.Copy(raw, bytes, Math.Min(raw.Length, bytes.Length));
+        return new Guid(bytes);
     }
 }
 

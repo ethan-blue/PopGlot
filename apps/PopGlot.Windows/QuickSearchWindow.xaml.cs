@@ -1032,7 +1032,7 @@ public partial class QuickSearchWindow : Window
 
         {
 
-            var clean = MarkdownPresenter.ToPlainText(textToCopy);
+            var clean = MarkdownPresenter.ToPlainText(textToCopy, preserveListStructure: true);
 
             // Hardened write: a raw Clipboard.SetText on the UI thread freezes
 

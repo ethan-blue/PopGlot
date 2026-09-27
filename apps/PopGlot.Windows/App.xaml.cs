@@ -780,8 +780,10 @@ public partial class App : Application
             SetHotkeysSuspended = suspended => _hotkeys?.SetSuspended(suspended),
         };
         window.LocalDataCleared += () => _mainWindow?.ReloadHistory();
+        window.ProfileChanged += () => _mainWindow?.RefreshEngineStatus();
         window.Closed += (_, _) =>
         {
+            _mainWindow?.RefreshEngineStatus();
             if (ReferenceEquals(_settingsWindow, window))
             {
                 _settingsWindow = null;

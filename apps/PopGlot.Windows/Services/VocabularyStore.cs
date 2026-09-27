@@ -289,6 +289,57 @@ internal sealed class VocabularyStore : IVocabularyRepository
         return VocabularySaveResult.Saved(willBeStarred);
     }
 
+    public bool TryTake(Guid id, out VocabularyWord? removed)
+    {
+        removed = null;
+        TaskCompletionSource<bool> tcs;
+        List<VocabularyWord> previous;
+        lock (_gate)
+        {
+            if (LoadBlocked)
+            {
+                return false;
+            }
+
+            var hit = _words.FirstOrDefault(word => word.Id == id);
+            if (hit is null)
+            {
+                return false;
+            }
+
+            var next = _words.Where(word => word.Id != id).ToList();
+            string json;
+            try
+            {
+                json = JsonSerializer.Serialize(next, new JsonSerializerOptions { WriteIndented = true });
+            }
+            catch
+            {
+                return false;
+            }
+
+            previous = _words;
+            _words = next;
+            tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _persistChannel.Writer.TryWrite(new PersistRequest(json, tcs));
+            removed = hit;
+        }
+
+        var written = tcs.Task.GetAwaiter().GetResult();
+        if (!written)
+        {
+            lock (_gate)
+            {
+                _words = previous;
+            }
+
+            removed = null;
+            return false;
+        }
+
+        return true;
+    }
+
     public bool Remove(Guid id)
     {
         TaskCompletionSource<bool> tcs;
@@ -335,8 +386,11 @@ internal sealed class VocabularyStore : IVocabularyRepository
         return true;
     }
 
-    public bool Clear()
+    public bool Clear() => TryClear(out _);
+
+    public bool TryClear(out IReadOnlyList<VocabularyWord> removed)
     {
+        removed = [];
         TaskCompletionSource<bool> tcs;
         List<VocabularyWord> previous;
         lock (_gate)
@@ -347,6 +401,12 @@ internal sealed class VocabularyStore : IVocabularyRepository
             {
                 return false;
             }
+
+            if (_words.Count == 0)
+            {
+                return true;
+            }
+
             var next = new List<VocabularyWord>();
             var json = JsonSerializer.Serialize(next, new JsonSerializerOptions { WriteIndented = true });
             previous = _words;
@@ -354,6 +414,7 @@ internal sealed class VocabularyStore : IVocabularyRepository
             tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _persistChannel.Writer.TryWrite(new PersistRequest(json, tcs));
         }
+
         var written = tcs.Task.GetAwaiter().GetResult();
         if (!written)
         {
@@ -361,8 +422,102 @@ internal sealed class VocabularyStore : IVocabularyRepository
             {
                 _words = previous;
             }
+
             return false;
         }
+
+        removed = previous;
+        return true;
+    }
+
+    /// <summary>
+    /// Restores only ids that are not already in the wordbook. Existing rows
+    /// are not replaced.
+    /// </summary>
+    public bool InsertMissing(IReadOnlyList<VocabularyWord> items, out int inserted)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        inserted = 0;
+        TaskCompletionSource<bool>? tcs = null;
+        List<VocabularyWord>? previous = null;
+        lock (_gate)
+        {
+            if (LoadBlocked)
+            {
+                return false;
+            }
+
+            var ids = _words.Select(word => word.Id).ToHashSet();
+            var adding = new List<VocabularyWord>();
+            foreach (var item in items)
+            {
+                if (item is null || string.IsNullOrWhiteSpace(item.Word) || ids.Contains(item.Id))
+                {
+                    continue;
+                }
+
+                if (item.Word.Length > MaxEntryCharacters ||
+                    (item.Translation?.Length ?? 0) > MaxEntryCharacters)
+                {
+                    continue;
+                }
+
+                if (_words.Count + adding.Count >= MaxEntries)
+                {
+                    break;
+                }
+
+                adding.Add(item);
+                ids.Add(item.Id);
+            }
+
+            if (adding.Count == 0)
+            {
+                return true;
+            }
+
+            var next = adding.Concat(_words).ToList();
+            string json;
+            try
+            {
+                json = JsonSerializer.Serialize(next, new JsonSerializerOptions { WriteIndented = true });
+                if (StrictUtf8.GetByteCount(json) > MaxFileBytes)
+                {
+                    return false;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            previous = _words;
+            _words = next;
+            inserted = adding.Count;
+            tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _persistChannel.Writer.TryWrite(new PersistRequest(json, tcs));
+        }
+
+        if (tcs is null)
+        {
+            return true;
+        }
+
+        var written = tcs.Task.GetAwaiter().GetResult();
+        if (!written)
+        {
+            lock (_gate)
+            {
+                if (previous is not null)
+                {
+                    _words = previous;
+                }
+            }
+
+            inserted = 0;
+            return false;
+        }
+
         return true;
     }
 

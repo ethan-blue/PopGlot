@@ -117,6 +117,7 @@ public partial class SettingsWindow : Window
             // Running requests keep the snapshot they started with; only
             // translations started afterwards see the new service.
             SetStatus("翻译引擎已更新，即时生效。", StatusTone.Info);
+            ProfileChanged?.Invoke();
         };
         ProviderSection.EditorOpenStateChanged += UpdateSaveBar;
         PromptSectionHost.StatusChanged += SetStatus;
@@ -158,6 +159,7 @@ public partial class SettingsWindow : Window
 
     /// <summary>Raised after history or vocabulary was wiped so open windows can refresh.</summary>
     internal event Action? LocalDataCleared;
+    internal event Action? ProfileChanged;
 
     // ================= Dirty tracking =================
 
