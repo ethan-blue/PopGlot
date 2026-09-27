@@ -4358,10 +4358,10 @@ internal static class Program
             var networkOff = await coordinator.TranslateTextAsync(
                 "hello offline", "en", "zh-CN", TranslationInputSource.QuickSearch, CancellationToken.None);
             Equal(TranslationSessionStage.Failed, networkOff.Stage);
-            True(
-                string.Equals(networkOff.PipelineLabel, "本地模型", StringComparison.Ordinal),
-                $"network off must route to the local provider, got label " +
-                $"<{networkOff.PipelineLabel}> error <{networkOff.Error?.Message}>");
+            Equal(
+                loopbackProfile.Name,
+                networkOff.PipelineLabel,
+                "network off must keep the selected local engine identity");
             await WaitUntilConnectionAsync(() => Volatile.Read(ref connectionCount), 2, "network off must still reach loopback");
 
             // Sanity: normal online mode reaches the same local endpoint too.
