@@ -43,7 +43,7 @@ if ($preCheckError) {
 }
 
 if (-not $Exe) {
-    $Exe = Join-Path $repoRoot 'apps/PopGlot.Windows/bin/Release/net10.0-windows10.0.19041.0/win-x64/publish/PopGlot.exe'
+    $Exe = Join-Path $repoRoot 'artifacts/release/win-x64/PopGlot.exe'
 }
 
 # --- package verification: any failure is structured and fatal ---

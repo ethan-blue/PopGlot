@@ -66,10 +66,13 @@
 5. 运行四方版本一致性本地检查，确保 Release Tag、csproj、Cargo.toml 与 CHANGELOG.md 版本一致。
 6. 构建发布产物并生成校验和：
    ```bash
-   dotnet publish apps/PopGlot.Windows/PopGlot.Windows.csproj -c Release -r win-x64 \
-     --self-contained true -o dist/release
-   cp target/release/popglot_ffi.dll dist/release/
+   powershell -ExecutionPolicy Bypass -File scripts/publish-package.ps1
    ```
+   本地发布输出固定覆盖 `artifacts/release/win-x64/`，不得再用版本号、日期或
+   临时轮次创建并列构建目录。GitHub Actions 的 `dist/release/` 只存在于一次
+   远端任务中，不作为本地交付路径。
+   历史二进制目录可用 `scripts/clean-build-outputs.ps1` 清理；脚本保留标准
+   `Debug/Release`、固定发布目录以及不含二进制的截图、报告和日志目录。
 7. 提交所有改动，打 annotated tag：
    ```bash
    git tag -a vX.Y.Z -m "PopGlot X.Y.Z"

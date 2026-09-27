@@ -12,13 +12,25 @@
 # at measurement time, so a stale or tampered package is rejected — file
 # timestamps alone are never trusted as build origin.
 #
+# The output is always replaced in one stable location:
+#   artifacts/release/win-x64
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/publish-package.ps1
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$publishDir = [System.IO.Path]::GetFullPath((Join-Path $repoRoot 'artifacts/release/win-x64'))
+$allowedReleaseRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot 'artifacts/release'))
+if (-not $publishDir.StartsWith($allowedReleaseRoot + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to clean unexpected publish path '$publishDir'."
+}
+if (Test-Path -LiteralPath $publishDir) {
+    Remove-Item -LiteralPath $publishDir -Recurse -Force
+}
+New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
 
 & dotnet publish (Join-Path $repoRoot 'apps/PopGlot.Windows/PopGlot.Windows.csproj') `
-    -c Release -r win-x64 --self-contained
+    -c Release -r win-x64 --self-contained true -o $publishDir `
+    /p:DebugType=None /p:DebugPortablePdb=false /p:ContinuousIntegrationBuild=true
 if ($LASTEXITCODE -ne 0) { throw 'dotnet publish failed' }
 
 & cargo build --release --locked -p popglot-ffi
@@ -26,7 +38,6 @@ if ($LASTEXITCODE -ne 0) { throw 'cargo build of popglot-ffi failed' }
 $rustDll = Join-Path $repoRoot 'target/release/popglot_ffi.dll'
 if (-not (Test-Path $rustDll)) { throw "FFI dll not found at '$rustDll' after cargo build." }
 
-$publishDir = Join-Path $repoRoot 'apps/PopGlot.Windows/bin/Release/net10.0-windows10.0.19041.0/win-x64/publish'
 Copy-Item $rustDll (Join-Path $publishDir 'popglot_ffi.dll') -Force
 
 # C09 round 4: the manifest must never certify ITSELF. A manifest left over

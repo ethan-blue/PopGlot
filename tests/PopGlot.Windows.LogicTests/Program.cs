@@ -85,6 +85,7 @@ internal static class Program
         await RunAsync("missing selection is explicit", MissingSelectionIsExplicitAsync);
         await RunAsync("clipboard selection supports target window", ClipboardSelectionSupportsTargetWindowAsync);
         await RunAsync("selection pre-read is bounded, recoverable and never double-copies", SelectionPrereadIsBoundedAndDegradesWithFeedbackAsync);
+        Run("tray menu keeps actions short and moves shortcuts to hover help", TrayMenuKeepsActionsShort);
         await RunAsync("selection copy keystrokes honor cancellation checkpoints", SelectionSendCopyCoreHonorsCancellationCheckpointsAsync);
 
         Run("panel positioning stays in work area", PanelPositionStaysInWorkArea);
@@ -587,6 +588,31 @@ internal static class Program
             "a read past its budget must be reported as a timeout");
         await Task.Delay(500); // let the abandoned attempt unwind
         Equal(0, stuckAdapter.CopyCalls, "a timed-out attempt must abort before the synthetic Ctrl+C");
+    }
+
+    private static void TrayMenuKeepsActionsShort()
+    {
+        using var item = new System.Windows.Forms.ToolStripMenuItem();
+        App.ApplyTrayActionPresentation(
+            item,
+            "划词翻译",
+            HotkeyBinding.SelectionDefault,
+            hotkeysUnavailable: false);
+        Equal("划词翻译", item.Text, "the shortcut must not widen the visible tray label");
+        True((item.ToolTipText ?? string.Empty).Contains(HotkeyBinding.SelectionDefault.DisplayName, StringComparison.Ordinal),
+            "the configured shortcut remains discoverable on hover");
+        True(!(item.Text ?? string.Empty).Contains("Ctrl", StringComparison.OrdinalIgnoreCase),
+            "keyboard notation belongs in hover help, not the action label");
+
+        App.ApplyTrayActionPresentation(
+            item,
+            "截图取字",
+            HotkeyBinding.ScreenshotDefault,
+            hotkeysUnavailable: true);
+        Equal("截图取字", item.Text, "a hotkey failure must not expand the visible label");
+        True((item.ToolTipText ?? string.Empty).Contains("快捷键不可用", StringComparison.Ordinal) &&
+             (item.ToolTipText ?? string.Empty).Contains("仍可点击", StringComparison.Ordinal),
+            "hover help must explain that the menu action itself still works");
     }
 
     /// <summary>
@@ -7108,7 +7134,7 @@ internal static class Program
         True(quick.Contains("ForegroundBelongsToThisProcess"), "quick search must ignore same-process deactivation (IME, menus)");
 
         var app = File.ReadAllText(Path.Combine(appDir, "App.xaml.cs"));
-        True(app.Contains("恢复最近翻译"), "the tray must offer a session-restore entry");
+        True(app.Contains("最近翻译"), "the tray must offer a concise session-restore entry");
         True(app.Contains("RestoreRecentSurface"), "the restore entry must be wired");
         True(app.Contains("DestroyActivePanel"), "session replacement must really destroy the old panel");
         True(app.Contains("_activeQuickSearch.Show();"), "an existing quick-search instance must be shown, not only activated");

@@ -1515,24 +1515,26 @@ public partial class App : Application
 
             ShowImageMargin = false,
 
+            ShowItemToolTips = true,
+
         };
 
-        _trayMenu.Items.Add("打开 PopGlot", null, (_, _) => ShowMainWindow());
+        _trayMenu.Items.Add("打开", null, (_, _) => ShowMainWindow());
 
-        var quickSearchItem = _trayMenu.Items.Add("极速查词", null, (_, _) => ShowQuickSearch());
+        var quickSearchItem = _trayMenu.Items.Add("查词", null, (_, _) => ShowQuickSearch());
 
-        _trayMenu.Items.Add("恢复最近翻译", null, (_, _) => RestoreRecentSurface());
+        _trayMenu.Items.Add("最近翻译", null, (_, _) => RestoreRecentSurface());
 
-        var sessionsSubMenu = new Forms.ToolStripMenuItem("暂存的翻译（最多5条）");
+        var sessionsSubMenu = new Forms.ToolStripMenuItem("暂存");
         _trayMenu.Items.Add(sessionsSubMenu);
 
         _trayMenu.Items.Add(new Forms.ToolStripSeparator());
 
-        var selectionItem = _trayMenu.Items.Add("翻译选中文字", null, (_, _) => _ = BeginSelectionTranslationAsync());
+        var selectionItem = _trayMenu.Items.Add("划词翻译", null, (_, _) => _ = BeginSelectionTranslationAsync());
 
         var captureItem = _trayMenu.Items.Add("截图翻译", null, (_, _) => BeginCapture(ocrOnly: false));
 
-        var ocrItem = _trayMenu.Items.Add("截图提取文本 (OCR)", null, (_, _) => BeginCapture(ocrOnly: true));
+        var ocrItem = _trayMenu.Items.Add("截图取字", null, (_, _) => BeginCapture(ocrOnly: true));
 
         _trayMenu.Items.Add(new Forms.ToolStripSeparator());
 
@@ -1551,29 +1553,22 @@ public partial class App : Application
             // usable (they run from the click, not the hotkey).
             var hotkeysUnavailable = _hotkeyFailure.FailureActive;
 
-            quickSearchItem.Text = hotkeysUnavailable
-                ? "极速查词（快捷键不可用）"
-                : $"极速查词\t{_shellSettings.QuickSearchHotkey.DisplayName}";
-
-            selectionItem.Text = hotkeysUnavailable
-
-                ? "翻译选中文字（快捷键不可用）"
-
-                : $"翻译选中文字\t{_shellSettings.SelectionHotkey.DisplayName}";
-
-            captureItem.Text = hotkeysUnavailable
-
-                ? "截图翻译（快捷键不可用）"
-
-                : $"截图翻译\t{_shellSettings.ScreenshotHotkey.DisplayName}";
-
-            ocrItem.Text = $"截图提取文本 (OCR)\tShift + 截图";
+            ApplyTrayActionPresentation(
+                quickSearchItem, "查词", _shellSettings.QuickSearchHotkey, hotkeysUnavailable);
+            ApplyTrayActionPresentation(
+                selectionItem, "划词翻译", _shellSettings.SelectionHotkey, hotkeysUnavailable);
+            ApplyTrayActionPresentation(
+                captureItem, "截图翻译", _shellSettings.ScreenshotHotkey, hotkeysUnavailable);
+            ocrItem.Text = "截图取字";
+            ocrItem.ToolTipText = "按住 Shift 使用截图取字";
 
             sessionsSubMenu.DropDownItems.Clear();
             var sessions = SharedSessionStore.GetAll();
+            sessionsSubMenu.Text = sessions.Count == 0 ? "暂存" : $"暂存 ({sessions.Count})";
+            sessionsSubMenu.ToolTipText = "恢复尚未关闭的翻译";
             if (sessions.Count == 0)
             {
-                var emptyItem = new Forms.ToolStripMenuItem("(暂无暂存会话)") { Enabled = false };
+                var emptyItem = new Forms.ToolStripMenuItem("暂无暂存") { Enabled = false };
                 sessionsSubMenu.DropDownItems.Add(emptyItem);
             }
             else
@@ -1588,7 +1583,7 @@ public partial class App : Application
                     sessionsSubMenu.DropDownItems.Add(item);
                 }
                 sessionsSubMenu.DropDownItems.Add(new Forms.ToolStripSeparator());
-                var clearItem = new Forms.ToolStripMenuItem("清空暂存的翻译");
+                var clearItem = new Forms.ToolStripMenuItem("清空暂存");
                 clearItem.Click += (_, _) =>
                 {
                     SharedSessionStore.Clear();
@@ -1620,6 +1615,23 @@ public partial class App : Application
 
         UpdateTrayTooltip();
 
+    }
+
+    /// <summary>
+    /// Keeps the tray menu narrow: the action is the visible label, while the
+    /// optional shortcut and recovery guidance appear only on hover. Clicking
+    /// the menu item remains available even when global registration failed.
+    /// </summary>
+    internal static void ApplyTrayActionPresentation(
+        Forms.ToolStripItem item,
+        string label,
+        HotkeyBinding shortcut,
+        bool hotkeysUnavailable)
+    {
+        item.Text = label;
+        item.ToolTipText = hotkeysUnavailable
+            ? "快捷键不可用；仍可点击此项。请在设置 → 快捷键中更换组合。"
+            : $"快捷键：{shortcut.DisplayName}";
     }
 
     /// <summary>
@@ -1657,9 +1669,8 @@ public partial class App : Application
         // While a hotkey failure is active the tooltip must NOT claim
         // shortcuts that are dead; the menu text below follows the same rule.
         var text = _hotkeyFailure.FailureActive
-            ? "PopGlot · 全局快捷键不可用 — 在「设置 → 快捷键」更换组合"
-            : $"PopGlot · {_shellSettings.SelectionHotkey.DisplayName} 划词 · " +
-              $"{_shellSettings.ScreenshotHotkey.DisplayName} 截图";
+            ? "PopGlot · 快捷键不可用"
+            : "PopGlot · 右键打开菜单";
         _trayIcon.Text = text.Length > 63 ? text[..63] : text;
     }
 
