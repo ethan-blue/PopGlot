@@ -171,7 +171,7 @@ internal static class TranslateSectionReducer
                 IsTranslateButtonEnabled = true,
                 AreResultActionsEnabled = true,
                 BadgeText = session.PipelineLabel ?? "完成",
-                StatusText = $"完成 · {session.Timing.TotalElapsedMs} ms",
+                StatusText = $"完成 · {TranslationElapsedText.ForMilliseconds(session.Timing.TotalElapsedMs)}",
                 ExplanationText = explanation,
                 ProtectedTerms = session.ProtectedTerms,
                 IsExplanationVisible = notes.Count > 0,
@@ -193,7 +193,7 @@ internal static class TranslateSectionReducer
                 IsTranslateButtonEnabled = true,
                 AreResultActionsEnabled = false,
                 BadgeText = "内容不完整",
-                StatusText = $"内容不完整 · {session.Timing.TotalElapsedMs} ms · 见下方说明",
+                StatusText = $"内容不完整 · {TranslationElapsedText.ForMilliseconds(session.Timing.TotalElapsedMs)} · 见下方说明",
                 ExplanationText = explanation,
                 ProtectedTerms = session.ProtectedTerms,
                 IsExplanationVisible = notes.Count > 0,
@@ -638,12 +638,12 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
                 {
                     TranslateProgress.Visibility = Visibility.Collapsed;
                 }
-                ShowSummaryChoice.IsEnabled = true;
+                UpdateSummaryCapabilityVisuals();
 
                 if (outcome.ElapsedMs == 0 && string.IsNullOrEmpty(outcome.EngineLabel))
                 {
                     PaintSummary(outcome.SummaryText, outcome.Notes);
-                    TranslateStatus.Text = ReadingRequestCopy.Finished(0);
+                    TranslateStatus.Text = ReadingRequestCopy.Cached;
                     var activeName = ProfileManager.Load().TryGetActiveProfile()?.Name;
                     TranslateEngineBadge.Text = string.IsNullOrEmpty(activeName) ? "要点" : $"{activeName} · 要点";
                     return;
@@ -668,7 +668,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
                 {
                     TranslateProgress.Visibility = Visibility.Collapsed;
                 }
-                ShowSummaryChoice.IsEnabled = true;
+                UpdateSummaryCapabilityVisuals();
 
                 if (error.IsCurrent)
                 {
@@ -969,6 +969,12 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         }
 
         TranslateButton.IsEnabled = state.IsTranslateButtonEnabled;
+        // The language pair is part of the request snapshot. Keep the headers
+        // immutable until that request terminates so a late response can never
+        // be shown under a direction it was not translated for.
+        TranslateSourceLang.IsEnabled = state.IsTranslateButtonEnabled;
+        TranslateTargetLang.IsEnabled = state.IsTranslateButtonEnabled;
+        TranslateSwapButton.IsEnabled = state.IsTranslateButtonEnabled;
         TranslateProgress.Visibility = state.IsProgressVisible ? Visibility.Visible : Visibility.Collapsed;
         TranslateStreamIndicator.Visibility = state.IsStreamIndicatorVisible ? Visibility.Visible : Visibility.Collapsed;
 
@@ -1214,6 +1220,13 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     {
         if (ShowSummaryChoice is null) return;
         var capability = _coordinator?.EvaluateSummaryCapability() ?? RouteCapabilityService.EvaluateCurrent();
+        var canSummarize = capability.State is RouteCapabilityState.Available or RouteCapabilityState.Unknown;
+        ShowSummaryChoice.IsEnabled = canSummarize;
+        if (!canSummarize && (_holdingSummary || ShowSummaryChoice.IsChecked == true))
+        {
+            CancelSummary();
+            ShowTranslationReading();
+        }
         ShowSummaryChoice.ToolTip = capability.State switch
         {
             RouteCapabilityState.Unsupported => "当前公共翻译不支持整理要点，请配置模型引擎。",
@@ -1455,22 +1468,38 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
     private void SourceLang_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_languageChangeSuspended) return;
         CancelSummary();
         if (_holdingSummary)
         {
             ShowTranslationReading();
         }
         PersistLanguagePair();
+        ClearResultForLanguageChange();
     }
 
     private void TargetLang_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_languageChangeSuspended) return;
         CancelSummary();
         if (_holdingSummary)
         {
             ShowTranslationReading();
         }
         PersistLanguagePair();
+        ClearResultForLanguageChange();
+    }
+
+    private void ClearResultForLanguageChange()
+    {
+        if (_currentState.Phase == TranslateUiPhase.Idle &&
+            string.IsNullOrWhiteSpace(_currentState.FinalText) &&
+            string.IsNullOrWhiteSpace(_currentState.StreamText))
+        {
+            return;
+        }
+        var epoch = Interlocked.Increment(ref _currentEpoch);
+        ApplyState(TranslateUiState.Initial with { Epoch = epoch, StatusText = "语言已更新，点击翻译后生效" });
     }
 
     /// <summary>Remembers the pair so the floating panel opens the same way.</summary>
@@ -1530,7 +1559,9 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             // 结果层保存的是原始 Markdown；换回原文方向时必须携带约定的
             // 纯文本（与浮窗/极速查词相同的 ToPlainText 格式化器），而不是
             // 把标记符号塞进输入框。
-            var plain = MarkdownPresenter.ToPlainText(TranslateResult.Text);
+            var plain = MarkdownPresenter.ToPlainText(
+                TranslateResult.Text,
+                preserveListStructure: true);
             if (string.IsNullOrWhiteSpace(plain))
             {
                 return;

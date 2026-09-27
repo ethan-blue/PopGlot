@@ -198,8 +198,13 @@ internal static class TranslationElapsedText
         return parts.Count == 0 ? "stages=none" : string.Join(" ", parts);
     }
 
-    public static string ForMilliseconds(double totalMilliseconds) =>
-        $"用时 {Math.Max(0, totalMilliseconds) / 1000.0:F1} 秒";
+    public static string ForMilliseconds(double totalMilliseconds)
+    {
+        var elapsed = Math.Max(0, totalMilliseconds);
+        return elapsed < 100
+            ? "用时 < 0.1 秒"
+            : $"用时 {elapsed / 1000.0:F1} 秒";
+    }
 }
 
 /// <summary>

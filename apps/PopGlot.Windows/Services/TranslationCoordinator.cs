@@ -653,6 +653,13 @@ internal sealed class TranslationCoordinator
         var settings = _executor.GetSettings();
         var routes = _executor.ResolveRoutes();
         var textRoute = routes.Text;
+        // The identity and cache key were captured before this method was
+        // scheduled. If the user switched engines meanwhile, do not send the
+        // old task through the new route or label/cache it under the old one.
+        if (snapshot.Identity.ConfigVersion != ProfileManager.Revision)
+        {
+            throw new OperationCanceledException("引擎已切换，请重新打开要点。", cancellationToken);
+        }
         var apiKey = textRoute is null ? null : _executor.LoadApiKey(textRoute.CredentialTarget);
         var routeSettings = textRoute?.Profile.ToProviderSettings(settings);
         var isLocal = routeSettings?.TargetsLocalRuntime ?? settings.TargetsLocalRuntime;

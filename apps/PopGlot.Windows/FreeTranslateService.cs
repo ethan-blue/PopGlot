@@ -96,6 +96,9 @@ internal static class FreeTranslateService
     private const int CacheCapacity = 256;
     private const long CacheMaxBytes = 16 * 1024 * 1024;
     private const int MaxSourceCharacters = 5_000;
+    // MyMemory's documented `q` contract is byte based rather than character
+    // based. Reject locally before authorization is consumed or a body is sent.
+    internal const int MyMemoryMaxQueryBytes = 500;
     /// <summary>Cumulative response-body cap, enforced with or without Content-Length.</summary>
     internal const int MaxResponseBytes = 4 * 1024 * 1024;
 
@@ -204,6 +207,13 @@ internal static class FreeTranslateService
         }
 
         var selected = provider ?? ReadSelectedProvider();
+        if (selected == FreeEngineProvider.MyMemory &&
+            Encoding.UTF8.GetByteCount(trimmed) > MyMemoryMaxQueryBytes)
+        {
+            throw new FreeTranslateException(
+                FreeTranslateFailureKind.LongContent,
+                $"MyMemory 单次最多处理 {MyMemoryMaxQueryBytes} 字节。请缩短内容或使用已配置的翻译引擎。");
+        }
         var cacheKey = $"{selected}|{sl}|{tl}|{trimmed}";
         TranslationResponse? cached;
         lock (CacheGate)

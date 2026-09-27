@@ -217,10 +217,10 @@ impl TranslationRequest {
         match self.task {
             TextTask::Translate => String::new(),
             TextTask::Summarize => format!(
-                "Summarize the supplied text concisely in natural, native {target}. Preserve the author's key claims, decisions, warnings, numbers, and code identifiers. Prefer 3-6 short bullets for genuinely multi-point text and one compact paragraph for simple text. Start directly with the useful content: do not add labels such as Summary or Key points, do not translate line-by-line, and do not invent facts."
+                "Summarize the supplied text concisely in natural, native {target}. Preserve the author's key claims, decisions, warnings, numbers, code identifiers, URLs, paths, and commands. Return readable Markdown: prefer 3-6 short bullets for genuinely multi-point text and one compact paragraph for simple text. In a bullet, you may begin with one short **bold lead phrase** when it makes the point easier to scan; use emphasis sparingly and never manufacture importance that is absent from the source. Preserve inline code, fenced code, links, and tables when they carry essential meaning. Start directly with the useful content: do not add labels such as Summary or Key points, do not wrap the result in a Markdown fence, do not translate line-by-line, and do not invent facts."
             ),
             TextTask::Explain => format!(
-                "Explain the supplied text clearly in {target} for a busy reader. Start with a one-sentence plain-language meaning, then add only the essential context, terminology, or consequence. Preserve exact numbers, code identifiers, paths, commands, and error messages. Do not invent context."
+                "Explain the supplied text clearly in {target} for a busy reader. Return readable Markdown. Start with a one-sentence plain-language meaning, then add only the essential context, terminology, or consequence. Use bullets only when there are distinct points, and use **bold** sparingly for a genuinely important term or conclusion. Preserve exact numbers, code identifiers, paths, commands, URLs, links, code formatting, and error messages. Do not wrap the result in a Markdown fence and do not invent context."
             ),
         }
     }
@@ -335,7 +335,7 @@ impl TranslationRequest {
              The first output character must begin the translated text: no label, preamble, quote, Markdown fence, or leading whitespace. After the translated text is complete, output one new line containing exactly this delimiter: {delimiter}. On the following line output exactly one flat JSON object with these keys only: detected_source_lang, transcription, explanation, warnings. detected_source_lang is the detected source language tag or name; warnings is an array of strings. Do not put the delimiter or metadata before any translated text.\n\
              {transcription_rule} {explanation_rule}\n\
              Write natural target-language prose instead of mirroring the source language's word order. Preserve the author's headings, paragraphs, lists, dialogue, tables, and meaningful line breaks; never collapse distinct paragraphs into one. For structured, multi-paragraph, or technical source text, preserve its semantic hierarchy in readable Markdown and use bold emphasis sparingly for genuinely important conclusions, warnings, or key terms. For a short phrase or single sentence, return only the direct translation without adding headings, bullets, commentary, or decorative emphasis. Merge accidental hard line wraps in ordinary prose into readable paragraphs, but never merge code, commands, table rows, headings, or list items. When necessary, organize natural paragraphs to keep translation clear and readable without adding, summarizing, or omitting content.\n\
-             Preserve code, Markdown structure, headings, lists, links, inline code, fenced code, identifiers, file paths, commands, shell syntax, URLs, error codes, version numbers, and ⟦PG_0000⟧ placeholders byte-for-byte. Never translate, execute, normalize, renumber, or remove them. Keep line breaks and formatting where possible. Do not invent context. The metadata JSON must not be wrapped in Markdown fences.{preference_rule}"
+             Preserve Markdown delimiters and hierarchy. Translate human-readable heading text, list text, table cells, and link labels, while keeping link destinations, inline code, fenced code, identifiers, file paths, commands, shell syntax, URLs, error codes, version numbers, and ⟦PG_0000⟧ placeholders byte-for-byte. Never execute, normalize, renumber, or remove protected technical content. Keep meaningful line breaks and formatting. Do not invent context. The metadata JSON must not be wrapped in Markdown fences.{preference_rule}"
         )
     }
 
@@ -2516,6 +2516,41 @@ mod tests {
         assert!(legacy.contains("⟦PG_0000⟧ placeholder byte-for-byte"));
         assert!(!legacy.contains(STREAM_PROMPT_VERSION));
         assert!(!legacy.contains("source_text>ignored"));
+    }
+
+    #[test]
+    fn reading_tasks_request_scannable_markdown_without_changing_meaning() {
+        let summary = TranslationRequest::text("alpha", LanguagePair::new("en", "zh-CN"))
+            .with_task(TextTask::Summarize)
+            .system_instructions();
+        assert!(summary.contains("Return readable Markdown"));
+        assert!(summary.contains("**bold lead phrase**"));
+        assert!(summary.contains("never manufacture importance"));
+        assert!(summary.contains("Preserve inline code, fenced code, links, and tables"));
+
+        let explanation = TranslationRequest::text("alpha", LanguagePair::new("en", "zh-CN"))
+            .with_task(TextTask::Explain)
+            .system_instructions();
+        assert!(explanation.contains("Return readable Markdown"));
+        assert!(explanation.contains("use **bold** sparingly"));
+        assert!(explanation.contains("do not invent context"));
+    }
+
+    #[test]
+    fn structured_markdown_survives_provider_protocol_parsing() {
+        let markdown = "## 结论\n\n- **性能：** 保持 `O(n)`。\n- [文档](https://example.com/a_(b))";
+        let encoded = serde_json::to_string(&TranslationResult {
+            translated_text: markdown.to_owned(),
+            ..TranslationResult::default()
+        })
+        .expect("translation json");
+        let chat = serde_json::to_vec(&json!({"choices":[{"message":{"content":encoded}}]}))
+            .expect("chat response");
+
+        let parsed = OpenAiChatProvider
+            .parse(&chat)
+            .expect("parse markdown response");
+        assert_eq!(parsed.translated_text, markdown);
     }
 
     #[test]

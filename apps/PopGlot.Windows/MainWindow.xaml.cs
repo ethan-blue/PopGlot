@@ -679,8 +679,8 @@ public partial class MainWindow : Window
         // Keep the popup aligned with the compact footer control even when a
         // provider exposes a very long model id. Long labels are ellipsized;
         // their complete value stays available from the item tooltip/name.
-        menu.Width = 248;
-        menu.MaxWidth = 248;
+        menu.Width = 208;
+        menu.MaxWidth = 208;
         menu.Background = Brushes.Transparent;
         menu.BorderBrush = Brushes.Transparent;
         menu.BorderThickness = new Thickness(0);
@@ -698,15 +698,18 @@ public partial class MainWindow : Window
         {
             var id = profile.Id;
             var isActive = profile.Id == activeId;
-            var label = $"{profile.Name} · {profile.TextModel}";
+            var label = profile.Name;
+            var detail = string.IsNullOrWhiteSpace(profile.TextModel)
+                ? profile.Name
+                : $"{profile.Name} · {profile.TextModel}";
             var item = new MenuItem
             {
                 Header = MakeCompactMenuLabel(label),
-                ToolTip = label,
+                ToolTip = detail,
                 FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
                 Icon = isActive ? MakeActiveCheck() : null,
             };
-            System.Windows.Automation.AutomationProperties.SetName(item, label);
+            System.Windows.Automation.AutomationProperties.SetName(item, detail);
             item.Click += (_, _) => SwitchTextEngine(id);
             menu.Items.Add(item);
         }
@@ -751,15 +754,18 @@ public partial class MainWindow : Window
         {
             var id = profile.Id;
             var isActive = profile.Id == currentVisionId;
-            var label = $"{profile.Name} · {profile.VisionModel}";
+            var label = profile.Name;
+            var detail = string.IsNullOrWhiteSpace(profile.VisionModel)
+                ? profile.Name
+                : $"{profile.Name} · {profile.VisionModel}";
             var item = new MenuItem
             {
                 Header = MakeCompactMenuLabel(label),
-                ToolTip = label,
+                ToolTip = detail,
                 FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
                 Icon = isActive ? MakeActiveCheck() : null,
             };
-            System.Windows.Automation.AutomationProperties.SetName(item, label);
+            System.Windows.Automation.AutomationProperties.SetName(item, detail);
             item.Click += (_, _) => SwitchVisionEngine(id);
             menu.Items.Add(item);
         }
@@ -797,7 +803,7 @@ public partial class MainWindow : Window
     private static TextBlock MakeCompactMenuLabel(string text) => new()
     {
         Text = text,
-        Width = 164,
+        Width = 124,
         TextTrimming = TextTrimming.CharacterEllipsis,
         VerticalAlignment = VerticalAlignment.Center,
         ToolTip = text,
@@ -852,7 +858,7 @@ public partial class MainWindow : Window
                 var success = ProfileManager.TrySwitchActiveProfile(profileId, out var message);
                 return (success, message);
             });
-            SetStatus(ok ? "已切换文字引擎，即时生效。" : error,
+            SetStatus(ok ? "已切换文字引擎，下次请求生效。" : error,
                 ok ? StatusTone.Success : StatusTone.Error);
             RefreshEngineStatus();
         }
@@ -882,7 +888,7 @@ public partial class MainWindow : Window
             });
             SetStatus(
                 ok
-                    ? (profileId is null ? "图片引擎已改为跟随文字引擎。" : "已切换图片引擎，即时生效。")
+                    ? (profileId is null ? "图片引擎已改为跟随文字引擎，下次图片请求生效。" : "已切换图片引擎，下次图片请求生效。")
                     : error,
                 ok ? StatusTone.Success : StatusTone.Error);
             RefreshEngineStatus();
@@ -922,7 +928,7 @@ public partial class MainWindow : Window
                 return (success, message);
             });
             SetStatus(
-                ok ? $"已切换到{name}（仅文字翻译）。" : error,
+                ok ? $"已切换到{name}，下次文字翻译生效。" : error,
                 ok ? StatusTone.Success : StatusTone.Error);
             RefreshEngineStatus();
         }

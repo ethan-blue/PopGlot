@@ -86,6 +86,21 @@
         </Setter>
     </Style>
 
+    <!-- Switches need a capsule focus outline. Reusing the rectangular
+         FocusRing made a checked switch look as if it had a soft halo. -->
+    <Style x:Key="SwitchFocusRing">
+        <Setter Property="Control.Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border Margin="-2" CornerRadius="13"
+                            BorderBrush="{DynamicResource FocusBrush}"
+                            BorderThickness="1"
+                            SnapsToDevicePixels="True" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- ==================== Typography ==================== -->
     <!--
         Deliberately NO Foreground setter here: a style setter would override
@@ -1378,7 +1393,7 @@
         <Setter Property="Width" Value="40" />
         <Setter Property="Height" Value="22" />
         <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource SwitchFocusRing}" />
         <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="Template">
             <Setter.Value>
@@ -1418,7 +1433,7 @@
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
-        <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource SwitchFocusRing}" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="CheckBox">

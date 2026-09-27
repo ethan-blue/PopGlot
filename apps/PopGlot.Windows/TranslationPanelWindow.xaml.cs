@@ -154,6 +154,7 @@ public partial class TranslationPanelWindow : Window
 
         RenderIdle();
         RefreshStyleSelector();
+        RefreshSummaryCapability();
     }
 
 
@@ -357,6 +358,7 @@ public partial class TranslationPanelWindow : Window
         _translation = string.Empty;
         var cancellation = new CancellationTokenSource();
         _operation = cancellation;
+        SetLanguageDirectionEnabled(false);
         try
         {
             await operation(cancellation.Token, epoch);
@@ -403,9 +405,17 @@ public partial class TranslationPanelWindow : Window
             if (ReferenceEquals(_operation, cancellation))
             {
                 _operation = null;
+                SetLanguageDirectionEnabled(true);
             }
             cancellation.Dispose();
         }
+    }
+
+    private void SetLanguageDirectionEnabled(bool enabled)
+    {
+        SourceLangCombo.IsEnabled = enabled;
+        TargetLangCombo.IsEnabled = enabled;
+        SwapLangButton.IsEnabled = enabled;
     }
 
     private void ShowTranslation_Click(object sender, RoutedEventArgs e) => ShowStoredTranslation();
@@ -485,12 +495,12 @@ public partial class TranslationPanelWindow : Window
                     ResultSkeleton.Visibility = Visibility.Collapsed;
                     Progress.Visibility = Visibility.Collapsed;
                 }
-                ShowSummaryChoice.IsEnabled = true;
+                RefreshSummaryCapability();
 
                 if (outcome.ElapsedMs == 0 && string.IsNullOrEmpty(outcome.EngineLabel))
                 {
                     PaintPanelSummary(outcome.SummaryText, outcome.Notes);
-                    StatusText.Text = ReadingRequestCopy.Finished(0);
+                    StatusText.Text = ReadingRequestCopy.Cached;
                     var activeName = ProfileManager.Load().TryGetActiveProfile()?.Name;
                     RouteText.Text = string.IsNullOrEmpty(activeName) ? "要点" : $"{activeName} · 要点";
                     return;
@@ -516,7 +526,7 @@ public partial class TranslationPanelWindow : Window
                     ResultSkeleton.Visibility = Visibility.Collapsed;
                     Progress.Visibility = Visibility.Collapsed;
                 }
-                ShowSummaryChoice.IsEnabled = true;
+                RefreshSummaryCapability();
 
                 if (error.IsCurrent)
                 {
@@ -1695,6 +1705,21 @@ public partial class TranslationPanelWindow : Window
         }
     }
 
+    private void RefreshSummaryCapability()
+    {
+        var capability = RouteCapabilityService.EvaluateCurrent();
+        var canSummarize = capability.State is RouteCapabilityState.Available or RouteCapabilityState.Unknown;
+        ShowSummaryChoice.IsEnabled = canSummarize;
+        ShowSummaryChoice.ToolTip = canSummarize
+            ? "整理原文要点，会额外使用一次模型额度。"
+            : capability.Reason;
+        if (!canSummarize && (_holdingSummary || ShowSummaryChoice.IsChecked == true))
+        {
+            CancelSummary();
+            ShowStoredTranslation();
+        }
+    }
+
     private void StyleSelector_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button button)
@@ -1782,7 +1807,7 @@ public partial class TranslationPanelWindow : Window
         await RunOperationAsync((cancellation, ep) => TranslateTextAsync(text, cancellation, ep), styleNotice);
     }
 
-    private async void Language_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void Language_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_languageChangeSuspended || !IsLoaded)
         {
@@ -1794,26 +1819,13 @@ public partial class TranslationPanelWindow : Window
             ShowStoredTranslation();
         }
         PersistLanguagePair();
-
-        // A screenshot re-runs the whole pipeline so a language change can pick a
-        // different OCR engine; text just re-translates.
-        if (_screenshot is { } image)
-        {
-            _retry = (token, ep) => TranslateScreenshotAsync(image, token, ep);
-            await RunOperationAsync((cancellation, ep) => TranslateScreenshotAsync(image, cancellation, ep));
-            return;
-        }
-
-        var text = SourceInputBox.Text.Trim();
-        if (string.IsNullOrEmpty(text))
-        {
-            return;
-        }
-        _retry = (token, ep) => TranslateTextAsync(text, token, ep);
-        await RunOperationAsync((cancellation, ep) => TranslateTextAsync(text, cancellation, ep));
+        SetTranslationContent(string.Empty);
+        SetResultActionsEnabled(false);
+        _retry = null;
+        StatusText.Text = "语言已更新，按 Enter 翻译";
     }
 
-    private async void SwapLangButton_Click(object sender, RoutedEventArgs e)
+    private void SwapLangButton_Click(object sender, RoutedEventArgs e)
     {
         CancelSummary();
         if (_holdingSummary)
@@ -1825,7 +1837,12 @@ public partial class TranslationPanelWindow : Window
 
         // Move the finished translation into the source box first, so the
         // re-translation runs on the swapped text rather than the original.
-        var swapped = _translation;
+        // The result store keeps Markdown for rich display/history. The source
+        // editor is plain text, so move the readable clipboard representation
+        // across while retaining list numbers, bullets and indentation.
+        var swapped = MarkdownPresenter.ToPlainText(
+            _translation,
+            preserveListStructure: true);
         if (!string.IsNullOrWhiteSpace(swapped))
         {
             SourceInputBox.Text = swapped;
@@ -1846,13 +1863,9 @@ public partial class TranslationPanelWindow : Window
         }
         PersistLanguagePair();
 
-        var text = SourceInputBox.Text.Trim();
-        if (string.IsNullOrEmpty(text))
-        {
-            return;
-        }
-        _retry = (token, ep) => TranslateTextAsync(text, token, ep);
-        await RunOperationAsync((cancellation, ep) => TranslateTextAsync(text, cancellation, ep));
+        _retry = null;
+        SetResultActionsEnabled(false);
+        StatusText.Text = "语言已交换，按 Enter 翻译";
     }
 
     /// <summary>Remembers the pair so the next popup opens the same way.</summary>
@@ -1913,6 +1926,7 @@ public partial class TranslationPanelWindow : Window
             // The panel lives across shows: the engine (and therefore style
             // support) may have changed since it was last on screen.
             RefreshStyleSelector();
+            RefreshSummaryCapability();
         }
     }
 

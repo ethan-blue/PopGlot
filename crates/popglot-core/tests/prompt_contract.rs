@@ -483,9 +483,15 @@ fn test_category_a_token_protection_and_structural_rules() {
         .expect("prompt");
 
     let sys = &prompt.system_instructions;
-    assert!(sys.contains("Preserve code, Markdown structure, headings, lists, links, inline code, fenced code, identifiers, file paths, commands, shell syntax, URLs, error codes, version numbers, and ⟦PG_0000⟧ placeholders byte-for-byte."));
-    assert!(sys.contains("Never translate, execute, normalize, renumber, or remove them."));
-    assert!(sys.contains("Keep line breaks and formatting where possible."));
+    assert!(sys.contains("Preserve Markdown delimiters and hierarchy."));
+    assert!(sys.contains(
+        "Translate human-readable heading text, list text, table cells, and link labels"
+    ));
+    assert!(sys.contains("link destinations, inline code, fenced code, identifiers, file paths, commands, shell syntax, URLs, error codes, version numbers, and ⟦PG_0000⟧ placeholders byte-for-byte."));
+    assert!(
+        sys.contains("Never execute, normalize, renumber, or remove protected technical content.")
+    );
+    assert!(sys.contains("Keep meaningful line breaks and formatting."));
     assert!(sys.contains(
         "Write natural target-language prose instead of mirroring the source language's word order."
     ));

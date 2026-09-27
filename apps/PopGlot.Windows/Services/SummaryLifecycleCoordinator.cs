@@ -113,8 +113,8 @@ internal sealed class SummaryLifecycleCoordinator
                 Identity: snapshot.Identity,
                 SummaryText: cached.Text,
                 Notes: cached.Note,
-                ElapsedMs: 0UL,
-                EngineLabel: string.Empty,
+                ElapsedMs: cached.ElapsedMs,
+                EngineLabel: cached.EngineLabel,
                 IsCurrent: true));
             return;
         }
@@ -166,7 +166,13 @@ internal sealed class SummaryLifecycleCoordinator
                             string.Equals(currentTarget, snapshot.Identity.TargetLanguage, StringComparison.OrdinalIgnoreCase);
 
             var show = isHoldingSummary() && isCurrent;
-            readingState.RememberSummary(snapshot.Identity, response.Result.TranslatedText, note, show);
+            readingState.RememberSummary(
+                snapshot.Identity,
+                response.Result.TranslatedText,
+                note,
+                show,
+                response.Diagnostics.ElapsedMs,
+                response.EngineLabel);
 
             onSuccess(new SummaryExecutionResult(
                 Identity: snapshot.Identity,

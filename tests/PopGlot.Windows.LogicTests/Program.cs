@@ -4067,7 +4067,21 @@ internal static class Program
             True(!onceAuth.IsConsumed,
                 "a local budget rejection must not burn the AllowOnce permit");
 
-            // 3. Short text behaves exactly as before: the first endpoint is
+            // 3. MyMemory documents a 500-byte q limit. Enforce bytes (so CJK
+            // is counted correctly) before endpoint selection or transport.
+            var myMemoryAuth = new FreeEngineAuthorization(settings, IsOnceOnly: true);
+            var myMemoryFailure = await ThrowsAsync<FreeTranslateException>(() =>
+                FreeTranslateService.TranslateAsync(
+                    new string('a', FreeTranslateService.MyMemoryMaxQueryBytes + 1),
+                    "en",
+                    "zh-CN",
+                    myMemoryAuth,
+                    provider: FreeEngineProvider.MyMemory));
+            Equal(FreeTranslateFailureKind.LongContent, myMemoryFailure.Kind);
+            Equal(0L, Interlocked.Read(ref sends), "MyMemory byte overflow must send nothing");
+            True(!myMemoryAuth.IsConsumed, "MyMemory byte overflow must not consume authorization");
+
+            // 4. Short text behaves exactly as before: the first endpoint is
             //    attempted and answers.
             var ok = await FreeTranslateService.TranslateAsync(
                 $"short-ok {Guid.NewGuid():N}", "auto", "zh-CN",
@@ -8087,6 +8101,8 @@ internal static class Program
 
             // ToolTip honesty check
             var summaryChoice = (System.Windows.Controls.RadioButton)section.FindName("ShowSummaryChoice")!;
+            True(!summaryChoice.IsEnabled,
+                "summary choice must be disabled when the active route is a free translation engine");
             True($"{summaryChoice.ToolTip}".Contains("当前公共翻译不支持整理要点"),
                 "summary tooltip must state upfront reason on free route");
         }
@@ -8538,7 +8554,7 @@ internal static class Program
                 var blockedBefore = TestIsolation.BlockedPublicSends;
                 var diskBefore = ProfileManager.Load();
                 var menu = window.BuildEngineSwitchMenu();
-                Equal(248d, menu.Width, "engine switch popup stays within the compact fixed width");
+                Equal(208d, menu.Width, "engine switch popup stays within the compact fixed width");
                 True(menu.Background == System.Windows.Media.Brushes.Transparent,
                     "the native context-menu surface stays transparent around the rounded template");
                 // The current-route marker is unique PER SECTION: exactly one
@@ -8572,9 +8588,13 @@ internal static class Program
                 True(menu.Items.OfType<System.Windows.Controls.MenuItem>()
                         .Where(item => item.Header is System.Windows.Controls.TextBlock)
                         .All(item => ((System.Windows.Controls.TextBlock)item.Header).TextTrimming == System.Windows.TextTrimming.CharacterEllipsis &&
-                                     ((System.Windows.Controls.TextBlock)item.Header).Width == 164 &&
+                                     ((System.Windows.Controls.TextBlock)item.Header).Width == 124 &&
                                      !string.IsNullOrWhiteSpace(item.ToolTip as string)),
-                    "long model labels use ellipsis while full names remain in tooltips");
+                    "compact engine names use ellipsis while model details remain in tooltips");
+                True(menu.Items.OfType<System.Windows.Controls.MenuItem>()
+                        .Where(item => item.Header is System.Windows.Controls.TextBlock)
+                        .All(item => !((System.Windows.Controls.TextBlock)item.Header).Text.Contains("demo-text-model", StringComparison.Ordinal)),
+                    "model ids must stay out of visible engine labels");
                 True(menu.Items.OfType<System.Windows.Controls.MenuItem>()
                         .Any(item => HeaderText(item) == "Google · 未测" || HeaderText(item).StartsWith("Google · ", StringComparison.Ordinal)),
                     "the free route uses a short provider label instead of repeating 'free engine' and 'text only'");
@@ -12459,10 +12479,10 @@ internal static class Program
             $"the elapsed time must be preserved, got: {state.StatusText}");
 
         // The shared user-facing elapsed formatter is pure and second-based.
-        Equal("用时 0.0 秒", TranslationElapsedText.ForMilliseconds(0));
+        Equal("用时 < 0.1 秒", TranslationElapsedText.ForMilliseconds(0));
         Equal("用时 0.2 秒", TranslationElapsedText.ForMilliseconds(205));
         Equal("用时 1.2 秒", TranslationElapsedText.ForMilliseconds(1234));
-        True(TranslationElapsedText.ForMilliseconds(-5).StartsWith("用时 0.0 秒", StringComparison.Ordinal),
+        True(TranslationElapsedText.ForMilliseconds(-5).StartsWith("用时 < 0.1 秒", StringComparison.Ordinal),
             "a negative measurement must clamp to zero, not render a negative duration");
     }
 
@@ -13674,6 +13694,24 @@ internal static class Program
         Equal(1, Row("TargetEditorCell"));
         Equal(2, System.Windows.Controls.Grid.GetColumn(grid.Children.OfType<FrameworkElement>().First(e => e.Name == "TargetEditorCell")));
         Equal(Visibility.Visible, swap.Visibility);
+
+        // A request owns the language pair it started with. While it is in
+        // flight, selectors and swap stay locked so a late result cannot be
+        // painted below different language headers; terminal state restores
+        // all three controls.
+        var running = TranslateSectionReducer.StartTranslation(section.CurrentState, 91);
+        section.ApplyState(running);
+        True(!section.SourceLangCombo.IsEnabled && !section.TargetLangCombo.IsEnabled && !swap.IsEnabled,
+            "language direction controls must lock for an in-flight request snapshot");
+        section.ApplyState(TranslateSectionReducer.ApplyCompletion(running, new TranslationSession
+        {
+            Stage = TranslationSessionStage.Completed,
+            TranslatedText = "完成",
+            PipelineLabel = "测试引擎",
+            Timing = new TranslationSessionTiming(TotalElapsedMs: 120),
+        }, 91));
+        True(section.SourceLangCombo.IsEnabled && section.TargetLangCombo.IsEnabled && swap.IsEnabled,
+            "language direction controls must restore after request completion");
     }
 
     /// <summary>

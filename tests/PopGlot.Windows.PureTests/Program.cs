@@ -425,7 +425,12 @@ internal static class Program
         var idEngine = new SummaryRequestIdentity("hello", "en", "zh-CN", TextTaskKind.Summarize, "p2", "claude-3-5", 1);
         var idVersion = new SummaryRequestIdentity("hello", "en", "zh-CN", TextTaskKind.Summarize, "p1", "gpt-4o", 2);
 
-        reading.RememberSummary(idZh, "中文要点", "注-中文");
+        reading.RememberSummary(
+            idZh,
+            "中文要点",
+            "注-中文",
+            elapsedMs: 1234,
+            engineLabel: "引擎A");
         True(reading.HasSummary(idZh), "zh summary must be cached");
         True(!reading.HasSummary(idJa), "ja summary must not hit zh cache");
         True(!reading.HasSummary(idEngine), "different engine must not hit cache");
@@ -437,6 +442,8 @@ internal static class Program
 
         True(reading.TryGetSummary(idZh, out var zhCached), "zh summary still present");
         Equal("中文要点", zhCached.Text, "zh cached text preserved");
+        Equal(1234UL, zhCached.ElapsedMs, "cache preserves the original request timing");
+        Equal("引擎A", zhCached.EngineLabel, "cache preserves the engine that produced the summary");
 
         reading.ShowSummary(idZh);
         Equal("中文要点", reading.SummaryText, "switching identity restores zh display");
@@ -659,7 +666,20 @@ internal static class Program
             Equal(3L, Interlocked.Read(ref sends), "a cache hit sends nothing");
             True(!cached!.IsConsumed, "a cache hit must not burn the permit");
 
-            // 7. A revocation between fallback endpoints stops the rest.
+            // 7. MyMemory's documented 500-byte q budget is enforced locally.
+            ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Unset }, consentPath);
+            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var myMemoryLong), "fresh once-token");
+            await ThrowsAsync<FreeTranslateException>(() =>
+                FreeTranslateService.TranslateAsync(
+                    new string('a', FreeTranslateService.MyMemoryMaxQueryBytes + 1),
+                    "en",
+                    "zh-CN",
+                    myMemoryLong!,
+                    provider: FreeEngineProvider.MyMemory));
+            Equal(3L, Interlocked.Read(ref sends), "MyMemory byte overflow sends nothing");
+            True(!myMemoryLong!.IsConsumed, "MyMemory byte overflow does not consume the permit");
+
+            // 8. A revocation between fallback endpoints stops the rest.
             ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed }, consentPath);
             OutboundPolicy.ConsentPrompt = null;
             True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var fallback), "Allowed consent must issue");

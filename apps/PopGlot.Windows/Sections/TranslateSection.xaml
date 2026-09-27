@@ -295,7 +295,7 @@
 
                         Width="32" Height="32"
 
-                        ToolTip="交换语言方向" AutomationProperties.Name="交换语言方向"
+                        ToolTip="交换语言；再次点击“翻译”后生效" AutomationProperties.Name="交换语言方向"
 
                         Click="TranslateSwap_Click">
 

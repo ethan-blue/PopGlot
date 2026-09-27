@@ -52,7 +52,10 @@ internal static class ReadingRequestCopy
     public static string WhileRequesting(bool translationRunning) =>
         translationRunning ? SummaryWhileTranslating : SummaryKeepsTranslation;
 
-    public static string Finished(ulong elapsedMs) => $"要点 · {elapsedMs} ms · 可切回译文";
+    public const string Cached = "要点 · 已缓存 · 可切回译文";
+
+    public static string Finished(ulong elapsedMs) =>
+        $"要点 · {TranslationElapsedText.ForMilliseconds(elapsedMs)} · 可切回译文";
 }
 
 /// <summary>
@@ -73,7 +76,13 @@ internal sealed class ReadingModeState
 
     public SummaryRequestIdentity? CurrentSummaryIdentity { get; private set; }
 
-    private readonly Dictionary<SummaryRequestIdentity, (string Text, string Note)> _summaryCache = new();
+    internal sealed record CachedSummary(
+        string Text,
+        string Note,
+        ulong ElapsedMs,
+        string EngineLabel);
+
+    private readonly Dictionary<SummaryRequestIdentity, CachedSummary> _summaryCache = new();
 
     public void CaptureTranslation(string? text, string? note)
     {
@@ -91,8 +100,16 @@ internal sealed class ReadingModeState
         string.Equals(CurrentSummaryIdentity.Source, source, StringComparison.Ordinal) &&
         SummaryText.Length > 0;
 
-    public bool TryGetSummary(SummaryRequestIdentity identity, out (string Text, string Note) summary) =>
-        _summaryCache.TryGetValue(identity, out summary);
+    public bool TryGetSummary(SummaryRequestIdentity identity, out CachedSummary summary)
+    {
+        if (_summaryCache.TryGetValue(identity, out var cached))
+        {
+            summary = cached;
+            return true;
+        }
+        summary = null!;
+        return false;
+    }
 
     public bool ShowSummary(SummaryRequestIdentity identity)
     {
@@ -107,11 +124,21 @@ internal sealed class ReadingModeState
         return false;
     }
 
-    public void RememberSummary(SummaryRequestIdentity identity, string? text, string? note, bool show = true)
+    public void RememberSummary(
+        SummaryRequestIdentity identity,
+        string? text,
+        string? note,
+        bool show = true,
+        ulong elapsedMs = 0,
+        string? engineLabel = null)
     {
         var safeText = text ?? string.Empty;
         var safeNote = note ?? string.Empty;
-        _summaryCache[identity] = (safeText, safeNote);
+        _summaryCache[identity] = new CachedSummary(
+            safeText,
+            safeNote,
+            elapsedMs,
+            engineLabel ?? string.Empty);
         if (show || CurrentSummaryIdentity is null || CurrentSummaryIdentity.Equals(identity))
         {
             CurrentSummaryIdentity = identity;
