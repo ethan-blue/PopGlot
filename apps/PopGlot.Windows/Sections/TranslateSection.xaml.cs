@@ -522,6 +522,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             Place(TargetEditorCell, 4);
             Place(TargetFooterCell, 5);
             TargetLangBarCell.BorderThickness = new Thickness(0, 1, 0, 1);
+            ApplyPaneCornerRadii(stacked: true);
 
             TranslateSwapButton.Visibility = Visibility.Collapsed;
             AxisTopCell.Visibility = Visibility.Collapsed;
@@ -551,6 +552,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         Place(TargetEditorCell, 1, 2);
         Place(TargetFooterCell, 2, 2);
         TargetLangBarCell.BorderThickness = new Thickness(0, 0, 0, 1);
+        ApplyPaneCornerRadii(stacked: false);
 
         TranslateSwapButton.Visibility = Visibility.Visible;
         AxisTopCell.Visibility = Visibility.Visible;
@@ -563,6 +565,30 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             System.Windows.Controls.Grid.SetColumn(element, column);
             System.Windows.Controls.Grid.SetColumnSpan(element, 1);
         }
+    }
+
+    /// <summary>
+    /// 卡片外框是 1 DIP 描边 + CardRadius 的圆角，但 Border 不会裁切子层：
+    /// 语言栏/页脚单元格自绘的方形背景会盖过外框圆弧。这里按当前布局把
+    /// 实际落在卡片四角的单元格拉出对应的内层圆角（卡片半径 − 1 DIP 描边）。
+    /// 横排只有最外侧角圆角，接缝保持直角；竖排只圆整组顶部/底部。
+    /// </summary>
+    private void ApplyPaneCornerRadii(bool stacked)
+    {
+        var card = TryFindResource("CardRadius") as CornerRadius? ?? new CornerRadius(10);
+        var r = Math.Max(0, card.TopLeft - 1);
+        if (stacked)
+        {
+            SourceLangBarCell.CornerRadius = new CornerRadius(r, r, 0, 0);
+            SourceFooterCell.CornerRadius = new CornerRadius();
+            TargetLangBarCell.CornerRadius = new CornerRadius();
+            TargetFooterCell.CornerRadius = new CornerRadius(0, 0, r, r);
+            return;
+        }
+        SourceLangBarCell.CornerRadius = new CornerRadius(r, 0, 0, 0);
+        TargetLangBarCell.CornerRadius = new CornerRadius(0, r, 0, 0);
+        SourceFooterCell.CornerRadius = new CornerRadius(0, 0, 0, r);
+        TargetFooterCell.CornerRadius = new CornerRadius(0, 0, r, 0);
     }
 
     internal bool IsStacked => _stacked;

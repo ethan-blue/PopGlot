@@ -1231,34 +1231,370 @@ internal static class WaveRegressionTests
         Equal("保存", (string)section.SaveTemplateButton.Content, "the button returns to its save wording");
     }
 
-    /// <summary>The two-step delete confirmation must arm (visual + tooltip +
-    /// auto-disarm timer) and MUST be dismountable directly, with the exact
-    /// original Content/ToolTip restored — the test never waits the 3 s.</summary>
-    public static void PromptDeleteArmDisarmWithoutWaiting()
+    /// <summary>U04 rework contract: the delete confirmation is an INLINE strip
+    /// inside the row — the icon button never widens or changes wording, there
+    /// is no 3-second auto-dismiss (pumping the dispatcher past 3 s must keep
+    /// the strip), and cancel/confirm both resolve it. The old contract (arm
+    /// the button itself, width 32→86, timer disarm) moved the row layout and
+    /// demanded a second aim — this test fails if that ever returns.</summary>
+    public static void PromptDeleteInlineConfirmContract()
+    {
+        EnsureApp();
+        const string probeId = "wave-inline-delete-probe";
+        PumpUntil(CoreBridge.SavePromptTemplateAsync(new PromptTemplateDto(probeId)
+        {
+            Name = "内联删除探针",
+            Description = "wave 回归",
+            Instruction = "把{{source_language}}译成{{target_language}}。",
+        }));
+        try
+        {
+        var section = new PromptSection();
+        PumpPaintUntil(section,
+            () => Rows(section).FirstOrDefault(r => r.Id == probeId) is { } &&
+                  section.CustomsList.ItemContainerGenerator.ContainerFromItem(
+                      Rows(section).First(r => r.Id == probeId)) is not null,
+            "the probe row must paint into the custom list");
+
+        var iconDeleteGeometry = (Geometry)Application.Current!.Resources["IconDelete"]!;
+        Button RowDeleteIcon() => RowButtons(section, probeId).Single(
+            b => b.Content is null && ReferenceEquals(Ui.GetIcon(b), iconDeleteGeometry));
+
+        var iconDelete = RowDeleteIcon();
+        var widthBefore = iconDelete.Width;
+        var minWidthBefore = iconDelete.MinWidth;
+
+        // 第一步：展开行内确认区，不武装按钮本身。
+        InvokePrivate(section, "DeleteTemplate_Click", iconDelete, new RoutedEventArgs());
+        var confirming = Rows(section).Single(r => r.Id == probeId);
+        Equal(Visibility.Visible, confirming.ConfirmDeleteVisibility,
+            "the first click opens the row's inline confirm strip");
+        Equal(Visibility.Collapsed, confirming.ActionsVisibility,
+            "the row's normal action column steps aside while confirming");
+        var redrawnIcon = RowDeleteIcon();
+            Equal(widthBefore, redrawnIcon.Width, "the delete icon button must not widen for the confirmation");
+            Equal(minWidthBefore, redrawnIcon.MinWidth, "the delete icon button keeps its min width");
+            True(redrawnIcon.Content is null, "the icon button never carries confirm text");
+
+            // 无 3 秒限时：泵过 3.3 秒后确认区仍在（旧实现在这里会自动解除）。
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            while (stopwatch.Elapsed < TimeSpan.FromSeconds(3.3))
+            {
+                PumpOnce();
+                Thread.Sleep(50);
+            }
+            Equal(Visibility.Visible, Rows(section).Single(r => r.Id == probeId).ConfirmDeleteVisibility,
+                "the confirm strip must persist past 3 seconds — no auto-dismiss timer");
+
+            // 取消：确认区收起，操作列恢复。
+            var cancel = RowButtons(section, probeId).Single(b => b.Content as string == "取消");
+            InvokePrivate(section, "CancelDeleteConfirm_Click", cancel, new RoutedEventArgs());
+            var cancelled = Rows(section).Single(r => r.Id == probeId);
+            Equal(Visibility.Collapsed, cancelled.ConfirmDeleteVisibility, "cancel closes the strip");
+            Equal(Visibility.Visible, cancelled.ActionsVisibility, "cancel restores the action column");
+
+            // 确认删除：模板真的被删掉，行消失。
+            InvokePrivate(section, "DeleteTemplate_Click", RowDeleteIcon(), new RoutedEventArgs());
+            var confirm = RowButtons(section, probeId).Single(b => b.Content as string == "删除");
+            InvokePrivate(section, "DeleteConfirmed_Click", confirm, new RoutedEventArgs());
+            PumpPaintUntil(section, () => Rows(section).All(r => r.Id != probeId),
+                "the confirmed delete must remove the row");
+            True(!CoreBridge.ListPromptTemplates().Any(t => t.Id == probeId),
+                "the confirmed delete must remove the template from the core");
+        }
+        finally
+        {
+            try
+            {
+                PumpUntil(CoreBridge.DeletePromptTemplateAsync(probeId));
+            }
+            catch
+            {
+                // 清理尽力而为：隔离核心随运行丢弃。
+            }
+            PumpUntil(CoreBridge.SetActivePromptTemplateAsync(null));
+        }
+    }
+
+    private static IEnumerable<TemplateRow> Rows(PromptSection section) =>
+        section.CustomsList.Items.Cast<TemplateRow>();
+
+    private static void Relayout(PromptSection section)
+    {
+        section.Measure(new Size(960, 900));
+        section.Arrange(new Rect(0, 0, 960, 900));
+        section.UpdateLayout();
+    }
+
+    private static List<Button> RowButtons(PromptSection section, string id)
+    {
+        Relayout(section);
+        var row = Rows(section).First(r => r.Id == id);
+        var container = section.CustomsList.ItemContainerGenerator.ContainerFromItem(row)
+            ?? throw new InvalidOperationException("row container not generated");
+        return Descendants<Button>(container).Where(b => b.Tag as string == id).ToList();
+    }
+
+    private static IEnumerable<T> Descendants<T>(DependencyObject root)
+        where T : DependencyObject
+    {
+        var count = System.Windows.Media.VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(root, i);
+            if (child is T match)
+            {
+                yield return match;
+            }
+            foreach (var nested in Descendants<T>(child))
+            {
+                yield return nested;
+            }
+        }
+    }
+
+    private static void PumpUntilCondition(Func<bool> condition, string message)
+    {
+        for (var attempt = 0; attempt < 1000 && !condition(); attempt++)
+        {
+            PumpOnce();
+            Thread.Sleep(10);
+        }
+        True(condition(), message);
+    }
+
+    /// <summary>未宿主进窗口的区段也要生成行容器：手动喂布局并泵调度器，
+    /// 直到条件成立（ItemsControl 的容器在 Measure 时生成）。</summary>
+    private static void PumpPaintUntil(PromptSection section, Func<bool> condition, string message)
+    {
+        for (var attempt = 0; attempt < 1000 && !condition(); attempt++)
+        {
+            section.Measure(new Size(960, 900));
+            section.Arrange(new Rect(0, 0, 960, 900));
+            section.UpdateLayout();
+            PumpOnce();
+            Thread.Sleep(10);
+        }
+        True(condition(), message);
+    }
+
+    /// <summary>U01: the workbench card is a 1 DIP stroked CardRadius(10)
+    /// border, and Border does not clip children — the cells that actually
+    /// paint a background must round the same outer corners themselves.
+    /// Horizontal mode rounds only the four outermost corners (inner seams
+    /// stay square); stacked mode rounds only the group's top and bottom.</summary>
+    public static void WorkbenchPaneCornerRadiiMatchLayout()
+    {
+        EnsureApp();
+        var cardRadius = (CornerRadius)Application.Current!.Resources["CardRadius"];
+        var inner = Math.Max(0, cardRadius.TopLeft - 1);
+
+        var section = new TranslateSection();
+        section.Measure(new Size(1200, 800));
+        section.Arrange(new Rect(0, 0, 1200, 800));
+        section.UpdateLayout();
+
+        Equal(new CornerRadius(inner, 0, 0, 0), section.SourceLangBarCell.CornerRadius,
+            "horizontal: only the top-left outer corner rounds");
+        Equal(new CornerRadius(0, inner, 0, 0), section.TargetLangBarCell.CornerRadius,
+            "horizontal: only the top-right outer corner rounds");
+        Equal(new CornerRadius(0, 0, 0, inner), section.SourceFooterCell.CornerRadius,
+            "horizontal: only the bottom-left outer corner rounds");
+        Equal(new CornerRadius(0, 0, inner, 0), section.TargetFooterCell.CornerRadius,
+            "horizontal: only the bottom-right outer corner rounds");
+        Equal(new CornerRadius(), section.AxisTopCell.CornerRadius,
+            "interior cells never add corner rounding");
+        Equal(new CornerRadius(), section.AxisFooterCell.CornerRadius,
+            "interior cells never add corner rounding");
+
+        section.SetStacked(true);
+        section.UpdateLayout();
+        Equal(new CornerRadius(inner, inner, 0, 0), section.SourceLangBarCell.CornerRadius,
+            "stacked: the group's top edge rounds both corners");
+        Equal(new CornerRadius(0, 0, inner, inner), section.TargetFooterCell.CornerRadius,
+            "stacked: the group's bottom edge rounds both corners");
+        Equal(new CornerRadius(), section.SourceFooterCell.CornerRadius,
+            "stacked: the source footer becomes interior and stays square");
+        Equal(new CornerRadius(), section.TargetLangBarCell.CornerRadius,
+            "stacked: the target language bar becomes interior and stays square");
+
+        section.SetStacked(false);
+        section.UpdateLayout();
+        Equal(new CornerRadius(inner, 0, 0, 0), section.SourceLangBarCell.CornerRadius,
+            "returning to horizontal restores the outer-only rounding");
+    }
+
+    /// <summary>U02: the flat text surfaces (FlatTextBox input, ResultTextBox
+    /// and FlatRichTextBox readers) must show a crisp keyboard-focus line —
+    /// a 1 DIP border that is transparent at rest and paints FocusBrush while
+    /// keyboard focus is inside. The old styles had no focus cue at all.</summary>
+    public static void FlatTextSurfacesShowKeyboardFocusBorder()
+    {
+        EnsureApp();
+        var focusBrush = (Brush)Application.Current!.Resources["FocusBrush"];
+        var host = new Window { Width = 640, Height = 480, WindowStyle = WindowStyle.None,
+                                ShowInTaskbar = false, ShowActivated = false };
+        try
+        {
+            var flat = new TextBox { Style = (Style)Application.Current.Resources["FlatTextBox"] };
+            var result = new TextBox { Style = (Style)Application.Current.Resources["ResultTextBox"] };
+            var rich = new RichTextBox { Style = (Style)Application.Current.Resources["FlatRichTextBox"] };
+            host.Content = new StackPanel { Children = { flat, result, rich } };
+            host.Show();
+            host.UpdateLayout();
+
+            foreach (var (name, control, surface) in new (string, Control, Border)[]
+                     {
+                         ("FlatTextBox", flat, (Border)flat.Template.FindName("Surface", flat)!),
+                         ("ResultTextBox", result, (Border)result.Template.FindName("Surface", result)!),
+                         ("FlatRichTextBox", rich, (Border)rich.Template.FindName("Surface", rich)!),
+                     })
+            {
+                Equal(1, surface.BorderThickness.Left, $"{name} reserves a 1 DIP border permanently");
+                True(BrushesEqual(Brushes.Transparent, surface.BorderBrush),
+                    $"{name} is borderless at rest");
+
+                control.Focus();
+                PumpOnce();
+                True(control.IsKeyboardFocused, $"{name} takes keyboard focus");
+                True(BrushesEqual(focusBrush, surface.BorderBrush),
+                    $"{name} paints the 1 DIP FocusBrush line on keyboard focus");
+            }
+        }
+        finally
+        {
+            host.Close();
+        }
+
+        static bool BrushesEqual(Brush left, Brush right) =>
+            left is SolidColorBrush a && right is SolidColorBrush b && a.Color == b.Color;
+    }
+
+    /// <summary>U03: built-in tones are mutually exclusive choices, so they
+    /// render as RadioButtons — the UIA peer exposes selection state, the
+    /// checked item matches the core's active template, and checking another
+    /// one actually switches the active style through the real core.</summary>
+    public static void PromptBuiltinChoicesAreRadioSelection()
     {
         EnsureApp();
         var section = new PromptSection();
-        var button = new Button { Content = "删除", Tag = "wave-delete-probe" };
+        PumpPaintUntil(section,
+            () => Descendants<RadioButton>(section.BuiltinsList).Count() >= 3,
+            "the built-in tone choices must paint as radio buttons");
 
-        InvokePrivate(section, "DeleteTemplate_Click", button, new RoutedEventArgs());
-        Equal("确认删除", (string)button.Content!, "the first click arms the confirmation");
-        True((button.ToolTip as string)?.Contains("再次点击确认删除", StringComparison.Ordinal) == true,
-            "the armed tooltip states the two-step contract");
-        True(GetPrivate<DispatcherTimer>(section, "_deleteArmTimer").IsEnabled,
-            "the 3-second auto-disarm timer is running (and this test never waits for it)");
+        var radios = Descendants<RadioButton>(section.BuiltinsList).ToList();
+        True(radios.All(r => r.GroupName == "PromptBuiltinStyle"),
+            "every tone choice shares one exclusion group");
+        var activeId = CoreBridge.GetActivePromptTemplate().Id;
+        var checkedRadio = radios.SingleOrDefault(r => r.IsChecked == true);
+        True(checkedRadio is not null, "the active tone is checked");
+        Equal(activeId, (string)checkedRadio!.Tag, "the checked choice matches the core's active template");
 
-        InvokePrivate(section, "DisarmDelete");
-        Equal("删除", (string)button.Content!, "disarming restores the exact original content");
-        True(button.ToolTip is null, "disarming restores the exact original tooltip");
-        True(ReferenceEquals(button.ReadLocalValue(Button.BackgroundProperty), DependencyProperty.UnsetValue) &&
-             ReferenceEquals(button.ReadLocalValue(Button.ForegroundProperty), DependencyProperty.UnsetValue),
-            "disarming clears the danger paint back to the style default");
-        True(!GetPrivate<DispatcherTimer>(section, "_deleteArmTimer").IsEnabled,
-            "the timer stops on disarm");
+        var peer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(checkedRadio);
+        True(peer is System.Windows.Automation.Peers.RadioButtonAutomationPeer,
+            "tone choices expose a radio automation peer with selection state");
+        True(peer!.GetPattern(System.Windows.Automation.Peers.PatternInterface.SelectionItem) is not null,
+            "the selection-item pattern is available to screen readers");
 
-        // Arming never touched the core: the probe id still resolves to nothing deleted.
-        True(CoreBridge.ListPromptTemplates().Any(t => t.IsBuiltIn),
-            "arming alone must not delete anything");
+        var other = radios.First(r => r.IsChecked != true);
+        other.SetCurrentValue(RadioButton.IsCheckedProperty, true);
+        PumpPaintUntil(section,
+            () => Descendants<RadioButton>(section.BuiltinsList)
+                .SingleOrDefault(r => r.IsChecked == true)?.Tag as string == (string)other.Tag,
+            "checking another tone must switch the active template and repaint only it checked");
+        Equal((string)other.Tag, CoreBridge.GetActivePromptTemplate().Id,
+            "the core's active template follows the checked radio choice");
+    }
+
+    /// <summary>U06: the custom rule row budgets its content — the name is a
+    /// single ellipsized line, the description clamps to exactly two caption
+    /// lines (12/17 DIP) instead of pushing the row arbitrarily tall, and the
+    /// full text stays reachable via tooltip/help-text and the editor.</summary>
+    public static void PromptRowDescriptionClampsToTwoLines()
+    {
+        EnsureApp();
+        const string probeId = "wave-desc-clamp-probe";
+        PumpUntil(CoreBridge.SavePromptTemplateAsync(new PromptTemplateDto(probeId)
+        {
+            Name = "两行省略探针",
+            Description = string.Concat(Enumerable.Repeat("很长的说明文字用于验证两行封顶。", 8)),
+            Instruction = "译成{{target_language}}。",
+        }));
+        try
+        {
+            var section = new PromptSection();
+            PumpPaintUntil(section,
+                () => Rows(section).Any(r => r.Id == probeId) &&
+                      section.CustomsList.ItemContainerGenerator.ContainerFromItem(
+                          Rows(section).First(r => r.Id == probeId)) is not null,
+                "the probe row must paint");
+
+            var row = Rows(section).First(r => r.Id == probeId);
+            var container = section.CustomsList.ItemContainerGenerator.ContainerFromItem(row)!;
+            var description = Descendants<TextBlock>(container).First(
+                b => b.Text == row.DisplayDescription);
+            Equal(17.0, description.LineHeight, "the description uses the caption 12/17 line height");
+            Equal(34.0, description.MaxHeight, "the description clamps to exactly two caption lines");
+            Equal(TextTrimming.CharacterEllipsis, description.TextTrimming,
+                "overflowing descriptions end in an ellipsis, never push the row tall");
+            True(description.ToolTip as string == row.DisplayDescription,
+                "the full description stays one hover away");
+            True(AutomationProperties.GetHelpText(description) as string == row.DisplayDescription,
+                "the full description is exposed to assistive tech");
+
+            var name = Descendants<TextBlock>(container).First(b => b.Text == row.DisplayName);
+            Equal(TextTrimming.CharacterEllipsis, name.TextTrimming,
+                "the rule name is a single ellipsized line");
+        }
+        finally
+        {
+            try
+            {
+                PumpUntil(CoreBridge.DeletePromptTemplateAsync(probeId));
+            }
+            catch
+            {
+                // 清理尽力而为。
+            }
+            PumpUntil(CoreBridge.SetActivePromptTemplateAsync(null));
+        }
+    }
+
+    /// <summary>U08: in the help TOC the LAST template trigger setting the row
+    /// background must be IsSelected — hovering a selected article may not
+    /// paint it back to the plain hover colour and erase the selected identity.</summary>
+    public static void HelpTocSelectionWinsOverHover()
+    {
+        EnsureApp();
+        var help = new HelpWindow { ShowActivated = false };
+        try
+        {
+            var list = (ListBox)help.FindName("ArticleList")!;
+            help.Show();
+            help.UpdateLayout();
+            var container = list.ItemContainerGenerator.ContainerFromIndex(0) as ListBoxItem
+                ?? throw new InvalidOperationException("the first TOC row must generate its container");
+            container.ApplyTemplate();
+            var rowTemplate = container.Template
+                ?? throw new InvalidOperationException("the styled TOC row must carry the custom template");
+
+            var backgroundSetters = rowTemplate.Triggers
+                .SelectMany(trigger => ((System.Windows.Trigger)trigger).Setters
+                    .OfType<Setter>()
+                    .Where(setter => setter.Property.Name == "Background"))
+                .ToList();
+            True(backgroundSetters.Count >= 2, "the TOC row must style both hover and selected backgrounds");
+
+            var last = backgroundSetters[^1];
+            var ownerTrigger = (System.Windows.Trigger)rowTemplate.Triggers
+                .Single(t => ((System.Windows.Trigger)t).Setters.Contains(last));
+            Equal(nameof(ListBoxItem.IsSelected), ownerTrigger.Property.Name,
+                "selected must win over hover when both are active");
+        }
+        finally
+        {
+            help.Close();
+        }
     }
 
     /// <summary>

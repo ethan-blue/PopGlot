@@ -69,13 +69,16 @@
                                             <ContentPresenter VerticalAlignment="Center" />
                                         </Border>
                                         <ControlTemplate.Triggers>
-                                            <Trigger Property="IsSelected" Value="True">
-                                                <Setter TargetName="Row" Property="Background"
-                                                        Value="{DynamicResource AccentSoftBrush}" />
-                                            </Trigger>
+                                            <!-- 悬停在选中项之前求值：两者同时成立时选中背景
+                                                 保留（后触发器胜出），悬停不再覆盖唯一的
+                                                 选中线索。 -->
                                             <Trigger Property="IsMouseOver" Value="True">
                                                 <Setter TargetName="Row" Property="Background"
                                                         Value="{DynamicResource SurfaceHoverBrush}" />
+                                            </Trigger>
+                                            <Trigger Property="IsSelected" Value="True">
+                                                <Setter TargetName="Row" Property="Background"
+                                                        Value="{DynamicResource AccentSoftBrush}" />
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>

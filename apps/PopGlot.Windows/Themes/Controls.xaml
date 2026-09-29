@@ -961,10 +961,15 @@
         </Setter>
     </Style>
 
-    <!-- Borderless variant used inside the floating panel's own cards. -->
+    <!-- Borderless variant used inside the floating panel's own cards.
+         The 1 DIP border is permanently reserved (transparent at rest) so the
+         inherited template's focus trigger can draw a crisp 1 DIP solid line
+         (FocusBrush) — flat panes had NO keyboard-focus cue at all. Thickness
+         never changes, so focus causes no layout shift; no blur halos. -->
     <Style x:Key="FlatTextBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
         <Setter Property="Background" Value="Transparent" />
-        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="local:Ui.ContentPadding" Value="0" />
         <!-- Borderless boxes are the multi-line work areas (workbench panes, panel
              body, history detail): text starts at the top-left, never centered. -->
@@ -974,7 +979,10 @@
     <!-- Reading surface variant used for translation outputs, readers, and stream viewers.
          Keeps background transparent so the parent reading canvas shows through seamlessly,
          without the IsReadOnly trigger forcing a muted input-box surface.
-         Preserves ClearType, smooth text selection, copy support, and placeholder watermarks. -->
+         Preserves ClearType, smooth text selection, copy support, and placeholder watermarks.
+         Reading surfaces answer to keyboard entry only (no hover ring on large panes):
+         a permanently reserved transparent border carries a 1 DIP FocusBrush line while
+         keyboard focus is inside. -->
     <Style x:Key="ResultTextBox" TargetType="TextBox">
         <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
         <Setter Property="FontSize" Value="14.5" />
@@ -983,8 +991,9 @@
         <Setter Property="CaretBrush" Value="Transparent" />
         <Setter Property="SelectionBrush" Value="{DynamicResource AccentBrush}" />
         <Setter Property="SelectionOpacity" Value="0.24" />
-        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="BorderThickness" Value="1" />
         <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="local:Ui.CornerRadius" Value="{StaticResource ControlRadius}" />
         <Setter Property="Padding" Value="0" />
         <Setter Property="VerticalContentAlignment" Value="Top" />
         <Setter Property="FocusVisualStyle" Value="{x:Null}" />
@@ -996,7 +1005,9 @@
             <Setter.Value>
                 <ControlTemplate TargetType="TextBox">
                     <Border x:Name="Surface" Background="{TemplateBinding Background}"
-                            BorderThickness="0"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{Binding (local:Ui.CornerRadius), RelativeSource={RelativeSource TemplatedParent}}"
                             Padding="{TemplateBinding Padding}"
                             SnapsToDevicePixels="True">
                         <Grid>
@@ -1020,6 +1031,9 @@
                         <Trigger Property="local:Ui.HasText" Value="False">
                             <Setter TargetName="Placeholder" Property="Visibility" Value="Visible" />
                         </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource FocusBrush}" />
+                        </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
                         </Trigger>
@@ -1029,6 +1043,10 @@
         </Setter>
     </Style>
 
+    <!-- Read-only rich text reader (markdown results, help articles, history
+         detail). Same focus contract as ResultTextBox: a permanently reserved
+         transparent 1 DIP border that paints FocusBrush only while keyboard
+         focus is inside — flat at rest, crisp on keyboard entry, no halo. -->
     <Style x:Key="FlatRichTextBox" TargetType="RichTextBox">
         <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
         <Setter Property="FontSize" Value="14.5" />
@@ -1036,7 +1054,9 @@
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="CaretBrush" Value="{DynamicResource AccentBrush}" />
         <Setter Property="SelectionBrush" Value="{DynamicResource AccentBrush}" />
-        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="local:Ui.CornerRadius" Value="{StaticResource ControlRadius}" />
         <Setter Property="Padding" Value="0" />
         <Setter Property="IsReadOnly" Value="True" />
         <Setter Property="IsDocumentEnabled" Value="True" />
@@ -1045,6 +1065,32 @@
         <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
         <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
         <Setter Property="RenderOptions.ClearTypeHint" Value="Enabled" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RichTextBox">
+                    <Border x:Name="Surface"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{Binding (local:Ui.CornerRadius), RelativeSource={RelativeSource TemplatedParent}}"
+                            Padding="{TemplateBinding Padding}"
+                            SnapsToDevicePixels="True">
+                        <ScrollViewer x:Name="PART_ContentHost" Margin="0" Padding="0"
+                                      Focusable="False"
+                                      VerticalScrollBarVisibility="{TemplateBinding VerticalScrollBarVisibility}"
+                                      HorizontalScrollBarVisibility="{TemplateBinding HorizontalScrollBarVisibility}" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource FocusBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
     <Style TargetType="PasswordBox">

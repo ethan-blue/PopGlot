@@ -71,16 +71,18 @@ PopGlot 采用高对比度、低视觉噪音的暗色与亮色调色盘：中性
 
 ### 2.2 层级矩阵 (Hierarchy Matrix)
 
-| 语义角色 | 字号 (px) | 行高 (Line-height) | 字重 (Weight) | 推荐色值 (Dark) | 适用场景 |
+> 单位为 **DIP**（WPF 设备无关像素，96 DIP = 1 英寸），不是网页 CSS 像素或物理像素。
+
+| 语义角色 | 字号 (DIP) | 行高 (DIP) | 字重 (Weight) | 推荐色值 (Dark) | 适用场景 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **PageTitle (H1)** | 20px | 28px (1.40) | SemiBold (600) | `#EEF0F4` | 页面/窗口顶栏大标题 |
-| **SectionTitle (H2)** | 13px | 18px (1.38) | SemiBold (600) | `#EEF0F4` | 模块分组标题（大写/强语义） |
-| **RowTitle (Subhead)** | 13px | 19px (1.46) | Medium (500) | `#EEF0F4` | 设置项主名称、列表条目标题 |
-| **Body (正文)** | 13px | 20px (1.54) | Regular (400) | `#EEF0F4` | 标准正文段落 |
-| **Content Large** | 14.5px | 22px (1.51) | Regular (400) | `#EEF0F4` | 翻译结果展示区域 |
-| **Caption (说明)** | 12px | 17px (1.42) | Regular (400) | `#A3A9B4` | 控件下方解释提示、空状态说明 |
-| **Metadata (元数据)** | 11px | 16px (1.45) | Regular (400) | `#8A93A2` | 时间戳、字符计数、路由徽章 |
-| **Kbd / Token** | 12.5px | 18px (1.44) | Medium (500) | `AccentBrush`（代码词条用 `TextSecondaryBrush`） | 快捷键录制框、保护代码词条 |
+| **PageTitle (H1)** | 20 | 28 (1.40) | SemiBold (600) | `#EEF0F4` | 页面/窗口顶栏大标题 |
+| **SectionTitle (H2)** | 13 | 18 (1.38) | SemiBold (600) | `#EEF0F4` | 模块分组标题（大写/强语义） |
+| **RowTitle (Subhead)** | 13 | 19 (1.46) | Medium (500) | `#EEF0F4` | 设置项主名称、列表条目标题 |
+| **Body (正文)** | 13 | 20 (1.54) | Regular (400) | `#EEF0F4` | 标准正文段落 |
+| **Content Large** | 14.5 | 22 (1.51) | Regular (400) | `#EEF0F4` | 翻译结果展示区域 |
+| **Caption (说明)** | 12 | 17 (1.42) | Regular (400) | `#A3A9B4` | 控件下方解释提示、空状态说明 |
+| **Metadata (元数据)** | 11 | 16 (1.45) | Regular (400) | `#8A93A2` | 时间戳、字符计数、路由徽章 |
+| **Kbd / Token** | 12.5 | 18 (1.44) | Medium (500) | `AccentBrush`（代码词条用 `TextSecondaryBrush`） | 快捷键录制框、保护代码词条 |
 
 ---
 
@@ -93,8 +95,9 @@ PopGlot 采用高对比度、低视觉噪音的暗色与亮色调色盘：中性
 2. **中西文混排盘古空格 (Pangu Spacing)**：
    * 中文字符与英文单词、数字之间自动保留 **0.05em 半角间隙**（如 `PopGlot 桌面翻译`、`耗时 120ms`），提升技术文档与代码报错的可读性。
 3. **字符长度膨胀/缩减补偿**：
-   * **EN → ZH**：中文短句缩短 35%~50%，按钮设置 `MinWidth="72px"` 配合弹性 Padding，防止两字操作按钮（如“翻译”、“删除”）过窄失真。
-   * **ZH → EN**：西文长句膨胀 40%~60%，单行预览强制启用 `TextTrimming="CharacterEllipsis"`，状态栏采用 `Grid` 弹性列与固定列分离，严禁互相挤压重叠。
+   * 中英翻译方向的长度差异随内容类型大幅波动，不存在普适换算百分比；文案与控件预算以**实测最长允许值**为准（规则名 64 字符、说明 256 字符等由 Rust 域限额约束）。
+   * **EN → ZH**：中文短句通常更紧凑。两字操作（如“翻译”、“删除”）设 `MinWidth="72"`（DIP）配合弹性 Padding，防止过窄失真。
+   * **ZH → EN**：西文长句更长。单行预览一律 `TextTrimming="CharacterEllipsis"`；说明类文本最多两行（12/17 DIP 行高 × 2 = 34 DIP 封顶），状态栏采用 `Grid` 弹性列与固定列分离，严禁互相挤压重叠。
 
 ---
 
@@ -129,9 +132,10 @@ PopGlot 采用高对比度、低视觉噪音的暗色与亮色调色盘：中性
 * **容器/卡片 (Cards / Panes / Lists)**：`CornerRadius="10"`
 * **独立浮窗 (Popups / Quick Search / Translation Panel)**：`CornerRadius="12"`
 * **胶囊徽章 (Status Pills)**：`CornerRadius="10"` 或 `CornerRadius="15"`（圆形）
+* **子层圆角契约**：WPF `Border` 不会裁切子元素——凡在圆角卡片内自绘背景的子层，必须自己圆对应的角（内层半径 = 卡片半径 − 描边宽度；横排只圆最外侧角，接缝保持直角）。禁止用 `ClipToBounds=True` 冒充圆角裁切。参考实现：`TranslateSection.ApplyPaneCornerRadii`。
 
 ### 5.2 间距网格 (Spacing Grid)
-* 基础网格基准为 **4px / 8px**：
-  * 微间距 (Micro): `4px`, `6px`, `8px`（图标与文字间距、徽章内边距）
-  * 组件内间距 (Component Padding): `10px`, `12px`, `14px`, `16px`
-  * 模块间距 (Section Margin): `14px`, `18px`, `20px`, `28px`
+* 基础网格基准为 **4 DIP / 8 DIP**：
+  * 微间距 (Micro): `4`, `6`, `8`（图标与文字间距、徽章内边距）
+  * 组件内间距 (Component Padding): `10`, `12`, `14`, `16`
+  * 模块间距 (Section Margin): `14`, `18`, `20`, `28`

@@ -46,18 +46,27 @@
             </Grid>
         </Border>
 
-        <!-- Top ToolBar: Workbench title left, primary actions right -->
+        <!-- Top ToolBar: title / hint / actions each own a grid cell (Auto + * + Auto),
+             so a long style label or visible hint can only trim inside its own cell —
+             title and actions can never overlap. -->
         <Grid Grid.Row="1" Margin="0,0,0,8">
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="翻译" Style="{StaticResource PageTitle}"
-                           FontWeight="SemiBold" VerticalAlignment="Center" />
-            </StackPanel>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" MinWidth="0" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
 
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                <TextBlock x:Name="TranslateShortcutHint" Text="Enter 翻译 · Shift+Enter 换行"
-                           Style="{StaticResource Metadata}"
-                           Foreground="{DynamicResource TextTertiaryBrush}"
-                           VerticalAlignment="Center" Margin="0,0,12,0" />
+            <TextBlock Grid.Column="0" Text="翻译" Style="{StaticResource PageTitle}"
+                       FontWeight="SemiBold" VerticalAlignment="Center" />
+
+            <TextBlock x:Name="TranslateShortcutHint" Grid.Column="1"
+                       Text="Enter 翻译 · Shift+Enter 换行"
+                       Style="{StaticResource Metadata}"
+                       Foreground="{DynamicResource TextTertiaryBrush}"
+                       HorizontalAlignment="Right" VerticalAlignment="Center"
+                       Margin="12,0,12,0" TextTrimming="CharacterEllipsis" />
+
+            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                 <Button x:Name="StyleSelectorButton" Style="{StaticResource GhostButton}"
                         Padding="10,6" Margin="0,0,8,0"
                         AutomationProperties.Name="翻译风格"
@@ -86,7 +95,7 @@
             </StackPanel>
 
             <!-- Hairline loading progress bar -->
-            <ProgressBar x:Name="TranslateProgress" Height="2" IsIndeterminate="True"
+            <ProgressBar x:Name="TranslateProgress" Grid.Column="0" Grid.ColumnSpan="3" Height="2" IsIndeterminate="True"
                          Foreground="{DynamicResource AccentBrush}"
                          Background="Transparent" BorderThickness="0"
                          VerticalAlignment="Bottom" Visibility="Collapsed" />
@@ -121,9 +130,15 @@
 
                 <!-- Source language bar: "原文" on left, auto hint & picker near center axis on right -->
 
+                <!-- 角部单元格带圆角：外层卡片是 1 DIP 描边 + CardRadius(10)，子层
+                     背景必须自己圆相同的角（内层半径 = 卡片半径 − 描边），否则方形
+                     底色会盖过外框圆弧。横排只圆外侧角；SetStacked 会按竖排重排。 -->
+
                 <Border x:Name="SourceLangBarCell" Grid.Row="0" Grid.Column="0" Background="{DynamicResource SurfaceMutedBrush}"
 
                         BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,0,0,1"
+
+                        CornerRadius="9,0,0,0"
 
                         Padding="12,6,8,6">
 
@@ -190,6 +205,8 @@
                 <Border x:Name="SourceFooterCell" Grid.Row="2" Grid.Column="0" Background="{DynamicResource SurfaceMutedBrush}"
 
                         BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
+
+                        CornerRadius="0,0,0,9"
 
                         Padding="12,5">
 
@@ -334,6 +351,8 @@
                 <Border x:Name="TargetLangBarCell" Grid.Row="0" Grid.Column="2" Background="{DynamicResource SurfaceMutedBrush}"
 
                         BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,0,0,1"
+
+                        CornerRadius="0,9,0,0"
 
                         Padding="8,6,12,6">
 
@@ -540,6 +559,7 @@
                 <!-- Target action footer (symmetrical to source) -->
                 <Border x:Name="TargetFooterCell" Grid.Row="2" Grid.Column="2" Background="{DynamicResource SurfaceMutedBrush}"
                         BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
+                        CornerRadius="0,0,9,0"
                         Padding="12,5">
                     <Grid>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">

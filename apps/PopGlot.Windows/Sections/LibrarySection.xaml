@@ -55,36 +55,53 @@
                     Visibility="Collapsed"
                     Background="{DynamicResource SurfaceRaisedBrush}"
                     BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                    CornerRadius="{StaticResource ControlRadius}">
-                <DockPanel LastChildFill="False">
-                    <TextBlock x:Name="LibraryUndoText" DockPanel.Dock="Left" Style="{StaticResource Caption}"
-                               VerticalAlignment="Center" Text="已删除" />
-                    <Button x:Name="LibraryUndoButton" DockPanel.Dock="Right" Margin="8,0,0,0"
+                    CornerRadius="{StaticResource ControlRadius}"
+                    AutomationProperties.Name="删除撤销提示">
+                <!-- 消息独占弹性列可换行；撤销按钮固定宽度，不被长消息挤出。 -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" MinWidth="0" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="LibraryUndoText" Grid.Column="0" Style="{StaticResource Caption}"
+                               VerticalAlignment="Center" Text="已删除"
+                               TextWrapping="Wrap" TextTrimming="CharacterEllipsis" Margin="0,0,8,0" />
+                    <Button x:Name="LibraryUndoButton" Grid.Column="1"
                             Style="{StaticResource GhostButton}" Content="撤销" Padding="10,2"
                             ToolTip="恢复刚才删除的条目" AutomationProperties.Name="撤销刚才的删除"
                             Click="LibraryUndo_Click" />
-                </DockPanel>
+                </Grid>
             </Border>
             <Border x:Name="LibraryExportBar" Margin="0,8,0,0" Padding="10,6"
                     Visibility="Collapsed"
                     Background="{DynamicResource SurfaceRaisedBrush}"
                     BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                    CornerRadius="{StaticResource ControlRadius}">
-                <DockPanel LastChildFill="False">
-                    <TextBlock DockPanel.Dock="Left" Style="{StaticResource Caption}" VerticalAlignment="Center" Text="已导出" />
-                    <Button x:Name="DismissExportButton" DockPanel.Dock="Right" Margin="8,0,0,0"
-                            Style="{StaticResource GhostButton}" Content="关闭" Padding="10,2"
-                            ToolTip="关闭导出提示" AutomationProperties.Name="关闭导出提示"
-                            Click="DismissExport_Click" />
-                    <Button x:Name="OpenExportFolderButton" DockPanel.Dock="Right" Margin="8,0,0,0"
-                            Style="{StaticResource GhostButton}" Content="打开所在文件夹" Padding="10,2"
-                            ToolTip="打开导出文件所在的文件夹" AutomationProperties.Name="打开导出文件夹"
-                            Click="OpenExportFolder_Click" />
-                    <Button x:Name="OpenExportFileButton" DockPanel.Dock="Right" Margin="8,0,0,0"
-                            Style="{StaticResource GhostButton}" Content="打开文件" Padding="10,2"
-                            ToolTip="打开刚导出的文件" AutomationProperties.Name="打开导出文件"
-                            Click="OpenExportFile_Click" />
-                </DockPanel>
+                    CornerRadius="{StaticResource ControlRadius}"
+                    AutomationProperties.Name="导出结果提示">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" MinWidth="0" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Style="{StaticResource Caption}" VerticalAlignment="Center"
+                               Text="已导出" TextTrimming="CharacterEllipsis" Margin="0,0,8,0" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- 主要后续操作在前；「关闭」是图标按钮 + 完整读屏名。 -->
+                        <Button x:Name="OpenExportFileButton" Margin="0,0,8,0"
+                                Style="{StaticResource GhostButton}" Content="打开文件" Padding="10,2"
+                                ToolTip="打开刚导出的文件" AutomationProperties.Name="打开导出文件"
+                                Click="OpenExportFile_Click" />
+                        <Button x:Name="OpenExportFolderButton"
+                                Style="{StaticResource GhostButton}" Content="所在文件夹" Padding="10,2"
+                                ToolTip="打开导出文件所在的文件夹" AutomationProperties.Name="打开导出文件夹"
+                                Click="OpenExportFolder_Click" />
+                        <Button x:Name="DismissExportButton" Style="{StaticResource IconButton}"
+                                Width="26" Height="26" Margin="6,0,0,0"
+                                local:Ui.Icon="{StaticResource IconClose}"
+                                ToolTip="关闭导出提示" AutomationProperties.Name="关闭导出提示"
+                                Click="DismissExport_Click" />
+                    </StackPanel>
+                </Grid>
             </Border>
             </StackPanel>
         </Grid>

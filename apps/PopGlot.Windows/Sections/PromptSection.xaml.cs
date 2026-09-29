@@ -1,6 +1,7 @@
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Threading;
 
 namespace PopGlot.Windows.Sections;
@@ -14,6 +15,9 @@ internal sealed record TemplateRow(
     Visibility ActiveBadge,
     Visibility ViewButtonVisibility,
     Visibility ActivateButtonVisibility,
+    Visibility ActionsVisibility,
+    Visibility ConfirmDeleteVisibility,
+    string DeleteConfirmText,
     bool IsActive);
 
 /// <summary>
@@ -79,15 +83,15 @@ public partial class PromptSection : System.Windows.Controls.UserControl
     private bool _editorDirty;
     private PromptEditorSnapshot _editorSaved = new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, true);
     private Action? _pendingAfterDraft;
-    private Button? _armedDeleteButton;
-    private object? _armedOriginalContent;
-    private string? _armedOriginalToolTip;
-    private double _armedOriginalWidth;
-    private double _armedOriginalMinWidth;
-    private string? _armedOriginalAutomationName;
+    /// <summary>正在等待行内删除确认的规则 Id；null 表示没有确认中的删除。
+    /// 确认区无 3 秒限时，靠显式「取消」/Esc/切换上下文解除。</summary>
+    private string? _confirmingDeleteId;
+    /// <summary>重绘后要聚焦的确认按钮所属规则 Id（一次性）。</summary>
+    private string? _focusConfirmId;
+    /// <summary>取消确认后要把焦点还回去的行删除按钮所属规则 Id（一次性）。</summary>
+    private string? _focusRowDeleteId;
     private bool? _compact;
     private readonly DispatcherTimer _previewDebounce;
-    private readonly DispatcherTimer _deleteArmTimer;
 
     /// <summary>Raised when the section needs to show a status message.</summary>
     internal event Action<string, StatusTone>? StatusChanged;
@@ -111,9 +115,6 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             _previewDebounce.Stop();
             RefreshPreview();
         };
-        // 删除确认 3 秒无操作自动解除，按钮恢复到确认前的原状。
-        _deleteArmTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
-        _deleteArmTimer.Tick += (_, _) => DisarmDelete();
         _ = LoadTemplatesAsync();
     }
 
@@ -149,6 +150,8 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             _templates = templates;
             _activeId = string.IsNullOrWhiteSpace(active.Id) ? FaithfulId : active.Id;
             _loadFailed = false;
+            // 重读列表意味着页面重新进入：未完成的删除确认不跨上下文残留。
+            ClearDeleteConfirm();
             ApplyListErrorState();
             PaintLists();
         }
@@ -186,7 +189,6 @@ public partial class PromptSection : System.Windows.Controls.UserControl
 
     private void PaintLists()
     {
-        DisarmDelete();
         var builtins = _templates.Where(t => t.IsBuiltIn).ToList();
         var customs = _templates.Where(t => !t.IsBuiltIn).ToList();
 
@@ -222,6 +224,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
         // （Rust 回退到内置 faithful），所以列表里必须如实标出。
         var meta = $"{(isBuiltIn ? "内置" : "自定义")} · 修订 {template.Revision}"
             + (template.Enabled ? string.Empty : " · 已停用");
+        var confirming = string.Equals(template.Id, _confirmingDeleteId, StringComparison.Ordinal);
         return new TemplateRow(
             template.Id,
             template.Name,
@@ -230,6 +233,9 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             isActive ? Visibility.Visible : Visibility.Collapsed,
             isBuiltIn ? Visibility.Visible : Visibility.Collapsed,
             isActive ? Visibility.Collapsed : Visibility.Visible,
+            confirming ? Visibility.Collapsed : Visibility.Visible,
+            confirming ? Visibility.Visible : Visibility.Collapsed,
+            $"删除「{template.Name}」？模板的历史修订版本会一并删除，此操作无法撤销。",
             isActive);
     }
 
@@ -237,7 +243,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
 
     private void OpenEditor(PromptTemplateDto template, bool adding, bool viewingBuiltin)
     {
-        DisarmDelete();
+        ClearDeleteConfirm();
         HideDraftGuard();
         _editingId = template.Id;
         _isAdding = adding;
@@ -293,7 +299,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
 
     private void ShowList()
     {
-        DisarmDelete();
+        ClearDeleteConfirm();
         HideDraftGuard();
         _editorDirty = false;
         _editingId = null;
@@ -386,9 +392,27 @@ public partial class PromptSection : System.Windows.Controls.UserControl
     /// <summary>Rust-owned IDs must be ASCII letters/digits/-/_ (prompt.rs validate).</summary>
     private static string NewTemplateId() => $"custom-{Guid.NewGuid():N}";
 
+    /// <summary>自定义规则行的「使用这条规则」按钮。</summary>
     private async void ActivateTemplate_Click(object sender, RoutedEventArgs e)
     {
-        if ((sender as Button)?.Tag is not string id || _saving) return;
+        if ((sender as Button)?.Tag is not string id) return;
+        await ActivateTemplateByIdAsync(id);
+    }
+
+    /// <summary>
+    /// 内置语气单选项。绑定回填（PaintLists 重建 ItemsSource 时 OneWay 推送
+    /// IsChecked）也会走到这里：与 _activeId 相同的回填直接忽略，只有用户
+    /// 的新选择才发起激活，避免数据回填被当成操作。
+    /// </summary>
+    private async void BuiltinChoice_Checked(object sender, RoutedEventArgs e)
+    {
+        if ((sender as RadioButton)?.Tag is not string id || _saving) return;
+        if (string.Equals(id, _activeId, StringComparison.Ordinal)) return;
+        await ActivateTemplateByIdAsync(id);
+    }
+
+    private async Task ActivateTemplateByIdAsync(string id)
+    {
         var template = _templates.FirstOrDefault(t => t.Id == id);
         if (template is null) return;
         _saving = true;
@@ -399,6 +423,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             // 激活写的是「当前风格指向」；停用的模板激活后 Rust 仍回退内置
             // faithful，必须重读对齐，卡片才不会说谎。
             _activeId = CoreBridge.GetActivePromptTemplate().Id;
+            ClearDeleteConfirm();
             PaintLists();
             StatusChanged?.Invoke(
                 !template.Enabled
@@ -408,6 +433,8 @@ public partial class PromptSection : System.Windows.Controls.UserControl
         }
         catch (Exception exception)
         {
+            // 激活失败：重建列表让单选项回到数据真值，不保留虚假的选中外观。
+            PaintLists();
             StatusChanged?.Invoke($"切换翻译风格失败：{exception.Message}", StatusTone.Error);
         }
         finally
@@ -417,41 +444,131 @@ public partial class PromptSection : System.Windows.Controls.UserControl
         }
     }
 
-    // ===================== Delete (two-step confirm) =====================
+    // ===================== Delete (inline confirm) =====================
 
-    private async void DeleteTemplate_Click(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// 行删除第一步：不武装按钮、不倒计时。行内展开确认区，焦点转到
+    /// 确认区的「删除」；按钮位置与宽度全程不变。
+    /// </summary>
+    private void DeleteTemplate_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button button || _saving) return;
-        var id = button.Tag as string ?? _editingId;
-        if (string.IsNullOrEmpty(id)) return;
+        var id = button.Tag as string;
+        if (string.IsNullOrEmpty(id) || _templates.All(t => t.Id != id)) return;
+        _confirmingDeleteId = id;
+        _focusConfirmId = id;
+        _focusRowDeleteId = null;
+        PaintLists();
+    }
 
-        if (!ReferenceEquals(button, _armedDeleteButton))
+    private void CancelDeleteConfirm_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as Button)?.Tag is not string id) return;
+        if (!string.Equals(_confirmingDeleteId, id, StringComparison.Ordinal)) return;
+        _confirmingDeleteId = null;
+        _focusConfirmId = null;
+        _focusRowDeleteId = id;
+        PaintLists();
+    }
+
+    private async void DeleteConfirmed_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as Button)?.Tag is not string id) return;
+        await DeleteTemplateByIdAsync(id);
+    }
+
+    /// <summary>模板被重绘进树后，把焦点交到刚展开的确认区删除按钮。</summary>
+    private void DeleteConfirmButton_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button button &&
+            string.Equals(button.Tag as string, _focusConfirmId, StringComparison.Ordinal))
         {
-            DisarmDelete();
-            _armedDeleteButton = button;
-            // 行按钮与编辑器按钮的 Content/ToolTip 各不相同：武装前先记下
-            // 各自原状，解除时精确恢复，绝不把一处按钮的文案搬到另一处。
-            _armedOriginalContent = button.Content;
-            _armedOriginalToolTip = button.ToolTip as string;
-            _armedOriginalWidth = button.Width;
-            _armedOriginalMinWidth = button.MinWidth;
-            _armedOriginalAutomationName = System.Windows.Automation.AutomationProperties.GetName(button);
-            if (button.Width <= 40)
+            _focusConfirmId = null;
+            button.Focus();
+        }
+    }
+
+    /// <summary>取消确认重绘后，把焦点还给那一行的删除按钮。</summary>
+    private void RowDeleteButton_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button button &&
+            string.Equals(button.Tag as string, _focusRowDeleteId, StringComparison.Ordinal))
+        {
+            _focusRowDeleteId = null;
+            button.Focus();
+        }
+    }
+
+    /// <summary>编辑器操作栏的删除按钮：同一条确认契约，无 3 秒限时。</summary>
+    private void EditorDelete_Click(object sender, RoutedEventArgs e)
+    {
+        if (_saving || string.IsNullOrEmpty(_editingId)) return;
+        if (_templates.All(t => t.Id != _editingId)) return;
+        var name = _templates.FirstOrDefault(t => t.Id == _editingId)?.Name ?? NameTextBox.Text.Trim();
+        EditorDeleteConfirmText.Text = $"删除「{name}」？模板的历史修订版本会一并删除，此操作无法撤销。";
+        EditorDeleteConfirmPanel.Visibility = Visibility.Visible;
+        DeleteTemplateButton.Visibility = Visibility.Collapsed;
+        EditorDeleteConfirmButton.Focus();
+    }
+
+    private void EditorDeleteConfirmCancel_Click(object sender, RoutedEventArgs e) => HideEditorDeleteConfirm(focusBack: true);
+
+    private async void EditorDeleteConfirmDelete_Click(object sender, RoutedEventArgs e)
+    {
+        if (_saving || string.IsNullOrEmpty(_editingId)) return;
+        await DeleteTemplateByIdAsync(_editingId);
+    }
+
+    private void HideEditorDeleteConfirm(bool focusBack = false)
+    {
+        EditorDeleteConfirmPanel.Visibility = Visibility.Collapsed;
+        // 只有编辑器仍处于「该按钮本应可见」的形态时才恢复它，避免关闭
+        // 编辑器后的残留显示。
+        if (IsEditorOpen && !_viewingBuiltin && !_isAdding)
+        {
+            DeleteTemplateButton.Visibility = Visibility.Visible;
+            if (focusBack)
             {
-                button.Width = 86;
-                button.MinWidth = 86;
+                DeleteTemplateButton.Focus();
             }
-            button.Content = "确认删除";
-            System.Windows.Automation.AutomationProperties.SetName(button, "确认删除翻译规则");
-            button.SetResourceReference(Button.BackgroundProperty, "DangerSoftBrush");
-            button.SetResourceReference(Button.ForegroundProperty, "DangerBrush");
-            button.ToolTip = "再次点击确认删除；历史版本一并删除，3 秒后自动还原。";
-            _deleteArmTimer.Stop();
-            _deleteArmTimer.Start();
+        }
+    }
+
+    /// <summary>删除确认的统一解除：行内确认与编辑器确认一并收起。</summary>
+    private void ClearDeleteConfirm()
+    {
+        _confirmingDeleteId = null;
+        _focusConfirmId = null;
+        _focusRowDeleteId = null;
+        HideEditorDeleteConfirm();
+    }
+
+    /// <summary>Esc：只服务删除确认的显式取消，不抢其他处理过的键。</summary>
+    private void PromptSection_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Handled || e.Key != Key.Escape)
+        {
             return;
         }
-        DisarmDelete();
+        if (EditorDeleteConfirmPanel.Visibility == Visibility.Visible)
+        {
+            HideEditorDeleteConfirm(focusBack: true);
+            e.Handled = true;
+            return;
+        }
+        if (_confirmingDeleteId is not null)
+        {
+            var id = _confirmingDeleteId;
+            _confirmingDeleteId = null;
+            _focusRowDeleteId = id;
+            PaintLists();
+            e.Handled = true;
+        }
+    }
 
+    private async Task DeleteTemplateByIdAsync(string id)
+    {
+        if (_saving) return;
         _saving = true;
         UpdateInteractivity();
         try
@@ -465,14 +582,17 @@ public partial class PromptSection : System.Windows.Controls.UserControl
                 // re-read so the card never lies about what will be used.
                 _activeId = CoreBridge.GetActivePromptTemplate().Id;
             }
+            ClearDeleteConfirm();
             var deletedWasEditing = string.Equals(_editingId, id, StringComparison.Ordinal);
             if (deletedWasEditing && EditorForm.Visibility == Visibility.Visible)
             {
                 ShowList();
+                AddTemplateButton.Focus();
             }
             else
             {
                 PaintLists();
+                AddTemplateButton.Focus();
             }
             StatusChanged?.Invoke(
                 wasActive
@@ -482,6 +602,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
         }
         catch (Exception exception)
         {
+            // 失败保留确认区，用户可直接重试或显式取消；状态条说明原因。
             StatusChanged?.Invoke($"删除失败：{exception.Message}", StatusTone.Error);
         }
         finally
@@ -489,32 +610,6 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             _saving = false;
             UpdateInteractivity();
         }
-    }
-
-    private void DisarmDelete()
-    {
-        _deleteArmTimer.Stop();
-        if (_armedDeleteButton is null)
-        {
-            return;
-        }
-        var button = _armedDeleteButton;
-        _armedDeleteButton = null;
-        // 精确恢复该按钮自己的 Content / ToolTip / 视觉状态；行按钮与
-        // 编辑器按钮的原文案不同，不能互相串用。
-        if (_armedOriginalContent is not null)
-        {
-            button.Content = _armedOriginalContent;
-        }
-        button.ToolTip = _armedOriginalToolTip;
-        button.Width = _armedOriginalWidth;
-        button.MinWidth = _armedOriginalMinWidth;
-        System.Windows.Automation.AutomationProperties.SetName(button, _armedOriginalAutomationName);
-        button.ClearValue(Button.BackgroundProperty);
-        button.ClearValue(Button.ForegroundProperty);
-        _armedOriginalContent = null;
-        _armedOriginalToolTip = null;
-        _armedOriginalAutomationName = null;
     }
 
     // ===================== Save =====================
@@ -920,6 +1015,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
         SaveTemplateButton.Content = busy ? "正在保存…" : "保存";
         CancelEditButton.IsEnabled = !busy;
         DeleteTemplateButton.IsEnabled = !busy;
+        EditorDeleteConfirmPanel.IsEnabled = !busy;
         CopyBuiltinButton.IsEnabled = !busy;
         // 保存进行中预览仍可查看与复制：复制按钮不参与 busy 门控，
         // PreviewTextBox 始终可选。
