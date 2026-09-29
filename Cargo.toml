@@ -11,7 +11,7 @@ exclude = ["vendor/genai"]
 genai = { path = "vendor/genai" }
 
 [workspace.package]
-version = "0.1.13"
+version = "0.1.14"
 edition = "2024"
 license = "MIT"
 authors = ["PopGlot Contributors"]

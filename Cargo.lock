@@ -1167,7 +1167,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "popglot-core"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
@@ -1187,7 +1187,7 @@ dependencies = [
 
 [[package]]
 name = "popglot-domain"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "regex",
  "serde",
@@ -1197,7 +1197,7 @@ dependencies = [
 
 [[package]]
 name = "popglot-ffi"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "base64 0.22.1",
  "popglot-core",
