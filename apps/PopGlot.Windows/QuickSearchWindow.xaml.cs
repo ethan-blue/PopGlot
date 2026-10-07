@@ -951,6 +951,9 @@ public partial class QuickSearchWindow : Window
             {
                 var settingsWindow = Application.Current.Windows.OfType<SettingsWindow>().FirstOrDefault()
                     ?? new SettingsWindow(ShellSettingsStore.Load(), _history, _vocabulary);
+                // The XAML is Manual: without convergence this fallback would
+                // open at the shell's cascade position with no work-area clamp.
+                WindowPositioner.ConvergeFirstShow(settingsWindow);
                 settingsWindow.Show();
                 settingsWindow.Activate();
             }

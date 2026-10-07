@@ -217,6 +217,8 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
     private void OpenHelp_Click(object sender, RoutedEventArgs e)
     {
         var help = new HelpWindow { Owner = Window.GetWindow(this) };
+        // 帮助窗口跟着所有者所在显示器居中，而不是无条件落在主屏。
+        WindowPositioner.ConvergeFirstShow(help);
         help.Show();
     }
 }

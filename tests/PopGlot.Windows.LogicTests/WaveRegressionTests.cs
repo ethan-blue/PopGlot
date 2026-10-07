@@ -1020,6 +1020,138 @@ internal static class WaveRegressionTests
         }
     }
 
+    /// <summary>
+    /// First-show convergence must land a window on the monitor that owns the
+    /// cursor — the one the user is working on — not unconditionally the
+    /// primary. The old code centred into SystemParameters.WorkArea (always
+    /// the primary), so on an extended desk every workbench/settings/help
+    /// open popped on the laptop screen. The center point is asserted in
+    /// physical desktop coordinates via PointToScreen, so the invariant holds
+    /// at any monitor scale; on a single-monitor machine it is trivially true
+    /// but still locks the shape of the landing. The cursor is sampled ONCE
+    /// so convergence and assertion agree even if the pointer crosses a
+    /// monitor mid-test.
+    /// </summary>
+    public static void FirstShowConvergesOntoCursorMonitor()
+    {
+        EnsureApp();
+        var cursor = ScreenGeometry.CursorPixels();
+        var window = new Window
+        {
+            Width = 800,
+            Height = 560,
+            WindowStyle = WindowStyle.None,
+            ShowInTaskbar = false,
+            ShowActivated = false,
+        };
+        try
+        {
+            WindowPositioner.ConvergeFirstShow(window);
+            window.Show();
+            window.UpdateLayout();
+
+            var work = ScreenGeometry.WorkAreaForPixel(cursor);
+            var center = window.PointToScreen(
+                new Point(window.ActualWidth / 2, window.ActualHeight / 2));
+            True(center.X >= work.Left && center.X <= work.Right,
+                $"first show must land on the cursor's monitor: center X {center.X:F0} " +
+                $"outside work area {work.Left:F0}..{work.Right:F0}");
+            True(center.Y >= work.Top && center.Y <= work.Bottom,
+                $"first show must land on the cursor's monitor: center Y {center.Y:F0} " +
+                $"outside work area {work.Top:F0}..{work.Bottom:F0}");
+
+            // The convergence is one-shot: a second call on the same window
+            // must never move it again.
+            var leftBefore = window.Left;
+            var topBefore = window.Top;
+            WindowPositioner.ConvergeFirstShow(window);
+            True(Math.Abs(window.Left - leftBefore) < 0.01 &&
+                 Math.Abs(window.Top - topBefore) < 0.01,
+                "convergence is one-shot per window");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>
+    /// The owned half of the first-show contract: a child window (settings,
+    /// help) follows its OWNER's monitor, and a MINIMIZED owner — whose HWND
+    /// the shell parks at (-32000,-32000) — must not drag the child there;
+    /// the child falls back to the cursor's monitor instead.
+    /// </summary>
+    public static void FirstShowOwnedWindowFollowsOwnerMonitor()
+    {
+        EnsureApp();
+        var owner = new Window
+        {
+            Width = 640,
+            Height = 480,
+            WindowStyle = WindowStyle.None,
+            ShowInTaskbar = false,
+            ShowActivated = false,
+        };
+        var owned = new Window
+        {
+            Width = 400,
+            Height = 300,
+            WindowStyle = WindowStyle.None,
+            ShowInTaskbar = false,
+            ShowActivated = false,
+        };
+        Window? minimizedCase = null;
+        try
+        {
+            owner.Show();
+            owned.Owner = owner;
+            WindowPositioner.ConvergeFirstShow(owned);
+            owned.Show();
+            owned.UpdateLayout();
+
+            var ownerWork = ScreenGeometry.WorkAreaForPixel(
+                owner.PointToScreen(new Point(owner.ActualWidth / 2, owner.ActualHeight / 2)));
+            var ownedCenter = owned.PointToScreen(
+                new Point(owned.ActualWidth / 2, owned.ActualHeight / 2));
+            True(ownedCenter.X >= ownerWork.Left && ownedCenter.X <= ownerWork.Right,
+                $"an owned window must land on its owner's monitor: center X {ownedCenter.X:F0} " +
+                $"outside work area {ownerWork.Left:F0}..{ownerWork.Right:F0}");
+            True(ownedCenter.Y >= ownerWork.Top && ownedCenter.Y <= ownerWork.Bottom,
+                $"an owned window must land on its owner's monitor: center Y {ownedCenter.Y:F0} " +
+                $"outside work area {ownerWork.Top:F0}..{ownerWork.Bottom:F0}");
+
+            // Minimized owner: the -32000 HWND position must be ignored.
+            owner.WindowState = WindowState.Minimized;
+            minimizedCase = new Window
+            {
+                Width = 300,
+                Height = 200,
+                WindowStyle = WindowStyle.None,
+                ShowInTaskbar = false,
+                ShowActivated = false,
+                Owner = owner,
+            };
+            WindowPositioner.ConvergeFirstShow(minimizedCase);
+            minimizedCase.Show();
+            minimizedCase.UpdateLayout();
+            var cursorWork = ScreenGeometry.WorkAreaForPixel(ScreenGeometry.CursorPixels());
+            var minimizedCenter = minimizedCase.PointToScreen(
+                new Point(minimizedCase.ActualWidth / 2, minimizedCase.ActualHeight / 2));
+            True(minimizedCenter.X >= cursorWork.Left && minimizedCenter.X <= cursorWork.Right,
+                $"a minimized owner must not anchor the child off-desktop: center X " +
+                $"{minimizedCenter.X:F0} outside {cursorWork.Left:F0}..{cursorWork.Right:F0}");
+            True(minimizedCenter.Y >= cursorWork.Top && minimizedCenter.Y <= cursorWork.Bottom,
+                $"a minimized owner must not anchor the child off-desktop: center Y " +
+                $"{minimizedCenter.Y:F0} outside {cursorWork.Top:F0}..{cursorWork.Bottom:F0}");
+        }
+        finally
+        {
+            minimizedCase?.Close();
+            owned.Close();
+            owner.Close();
+        }
+    }
+
     // ===================== D: settings window =====================
 
     /// <summary>Saving locks BOTH save-bar actions — the save must not be

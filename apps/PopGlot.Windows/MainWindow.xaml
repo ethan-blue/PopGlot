@@ -11,7 +11,7 @@
         UseLayoutRounding="True" SnapsToDevicePixels="True"
         TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType"
         RenderOptions.ClearTypeHint="Enabled"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="Manual">
 
     <WindowChrome.WindowChrome>
         <WindowChrome CaptionHeight="38" CornerRadius="0" GlassFrameThickness="0"

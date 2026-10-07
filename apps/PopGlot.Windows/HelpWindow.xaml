@@ -4,7 +4,7 @@
         xmlns:local="clr-namespace:PopGlot.Windows"
         Title="帮助" Width="820" Height="560" MinWidth="620" MinHeight="440"
         Icon="/PopGlot;component/Assets/PopGlot-v5.ico"
-        WindowStartupLocation="CenterScreen"
+        WindowStartupLocation="Manual"
         Background="{DynamicResource CanvasBrush}" Foreground="{DynamicResource TextPrimaryBrush}"
         UseLayoutRounding="True" SnapsToDevicePixels="True"
         TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType"

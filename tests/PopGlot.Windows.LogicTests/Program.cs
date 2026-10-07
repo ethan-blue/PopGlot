@@ -386,6 +386,8 @@ internal static class Program
             ("quick search re-show repaints the language badge from persisted state", WaveRegressionTests.QuickSearchReshowRefreshesLangBadge),
             ("quick search star automation name follows the starred state", WaveRegressionTests.QuickSearchStarAutomationNameFollowsState),
             ("quick search clamp keeps an oversized window inside the work area", WaveRegressionTests.QuickSearchClampToWorkArea),
+            ("first show convergence lands the window on the cursor's monitor", WaveRegressionTests.FirstShowConvergesOntoCursorMonitor),
+            ("first show owned window follows the owner monitor and ignores a minimized owner", WaveRegressionTests.FirstShowOwnedWindowFollowsOwnerMonitor),
             ("quick search pending notice survives the first-show loaded sync", WaveRegressionTests.QuickSearchPendingNoticeSurvivesFirstShowLoaded),
             ("quick search pending notice clears on the next real query", WaveRegressionTests.QuickSearchPendingNoticeClearsOnNextQuery),
             ("quick search pending notice outranks and consumes the style notice", WaveRegressionTests.QuickSearchPendingNoticeOutranksStyleNotice),

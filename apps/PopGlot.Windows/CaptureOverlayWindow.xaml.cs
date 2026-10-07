@@ -25,6 +25,7 @@ public partial class CaptureOverlayWindow : Window
     private Point _workOrigin;
     private double _workLocalWidth;
     private double _workLocalHeight;
+    private int _dpiGeneration;
     private readonly DispatcherTimer _tinySelectionTimer;
 
     public CaptureOverlayWindow()
@@ -63,6 +64,40 @@ public partial class CaptureOverlayWindow : Window
         // Width/Height in WPF units instead leaves gaps on mixed-DPI setups.
         var bounds = ScreenGeometry.VirtualScreenPixels();
         ScreenGeometry.ResizeToPixels(this, bounds);
+    }
+
+    /// <summary>
+    /// WPF answers a WM_DPICHANGED by resizing the HWND to the OS-suggested
+    /// rect. An overlay created small on one monitor and then stretched
+    /// across a mixed-DPI desktop gets its desktop-wide coverage undone that
+    /// way — the dim shades stop matching the physical screens even though
+    /// the selection coordinates stay valid. Once the transition settles the
+    /// coverage is restated; never a mid-transition reposition (same
+    /// discipline as the main window's stable-size restore).
+    /// </summary>
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+        if (_closing || _completed)
+        {
+            return;
+        }
+        var generation = ++_dpiGeneration;
+        Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
+        {
+            if (generation != _dpiGeneration || _closing || _completed)
+            {
+                return;
+            }
+            ScreenGeometry.ResizeToPixels(this, ScreenGeometry.VirtualScreenPixels());
+            if (_dragStart is null)
+            {
+                // The rescaled local space moved the cached work-area origin
+                // that centers the hint chip.
+                PositionHintNearCursor();
+                UpdateCrosshair(Mouse.GetPosition(this));
+            }
+        }));
     }
 
     private void OnLoaded(object sender, RoutedEventArgs args)

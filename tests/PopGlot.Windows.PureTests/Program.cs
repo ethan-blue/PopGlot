@@ -3,6 +3,7 @@ using System.IO;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Windows;
 using PopGlot.Windows;
 using PopGlot.Windows.Services;
 
@@ -105,10 +106,60 @@ internal static class Program
         Run("library undo restores only the removed rows", LibraryUndoRestoresOnlyRemovedRows);
         Run("library undo is not offered when the write fails", LibraryUndoIsNotOfferedWhenWriteFails);
         Run("long history search records size and elapsed time", LongHistorySearchRecordsSizeAndElapsedTime);
+        Run("first-show centres inside the cursor monitor, never unconditional primary", FirstShowCentresOnCursorMonitor);
+        Run("first-show keeps a declared position on a secondary monitor", FirstShowKeepsDeclaredPositionOnSecondary);
+        Run("first-show target anchor prefers the owner center over the cursor", FirstShowAnchorPrefersOwnerCenter);
 
         Console.WriteLine($"\nPopGlot pure tests: {_passed} passed, {_failed} failed, " +
                           $"{Interlocked.Read(ref refusedSends)} send attempts refused.");
         return _failed == 0 ? 0 : 1;
+    }
+
+    // ================= First-show window convergence =================
+
+    // The old convergence centred into SystemParameters.WorkArea — always the
+    // PRIMARY monitor, in the primary's scale — so on an extended desk every
+    // workbench/settings/help open landed on the laptop screen. The pure core
+    // takes the TARGET monitor's work area as an input; these tests lock that
+    // a secondary monitor (negative origin included) is honoured as-is.
+
+    private static void FirstShowCentresOnCursorMonitor()
+    {
+        // Secondary monitor placed LEFT of the primary: negative origin.
+        var secondary = new Rect(-1920, 0, 1920, 1040);
+        var rect = WindowPositioner.FirstShowRect(
+            secondary, new Size(1120, 760), declaredTopLeftDip: null, new Size(560, 560));
+
+        True(rect.Left >= secondary.Left && rect.Right <= secondary.Right,
+            $"window must land inside the passed secondary work area, got {rect}");
+        True(rect.Top >= secondary.Top && rect.Bottom <= secondary.Bottom,
+            "window must be vertically inside the secondary work area");
+        Equal(secondary.Left + ((secondary.Width - 1120) / 2), rect.Left,
+            "centres inside the monitor that owns the cursor, not the primary");
+    }
+
+    private static void FirstShowKeepsDeclaredPositionOnSecondary()
+    {
+        var secondary = new Rect(-1920, 0, 1920, 1040);
+        // A declared position near the secondary's left edge: the old code
+        // clamped against the PRIMARY work area and yanked the window across
+        // the desktop; the clamp must use the target monitor's area.
+        var rect = WindowPositioner.FirstShowRect(
+            secondary, new Size(600, 400), new Point(-1900, 40), new Size(560, 560));
+
+        Equal(-1900.0, rect.Left,
+            "an on-screen declared position stays where it was declared");
+        Equal(40.0, rect.Top,
+            "an on-screen declared position keeps its top");
+    }
+
+    private static void FirstShowAnchorPrefersOwnerCenter()
+    {
+        var ownerOnSecondary = new Rect(-960, 540, 0, 0);
+        Equal(-960.0, WindowPositioner.TargetAnchorPixel(ownerOnSecondary, new Point(500, 5)).X,
+            "an owned window follows its owner's monitor");
+        Equal(500.0, WindowPositioner.TargetAnchorPixel(null, new Point(500, 5)).X,
+            "an unowned window follows the cursor");
     }
 
     // ================= Seed pure suites =================

@@ -94,13 +94,17 @@ internal static class WindowPositioner
     private static bool IsFinite(double value) => double.IsFinite(value);
 
     /// <summary>
-    /// One-shot first-show convergence for CenterScreen windows (main,
-    /// settings): clamps the not-yet-shown window into the current work area
-    /// so a small monitor never hides the footer or caption behind the
-    /// taskbar. Runs BEFORE the first <c>Show()</c> only — a window that is
-    /// already loaded, or any later resize/maximize by the user, is never
-    /// touched. Position is centred first because CenterScreen leaves
-    /// Left/Top unset until the window source is created.
+    /// One-shot first-show convergence for the centered windows (main,
+    /// settings, help): lands the not-yet-shown window centred on its TARGET
+    /// monitor — the owner's monitor for owned windows, otherwise the monitor
+    /// under the cursor — and clamped into that monitor's work area so a
+    /// small screen never hides the footer or caption behind the taskbar.
+    /// Runs BEFORE the first <c>Show()</c> only — a window that is already
+    /// loaded, or any later resize/maximize by the user, is never touched.
+    /// The previous version centred into <see cref="SystemParameters.WorkArea"/>,
+    /// which is always the PRIMARY monitor in the primary's scale: on an
+    /// extended desk the workbench opened on the laptop screen even while
+    /// the user worked on the second display.
     /// </summary>
     public static void ConvergeFirstShow(Window window)
     {
@@ -111,24 +115,129 @@ internal static class WindowPositioner
         }
         ConvergedWindows.Add(window, true);
 
-        var work = SystemParameters.WorkArea;
-        var width = double.IsFinite(window.Width) ? window.Width : work.Width;
-        var height = double.IsFinite(window.Height) ? window.Height : work.Height;
-        var left = double.IsFinite(window.Left)
-            ? window.Left
-            : work.Left + Math.Max(0, (work.Width - width) / 2);
-        var top = double.IsFinite(window.Top)
-            ? window.Top
-            : work.Top + Math.Max(0, (work.Height - height) / 2);
+        var anchorPixels = TargetAnchorPixel(OwnerCenterPixels(window.Owner), ScreenGeometry.CursorPixels());
+        var workPixels = ScreenGeometry.WorkAreaForPixel(anchorPixels);
+        // Target-monitor scale: the same discipline as every other landing —
+        // never the primary's scale for a window that belongs elsewhere.
+        var scale = ScreenGeometry.ScaleOfMonitorAtPixel(anchorPixels);
+        var workDip = new Rect(
+            ScreenGeometry.PixelToDip(workPixels.Left, scale.X),
+            ScreenGeometry.PixelToDip(workPixels.Top, scale.Y),
+            ScreenGeometry.PixelToDip(workPixels.Width, scale.X),
+            ScreenGeometry.PixelToDip(workPixels.Height, scale.Y));
 
-        var converged = ClampToWorkArea(
-            new Rect(left, top, width, height),
-            work,
-            new Size(window.MinWidth, window.MinHeight));
+        var declaredSize = new Size(
+            double.IsFinite(window.Width) ? window.Width : workDip.Width,
+            double.IsFinite(window.Height) ? window.Height : workDip.Height);
+        Point? declaredTopLeft =
+            double.IsFinite(window.Left) && double.IsFinite(window.Top)
+                ? new Point(window.Left, window.Top)
+                : null;
+
+        var converged = FirstShowRect(workDip, declaredSize, declaredTopLeft, new Size(window.MinWidth, window.MinHeight));
         window.Left = converged.Left;
         window.Top = converged.Top;
         window.Width = converged.Width;
         window.Height = converged.Height;
+        LandOnSourceInitialized(window, converged, scale);
+    }
+
+    /// <summary>
+    /// Pure core of the first-show convergence: centre the declared size
+    /// inside the TARGET monitor's work area — or keep a declared position —
+    /// then clamp. Coordinate-agnostic, so a secondary monitor placed left
+    /// of the primary (negative work-area origin) is just another rect.
+    /// </summary>
+    internal static Rect FirstShowRect(
+        Rect workAreaDip, Size windowSizeDip, Point? declaredTopLeftDip, Size minSize)
+    {
+        var left = declaredTopLeftDip?.X
+            ?? workAreaDip.Left + Math.Max(0, (workAreaDip.Width - windowSizeDip.Width) / 2);
+        var top = declaredTopLeftDip?.Y
+            ?? workAreaDip.Top + Math.Max(0, (workAreaDip.Height - windowSizeDip.Height) / 2);
+        return ClampToWorkArea(
+            new Rect(left, top, windowSizeDip.Width, windowSizeDip.Height),
+            workAreaDip,
+            minSize);
+    }
+
+    /// <summary>
+    /// An owned window follows its owner's monitor; everything else opens on
+    /// the monitor under the cursor. The primary monitor is never the
+    /// unconditional answer.
+    /// </summary>
+    internal static Point TargetAnchorPixel(Rect? ownerCenterPixels, Point cursorPixels) =>
+        ownerCenterPixels is { } owner ? new Point(owner.Left, owner.Top) : cursorPixels;
+
+    /// <summary>
+    /// Physical-pixel center of a loaded, non-minimized owner — the anchor
+    /// that decides an owned window's target monitor. A minimized owner's
+    /// HWND sits at (-32000,-32000); it must not drag the child there.
+    /// </summary>
+    private static Rect? OwnerCenterPixels(Window? owner)
+    {
+        if (owner is not { IsLoaded: true } || owner.WindowState == WindowState.Minimized)
+        {
+            return null;
+        }
+        var scale = ScreenGeometry.ScaleOf(owner);
+        var scaleX = scale.X > 0 ? scale.X : 1.0;
+        var scaleY = scale.Y > 0 ? scale.Y : 1.0;
+        var left = double.IsFinite(owner.Left) ? owner.Left : 0;
+        var top = double.IsFinite(owner.Top) ? owner.Top : 0;
+        var width = owner.ActualWidth > 0 ? owner.ActualWidth : (double.IsFinite(owner.Width) ? owner.Width : 0);
+        var height = owner.ActualHeight > 0 ? owner.ActualHeight : (double.IsFinite(owner.Height) ? owner.Height : 0);
+        return new Rect(
+            (left * scaleX) + ((width * scaleX) / 2),
+            (top * scaleY) + ((height * scaleY) / 2),
+            0,
+            0);
+    }
+
+    /// <summary>
+    /// Exact landing for the converged rect: the pre-show DIP write is
+    /// converted with whichever scale the OS creates the window under, so
+    /// once the HWND exists — <c>SourceInitialized</c> still runs before the
+    /// first <c>Show()</c> becomes visible — the rect is restated in physical
+    /// pixels (the same authoritative-HWND discipline as the capture
+    /// overlay).
+    /// </summary>
+    private static void LandOnSourceInitialized(Window window, Rect convergedDip, (double X, double Y) scale)
+    {
+        void Land() => ScreenGeometry.ResizeToPixels(window, new Rect(
+            ScreenGeometry.DipToPixel(convergedDip.Left, scale.X),
+            ScreenGeometry.DipToPixel(convergedDip.Top, scale.Y),
+            ScreenGeometry.DipToPixel(convergedDip.Width, scale.X),
+            ScreenGeometry.DipToPixel(convergedDip.Height, scale.Y)));
+
+        // A cross-monitor landing raises WM_DPICHANGED synchronously; WPF then
+        // applies the OS-suggested rect, which re-derives the SIZE but anchors
+        // the position its own way. One idle re-assert restates the exact
+        // rect — a no-op when no DPI transition happened.
+        void LandAndSettle()
+        {
+            Land();
+            var landed = ScreenGeometry.ScaleOf(window);
+            if (Math.Abs(landed.X - scale.X) < 0.01 && Math.Abs(landed.Y - scale.Y) < 0.01)
+            {
+                return;
+            }
+            window.Dispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+                new Action(Land));
+        }
+
+        if (new WindowInteropHelper(window).Handle != 0)
+        {
+            LandAndSettle();
+            return;
+        }
+        void OnSourceInitialized(object? sender, EventArgs args)
+        {
+            window.SourceInitialized -= OnSourceInitialized;
+            LandAndSettle();
+        }
+        window.SourceInitialized += OnSourceInitialized;
     }
 
     private static readonly ConditionalWeakTable<Window, object> ConvergedWindows = new();

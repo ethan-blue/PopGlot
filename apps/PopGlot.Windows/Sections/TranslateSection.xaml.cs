@@ -1402,11 +1402,18 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         try
         {
             var help = new HelpWindow("provider-setup/index.md") { Owner = Window.GetWindow(this) };
+            WindowPositioner.ConvergeFirstShow(help);
             help.Show();
         }
         catch
         {
-            try { new HelpWindow("provider-setup/index.md").Show(); } catch { }
+            try
+            {
+                var fallback = new HelpWindow("provider-setup/index.md");
+                WindowPositioner.ConvergeFirstShow(fallback);
+                fallback.Show();
+            }
+            catch { }
         }
     }
 

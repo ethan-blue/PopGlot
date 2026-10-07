@@ -6,7 +6,7 @@
         Title="设置" Width="960" Height="700" MinWidth="680" MinHeight="480"
         Icon="/PopGlot;component/Assets/PopGlot-v5.ico"
         Background="{DynamicResource CanvasBrush}" Foreground="{DynamicResource TextPrimaryBrush}"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="Manual">
 
     <WindowChrome.WindowChrome>
         <WindowChrome CaptionHeight="38" CornerRadius="0" GlassFrameThickness="0"

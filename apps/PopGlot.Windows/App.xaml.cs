@@ -1,12 +1,7 @@
 using System.Drawing.Drawing2D;
-
 using System.Runtime.InteropServices;
-
 using System.Windows;
-
 using PopGlot.Windows.Services;
-
-
 
 namespace PopGlot.Windows;
 
@@ -14,35 +9,20 @@ public partial class App : Application
 {
     private const string InstanceMutexName = @"Local\PopGlot.SingleInstance";
     private const string ShowWindowSignalName = @"Local\PopGlot.ShowWindow";
-
     private readonly HistoryStore _history = new();
-
     private readonly VocabularyStore _vocabulary = new();
-
     private readonly ClipboardSelectionService _selectionService =
-
         new(new WindowsSelectionClipboardAdapter());
 
-
-
     private Mutex? _instanceMutex;
-
     private EventWaitHandle? _showSignal;
-
     private CancellationTokenSource? _signalListener;
-
     private Forms.NotifyIcon? _trayIcon;
-
     private Forms.ContextMenuStrip? _trayMenu;
-
     private Drawing.Icon? _trayIconImage;
-
     private HotkeyService? _hotkeys;
-
     private Window? _hotkeyOwner;
-
     private MainWindow? _mainWindow;
-
     /// <summary>
     /// Dedup state for hotkey-failure surfacing: one failure cycle (first
     /// failure until recovery) balloons at most once, a changed detail only
@@ -58,17 +38,11 @@ public partial class App : Application
     /// two attempts can never interleave.
     /// </summary>
     private bool _hotkeyFailureReportedThisAttempt;
-
     private SettingsWindow? _settingsWindow;
-
     private TranslationPanelWindow? _activePanel;
-
     private CaptureOverlayWindow? _activeOverlay;
-
     private QuickSearchWindow? _activeQuickSearch;
-
     internal static SessionStore SharedSessionStore { get; } = new();
-
     /// <summary>
     /// N01: a session-store rejection that no visible surface can report
     /// (the window is already closing or hidden) is recorded in the bounded
@@ -1043,11 +1017,8 @@ public partial class App : Application
     {
         private readonly string _text;
         private uint _seq = 1;
-
         public PreloadedSelectionClipboardAdapter(string text) => _text = text;
-
         public uint SequenceNumber => _seq;
-
         public Task<IClipboardSnapshot> CaptureAsync() =>
             Task.FromResult<IClipboardSnapshot>(new NoopSnapshot());
 
@@ -1058,7 +1029,6 @@ public partial class App : Application
         }
 
         public Task<string?> ReadTextAsync() => Task.FromResult<string?>(_text);
-
         public Task RestoreAsync(IClipboardSnapshot snapshot) => Task.CompletedTask;
 
         private sealed class NoopSnapshot : IClipboardSnapshot
@@ -1068,131 +1038,69 @@ public partial class App : Application
     }
 
     private void BeginCapture(bool ocrOnly = false)
-
     {
-
         Dispatcher.Invoke(() =>
-
         {
-
             DestroyActivePanel();
-
             CloseActiveOverlay();
 
-
-
             var overlay = new CaptureOverlayWindow();
-
             if (ocrOnly)
-
             {
-
                 overlay.SetOcrOnlyMode(true);
-
             }
-
             _activeOverlay = overlay;
-
             overlay.Closed += (_, _) =>
-
             {
-
                 if (ReferenceEquals(_activeOverlay, overlay))
-
                 {
-
                     _activeOverlay = null;
-
                 }
-
             };
-
             overlay.Captured += async (_, capture) =>
-
             {
-
                 var panel = CreatePanel(capture.PixelBounds);
-
                 panel.Show();
-
                 if (capture.IsOcrOnly)
-
                 {
-
                     await panel.StartScreenshotOcrAsync(capture.Png);
-
                 }
-
                 else
-
                 {
-
                     await panel.StartScreenshotAsync(capture.Png);
-
                 }
-
             };
-
             overlay.Failed += (_, message) =>
-
             {
-
                 var panel = CreatePanel(ScreenGeometry.WorkAreaForPixel(ScreenGeometry.CursorPixels()));
-
                 panel.Show();
-
                 panel.ShowImmediateFailure(message);
-
             };
-
             overlay.Show();
-
             overlay.Activate();
-
         });
-
     }
 
     private TranslationPanelWindow CreatePanel(Rect anchorPixels)
-
     {
-
         DestroyActivePanel();
-
         _panelLastUsedUtc = DateTime.UtcNow;
-
         var panel = new TranslationPanelWindow(
-
             anchorPixels,
-
             _history,
-
             () => _shellSettings,
-
             () => ShowSettings(),
-
             OpenInMainWindow,
-
             _vocabulary);
-
         _activePanel = panel;
-
         panel.Closed += (_, _) =>
-
         {
-
             if (ReferenceEquals(_activePanel, panel))
-
             {
-
                 _activePanel = null;
-
             }
-
         };
-
         return panel;
-
     }
 
     /// <summary>
@@ -1204,29 +1112,17 @@ public partial class App : Application
     private void OpenInMainWindow(
         string source, string? targetLang, string? sourceLang, string? translation,
         TranslationSessionState sessionState)
-
     {
-
         ShowMainWindow();
-
         _mainWindow?.FocusTranslate(source, targetLang, sourceLang, translation, sessionState);
-
     }
 
-
-
     private void ShowQuickSearch()
-
     {
-
         Dispatcher.Invoke(() =>
-
         {
-
             if (_activeQuickSearch is not null && _activeQuickSearch.IsLoaded)
-
             {
-
                 // C05: the instance may be hidden (X/Esc/focus-loss); Show
                 // restores it with its previous session intact.
                 _activeQuickSearch.Show();
@@ -1234,23 +1130,18 @@ public partial class App : Application
                 _activeQuickSearch.Activate();
                 _activeQuickSearch.Focus();
                 _quickSearchLastUsedUtc = DateTime.UtcNow;
-
                 return;
-
             }
-
             _quickSearchLastUsedUtc = DateTime.UtcNow;
-            _activeQuickSearch = new QuickSearchWindow(_history, _vocabulary);
-
+            // The settings callback routes through App's production path
+            // (panel/overlay teardown, owner, first-show convergence); without
+            // it QuickSearch falls back to a bare SettingsWindow.
+            _activeQuickSearch = new QuickSearchWindow(_history, _vocabulary, () => ShowSettings());
             _activeQuickSearch.Closed += (_, _) => _activeQuickSearch = null;
-
             _activeQuickSearch.Show();
-
             _activeQuickSearch.Activate();
             _activeQuickSearch.Focus();
-
         });
-
     }
 
     private void CloseActivePanel()
@@ -1502,50 +1393,28 @@ public partial class App : Application
     }
 
     // ================= Tray =================
-
     private void CreateTrayIcon()
-
     {
-
         _trayMenu = new Forms.ContextMenuStrip
-
         {
-
             Renderer = new Forms.ToolStripProfessionalRenderer(),
-
             ShowImageMargin = false,
-
             ShowItemToolTips = true,
-
         };
-
         _trayMenu.Items.Add("打开", null, (_, _) => ShowMainWindow());
-
         var quickSearchItem = _trayMenu.Items.Add("查词", null, (_, _) => ShowQuickSearch());
-
         _trayMenu.Items.Add("最近翻译", null, (_, _) => RestoreRecentSurface());
-
         var sessionsSubMenu = new Forms.ToolStripMenuItem("暂存");
         _trayMenu.Items.Add(sessionsSubMenu);
-
         _trayMenu.Items.Add(new Forms.ToolStripSeparator());
-
         var selectionItem = _trayMenu.Items.Add("划词翻译", null, (_, _) => _ = BeginSelectionTranslationAsync());
-
         var captureItem = _trayMenu.Items.Add("截图翻译", null, (_, _) => BeginCapture(ocrOnly: false));
-
         var ocrItem = _trayMenu.Items.Add("截图取字", null, (_, _) => BeginCapture(ocrOnly: true));
-
         _trayMenu.Items.Add(new Forms.ToolStripSeparator());
-
         _trayMenu.Items.Add("设置", null, (_, _) => ShowSettings());
-
         _trayMenu.Items.Add("退出", null, (_, _) => ExitApplication());
 
-
-
         _trayMenu.Opening += (_, _) =>
-
         {
 
             // A live hotkey failure must stop the menu from advertising
@@ -1593,28 +1462,16 @@ public partial class App : Application
             }
         };
 
-
-
         _trayIconImage = LoadAppIconFromResource();
-
         _trayIcon = new Forms.NotifyIcon
-
         {
-
             Text = "PopGlot",
-
             Icon = _trayIconImage,
-
             ContextMenuStrip = _trayMenu,
-
             Visible = true,
-
         };
-
         _trayIcon.DoubleClick += (_, _) => ShowMainWindow();
-
         UpdateTrayTooltip();
-
     }
 
     /// <summary>
