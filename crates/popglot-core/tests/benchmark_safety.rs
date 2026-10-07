@@ -332,7 +332,7 @@ fn test_fixture_character_cap_enforced() {
     let max_chars = 30;
     let fixtures = load_benchmark_fixtures(BenchmarkSubset::All, max_chars);
 
-    assert!(!fixtures.is_empty());
+    assert_ne!(fixtures, [] as [popglot_core::BenchmarkFixtureItem; 0]);
     let total_chars: usize = fixtures.iter().map(|f| f.source_text.chars().count()).sum();
     assert!(
         total_chars <= max_chars,
@@ -363,7 +363,10 @@ fn test_dry_run_report_generation() {
     assert!(dry_report.safety_verified);
     assert_eq!(dry_report.total_output_chars, 0);
     assert!(dry_report.total_input_chars > 0);
-    assert!(!dry_report.items.is_empty());
+    assert_ne!(
+        dry_report.items,
+        [] as [popglot_core::BenchmarkItemResult; 0]
+    );
     assert_eq!(dry_report.items[0].status, "dry_run_blocked");
 }
 
@@ -388,7 +391,7 @@ fn test_benchmark_subset_parsing_and_selection() {
     assert_eq!(min_fixtures.len(), 1);
 
     let code_fixtures = load_benchmark_fixtures(BenchmarkSubset::CodeMixed, 5000);
-    assert!(!code_fixtures.is_empty());
+    assert_ne!(code_fixtures, [] as [popglot_core::BenchmarkFixtureItem; 0]);
 
     let all_fixtures = load_benchmark_fixtures(BenchmarkSubset::All, 10000);
     assert!(all_fixtures.len() >= min_fixtures.len());

@@ -924,7 +924,7 @@ async fn openai_json_stream_fallback_preserves_body_without_or_with_bad_trailer(
             .expect("JSON fallback response");
         assert_eq!(response.result.translated_text, "正文");
         assert!(!response.result.translated_text.contains(delimiter));
-        assert!(response.result.explanation.is_empty());
+        assert_eq!(response.result.explanation, "");
         assert!(
             response
                 .result
@@ -1312,7 +1312,7 @@ async fn cancellation_during_slow_ttft_and_mid_stream_returns_cancelled_without_
         .await
         .expect_err("slow TTFT cancellation must return Cancelled error");
     assert_eq!(slow_error.kind, ProviderErrorKind::Cancelled);
-    assert!(slow_deltas.is_empty());
+    assert_eq!(slow_deltas, [] as [std::string::String; 0]);
 
     // 2. Cancellation mid-stream: callback triggers cancellation upon receiving first delta
     let mid_stream_server = SseServer::start(vec![
@@ -1490,7 +1490,7 @@ async fn missing_or_malformed_trailer_preserves_visible_body_with_warning() {
         .await;
         assert_eq!(deltas.concat(), "正文");
         assert_eq!(response.result.translated_text, deltas.concat());
-        assert!(!response.result.warnings.is_empty());
+        assert_ne!(response.result.warnings, [] as [std::string::String; 0]);
     }
 }
 
@@ -1685,7 +1685,7 @@ async fn openai_same_frame_final_delta_completes_cleanly() {
         assert_eq!(response.result.translated_text, "同帧译文");
         assert_eq!(response.result.explanation, "同帧说明");
         assert!(!response.result.is_partial);
-        assert!(response.result.warnings.is_empty());
+        assert_eq!(response.result.warnings, [] as [std::string::String; 0]);
     }
 }
 
@@ -1719,7 +1719,7 @@ async fn illegal_utf8_sse_fails_without_retry() {
     assert!(!error.retryable);
     assert!(error.message.contains("UTF-8"));
     assert_eq!(server.requests().len(), 1);
-    assert!(deltas.is_empty());
+    assert_eq!(deltas, [] as [std::string::String; 0]);
 }
 
 #[tokio::test]
@@ -1757,7 +1757,7 @@ async fn stream_exceeding_size_limit_fails_without_retry() {
     assert!(!error.retryable);
     assert!(error.message.contains("上限"));
     assert_eq!(server.requests().len(), 1);
-    assert!(deltas.is_empty());
+    assert_eq!(deltas, [] as [std::string::String; 0]);
 }
 
 #[tokio::test]

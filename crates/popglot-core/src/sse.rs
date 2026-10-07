@@ -214,7 +214,10 @@ mod tests {
     #[test]
     fn handles_comments_and_default_message_event() {
         let mut decoder = SseDecoder::default();
-        assert!(decoder.push(b": heartbeat\n\n").unwrap().is_empty());
+        assert_eq!(
+            decoder.push(b": heartbeat\n\n").unwrap(),
+            [] as [SseEvent; 0]
+        );
         assert_eq!(
             decoder.push(b"data: hello\n\n").unwrap(),
             vec![event("message", "hello")]
@@ -258,7 +261,10 @@ mod tests {
     #[test]
     fn preserves_utf8_split_across_chunks() {
         let mut decoder = SseDecoder::new(1024);
-        assert!(decoder.push("data: 你".as_bytes()).unwrap().is_empty());
+        assert_eq!(
+            decoder.push("data: 你".as_bytes()).unwrap(),
+            [] as [SseEvent; 0]
+        );
         assert_eq!(
             decoder.push("好\n\n".as_bytes()).unwrap(),
             vec![event("message", "你好")]
@@ -299,7 +305,7 @@ mod tests {
     #[test]
     fn incomplete_line_is_completed_by_a_later_chunk() {
         let mut decoder = SseDecoder::new(1024);
-        assert!(decoder.push(b"data: hel").unwrap().is_empty());
+        assert_eq!(decoder.push(b"data: hel").unwrap(), [] as [SseEvent; 0]);
         assert_eq!(
             decoder.push(b"lo\n\n").unwrap(),
             vec![event("message", "hello")]

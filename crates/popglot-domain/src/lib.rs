@@ -1724,9 +1724,12 @@ mod tests {
         );
         let restored = restore_tokens(&echo, &protected.tokens);
         assert_eq!(restored.text, "检查 foo_bar 和 foo_bar 两次");
-        assert!(restored.dropped_terms.is_empty());
-        assert!(restored.duplicated_terms.is_empty());
-        assert!(restored.unknown_placeholders.is_empty());
+        assert_eq!(restored.dropped_terms, [] as [std::string::String; 0]);
+        assert_eq!(restored.duplicated_terms, [] as [std::string::String; 0]);
+        assert_eq!(
+            restored.unknown_placeholders,
+            [] as [std::string::String; 0]
+        );
     }
 
     #[test]
@@ -1767,8 +1770,11 @@ mod tests {
         // The user's literal must survive untouched after restoration.
         let restored = restore_tokens(&protected.sanitized_text, &protected.tokens);
         assert!(restored.text.contains("PG_0000 是用户写的字面量"));
-        assert!(restored.dropped_terms.is_empty());
-        assert!(restored.unknown_placeholders.is_empty());
+        assert_eq!(restored.dropped_terms, [] as [std::string::String; 0]);
+        assert_eq!(
+            restored.unknown_placeholders,
+            [] as [std::string::String; 0]
+        );
     }
 
     #[test]
@@ -1805,7 +1811,7 @@ mod tests {
         // Switch to deepseek profile
         config.active_profile_id = "deepseek".to_owned();
         let ds_settings = config.to_provider_settings();
-        assert!(ds_settings.text_model.is_empty());
+        assert_eq!(ds_settings.text_model, "");
         assert_eq!(ds_settings.api_base_url, "https://api.deepseek.com/v1");
         assert!(!ds_settings.supports_vision);
 
@@ -1813,7 +1819,7 @@ mod tests {
         config.active_profile_id = "ollama-local".to_owned();
         let ollama_settings = config.to_provider_settings();
         assert!(ollama_settings.targets_local_runtime());
-        assert!(ollama_settings.text_model.is_empty());
+        assert_eq!(ollama_settings.text_model, "");
     }
 
     #[test]
@@ -1834,7 +1840,7 @@ mod tests {
         assert!(protected.tokens.len() >= 3);
         let translated = format!("中文解释：{}", protected.sanitized_text);
         let restored = restore_tokens(&translated, &protected.tokens);
-        assert!(restored.dropped_terms.is_empty());
+        assert_eq!(restored.dropped_terms, [] as [std::string::String; 0]);
         assert!(restored.text.contains("NullReferenceException"));
         assert!(restored.text.contains("getUserProfile"));
         assert!(restored.text.contains("C:\\src\\User.cs"));
@@ -1844,7 +1850,7 @@ mod tests {
     #[test]
     fn plain_prose_is_not_masked() {
         let protected = protect_tokens("I am learning JavaScript and it is fun");
-        assert!(protected.tokens.is_empty());
+        assert_eq!(protected.tokens, [] as [ProtectedToken; 0]);
         assert_eq!(
             protected.sanitized_text,
             "I am learning JavaScript and it is fun"
@@ -1875,7 +1881,7 @@ mod tests {
         let translated = protected.sanitized_text.replace('⟦', "[").replace('⟧', "]");
         let restored = restore_tokens(&translated, &protected.tokens);
         assert!(restored.text.contains("--verbose"));
-        assert!(restored.dropped_terms.is_empty());
+        assert_eq!(restored.dropped_terms, [] as [std::string::String; 0]);
     }
 
     #[test]

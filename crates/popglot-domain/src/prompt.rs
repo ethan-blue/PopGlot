@@ -514,7 +514,7 @@ mod tests {
             let compiled = compile_prompt(&builtin, &vars).expect("compile must succeed");
             assert_eq!(compiled.template_id, builtin.id);
             assert_eq!(compiled.revision, builtin.revision);
-            assert!(!compiled.compiled_text.is_empty());
+            assert_ne!(compiled.compiled_text, "");
             assert!(!compiled.compiled_text.contains("{{"));
         }
     }

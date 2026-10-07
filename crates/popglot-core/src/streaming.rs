@@ -365,7 +365,7 @@ mod tests {
         let mut assembler = TextFirstAssembler::new("<<<PG_META_x>>>");
         assert_eq!(assembler.push("尾<<<PG_"), "尾");
         assert_eq!(assembler.finish_delta(), "<<<PG_");
-        assert!(assembler.finish_delta().is_empty());
+        assert_eq!(assembler.finish_delta(), "");
         assert_eq!(assembler.finish().text, "尾<<<PG_");
     }
 
@@ -392,7 +392,7 @@ mod tests {
         missing.push("正文");
         let result = missing.finish();
         assert_eq!(result.text, "正文");
-        assert!(!result.warnings.is_empty());
+        assert_ne!(result.warnings, [] as [String; 0]);
     }
 
     #[test]
@@ -417,7 +417,7 @@ mod tests {
         );
         let result = restorer.finish();
         assert_eq!(result.text, "const answer = getAnswer();");
-        assert!(result.dropped_terms.is_empty());
+        assert_eq!(result.dropped_terms, [] as [String; 0]);
     }
 
     #[test]
@@ -459,7 +459,7 @@ mod tests {
         assert_eq!(fourth, "getAnswer");
         let result = restorer.finish();
         assert_eq!(result.duplicated_terms, vec!["getAnswer"]);
-        assert!(result.dropped_terms.is_empty());
+        assert_eq!(result.dropped_terms, [] as [String; 0]);
     }
 
     #[test]
