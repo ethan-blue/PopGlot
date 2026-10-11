@@ -309,6 +309,10 @@ internal sealed class JsonLineTransport : IDisposable
                 // We own this process tree (we started it); killing it never
                 // matches by name.
                 _process.Kill(entireProcessTree: true);
+                // Kill only signals: until the OS finishes tearing the child
+                // down its handles stay pinned — notably the working
+                // directory, which callers reclaim right after Dispose.
+                _process.WaitForExit(5000);
             }
         }
         catch (Exception exception) when (

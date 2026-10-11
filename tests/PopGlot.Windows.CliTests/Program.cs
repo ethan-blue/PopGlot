@@ -54,6 +54,10 @@ internal static class Program
     {
         try { test().GetAwaiter().GetResult(); _passes++; Console.WriteLine($"PASS {name}"); }
         catch (Exception ex) { _failures++; Console.WriteLine($"FAIL {name}: {ex.GetType().Name}: {ex.Message}"); }
+        // A failed test must not poison the next one: scenario cleanup lives
+        // here, not in the test body, or a leaked "hang" makes every later
+        // fake server sleep through its 3-minute deadline.
+        finally { Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", null); }
     }
     internal static void Assert(bool value, string message) { if (!value) throw new InvalidOperationException(message); }
     private static ProviderProfile FakeProfile(EngineExecutionKind kind)
@@ -99,9 +103,9 @@ internal static class Program
         var watch = Stopwatch.StartNew(); var cancelled = false;
         try { await CliTranslationExecutor.Stream(profile, "hello", "en", "zh", null, cancel.Token).Completion; }
         catch (OperationCanceledException) { cancelled = true; }
-        Assert(cancelled && watch.Elapsed < TimeSpan.FromSeconds(5), "cancellation must finish promptly");
-        Assert(!Directory.EnumerateDirectories(Path.Combine(StoragePaths.CoreConfigDirectory, "cli-run")).Any(), "owned work directories reclaimed");
-        Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", null);
+            Assert(cancelled && watch.Elapsed < TimeSpan.FromSeconds(5), "cancellation must finish promptly");
+            Assert(!Directory.EnumerateDirectories(Path.Combine(StoragePaths.CoreConfigDirectory, "cli-run")).Any(), "owned work directories reclaimed");
+            Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", null);
     }
     private static async Task Offline()
     {

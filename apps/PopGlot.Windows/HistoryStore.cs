@@ -46,7 +46,7 @@ internal sealed partial class HistoryStore : IHistoryRepository
         PropertyNameCaseInsensitive = true,
     };
 
-    private sealed record HistoryPersistRequest(string? Json, bool IsClear, TaskCompletionSource<bool>? Completion);
+    private sealed record HistoryPersistRequest(string? Json, bool IsClear, TaskCompletionSource<bool>? Completion, long ClearGeneration);
 
     // Snapshot bytes are plain UTF-8 with no BOM so the file is byte-stable
     // across writers and parsers never see a stray EF BB BF prefix.
@@ -57,6 +57,10 @@ internal sealed partial class HistoryStore : IHistoryRepository
     private List<TranslationHistoryEntry> _entries = [];
     private readonly Channel<HistoryPersistRequest> _persistChannel = Channel.CreateUnbounded<HistoryPersistRequest>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+    // Guarded by _gate; bumped when a clear is queued so the writer can drop
+    // unawaited snapshots the clear makes moot. Read without the lock via
+    // Volatile.Read in the single reader loop.
+    private long _clearGeneration;
     private readonly Task _writerTask;
 
     /// <summary>
@@ -94,6 +98,16 @@ internal sealed partial class HistoryStore : IHistoryRepository
             {
                 while (reader.TryRead(out var request))
                 {
+                    // A clear deletes the file, so unawaited snapshots queued
+                    // before the newest clear are dead state — writing them
+                    // would only delay the awaited delete sitting behind them.
+                    // Awaited requests always run: their completion is a
+                    // disk-truth promise, never faked.
+                    if (!request.IsClear && request.Completion is null &&
+                        request.ClearGeneration < Volatile.Read(ref _clearGeneration))
+                    {
+                        continue;
+                    }
                     var ok = true;
                     try
                     {
@@ -199,7 +213,7 @@ internal sealed partial class HistoryStore : IHistoryRepository
     public void Flush(int timeoutMs = 5000)
     {
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (_persistChannel.Writer.TryWrite(new HistoryPersistRequest(null, false, tcs)))
+        if (_persistChannel.Writer.TryWrite(new HistoryPersistRequest(null, false, tcs, Volatile.Read(ref _clearGeneration))))
         {
             tcs.Task.Wait(timeoutMs);
         }
@@ -323,7 +337,7 @@ internal sealed partial class HistoryStore : IHistoryRepository
 
                 _entries = next;
                 Revision++;
-                _persistChannel.Writer.TryWrite(new HistoryPersistRequest(json, false, null));
+                _persistChannel.Writer.TryWrite(new HistoryPersistRequest(json, false, null, _clearGeneration));
                 return HistoryAddResult.Stored;
             }
             catch
@@ -361,7 +375,7 @@ internal sealed partial class HistoryStore : IHistoryRepository
                 _entries = next;
                 Revision++;
                 tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-                _persistChannel.Writer.TryWrite(new HistoryPersistRequest(json, false, tcs));
+                _persistChannel.Writer.TryWrite(new HistoryPersistRequest(json, false, tcs, _clearGeneration));
                 removed = hit;
             }
             catch
@@ -412,7 +426,8 @@ internal sealed partial class HistoryStore : IHistoryRepository
             _entries = [];
             Revision++;
             tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _persistChannel.Writer.TryWrite(new HistoryPersistRequest(null, true, tcs));
+            _clearGeneration++;
+            _persistChannel.Writer.TryWrite(new HistoryPersistRequest(null, true, tcs, _clearGeneration));
         }
 
         if (!WaitForPersist(tcs))
@@ -507,7 +522,7 @@ internal sealed partial class HistoryStore : IHistoryRepository
             Revision++;
             inserted = adding.Count;
             tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _persistChannel.Writer.TryWrite(new HistoryPersistRequest(json, false, tcs));
+            _persistChannel.Writer.TryWrite(new HistoryPersistRequest(json, false, tcs, _clearGeneration));
         }
 
         if (tcs is null)
@@ -575,7 +590,7 @@ internal sealed partial class HistoryStore : IHistoryRepository
                 }
                 _entries = next;
                 Revision++;
-                _persistChannel.Writer.TryWrite(new HistoryPersistRequest(json, false, null));
+                _persistChannel.Writer.TryWrite(new HistoryPersistRequest(json, false, null, _clearGeneration));
                 return true;
             }
             catch
