@@ -224,7 +224,7 @@ internal static class FreeTranslateService
         {
             // A hit must never masquerade as a fresh measurement: the original
             // request timing is replaced with an explicit zero.
-            return cached with { Diagnostics = cached.Diagnostics with { ElapsedMs = 0 } };
+            return cached with { Diagnostics = cached.Diagnostics is { } diagnostics ? diagnostics with { ElapsedMs = 0 } : null };
         }
 
         var started = Stopwatch.GetTimestamp();

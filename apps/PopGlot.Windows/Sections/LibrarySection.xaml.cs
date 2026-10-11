@@ -64,6 +64,12 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
     private bool _narrowLibrary;
     private bool _narrowShowDetail;
     private readonly System.Windows.Threading.DispatcherTimer _undoTimer;
+    /// <summary>P03: the store revisions whose data the visible rows already
+    /// reflect. A refresh whose revision matches rebuilds nothing — identical
+    /// data (even identical counts with different content, which the store
+    /// bumps on every real mutation) never triggers a redundant rebuild.</summary>
+    private long _historyRevisionApplied = -1;
+    private long _vocabularyRevisionApplied = -1;
 
     /// <summary>Raised when the user wants to load an entry into the workbench.</summary>
     internal event Action<string, string, string?, string?, string?, string?>? LoadToTranslate;
@@ -146,11 +152,19 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
     {
         try
         {
-            _allHistory = _history.Load();
-            if (_mode == LibraryMode.History)
+            // P03: converge on the store revision — an unchanged revision
+            // (no add/remove/clear/rollback since the last applied refresh)
+            // means the visible rows are already current.
+            var revision = _history.Revision;
+            if (revision != _historyRevisionApplied)
             {
-                SyncCurrentRows();
-                ApplyFilter();
+                _allHistory = _history.Load();
+                _historyRevisionApplied = revision;
+                if (_mode == LibraryMode.History)
+                {
+                    SyncCurrentRows();
+                    ApplyFilter();
+                }
             }
             // A quarantined history file is user data we refuse to destroy:
             // say so once, with the backup name, instead of silently showing
@@ -174,11 +188,18 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         if (_vocabulary is null) return;
         try
         {
-            _allVocabulary = _vocabulary.GetAll();
-            if (_mode == LibraryMode.Vocabulary)
+            // P03: same revision convergence as history; a failed retry that
+            // changed no data rebuilds nothing.
+            var revision = _vocabulary.Revision;
+            if (revision != _vocabularyRevisionApplied)
             {
-                SyncCurrentRows();
-                ApplyFilter();
+                _allVocabulary = _vocabulary.GetAll();
+                _vocabularyRevisionApplied = revision;
+                if (_mode == LibraryMode.Vocabulary)
+                {
+                    SyncCurrentRows();
+                    ApplyFilter();
+                }
             }
             // C02: an unreadable wordbook is protected, not silently emptied —
             // say so once, with where the file lives, instead of a bare list.

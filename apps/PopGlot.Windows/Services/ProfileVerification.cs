@@ -42,7 +42,20 @@ internal static class ProfileVerification
             (profile.TextModel ?? string.Empty).Trim(),
             HeaderText(profile.ExtraHeaders),
             (profile.AnthropicVersion ?? string.Empty).Trim(),
-            profile.AllowInsecureTls);
+            profile.AllowInsecureTls,
+            // P05: the execution dimension changes what a "connection test"
+            // means — evidence for an API route must never cover a CLI route
+            // or vice versa, and a CLI connection change (path/version/model)
+            // invalidates it the same way an address change does.
+            (profile.ExecutionKind ?? string.Empty).Trim(),
+            profile.CliConnection is { } cli
+                ? string.Join('\n',
+                    cli.ExecutablePath.Trim(),
+                    cli.ExpectedVersion.Trim(),
+                    cli.ModelId.Trim(),
+                    cli.UpstreamProviderId?.Trim() ?? string.Empty,
+                    cli.Enabled)
+                : string.Empty);
         return Hash(material);
     }
 
@@ -129,6 +142,7 @@ internal static class ProfileVerification
 
     public static bool CredentialAvailable(ProviderProfile profile)
     {
+        if (profile.ExecutionFacts.IsCliExecution) return false;
         if (ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl))
         {
             return true;

@@ -171,14 +171,14 @@ internal sealed class SummaryLifecycleCoordinator
                 response.Result.TranslatedText,
                 note,
                 show,
-                response.Diagnostics.ElapsedMs,
+                response.ElapsedMs,
                 response.EngineLabel);
 
             onSuccess(new SummaryExecutionResult(
                 Identity: snapshot.Identity,
                 SummaryText: response.Result.TranslatedText,
                 Notes: note,
-                ElapsedMs: response.Diagnostics.ElapsedMs,
+                ElapsedMs: response.ElapsedMs,
                 EngineLabel: response.EngineLabel,
                 IsCurrent: show));
         }

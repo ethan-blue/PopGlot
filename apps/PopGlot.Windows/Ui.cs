@@ -128,6 +128,29 @@ internal static class Ui
     public static void SetContentPadding(DependencyObject element, Thickness value) =>
         element.SetValue(ContentPaddingProperty, value);
 
+    // ---- Quiet text surfaces (P01) -----------------------------------------
+    // Large read/write text surfaces (workbench panes, floating-panel body,
+    // quick-search input, readers) opt out of the whole-area hover/focus
+    // border rings the implicit TextBox template paints — with the mouse
+    // those rings read as noise on pane-sized regions. Keyboard users still
+    // get a cue: the flat styles pair this with a lightweight FocusVisualStyle
+    // that WPF only draws for real keyboard navigation, so mouse clicks and
+    // programmatic focus stay visually quiet. Normal form fields keep the
+    // original hover/focus contract (default false).
+
+    public static readonly DependencyProperty QuietTextSurfaceProperty =
+        DependencyProperty.RegisterAttached(
+            "QuietTextSurface",
+            typeof(bool),
+            typeof(Ui),
+            new PropertyMetadata(false));
+
+    public static bool GetQuietTextSurface(DependencyObject element) =>
+        (bool)element.GetValue(QuietTextSurfaceProperty);
+
+    public static void SetQuietTextSurface(DependencyObject element, bool value) =>
+        element.SetValue(QuietTextSurfaceProperty, value);
+
     /// <summary>Glyph shown ahead of a navigation item's label.</summary>
     public static readonly DependencyProperty IconProperty =
         DependencyProperty.RegisterAttached(

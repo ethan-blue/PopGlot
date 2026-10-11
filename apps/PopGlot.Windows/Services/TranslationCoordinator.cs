@@ -287,14 +287,63 @@ internal sealed class TranslationCoordinator
     internal static (bool HasConfiguredProvider, bool IsLocal) ResolveTextProviderCapability(
         ProviderSettings? textRuntimeSettings,
         string? textApiKey,
-        ProviderSettings legacySettings)
+        ProviderSettings legacySettings) =>
+        ResolveTextRouteCapability(textRuntimeSettings, textApiKey, legacySettings) is { } legacy
+            ? (legacy.HasConfiguredProvider, legacy.IsLocal)
+            : (false, false);
+
+    /// <summary>
+    /// P05: the typed text-route capability. The execution dimension is read
+    /// from the PROFILE (a stable discriminator), never inferred from labels,
+    /// file existence or <c>IsLocal</c>. A CLI-backed profile is a configured
+    /// engine — it must never fall through to the free engine — and when its
+    /// adapter is not enabled in this build it surfaces as
+    /// <see cref="TextRouteCapability.ConfiguredButUnsupported"/> with an
+    /// honest reason instead of a request.
+    /// </summary>
+    internal static TextRouteCapability ResolveTextRouteCapability(
+        ProviderSettings? textRuntimeSettings,
+        string? textApiKey,
+        ProviderSettings legacySettings,
+        ProviderProfile? textProfile = null)
     {
+        if (textProfile is not null &&
+            textProfile.ResolvedExecutionKind is not AiConnections.EngineExecutionKind.NativeApi)
+        {
+            var facts = textProfile.ExecutionFacts;
+            if (!facts.TextCapable)
+            {
+                var reason = textProfile.ResolvedExecutionKind == AiConnections.EngineExecutionKind.Unknown
+                    ? "该引擎使用当前版本不认识的后端类型；请更新 PopGlot 或改用 API 引擎。"
+                    : "本机工具连接未配置完整、已断开或版本不兼容；请重新连接并选择模型。";
+                return new TextRouteCapability(
+                    HasConfiguredProvider: true,
+                    IsLocal: false,
+                    Execution: facts,
+                    ConfiguredButUnsupported: true,
+                    UnsupportedReasonZh: reason);
+            }
+            // CLI execution is NOT local inference: the model may be remote,
+            // so the privacy route treats it as outbound-capable.
+            return new TextRouteCapability(
+                HasConfiguredProvider: true,
+                IsLocal: false,
+                Execution: facts,
+                ConfiguredButUnsupported: false,
+                UnsupportedReasonZh: null);
+        }
+
         var isLocal = textRuntimeSettings?.TargetsLocalRuntime ?? legacySettings.TargetsLocalRuntime;
         var hasConfiguredProvider = (textRuntimeSettings is not null &&
             (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))
             || !string.IsNullOrWhiteSpace(textApiKey)
             || isLocal;
-        return (hasConfiguredProvider, isLocal);
+        return new TextRouteCapability(
+            hasConfiguredProvider,
+            isLocal,
+            Execution: null,
+            ConfiguredButUnsupported: false,
+            UnsupportedReasonZh: null);
     }
 
     /// <summary>
@@ -432,7 +481,8 @@ internal sealed class TranslationCoordinator
         CancellationToken cancellationToken = default,
         Action<TranslationSessionStage>? onStageChanged = null,
         IProgress<TranslationStreamUpdate>? progress = null,
-        long epoch = 0)
+        long epoch = 0,
+        InteractionTrace? trace = null)
     {
         // A10: a fused app refuses new work instead of half-starting it.
         if (!RuntimeGate.NewWorkAllowed)
@@ -452,6 +502,7 @@ internal sealed class TranslationCoordinator
             SourceLanguage = sourceLang,
             TargetLanguage = targetLang,
             Stage = TranslationSessionStage.Created,
+            Trace = trace,
         };
 
         var totalStopwatch = Stopwatch.StartNew();
@@ -480,14 +531,33 @@ internal sealed class TranslationCoordinator
             // 绝不从旧版默认凭据槽取 key：残留 key 会把空模型名的请求
             // 打到 Provider 上然后报「尚未配置文本模型」。旧版单服务安装
             // 由 ProfileManager 合成档案，不依赖这个回退。
-            var textApiKey = textRoute is null
+            var textApiKey = textRoute is null || textRoute.Profile.ExecutionFacts.IsCliExecution
                 ? null
                 : _executor.LoadApiKey(textRoute.CredentialTarget);
             var textRuntimeSettings = textRoute?.Profile.ToProviderSettings(settings);
             // 与 UI 侧 ProbeNextTextRoute 共用同一判定（含遗留
-            // TargetsLocalRuntime 回退），两边永远一致。
+            // TargetsLocalRuntime 回退），两边永远一致；P05 起该判定消费
+            // 档案上的类型化执行维度，绝不从标签/文件存在/IsLocal 推断。
+            var capability = ResolveTextRouteCapability(
+                textRuntimeSettings, textApiKey, settings, textRoute?.Profile);
+
+            if (capability.ConfiguredButUnsupported)
+            {
+                // 配置了引擎但该后端未放行：如实失败，绝不落到免费引擎，
+                // 也绝不把 CLI 档案当 HTTP 档案发出请求。
+                session.Stage = TranslationSessionStage.Failed;
+                session.Error = new TranslationError(
+                    TranslationErrorKind.Configuration,
+                    capability.UnsupportedReasonZh ?? "该引擎后端当前不可用。",
+                    "可在设置中改用 API 引擎，或等待该工具连接验证完成。");
+                onStageChanged?.Invoke(session.Stage);
+                CloseInteractionTrace(session);
+                return session;
+            }
+            session.TextEngineProfile = textRoute?.Profile.Clone();
             var (hasConfiguredProvider, isLocal) =
-                ResolveTextProviderCapability(textRuntimeSettings, textApiKey, settings);
+                (capability.HasConfiguredProvider, capability.IsLocal);
+            trace?.Mark(TracePoint.RoutingEnded);
 
             if (settings.SafeDevMode || !settings.NetworkEnabled)
             {
@@ -502,6 +572,7 @@ internal sealed class TranslationCoordinator
                     return session;
                 }
             }
+            trace?.Mark(TracePoint.PolicyChecked);
 
             session.Stage = TranslationSessionStage.Translating;
             onStageChanged?.Invoke(session.Stage);
@@ -520,14 +591,18 @@ internal sealed class TranslationCoordinator
                 // free-engine branch below deliberately keeps the metadata
                 // null and never compiles an anchor.
                 var promptSnapshot = AttachPromptTemplateSnapshot(session, sourceLang, targetLang);
+                session.Trace?.Mark(TracePoint.PromptPrepared);
 
                 session.OutboundOccurred = !isLocal;
                 session.PipelineKind = isLocal
                     ? TranslationPipelineKind.LocalModel
                     : TranslationPipelineKind.UserProvider;
-                session.TextExecutor = isLocal
-                    ? TranslationTextExecutor.LocalModel
-                    : TranslationTextExecutor.UserProvider;
+                session.TextExecutor = textRoute?.Profile.ResolvedExecutionKind switch
+                {
+                    AiConnections.EngineExecutionKind.CodexAppServer => TranslationTextExecutor.CodexAppServer,
+                    AiConnections.EngineExecutionKind.OmpRpc => TranslationTextExecutor.OmpRpc,
+                    _ => isLocal ? TranslationTextExecutor.LocalModel : TranslationTextExecutor.UserProvider,
+                };
                 // snapshot 非 null 即已冻结身份并编译锚点；null 且首次快照失败
                 // 视为 Unknown，诚实不承诺。
                 session.PromptSupport = promptSnapshot is not null || session.PromptTemplateId is not null
@@ -608,6 +683,7 @@ internal sealed class TranslationCoordinator
                 networkElapsedMs: (ulong)netStopwatch.ElapsedMilliseconds,
                 totalStopwatch: totalStopwatch,
                 cancellationToken: cancellationToken);
+            CloseInteractionTrace(session);
 
             return session;
         }
@@ -624,9 +700,10 @@ internal sealed class TranslationCoordinator
                 epoch: epoch,
                 progress: progress,
                 onStageChanged: onStageChanged,
-                networkElapsedMs: segmentFailure.PartialResponse.Diagnostics.ElapsedMs,
+                networkElapsedMs: segmentFailure.PartialResponse.ElapsedMs,
                 totalStopwatch: totalStopwatch,
                 cancellationToken: cancellationToken);
+            CloseInteractionTrace(session);
             return session;
         }
         catch (OperationCanceledException)
@@ -645,6 +722,7 @@ internal sealed class TranslationCoordinator
                 IsPartial: true,
                 Message: "翻译请求已取消。"));
             onStageChanged?.Invoke(session.Stage);
+            CloseInteractionTrace(session);
             return session;
         }
         catch (Exception ex)
@@ -661,8 +739,36 @@ internal sealed class TranslationCoordinator
                 IsPartial: true,
                 Message: ex.Message));
             onStageChanged?.Invoke(session.Stage);
+            CloseInteractionTrace(session);
             return session;
         }
+    }
+
+    /// <summary>
+    /// P02: terminal close-out of the interaction timeline. Marks Completed
+    /// for clean terminals, CancelObserved when cancellation was observed,
+    /// records the session's real stage as the outcome label, and publishes
+    /// the trace exactly once. Unknown stays absent — nothing is fabricated.
+    /// </summary>
+    private static void CloseInteractionTrace(TranslationSession session)
+    {
+        var trace = session.Trace;
+        if (trace is null)
+        {
+            return;
+        }
+        switch (session.Stage)
+        {
+            case TranslationSessionStage.Completed:
+            case TranslationSessionStage.Partial:
+                trace.Mark(TracePoint.Completed);
+                break;
+            case TranslationSessionStage.Cancelled:
+                trace.Mark(TracePoint.CancelObserved);
+                break;
+        }
+        trace.SetOutcome(session.Stage.ToString().ToLowerInvariant());
+        InteractionTraceCollector.Publish(trace);
     }
 
     public SummaryRequestSnapshot CreateSummarySnapshot(
@@ -694,7 +800,7 @@ internal sealed class TranslationCoordinator
         var settings = _executor.GetSettings();
         var routes = _executor.ResolveRoutes();
         var textRoute = routes.Text;
-        var apiKey = textRoute is null ? null : _executor.LoadApiKey(textRoute.CredentialTarget);
+        var apiKey = textRoute is null || textRoute.Profile.ExecutionFacts.IsCliExecution ? null : _executor.LoadApiKey(textRoute.CredentialTarget);
         var shell = ShellSettingsStore.Load();
         var preferFree = false;
         try
@@ -731,12 +837,19 @@ internal sealed class TranslationCoordinator
         {
             throw new OperationCanceledException("引擎已切换，请重新打开要点。", cancellationToken);
         }
-        var apiKey = textRoute is null ? null : _executor.LoadApiKey(textRoute.CredentialTarget);
+        var apiKey = textRoute is null || textRoute.Profile.ExecutionFacts.IsCliExecution ? null : _executor.LoadApiKey(textRoute.CredentialTarget);
         var routeSettings = textRoute?.Profile.ToProviderSettings(settings);
         var isLocal = routeSettings?.TargetsLocalRuntime ?? settings.TargetsLocalRuntime;
         if (textRoute is null && !isLocal)
         {
             throw new InvalidOperationException("请先在设置中配置模型引擎，再使用要点。免费引擎不能整理要点。");
+        }
+        if (textRoute?.Profile.ExecutionFacts.IsCliExecution == true)
+        {
+            var stream = AiConnections.CliTranslationExecutor.Stream(textRoute.Profile, snapshot.Identity.Source,
+                snapshot.Identity.SourceLanguage, snapshot.Identity.TargetLanguage, null, cancellationToken,
+                task: snapshot.Identity.TaskKind.ToString().ToLowerInvariant());
+            return await stream.Completion;
         }
         var response = await _executor.RunTextTaskAsync(
             apiKey,
@@ -770,7 +883,8 @@ internal sealed class TranslationCoordinator
         CancellationToken cancellationToken = default,
         Action<TranslationSessionStage>? onStageChanged = null,
         IProgress<TranslationStreamUpdate>? progress = null,
-        long epoch = 0)
+        long epoch = 0,
+        InteractionTrace? trace = null)
     {
         // A10: a fused app refuses new work instead of half-starting it.
         if (!RuntimeGate.NewWorkAllowed)
@@ -789,6 +903,7 @@ internal sealed class TranslationCoordinator
             SourceLanguage = sourceLang,
             TargetLanguage = targetLang,
             Stage = TranslationSessionStage.Created,
+            Trace = trace,
         };
 
         var totalStopwatch = Stopwatch.StartNew();
@@ -820,7 +935,7 @@ internal sealed class TranslationCoordinator
             var textRoute = route.Text;
             var visionRoute = route.Vision;
 
-            var textApiKey = textRoute is null
+            var textApiKey = textRoute is null || textRoute.Profile.ExecutionFacts.IsCliExecution
                 ? null
                 : _executor.LoadApiKey(textRoute.CredentialTarget);
             var visionApiKey = visionRoute is null
@@ -840,6 +955,22 @@ internal sealed class TranslationCoordinator
                     VisionProvider = null,
                 };
             routingStopwatch.Stop();
+            trace?.Mark(TracePoint.RoutingEnded);
+            trace?.Mark(TracePoint.PolicyChecked);
+
+            // 复查修复 #1：截图管线的文本阶段（本地 OCR→文本、VisionOcr
+            // 二段、全部回退分支）与主文本路径消费同一个类型化能力门——
+            // CLI/Unknown 档案绝不被当作 HTTP 档案发送；门在 OCR/任何网络
+            // 之前，失败零请求。
+            session.TextEngineProfile = textRoute?.Profile.Clone();
+            if (TextStageExecutionBlocked(textRoute?.Profile) is { } blocked)
+            {
+                session.Stage = TranslationSessionStage.Failed;
+                session.Error = blocked;
+                onStageChanged?.Invoke(session.Stage);
+                CloseInteractionTrace(session);
+                return session;
+            }
 
             // Both routes dead: say what would fix it, before any pixel work.
             if (route.ScreenshotPipeline == ScreenshotPipeline.Unavailable)
@@ -1002,11 +1133,12 @@ internal sealed class TranslationCoordinator
 
                     if ((textRuntimeSettings is not null &&
                             (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))
-                        || !string.IsNullOrWhiteSpace(textApiKey))
+                        || !string.IsNullOrWhiteSpace(textApiKey) || session.TextEngineProfile?.ExecutionFacts.TextCapable == true)
                     {
                         // Text-phase request start: freeze identity + compiled
                         // anchor once, shared by every segment/retry below.
                         var promptSnapshot = AttachPromptTemplateSnapshot(session, sourceLang, targetLang);
+                session.Trace?.Mark(TracePoint.PromptPrepared);
 
                         MarkUserTextStage(session, textRuntimeSettings?.TargetsLocalRuntime ?? false, promptSnapshot);
 
@@ -1105,7 +1237,7 @@ internal sealed class TranslationCoordinator
             session.ImageSentToProvider = imageSentToProvider;
             session.ImageLeftDevice = imageLeftDevice;
             session.ImageUploaded = imageLeftDevice;
-            var textLeavesDevice = textRuntimeSettings is not null && !textRuntimeSettings.TargetsLocalRuntime;
+            var textLeavesDevice = session.TextEngineProfile?.ExecutionFacts.IsCliExecution == true || textRuntimeSettings is not null && !textRuntimeSettings.TargetsLocalRuntime;
             session.OutboundOccurred = imageLeftDevice || textLeavesDevice ||
                 (textRuntimeSettings is null && !string.IsNullOrWhiteSpace(textApiKey));
 
@@ -1121,6 +1253,7 @@ internal sealed class TranslationCoordinator
                 ocrElapsedMs: ocrElapsedMs,
                 routingElapsedMs: (ulong)routingStopwatch.ElapsedMilliseconds,
                 cancellationToken: cancellationToken);
+            CloseInteractionTrace(session);
 
             return session;
         }
@@ -1134,11 +1267,12 @@ internal sealed class TranslationCoordinator
                 epoch: epoch,
                 progress: progress,
                 onStageChanged: onStageChanged,
-                networkElapsedMs: segmentFailure.PartialResponse.Diagnostics.ElapsedMs,
+                networkElapsedMs: segmentFailure.PartialResponse.ElapsedMs,
                 totalStopwatch: totalStopwatch,
                 ocrElapsedMs: ocrElapsedMs,
                 routingElapsedMs: (ulong)routingStopwatch.ElapsedMilliseconds,
                 cancellationToken: cancellationToken);
+            CloseInteractionTrace(session);
             return session;
         }
         catch (OperationCanceledException)
@@ -1157,6 +1291,7 @@ internal sealed class TranslationCoordinator
                 IsPartial: true,
                 Message: "截图翻译已取消。"));
             onStageChanged?.Invoke(session.Stage);
+            CloseInteractionTrace(session);
             return session;
         }
         catch (Exception ex)
@@ -1173,8 +1308,34 @@ internal sealed class TranslationCoordinator
                 IsPartial: true,
                 Message: ex.Message));
             onStageChanged?.Invoke(session.Stage);
+            CloseInteractionTrace(session);
             return session;
         }
+    }
+
+    /// <summary>
+    /// P05 复查修复 #1：截图管线文本阶段的类型化执行门。null=放行（走
+    /// 原有判定）；非 null=如实失败文案。CLI 档案无论"未放行"还是"已放
+    /// 行但截图路径尚无 CLI 通道"都不发送——绝不把 CLI/Unknown 档案当
+    /// HTTP 档案执行，也绝不落回免费引擎。
+    /// </summary>
+    private static TranslationError? TextStageExecutionBlocked(ProviderProfile? textProfile)
+    {
+        if (textProfile is null ||
+            textProfile.ResolvedExecutionKind == AiConnections.EngineExecutionKind.NativeApi)
+        {
+            return null;
+        }
+        if (!textProfile.ExecutionFacts.TextCapable)
+        {
+            return new TranslationError(
+                TranslationErrorKind.Configuration,
+                textProfile.ResolvedExecutionKind == AiConnections.EngineExecutionKind.Unknown
+                    ? "文字引擎使用当前版本不认识的后端类型；截图文字不会发送。"
+                    : "本机工具连接尚未放行；截图文字不会发送。",
+                "可在设置中改用 API 引擎作为文字引擎。");
+        }
+        return null;
     }
 
     /// <summary>
@@ -1199,7 +1360,7 @@ internal sealed class TranslationCoordinator
 
         if ((textRuntimeSettings is not null &&
                 (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))
-            || !string.IsNullOrWhiteSpace(textApiKey) || (textRuntimeSettings?.TargetsLocalRuntime ?? false))
+            || !string.IsNullOrWhiteSpace(textApiKey) || (textRuntimeSettings?.TargetsLocalRuntime ?? false) || session.TextEngineProfile?.ExecutionFacts.TextCapable == true)
         {
             // Request start of the text phase: one identity + anchor snapshot
             // for this session, carried by every segment/retry below; the
@@ -1264,9 +1425,12 @@ internal sealed class TranslationCoordinator
         PromptSessionSnapshot? promptSnapshot)
     {
         session.PipelineKind = TranslationPipelineKind.OcrUserText;
-        session.TextExecutor = textIsLocal
-            ? TranslationTextExecutor.LocalModel
-            : TranslationTextExecutor.UserProvider;
+        session.TextExecutor = session.TextEngineProfile?.ResolvedExecutionKind switch
+        {
+            AiConnections.EngineExecutionKind.CodexAppServer => TranslationTextExecutor.CodexAppServer,
+            AiConnections.EngineExecutionKind.OmpRpc => TranslationTextExecutor.OmpRpc,
+            _ => textIsLocal ? TranslationTextExecutor.LocalModel : TranslationTextExecutor.UserProvider,
+        };
         session.PromptSupport = promptSnapshot is not null || session.PromptTemplateId is not null
             ? TranslationPromptSupport.Applied
             : TranslationPromptSupport.Unknown;
@@ -1333,9 +1497,10 @@ internal sealed class TranslationCoordinator
         // One request behaves exactly as before.
         if (segments.Count == 1)
         {
+            session.Trace?.Mark(TracePoint.TransportSubmitted);
             var single = CreateTextStream(
                 segments[0], sourceLang, targetLang, textRuntimeSettings, textApiKey,
-                session.SessionId, epoch, preferenceAnchor, MaxTextSessionOutputBytes, cancellationToken);
+                session.SessionId, epoch, preferenceAnchor, MaxTextSessionOutputBytes, cancellationToken, session.TextEngineProfile);
             return await PumpStreamAsync(
                 single, session, epoch, startTimestampTicks, progress, onStageChanged,
                 textPrefix: string.Empty, cancellationToken);
@@ -1350,6 +1515,7 @@ internal sealed class TranslationCoordinator
         var explanations = new List<string>();
         var warnings = new List<string>();
         ulong networkMs = 0;
+        TranslationResponse? lastSegment = null;
 
         for (var index = 0; index < segments.Count; index++)
         {
@@ -1362,11 +1528,12 @@ internal sealed class TranslationCoordinator
                     $"本次翻译已达到 {MaxTextSessionOutputBytes / 1024 / 1024} MiB 输出上限；" +
                     $"已保留前 {index} 段，后续内容未继续请求。");
                 throw new SegmentSessionException(
-                    BuildSegmentResponse(merged, explanations, warnings, networkMs));
+                    BuildSegmentResponse(merged, explanations, warnings, networkMs, session.TextEngineProfile, lastSegment));
             }
             var streamSession = CreateTextStream(
                 segments[index], sourceLang, targetLang, textRuntimeSettings, textApiKey,
-                session.SessionId, epoch, preferenceAnchor, remainingOutputBytes, sessionCts.Token);
+                session.SessionId, epoch, preferenceAnchor, remainingOutputBytes, sessionCts.Token, session.TextEngineProfile);
+            session.Trace?.Mark(TracePoint.TransportSubmitted);
 
             TranslationResponse segmentResponse;
             try
@@ -1393,13 +1560,14 @@ internal sealed class TranslationCoordinator
                 {
                     warnings.Add($"第 {index + 1} 段翻译失败，仅保留已返回片段。");
                     throw new SegmentSessionException(
-                        BuildSegmentResponse(new StringBuilder(visiblePartial), explanations, warnings, networkMs));
+                        BuildSegmentResponse(new StringBuilder(visiblePartial), explanations, warnings, networkMs, session.TextEngineProfile, lastSegment));
                 }
                 throw;
             }
 
+            lastSegment = segmentResponse;
             var result = segmentResponse.Result;
-            networkMs += segmentResponse.Diagnostics.ElapsedMs;
+            networkMs += segmentResponse.ElapsedMs;
             var segmentIncomplete =
                 result.Warnings.Count > 0 || result.IsPartial || string.IsNullOrWhiteSpace(result.TranslatedText);
             if (segmentIncomplete)
@@ -1423,7 +1591,7 @@ internal sealed class TranslationCoordinator
                     $"已保留前 {index} 段，后续内容未继续请求。");
                 session.TranslatedText = merged.ToString();
                 throw new SegmentSessionException(
-                    BuildSegmentResponse(merged, explanations, warnings, networkMs));
+                    BuildSegmentResponse(merged, explanations, warnings, networkMs, session.TextEngineProfile, lastSegment));
             }
             merged.Append(segmentText);
             mergedBytes += segmentBytes;
@@ -1434,11 +1602,11 @@ internal sealed class TranslationCoordinator
             if (segmentIncomplete)
             {
                 throw new SegmentSessionException(
-                    BuildSegmentResponse(merged, explanations, warnings, networkMs));
+                    BuildSegmentResponse(merged, explanations, warnings, networkMs, session.TextEngineProfile, lastSegment));
             }
         }
 
-        return BuildSegmentResponse(merged, explanations, warnings, networkMs);
+        return BuildSegmentResponse(merged, explanations, warnings, networkMs, session.TextEngineProfile, lastSegment);
     }
 
     private TranslationStreamSession CreateTextStream(
@@ -1451,8 +1619,11 @@ internal sealed class TranslationCoordinator
         long epoch,
         PromptAnchorSnapshot? preferenceAnchor,
         long maxResponseBytes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ProviderProfile? engineProfile)
     {
+        if (engineProfile?.ExecutionFacts.IsCliExecution == true)
+            return AiConnections.CliTranslationExecutor.Stream(engineProfile, segment, sourceLang, targetLang, preferenceAnchor, cancellationToken, maxResponseBytes);
         if (textRuntimeSettings is not null &&
             (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))
         {
@@ -1484,7 +1655,7 @@ internal sealed class TranslationCoordinator
         StringBuilder merged,
         IReadOnlyList<string> explanations,
         IReadOnlyList<string> warnings,
-        ulong networkMs) =>
+        ulong networkMs, ProviderProfile? engineProfile = null, TranslationResponse? lastSegment = null) =>
         new(
             new TranslationResult(
                 TranslatedText: merged.ToString(),
@@ -1492,13 +1663,17 @@ internal sealed class TranslationCoordinator
                 Explanation: string.Join("\n\n", explanations),
                 ProtectedTerms: [],
                 Warnings: warnings),
-            new ProviderDiagnostics(
+            engineProfile?.ExecutionFacts.IsCliExecution == true ? null : new ProviderDiagnostics(
                 RequestId: "segmented",
                 ProviderType: ProviderType.OpenAiCompatible,
                 Endpoint: string.Empty,
                 Attempts: 1,
                 StatusCode: 200,
-                ElapsedMs: networkMs));
+                ElapsedMs: networkMs),
+            engineProfile?.Name,
+            engineProfile?.ExecutionFacts.IsCliExecution == true
+                ? new CliBackendDiagnostics(engineProfile.ExecutionKind, engineProfile.CliConnection?.ModelId, engineProfile.CliConnection?.ExpectedVersion, networkMs, warnings.Count == 0)
+                : null);
 
     /// <summary>
     /// Some segments completed and one failed or returned incomplete: the
@@ -1541,6 +1716,10 @@ internal sealed class TranslationCoordinator
                             FirstDeltaMs = (ulong)Stopwatch.GetElapsedTime(startTimestampTicks).TotalMilliseconds,
                         };
                     }
+                    // P02：同一事实的时间线点——泵排空出的首段「可见」delta
+                    // （reasoning/usage 不算）。与 FirstDeltaMs 同源，但以
+                    // 交互起点（热键/托盘）为原点，而非请求起点。
+                    session.Trace?.Mark(TracePoint.FirstVisibleDeltaBuffered);
                     onStageChanged?.Invoke(session.Stage);
                 }
                 session.TranslatedText = textPrefix + buffer.GetAccumulatedText();
@@ -1588,6 +1767,7 @@ internal sealed class TranslationCoordinator
                     FirstDeltaMs = (ulong)Stopwatch.GetElapsedTime(startTimestampTicks).TotalMilliseconds,
                 };
             }
+            session.Trace?.Mark(TracePoint.FirstVisibleDeltaBuffered);
             session.TranslatedText = textPrefix + buffer.GetAccumulatedText();
             progress?.Report(new TranslationStreamUpdate(
                 SessionId: session.SessionId,
@@ -1666,7 +1846,7 @@ internal sealed class TranslationCoordinator
         session.Timing = new TranslationSessionTiming(
             OcrElapsedMs: ocrElapsedMs,
             RoutingElapsedMs: routingElapsedMs,
-            NetworkElapsedMs: networkElapsedMs > 0 ? networkElapsedMs : response.Diagnostics.ElapsedMs,
+            NetworkElapsedMs: networkElapsedMs > 0 ? networkElapsedMs : response.ElapsedMs,
             TotalElapsedMs: (ulong)totalStopwatch.ElapsedMilliseconds,
             // C10：泵/面板已盖的章节戳不可被终态构造抹掉——原样携带。
             SelectionReadMs: session.Timing.SelectionReadMs,

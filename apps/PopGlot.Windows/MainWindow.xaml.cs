@@ -1103,6 +1103,24 @@ public partial class MainWindow : Window
     internal void ReloadHistory() => LibrarySection.ReloadHistory();
 
     /// <summary>
+    /// P03: the library converges AFTER the first frame. The show path paints
+    /// immediately with whatever rows it already has (the previous session's
+    /// content on a re-show), and this refresh — revision-gated, so identical
+    /// data rebuilds nothing — runs once the frame is interactive. Failures
+    /// report to the footer and never clear the rows already on screen.
+    /// </summary>
+    internal void RequestLibraryRefreshAfterFirstFrame()
+    {
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                LibrarySection.ReloadHistory();
+                LibrarySection.ReloadVocabulary();
+            },
+            System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    /// <summary>
     /// 常驻 Hotkey 通道（Set）：全局快捷键真实失效时，状态行持续解释具体
     /// 原因；瞬时消息可以临时占用展示权，但到期后仍回到这条故障提示，直
     /// 到恢复后被 <see cref="ClearShortcutConflict"/> 清除。同一失效周期内
@@ -1199,9 +1217,14 @@ public partial class MainWindow : Window
 
             e.Cancel = true;
             Hide();
-            // 主窗口驻留托盘后释放工作集：隐藏状态下不需要保住渲染页，
-            // 任务管理器中的内存随之回落，重新显示时自动调回。
-            App.TrimWorkingSet();
+            // P03: the trim-on-hide default stays after the A/B — no wake
+            // penalty was measured at 1/30/300 s idle, and the resting
+            // footprint is ~10x lower. POPGLOT_TRIM_ON_HIDE=0 disables it
+            // for A/B (e.g. on an older machine).
+            if (App.TrimOnHideEnabled)
+            {
+                App.TrimWorkingSet();
+            }
             // The "still running" balloon shows at most once per install:
             // in-memory for this run, persisted so later runs never nag.
             if (!_closeHintShown && !ShellSettingsStore.Load().CloseHintShown)
@@ -1379,14 +1402,16 @@ internal static class TranslationStyleMenu
         try
         {
             // 与 coordinator 真实请求完全相同的解析链：ProfileManager.ResolveRoutes
-            // → 按 route 的凭据目标读 key → 共享谓词判定。
+            // → 按 route 的凭据目标读 key → 共享谓词判定（P05 起消费档案上的
+            // 类型化执行维度，不从标签/IsLocal 推断）。
             var settings = CoreBridge.GetSettings();
             var (textRoute, _) = ProfileManager.ResolveRoutes();
-            var textApiKey = textRoute is null
+            var textApiKey = textRoute is null || textRoute.Profile.ExecutionFacts.IsCliExecution
                 ? null
                 : CredentialStore.LoadApiKey(textRoute.CredentialTarget);
             var textRuntimeSettings = textRoute?.Profile.ToProviderSettings(settings);
-            return TranslationCoordinator.ResolveTextProviderCapability(textRuntimeSettings, textApiKey, settings)
+            return TranslationCoordinator
+                .ResolveTextRouteCapability(textRuntimeSettings, textApiKey, settings, textRoute?.Profile)
                 .HasConfiguredProvider
                 ? TranslationStyleSupport.Supported
                 : TranslationStyleSupport.FreeEngine;

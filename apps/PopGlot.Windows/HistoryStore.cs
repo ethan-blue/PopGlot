@@ -66,12 +66,21 @@ internal sealed partial class HistoryStore : IHistoryRepository
     /// </summary>
     internal string? LastQuarantinePath { get; private set; }
 
+    /// <summary>
+    /// P03: revision of the in-memory data, incremented at every successful
+    /// mutation (add / remove / clear / insert-missing / rollback). Consumers
+    /// converge on this number instead of rebuilding identical lists; equal
+    /// counts with different content can never masquerade as "unchanged".
+    /// </summary>
+    public long Revision { get; private set; }
+
     public HistoryStore(string? path = null)
     {
         _path = path ?? StoragePaths.History;
         lock (_gate)
         {
             _entries = LoadUnlocked().ToList();
+            Revision = 1;
         }
         _writerTask = Task.Run(ProcessPersistenceQueueAsync);
     }
@@ -313,6 +322,7 @@ internal sealed partial class HistoryStore : IHistoryRepository
                 }
 
                 _entries = next;
+                Revision++;
                 _persistChannel.Writer.TryWrite(new HistoryPersistRequest(json, false, null));
                 return HistoryAddResult.Stored;
             }
@@ -349,6 +359,7 @@ internal sealed partial class HistoryStore : IHistoryRepository
                 var json = JsonSerializer.Serialize(next, JsonOptions);
                 previous = _entries;
                 _entries = next;
+                Revision++;
                 tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                 _persistChannel.Writer.TryWrite(new HistoryPersistRequest(json, false, tcs));
                 removed = hit;
@@ -366,6 +377,7 @@ internal sealed partial class HistoryStore : IHistoryRepository
                 if (ReferenceEquals(_entries, next))
                 {
                     _entries = previous;
+                    Revision++;
                 }
             }
 
@@ -398,6 +410,7 @@ internal sealed partial class HistoryStore : IHistoryRepository
 
             previous = _entries;
             _entries = [];
+            Revision++;
             tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _persistChannel.Writer.TryWrite(new HistoryPersistRequest(null, true, tcs));
         }
@@ -409,6 +422,7 @@ internal sealed partial class HistoryStore : IHistoryRepository
                 if (_entries.Count == 0)
                 {
                     _entries = previous;
+                    Revision++;
                 }
             }
 
@@ -490,6 +504,7 @@ internal sealed partial class HistoryStore : IHistoryRepository
 
             previous = _entries;
             _entries = next;
+            Revision++;
             inserted = adding.Count;
             tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _persistChannel.Writer.TryWrite(new HistoryPersistRequest(json, false, tcs));
@@ -507,6 +522,7 @@ internal sealed partial class HistoryStore : IHistoryRepository
                 if (ReferenceEquals(_entries, next))
                 {
                     _entries = previous;
+                    Revision++;
                 }
             }
 
@@ -558,6 +574,7 @@ internal sealed partial class HistoryStore : IHistoryRepository
                     return false;
                 }
                 _entries = next;
+                Revision++;
                 _persistChannel.Writer.TryWrite(new HistoryPersistRequest(json, false, null));
                 return true;
             }

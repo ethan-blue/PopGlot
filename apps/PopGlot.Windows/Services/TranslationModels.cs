@@ -52,6 +52,13 @@ internal enum TranslationTextExecutor
 
     /// <summary>The built-in free engine runs the text request.</summary>
     FreeEngine,
+
+    /// <summary>P05: a Codex app-server subprocess runs the text request
+    /// (never before the adapter is enabled for the installed version).</summary>
+    CodexAppServer,
+
+    /// <summary>P05: an oh-my-pi RPC subprocess runs the text request.</summary>
+    OmpRpc,
 }
 
 /// <summary>
@@ -168,6 +175,19 @@ internal sealed record TranslationSessionTiming(
     ulong PaintedLagMs = 0);
 
 /// <summary>
+/// P05: typed text-route capability. <see cref="ConfiguredButUnsupported"/>
+/// keeps a CLI/unknown-backend profile a CONFIGURED engine (never a free-
+/// engine fallback) while making it honestly non-executable until the
+/// adapter is enabled for the installed version.
+/// </summary>
+internal sealed record TextRouteCapability(
+    bool HasConfiguredProvider,
+    bool IsLocal,
+    AiConnections.EngineExecutionFacts? Execution,
+    bool ConfiguredButUnsupported,
+    string? UnsupportedReasonZh);
+
+/// <summary>
 /// 面向用户的秒级耗时文案（0.1.6 文案减法）：状态行只说"用时 X.X 秒"，
 /// 不再暴露取词/OCR/路由/网络等内部毫秒拆分。纯函数、无状态，供极速查词
 /// 状态行与浮窗页脚等表面共用，保证三表面措辞一致。
@@ -223,12 +243,20 @@ internal sealed class TranslationSession
     public string SourceLanguage { get; set; } = LanguageCatalog.Auto;
     public string TargetLanguage { get; set; } = "zh-CN";
 
+    /// <summary>
+    /// P02 交互时间线。null = 本会话没有可用的入口时间点（例如测试直连内部
+    /// 方法），诊断如实缺失，不伪造。只承载毫秒级时间点与匿名元数据，
+    /// 绝不承载原文/译文/地址/凭据。
+    /// </summary>
+    public InteractionTrace? Trace { get; set; }
+
     public TranslationSessionStage Stage { get; set; } = TranslationSessionStage.Created;
     public string? PipelineLabel { get; set; }
     /// <summary>Typed pipeline identity — control logic branches here, never on <see cref="PipelineLabel"/>.</summary>
     public TranslationPipelineKind PipelineKind { get; set; } = TranslationPipelineKind.Unknown;
     /// <summary>Which engine runs (ran) the session's TEXT stage.</summary>
     public TranslationTextExecutor TextExecutor { get; set; } = TranslationTextExecutor.None;
+    internal ProviderProfile? TextEngineProfile { get; set; }
     /// <summary>Whether the active custom prompt/style actually took part in the text stage.</summary>
     public TranslationPromptSupport PromptSupport { get; set; } = TranslationPromptSupport.Pending;
     public string? RoutingReason { get; set; }

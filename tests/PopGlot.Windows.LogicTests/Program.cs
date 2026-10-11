@@ -83,6 +83,13 @@ internal static class Program
         await RunAsync("newer user clipboard wins", NewerUserClipboardWinsAsync);
         await RunAsync("cancelled read restores clipboard", CancelledReadRestoresClipboardAsync);
         await RunAsync("missing selection is explicit", MissingSelectionIsExplicitAsync);
+        await RunAsync("json line transport matches ids and drains stderr in parallel", CliSubprocessTests.TransportMatchesIdsAndDrainsStderr);
+        await RunAsync("json line transport frames multibyte unicode exactly", CliSubprocessTests.TransportFramesMultilineAndUnicodeExactly);
+        await RunAsync("child crash completes pending with the terminal reason", CliSubprocessTests.CrashCompletesPendingWithTerminalReason);
+        await RunAsync("dispose reclaims only the process it spawned", CliSubprocessTests.DisposeKillsOwnChildOnly);
+        await RunAsync("disabled cli adapters never spawn through the typed policy", CliSubprocessTests.DisabledAdapterPolicyNeverSpawns);
+        Run("ffi text job protocol runs through the real core", CliSubprocessTests.TextJobProtocolThroughCore);
+        RunSta("connection panel stays honest without spawning", CliSubprocessTests.ConnectionPanelStaysHonestWithoutSpawning);
         await RunAsync("clipboard selection supports target window", ClipboardSelectionSupportsTargetWindowAsync);
         await RunAsync("selection pre-read is bounded, recoverable and never double-copies", SelectionPrereadIsBoundedAndDegradesWithFeedbackAsync);
         Run("tray menu keeps actions short and moves shortcuts to hover help", TrayMenuKeepsActionsShort);
@@ -200,6 +207,7 @@ internal static class Program
         Run("text windows are opaque for ClearType", TextWindowsAreOpaque);
         Run("daily flows never open system dialogs", DailyFlowsUseInlineConfirmations);
         RunSta("library clear all acts on the first click", LibraryClearAllActsOnFirstClick);
+        RunSta("main window library refreshes after the first frame by revision", MainWindowLibraryRefreshesAfterFirstFrame);
         RunSta("library preserves saved markdown and disables empty actions", LibrarySavedMarkdown);
         Run("unready services cannot become the default", UnreadyServicesCannotBecomeDefault);
         Run("schema v4 factory profiles migrate out of configured services", SchemaV4MigratesPristineTemplates);
@@ -254,6 +262,7 @@ internal static class Program
         await RunAsync("budget refusal sends nothing", BudgetRefusalSendsNothingAsync);
         Run("short source stays single and planner agrees across ffi", ShortSourceStaysSingleAndPlannerAgreesAcrossFfi);
         await RunAsync("coordinator vision failure with deltas does not fallback to OCR", CoordinatorVisionWithDeltaFailureDoesNotOcrFallbackAsync);
+        await RunAsync("coordinator screenshot with cli text engine fails before any work", CoordinatorScreenshotCliTextEngineFailsBeforeAnyWorkAsync);
         await RunAsync("coordinator vision failure with zero deltas falls back to OCR", CoordinatorVisionZeroDeltaFailureFallsBackToOcrAsync);
         await RunAsync("coordinator epoch propagation fences session updates", CoordinatorEpochPropagationAsync);
         await RunAsync("coordinator stage transitions follow correct lifecycle order", CoordinatorStageOrderAsync);
@@ -402,7 +411,7 @@ internal static class Program
             ("builtin tone choices are radio selection semantics", WaveRegressionTests.PromptBuiltinChoicesAreRadioSelection),
             ("prompt row description clamps to two caption lines", WaveRegressionTests.PromptRowDescriptionClampsToTwoLines),
             ("workbench pane corner cells round the card corners in both layouts", WaveRegressionTests.WorkbenchPaneCornerRadiiMatchLayout),
-            ("flat text surfaces paint a keyboard focus line", WaveRegressionTests.FlatTextSurfacesShowKeyboardFocusBorder),
+            ("flat text surfaces are quiet under mouse focus keyboard", WaveRegressionTests.FlatTextSurfacesAreQuietUnderMouseFocusKeyboard),
             ("help toc selection wins over hover", WaveRegressionTests.HelpTocSelectionWinsOverHover),
             ("main window responsive layout has one source and the agreed breakpoints", WaveRegressionTests.MainWindowSingleResponsiveSource),
             ("settings nav rail follows programmatic page changes", WaveRegressionTests.SettingsNavRailFollowsProgrammaticShowPage),
@@ -1513,7 +1522,7 @@ internal static class Program
         True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var authorization),
             "free-engine consent must be grantable in the isolated environment");
         var response = await FreeTranslateService.TranslateAsync("hello world", "auto", "zh-CN", authorization);
-        Console.WriteLine($"  -> engine={response.Diagnostics.Endpoint} text={response.Result.TranslatedText}");
+        Console.WriteLine($"  -> engine={response.Diagnostics!.Endpoint} text={response.Result.TranslatedText}");
         True(response.IsFreeEngine, "the free engine must identify itself");
         True(response.Result.TranslatedText.Contains("世界", StringComparison.Ordinal) ||
              response.Result.TranslatedText.Contains("你好", StringComparison.Ordinal),
@@ -3394,7 +3403,8 @@ internal static class Program
         var root = FindProjectRoot();
         var appCode = File.ReadAllText(Path.Combine(root, "apps", "PopGlot.Windows", "App.xaml.cs"));
         True(appCode.Contains("HotkeyAction.QuickSearch"), "App must handle HotkeyAction.QuickSearch");
-        True(appCode.Contains("ShowQuickSearch()"), "App must trigger ShowQuickSearch for QuickSearch hotkey");
+        True(appCode.Contains("ShowQuickSearch(trace)") || appCode.Contains("ShowQuickSearch()"),
+            "App must trigger ShowQuickSearch for QuickSearch hotkey");
         True(appCode.Contains("IsNoSelectionException"),
             "App must classify missing selection when TranslateSelection runs");
         True(appCode.Contains("PreloadedSelectionClipboardAdapter"),
@@ -4946,6 +4956,72 @@ internal static class Program
                 "empty collections must not offer ineffective actions");
         }
         finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    /// <summary>P03: the show path no longer rebuilds the library before the
+    /// first frame — the deferred, revision-gated refresh must converge the
+    /// rows after the frame, pick up real mutations, and never clear rows
+    /// when nothing changed.</summary>
+    private static void MainWindowLibraryRefreshesAfterFirstFrame()
+    {
+        EnsureApplication();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-library-firstframe-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var history = new HistoryStore(Path.Combine(dir, "history.json"));
+        var window = new MainWindow(
+            ShellSettings.Default,
+            history,
+            new VocabularyStore(Path.Combine(dir, "vocabulary.json")))
+        {
+            ShowInTaskbar = false,
+            ShowActivated = false,
+            WindowStyle = WindowStyle.None,
+        };
+        try
+        {
+            window.Show();
+            True(window.LibrarySection.LibraryListBox.Items.Count == 0,
+                "the show path must not synchronously rebuild the library before the first frame");
+
+            window.RequestLibraryRefreshAfterFirstFrame();
+            True(PumpLibraryRows(window, 0, "the deferred refresh must not invent rows for an empty store"),
+                "the deferred refresh must land after the first frame");
+
+            Equal(HistoryAddResult.Stored, history.TryAdd(Entry("first frame", "首帧"), enabled: true), "setup: add one entry");
+            window.RequestLibraryRefreshAfterFirstFrame();
+            True(PumpLibraryRows(window, 1, "a real mutation must converge into the rows"),
+                "a real mutation must converge into the rows");
+
+            window.RequestLibraryRefreshAfterFirstFrame();
+            FlushDispatcher();
+            Equal(1, window.LibrarySection.LibraryListBox.Items.Count,
+                "an unchanged revision must not clear or duplicate the rows");
+
+            Equal(HistoryAddResult.Stored, history.TryAdd(Entry("second entry", "第二条"), enabled: true), "setup: add a second entry");
+            window.RequestLibraryRefreshAfterFirstFrame();
+            True(PumpLibraryRows(window, 2, "a second mutation must converge too"),
+                "a second mutation must converge too");
+        }
+        finally
+        {
+            window.Close();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    private static bool PumpLibraryRows(MainWindow window, int expected, string message)
+    {
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            if (window.LibrarySection.LibraryListBox.Items.Count == expected)
+            {
+                return true;
+            }
+            System.Threading.Thread.Sleep(5);
+            FlushDispatcher();
+        }
+        True(window.LibrarySection.LibraryListBox.Items.Count == expected, message);
+        return false;
     }
 
     private static void LibraryClearAllActsOnFirstClick()
@@ -9115,6 +9191,18 @@ internal static class Program
             RenderAndSave(generalPage, 960, 760,
                 Path.Combine(outDir, $"settings_general_{theme.ToString().ToLowerInvariant()}.png"), theme);
         }
+        // P09 visual evidence: the local-tool connection panel with real
+        // detection results (offline facts; detection never spawns).
+        var cliDark = new SettingsWindow(ShellSettings.Default, history, vocab);
+        cliDark.ShowPage("Provider");
+        cliDark.ProviderSection.ConnectLocalToolHeaderButton.RaiseEvent(
+            new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        cliDark.ProviderSection.DetectCliToolsButton.RaiseEvent(
+            new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        True(cliDark.ProviderSection.CliConnectionsPanel.Visibility == Visibility.Visible,
+            "cli-connections capture: the panel must be open with detection rows");
+        RenderAndSave(cliDark, 960, 760,
+            Path.Combine(outDir, "settings_cli_connections_dark.png"), ThemePreference.Dark);
         // The privacy page carries the destination consents (free engine,
         // cloud speech); it needs its own visual regression capture. The
         // programmatic ShowPage must also move the sidebar highlight — a
@@ -11364,8 +11452,8 @@ internal static class Program
         Equal("Hello, world!", response.Result.Transcription, "Transcription matches");
         Equal("标准问候语", response.Result.Explanation, "Explanation matches");
         Equal("nǐ hǎo", response.Result.Phonetic, "Phonetic matches");
-        Equal("req-streaming-123", response.Diagnostics.RequestId, "RequestId matches");
-        Equal(ProviderType.OpenAiCompatible, response.Diagnostics.ProviderType, "ProviderType matches");
+        Equal("req-streaming-123", response.Diagnostics!.RequestId, "RequestId matches");
+        Equal(ProviderType.OpenAiCompatible, response.Diagnostics!.ProviderType, "ProviderType matches");
 
         // 2. Failure Envelope throws with exact error message
         var failureJson = """
@@ -12121,7 +12209,7 @@ internal static class Program
             var first = await FreeTranslateService.TranslateAsync("boundary cache hit", "auto", "zh", authorization);
             var second = await FreeTranslateService.TranslateAsync("boundary cache hit", "auto", "zh", authorization);
             Equal(1, sends, "the second identical call must be a cache hit");
-            Equal(0UL, second.Diagnostics.ElapsedMs, "a cache hit must report zero elapsed, not the old timing");
+            Equal(0UL, second.ElapsedMs, "a cache hit must report zero elapsed, not the old timing");
             Equal(first.Result.TranslatedText, second.Result.TranslatedText);
         }
         finally
@@ -12240,6 +12328,62 @@ internal static class Program
         finally
         {
             OutboundPolicy.SettingsLoader = prevLoader;
+        }
+    }
+
+    /// <summary>
+    /// 复查修复 #1 的抓老 bug 回归：截图管线的文本阶段必须消费类型化执行
+    /// 门。CLI/Unknown 档案被选为活动文字引擎时，截图翻译在任何 OCR 或
+    /// 网络之前如实失败——绝不把 CLI 档案当 HTTP 档案发送。
+    /// </summary>
+    private static async Task CoordinatorScreenshotCliTextEngineFailsBeforeAnyWorkAsync()
+    {
+        var history = new FakeHistoryRepository();
+        foreach (var executionKind in new[]
+                 {
+                     PopGlot.Windows.Services.AiConnections.EngineExecutionKindNames.CodexAppServer,
+                     "some-future-backend",
+                 })
+        {
+            var executor = new FakeTranslationExecutor();
+            var cliTextProfile = new ProviderProfile
+            {
+                Id = "cli-text",
+                Name = "CLI 引擎",
+                TextModel = "some-model",
+                SupportsText = true,
+                ApiBaseUrl = "https://api.example.com/v1",
+                ExecutionKind = executionKind,
+                CliConnection = executionKind == PopGlot.Windows.Services.AiConnections.EngineExecutionKindNames.CodexAppServer
+                    ? new PopGlot.Windows.Services.AiConnections.CliConnectionSettings
+                    {
+                        ExecutablePath = @"C:\nowhere\codex.exe",
+                        ModelId = "m",
+                        Enabled = true,
+                    }
+                    : null,
+            };
+            var textRoute = new ProviderRoute(cliTextProfile, "fake-target");
+            executor.TextRoute = textRoute;
+            // Even a LOCAL-OCR screenshot route must hit the text gate: the
+            // recognized text would translate through the CLI-profile text
+            // route — the exact path the review found unguarded.
+            executor.ScreenshotRoute = new ResolvedRoute(
+                textRoute, null, ScreenshotPipeline.LocalOcr, false, "Local OCR");
+            executor.OnStreamTextDraft = (_, _, _, _, _, _, _, _) =>
+                throw new InvalidOperationException("HTTP stream must never start for a CLI profile");
+            executor.OnTranslateFree = (_, _, _, _) =>
+                throw new InvalidOperationException("the free engine must never pick up a CLI profile");
+            var coordinator = new TranslationCoordinator(history: history, executor: executor);
+
+            var dummyImage = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+            var session = await coordinator.TranslateScreenshotAsync(dummyImage, "en", "zh");
+
+            Equal(TranslationSessionStage.Failed, session.Stage, $"({executionKind}) stage must be Failed");
+            True(
+                session.Error?.Message.Contains("截图文字不会发送", StringComparison.Ordinal) == true,
+                $"({executionKind}) the error states the honest refusal, got: {session.Error?.Message}");
+            Equal(0, executor.OcrCallCount, $"({executionKind}) no OCR may run before the typed gate");
         }
     }
 

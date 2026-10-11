@@ -72,6 +72,7 @@ jobs:
       - run: dotnet build apps/PopGlot.Windows/PopGlot.Windows.csproj --configuration Release
       - run: dotnet run --project tests/PopGlot.Windows.PureTests/PopGlot.Windows.PureTests.csproj --configuration Release
       - run: dotnet run --project tests/PopGlot.Windows.LogicTests/PopGlot.Windows.LogicTests.csproj --configuration Release
+      - run: dotnet run --project tests/PopGlot.Windows.CliTests/PopGlot.Windows.CliTests.csproj --configuration Release -- --ui
 
       - name: Publish portable build
         run: >

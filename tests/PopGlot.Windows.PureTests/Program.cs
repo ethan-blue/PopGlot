@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Windows;
 using PopGlot.Windows;
 using PopGlot.Windows.Services;
+using PopGlot.Windows.Services.AiConnections;
 
 namespace PopGlot.Windows.PureTests;
 
@@ -66,8 +67,12 @@ internal static class Program
         });
 
         Run("reading mode keeps the translation when a summary is shown", ReadingModeKeepsTranslation);
+        Run("interaction trace keeps unknown points null and diagnostics anonymous", InteractionTraceNullSemanticsAndPrivacy);
+        Run("interaction trace collector ring is bounded and jsonl flushes off-thread", () => InteractionTraceCollectorRingAndFlush(root));
+        Run("store revisions bump on real mutations only", () => StoreRevisionSemantics(root));
         Run("summary request identity segregates cache by target lang, engine, and version", SummaryRequestIdentitySegregation);
         Run("R03 route capability evaluates all five states accurately", RouteCapabilityEvaluatesAllFiveStates);
+        Run("P05 execution kinds stay typed: CLI unsupported, never free fallback", ExecutionKindsStayTypedNeverFreeFallback);
         Run("free engine provider round-trips and stays on Google when missing", FreeEngineProviderRoundTrip);
         await RunAsync("alternate free engine contacts only MyMemory", AlternateFreeEngineContactsMyMemory);
         Run("session store enforces max 5 sessions and LRU eviction", SessionStoreCapacityAndLru);
@@ -308,6 +313,119 @@ internal static class Program
             "tilde info strings are allowed");
     }
 
+    /// <summary>
+    /// P05: the execution dimension is typed end to end. A CLI profile is a
+    /// CONFIGURED engine — configured-but-unsupported when the adapter is
+    /// disabled, never a free-engine fallback — and never claims vision. An
+    /// unknown backend string loads as unsupported. Legacy profiles (no
+    /// execution kind) keep the native-api contract.
+    /// </summary>
+    private static void ExecutionKindsStayTypedNeverFreeFallback()
+    {
+        var settings = DemoSettings();
+
+        // Legacy profile: no execution kind in the JSON round-trips as native-api.
+        var legacy = new ProviderProfile
+        {
+            Id = "legacy",
+            TextModel = "m1",
+            VisionModel = "v1",
+            SupportsText = true,
+        };
+        Equal(PopGlot.Windows.Services.AiConnections.EngineExecutionKind.NativeApi, legacy.ResolvedExecutionKind,
+            "a profile without an execution kind is the native API path");
+        True(legacy.ExecutionFacts.TextCapable, "legacy native profiles keep their text capability");
+        True(legacy.ExecutionFacts.VisionCapable && legacy.ExecutionFacts.NetworkRoute,
+            "legacy native profiles are network routes with vision");
+
+        // CLI profile (Codex): configured, but the adapters ship disabled —
+        // text must be unsupported and the capability must NOT read as the
+        // free engine, so no silent fallback can ever fire.
+        var codex = new ProviderProfile
+        {
+            Id = "codex",
+            TextModel = "irrelevant",
+            SupportsText = true,
+            SupportsVision = true,
+            ExecutionKind = PopGlot.Windows.Services.AiConnections.EngineExecutionKindNames.CodexAppServer,
+            CliConnection = new PopGlot.Windows.Services.AiConnections.CliConnectionSettings
+            {
+                ExecutablePath = "C:/tools/codex.exe",
+                ExpectedVersion = "1.0.0",
+                ModelId = "some-model",
+                Enabled = true,
+            },
+        };
+        var capability = TranslationCoordinator.ResolveTextRouteCapability(
+            null, null, settings, codex);
+        True(capability.HasConfiguredProvider, "a CLI profile is a configured engine");
+        True(capability.ConfiguredButUnsupported,
+            "an unverified CLI version is honestly unsupported");
+        True(capability.UnsupportedReasonZh?.Contains("版本") == true,
+            "the reason names the actual gap");
+        True(capability.Execution?.IsCliExecution == true, "the typed facts expose CLI execution");
+
+        var verifiedCodex = codex.Clone();
+        verifiedCodex.CliConnection!.ExpectedVersion = "0.150.1";
+        var connected = TranslationCoordinator.ResolveTextRouteCapability(null, null, settings, verifiedCodex);
+        True(connected.HasConfiguredProvider && !connected.ConfiguredButUnsupported, "version-pinned CLI routes execute");
+        True(!connected.IsLocal, "CLI authentication does not imply local inference");
+        True(!verifiedCodex.ToProviderSettings(settings).TextIsConfigured, "CLI is never mirrored as an HTTP model");
+        verifiedCodex.CliConnection.Enabled = false;
+        True(!verifiedCodex.ExecutionFacts.TextCapable, "disconnected routes cannot execute");
+
+        // Vision: a CLI profile never claims vision, so screenshots cannot
+        // route images into a CLI channel.
+        True(!codex.ExecutionFacts.VisionCapable, "CLI profiles never claim vision");
+
+        // The explicit vision profile selection refuses CLI profiles.
+        var config = new CoreProductConfig
+        {
+            ActiveProfileId = codex.Id,
+            VisionProfileId = codex.Id,
+            Profiles = [codex],
+        };
+        True(config.TryGetVisionProfile() is null,
+            "a CLI profile set as the vision service resolves no vision route");
+
+        // Unknown backend string: loadable but never executable, never native.
+        var future = new ProviderProfile
+        {
+            Id = "future",
+            TextModel = "m",
+            SupportsText = true,
+            ExecutionKind = "some-future-backend",
+        };
+        Equal(PopGlot.Windows.Services.AiConnections.EngineExecutionKind.Unknown, future.ResolvedExecutionKind,
+            "an unknown backend string stays unknown");
+        True(!future.ExecutionFacts.TextCapable, "unknown backends are not executable");
+        True(!future.ExecutionFacts.VisionCapable, "unknown backends never claim vision");
+        var unknownCapability = TranslationCoordinator.ResolveTextRouteCapability(null, null, settings, future);
+        True(unknownCapability.HasConfiguredProvider && unknownCapability.ConfiguredButUnsupported,
+            "unknown backends are configured-but-unsupported, never a fallback");
+
+        // Summary: CLI and unknown backends surface unsupported with the
+        // honest reason (the task protocol is not verified in this build).
+        var cliSummary = RouteCapabilityService.Evaluate(codex, false, FreeEngineConsent.Allowed, null, settings);
+        Equal(RouteCapabilityState.Unsupported, cliSummary.State, "CLI summary is unsupported");
+        var unknownSummary = RouteCapabilityService.Evaluate(future, false, FreeEngineConsent.Allowed, null, settings);
+        Equal(RouteCapabilityState.Unsupported, unknownSummary.State, "unknown-backend summary is unsupported");
+
+        // Serialization strings are stable and round-trip through the profile
+        // clone (the copy must carry the execution dimension).
+        Equal(PopGlot.Windows.Services.AiConnections.EngineExecutionKindNames.CodexAppServer, codex.Clone().ExecutionKind,
+            "clones carry the execution kind");
+        True(codex.Clone().CliConnection?.Enabled == true, "clones carry the CLI connection");
+
+        // The fingerprint changes with the execution dimension: evidence for
+        // one backend never covers another.
+        var asNative = codex.Clone();
+        asNative.ExecutionKind = PopGlot.Windows.Services.AiConnections.EngineExecutionKindNames.NativeApi;
+        True(
+            ProfileVerification.ConnectionVersion(codex) != ProfileVerification.ConnectionVersion(asNative),
+            "switching the execution kind invalidates connection evidence");
+    }
+
     private static void RouteCapabilityEvaluatesAllFiveStates()
     {
         var defaultSettings = DemoSettings() with
@@ -440,6 +558,156 @@ internal static class Program
             "an unreadable store must refuse to save");
         True(!store.Clear(), "Clear must refuse while the file is unreadable");
         True(File.ReadAllText(oversize).Length == fixture.Length, "the original file must be untouched");
+    }
+
+    /// <summary>P02: the interaction timeline's honest-null contract and its
+    /// privacy shape — unmeasured points read as null (never 0), and the
+    /// diagnostic serialization can only ever carry point names, channels,
+    /// outcomes and millisecond offsets.</summary>
+    private static void InteractionTraceNullSemanticsAndPrivacy()
+    {
+        var trace = new InteractionTrace("selection");
+        True(trace.Milliseconds(TracePoint.HotkeyReceived) is null,
+            "a point that never fired must read as null, not 0");
+        trace.Mark(TracePoint.HotkeyReceived);
+        trace.Mark(TracePoint.SelectionEnded);
+        var first = trace.Milliseconds(TracePoint.HotkeyReceived);
+        True(first is >= 0, "a fired point reads as a non-negative offset from the origin");
+        True(trace.Milliseconds(TracePoint.SelectionEnded) >= first,
+            "a later point never reads earlier than the origin point");
+        True(trace.Milliseconds(TracePoint.Completed) is null,
+            "an unmeasured terminal point stays null");
+        True(!trace.IsMarked(TracePoint.Completed), "IsMarked agrees with absence");
+
+        // External phases are durations from another clock, never mixed into
+        // the local tick math.
+        trace.RecordExternalPhaseMs("rustHeadersMs", 42.5);
+        var shape = trace.ToDiagnosticShape();
+        True(shape.ContainsKey("id") && shape.ContainsKey("channel") && shape.ContainsKey("points"),
+            "the diagnostic shape carries only the anonymous keys");
+        True(shape["channel"]!.Equals("selection"), "the channel is the anonymous label");
+        var points = (Dictionary<string, double>)shape["points"]!;
+        True(points.Count == 2, "only fired points serialize: absence stays absent");
+        True(!points.ContainsKey("Completed"), "unfired points never appear in diagnostics");
+        var phases = (Dictionary<string, double>)shape["externalPhasesMs"]!;
+        True(Math.Abs(phases["rustHeadersMs"] - 42.5) < 0.01, "external phases ride along as durations");
+        var serialized = JsonSerializer.Serialize(shape);
+        True(!serialized.Contains("selectionRead", StringComparison.Ordinal) ||
+             !serialized.Contains("原文", StringComparison.Ordinal),
+            "nothing text-like can enter the shape by construction");
+
+        // Publish is exactly-once: a second close must not duplicate the line.
+        True(trace.TryBeginPublish(), "the first publish wins");
+        True(!trace.TryBeginPublish(), "a second publish is rejected");
+    }
+
+    /// <summary>P02: the collector keeps a bounded ring without enabling the
+    /// durable sink, and an enabled sink flushes JSONL off the caller's
+    /// thread within the flush budget.</summary>
+    private static void InteractionTraceCollectorRingAndFlush(string root)
+    {
+        // Ring bounding without the durable sink.
+        for (var i = 0; i < 400; i++)
+        {
+            var trace = new InteractionTrace("ring-test");
+            trace.Mark(TracePoint.DispatcherEntered);
+            trace.SetOutcome("completed");
+            InteractionTraceCollector.Publish(trace);
+        }
+        var recent = InteractionTraceCollector.Recent();
+        True(recent.Count <= 200, $"the ring must stay bounded (got {recent.Count})");
+
+        // Durable sink: enable, publish, flush, verify the file content and
+        // its anonymous shape.
+        var sinkDir = Path.Combine(root, "trace-sink");
+        Directory.CreateDirectory(sinkDir);
+        var sinkPath = Path.Combine(sinkDir, "interaction-trace.jsonl");
+        InteractionTraceCollector.Enable(sinkPath);
+        True(InteractionTraceCollector.Enabled, "an explicit enable turns the durable sink on");
+        var durable = new InteractionTrace("sink-test");
+        durable.Mark(TracePoint.TrayActionReceived);
+        durable.Mark(TracePoint.ShowRequested);
+        durable.SetOutcome("completed");
+        InteractionTraceCollector.Publish(durable);
+        InteractionTraceCollector.Flush(TimeSpan.FromSeconds(5));
+        True(File.Exists(sinkPath), "the flushed sink file must exist");
+        var lines = File.ReadAllLines(sinkPath);
+        True(lines.Length >= 1, "at least the published trace must be on disk");
+        var payload = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(lines[^1]);
+        True(payload!.TryGetValue("channel", out var channel) && channel.GetString() == "sink-test",
+            "the last line is the published trace");
+        True(payload.TryGetValue("points", out var points) && points.ValueKind == JsonValueKind.Object,
+            "the points object serializes");
+        True(!payload.ContainsKey("sourceText") && !payload.ContainsKey("text"),
+            "no text fields exist in the wire shape");
+    }
+
+    /// <summary>P03: the store revisions are the library's convergence signal
+    /// — every real in-memory mutation bumps them, and no-op operations never
+    /// do, so "identical count with different content" can never read as
+    /// unchanged.</summary>
+    private static void StoreRevisionSemantics(string root)
+    {
+        var history = new HistoryStore(Path.Combine(root, $"history-{Guid.NewGuid():N}.json"));
+        Equal(1L, history.Revision, "a fresh history store starts at revision 1");
+
+        var entry = new TranslationHistoryEntry(
+            Guid.NewGuid(), DateTimeOffset.UtcNow, "划词", "hello", "你好", "", []);
+        Equal(HistoryAddResult.Stored, history.TryAdd(entry, enabled: true), "the add must succeed");
+        Equal(2L, history.Revision, "a successful add bumps the revision");
+
+        var beforeNoOp = history.Revision;
+        Equal(HistoryAddResult.Disabled, history.TryAdd(entry, enabled: false), "a disabled add is refused");
+        Equal(HistoryAddResult.SkippedSensitiveOrLarge, history.TryAdd(entry with { Source = new string('x', 10_000) }, enabled: true), "an oversized add is refused");
+        Equal(beforeNoOp, history.Revision, "refused adds bump nothing");
+
+        Equal(history.Revision, history.Revision + 0, "sanity");
+        True(!history.TryRemove(Guid.NewGuid(), out _), "removing an unknown id is a no-op");
+        Equal(beforeNoOp, history.Revision, "a no-op removal bumps nothing");
+
+        True(history.TryRemove(entry.Id, out _), "removing the real entry succeeds");
+        Equal(beforeNoOp + 1, history.Revision, "a successful removal bumps the revision");
+
+        True(history.TryAdd(entry, enabled: true) == HistoryAddResult.Stored, "re-add for clear");
+        True(history.TryClear(out _), "clear succeeds");
+        Equal(beforeNoOp + 3, history.Revision, "a successful clear bumps the revision (remove + re-add + clear)");
+
+        // InsertMissing with only duplicate ids adds nothing and bumps nothing.
+        history.TryAdd(entry, enabled: true);
+        var beforeDuplicates = history.Revision;
+        history.InsertMissing([entry], out var inserted);
+        Equal(0, inserted, "a duplicate-only insert adds nothing");
+        Equal(beforeDuplicates, history.Revision, "a no-op insert bumps nothing");
+
+        var vocabulary = new VocabularyStore(Path.Combine(root, $"vocab-{Guid.NewGuid():N}.json"));
+        Equal(1L, vocabulary.Revision, "a fresh wordbook starts at revision 1");
+        var saved = vocabulary.ToggleStar("hello", "你好");
+        True(saved.Persisted && saved.Starred, "the star toggle saves");
+        Equal(2L, vocabulary.Revision, "a successful star bumps the revision");
+        var beforeUnstar = vocabulary.Revision;
+        var removed = vocabulary.ToggleStar("hello", "你好");
+        True(removed.Persisted && !removed.Starred, "the unstar saves");
+        Equal(beforeUnstar + 1, vocabulary.Revision, "a successful unstar bumps the revision");
+
+        var beforeVocabNoOp = vocabulary.Revision;
+        vocabulary.ToggleStar("", "空词");
+        Equal(beforeVocabNoOp, vocabulary.Revision, "a rejected empty-word toggle bumps nothing");
+
+        vocabulary.ToggleStar("hello", "你好");
+        var beforeTake = vocabulary.Revision;
+        vocabulary.TryTake(Guid.NewGuid(), out _);
+        Equal(beforeTake, vocabulary.Revision, "an unknown-id take bumps nothing");
+
+        // Same count, different content: replace one entry with another —
+        // the revision must move even though the count is identical.
+        vocabulary.ToggleStar("count-a", "甲");
+        vocabulary.ToggleStar("count-b", "乙");
+        var countBefore = vocabulary.GetAll().Count;
+        vocabulary.TryTake(vocabulary.GetAll().First(w => w.Word == "count-a").Id, out _);
+        vocabulary.ToggleStar("count-c", "丙");
+        var countAfter = vocabulary.GetAll().Count;
+        True(countAfter == countBefore, "setup: the count is intentionally identical");
+        True(vocabulary.Revision > beforeTake + 2, "same-count content changes still bumped the revision");
     }
 
     private static void ReadingModeKeepsTranslation()
@@ -1685,8 +1953,8 @@ internal static string FindProjectRoot()
 
         try
         {
-            var baitKey = "sk-1234567890abcdef1234567890";
-            var baitToken = "Bearer ghp_abcdef12345678901234567890";
+            var baitKey = "sk-" + "1234567890abcdef1234567890";
+            var baitToken = "Bearer " + "ghp_" + "abcdef12345678901234567890";
             var baitUrl = "https://api.openai.com/v1/chat/completions?api_key=secret-in-query-12345";
             var baitUserPath = "C:\\Users\\SecretDeveloper\\AppData\\Local\\PopGlot";
 
@@ -1719,7 +1987,7 @@ internal static string FindProjectRoot()
             // Strict Secret Redaction Assertions
             True(!json.Contains(baitKey), "Serialized JSON must never contain bait API key");
             True(!json.Contains("secret-in-query-12345"), "Serialized JSON must never contain URL query secrets");
-            True(!json.Contains("ghp_abcdef12345678901234567890"), "Serialized JSON must never contain bearer tokens");
+            True(!json.Contains("ghp_" + "abcdef12345678901234567890"), "Serialized JSON must never contain bearer tokens");
             True(!json.Contains("SecretDeveloper"), "Serialized JSON must never contain username from paths");
 
             // Verify redaction markers

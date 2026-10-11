@@ -102,6 +102,31 @@ internal static class RouteCapabilityService
                 CanNavigateToAddEngine: true);
         }
 
+        // 1b. P05: CLI-backed engines (Codex / OMP). The subprocess is NOT
+        // local inference, and summary support needs the tool's task
+        // protocol to be actually verified — until the adapter is enabled
+        // for the installed version, summary is honestly unsupported.
+        var executionKind = activeProfile.ResolvedExecutionKind;
+        if (executionKind is AiConnections.EngineExecutionKind.CodexAppServer or
+            AiConnections.EngineExecutionKind.OmpRpc or
+            AiConnections.EngineExecutionKind.Unknown)
+        {
+            if (activeProfile.ExecutionFacts.TextCapable)
+                return new SummaryCapability(
+                    settings.SafeDevMode || !settings.NetworkEnabled ? RouteCapabilityState.Unsupported : RouteCapabilityState.Available,
+                    RouteKind.ValidRemote,
+                    settings.SafeDevMode || !settings.NetworkEnabled ? "离线策略禁止本机工具出网。" : "本机工具文字模型已配置。",
+                    "本机工具", CanNavigateToAddEngine: false);
+            return new SummaryCapability(
+                RouteCapabilityState.Unsupported,
+                RouteKind.UnknownModel,
+                executionKind == AiConnections.EngineExecutionKind.Unknown
+                    ? "该引擎使用当前版本不认识的后端类型，无法整理要点。"
+                    : "本机工具连接的要点整理尚未在当前版本放行，请暂时使用 API 引擎。",
+                "不支持要点",
+                CanNavigateToAddEngine: true);
+        }
+
         // 2. 本地运行时（Ollama / LM Studio）
         var isLocal = activeProfile.IsLocal || activeProfile.ToProviderSettings(settings).TargetsLocalRuntime;
         if (isLocal)

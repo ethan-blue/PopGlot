@@ -1750,28 +1750,7 @@ fn validate_input_capability(
 
 fn build_url(base: &str, endpoint: &str) -> Result<reqwest::Url, ProviderError> {
     validate_endpoint(endpoint)?;
-    let base_url = reqwest::Url::parse(base.trim())
-        .map_err(|_| ProviderError::new(ProviderErrorKind::Configuration, "API Base URL 无效。"))?;
-    // RFC1918/loopback detection must be exact: naive prefixes like `10.`
-    // or `172.` also match lookalike public domains (10.evil.com, 172.32.1.1)
-    // and would send credentials over plaintext HTTP.
-    let local_http = base_url.scheme() == "http" && is_local_base_url(base.trim());
-    if base_url.scheme() != "https" && !local_http {
-        return Err(ProviderError::new(
-            ProviderErrorKind::Configuration,
-            "API Base URL 必须使用 HTTPS；本地或局域网服务允许 HTTP。",
-        ));
-    }
-    if !base_url.username().is_empty()
-        || base_url.password().is_some()
-        || base_url.query().is_some()
-        || base_url.fragment().is_some()
-    {
-        return Err(ProviderError::new(
-            ProviderErrorKind::Configuration,
-            "API Base URL 不得包含凭据、查询参数或片段。",
-        ));
-    }
+    let base_url = parse_valid_base_url(base)?;
     // A relay Base URL may already carry the version prefix that the endpoint
     // template also contains (base ".../v1beta" + endpoint "/v1beta/models/…");
     // joining verbatim would double it. Treat the endpoint as authoritative in
@@ -1806,6 +1785,66 @@ fn build_url(base: &str, endpoint: &str) -> Result<reqwest::Url, ProviderError> 
     reqwest::Url::parse(&joined).map_err(|_| {
         ProviderError::new(ProviderErrorKind::Configuration, "Provider endpoint 无效。")
     })
+}
+
+/// Parses and validates the Base URL with EXACTLY the rules [`build_url`]
+/// enforces, so every consumer agrees on what a usable base looks like.
+fn parse_valid_base_url(base: &str) -> Result<reqwest::Url, ProviderError> {
+    let base_url = reqwest::Url::parse(base.trim())
+        .map_err(|_| ProviderError::new(ProviderErrorKind::Configuration, "API Base URL 无效。"))?;
+    // RFC1918/loopback detection must be exact: naive prefixes like `10.`
+    // or `172.` also match lookalike public domains (10.evil.com, 172.32.1.1)
+    // and would send credentials over plaintext HTTP.
+    let local_http = base_url.scheme() == "http" && is_local_base_url(base.trim());
+    if base_url.scheme() != "https" && !local_http {
+        return Err(ProviderError::new(
+            ProviderErrorKind::Configuration,
+            "API Base URL 必须使用 HTTPS；本地或局域网服务允许 HTTP。",
+        ));
+    }
+    if !base_url.username().is_empty()
+        || base_url.password().is_some()
+        || base_url.query().is_some()
+        || base_url.fragment().is_some()
+    {
+        return Err(ProviderError::new(
+            ProviderErrorKind::Configuration,
+            "API Base URL 不得包含凭据、查询参数或片段。",
+        ));
+    }
+    if base_url.host_str().is_none() {
+        return Err(ProviderError::new(
+            ProviderErrorKind::Configuration,
+            "API Base URL 无效。",
+        ));
+    }
+    Ok(base_url)
+}
+
+/// P04: the normalized transport origin (scheme + host + default-resolved
+/// port) of a Base URL, derived through the SAME validation as
+/// [`build_url`] — never from the raw user string. This is the client-pool
+/// cache key's identity component: two requests to the same origin may share
+/// a pooled client, everything else in the key still has to match.
+///
+/// # Errors
+///
+/// Returns a configuration error when the Base URL fails the shared
+/// validation.
+pub fn transport_origin(base: &str) -> Result<String, ProviderError> {
+    let base_url = parse_valid_base_url(base)?;
+    let host = base_url.host_str().unwrap_or_default();
+    let port = base_url.port().map_or_else(
+        || {
+            if base_url.scheme() == "https" {
+                ":443".to_owned()
+            } else {
+                ":80".to_owned()
+            }
+        },
+        |value| format!(":{value}"),
+    );
+    Ok(format!("{}://{host}{port}", base_url.scheme()))
 }
 
 fn validate_endpoint(endpoint: &str) -> Result<(), ProviderError> {

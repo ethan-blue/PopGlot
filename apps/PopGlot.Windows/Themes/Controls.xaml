@@ -101,6 +101,26 @@
         </Setter>
     </Style>
 
+    <!-- Keyboard cue for the flat large text surfaces (FlatTextBox,
+         ResultTextBox, FlatRichTextBox). The framework draws a
+         FocusVisualStyle ONLY for real keyboard navigation (Tab/arrows) —
+         mouse clicks and programmatic focus never show it — which is exactly
+         the input-source split P01 needs: quiet under the mouse, locatable
+         from the keyboard. The border renders at the element's own bounds
+         (no margin) so no host clipping can cut it, and it draws over the
+         same 1 DIP edge the templates already reserve. -->
+    <Style x:Key="QuietSurfaceFocus">
+        <Setter Property="Control.Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border BorderBrush="{DynamicResource FocusBrush}"
+                            BorderThickness="1" CornerRadius="6"
+                            IsHitTestVisible="False" SnapsToDevicePixels="True" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- ==================== Typography ==================== -->
     <!--
         Deliberately NO Foreground setter here: a style setter would override
@@ -878,12 +898,24 @@
                         <Trigger Property="local:Ui.HasText" Value="False">
                             <Setter TargetName="Placeholder" Property="Visibility" Value="Visible" />
                         </Trigger>
-                        <Trigger Property="IsMouseOver" Value="True">
+                        <!-- Form fields keep the hover/focus border contract.
+                             Large flat surfaces opt out via QuietTextSurface:
+                             the trigger must stay conditioned so an inherited
+                             template can be shared by both families. -->
+                        <MultiTrigger>
+                            <MultiTrigger.Conditions>
+                                <Condition Property="local:Ui.QuietTextSurface" Value="False" />
+                                <Condition Property="IsMouseOver" Value="True" />
+                            </MultiTrigger.Conditions>
                             <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource AccentBorderBrush}" />
-                        </Trigger>
-                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                        </MultiTrigger>
+                        <MultiTrigger>
+                            <MultiTrigger.Conditions>
+                                <Condition Property="local:Ui.QuietTextSurface" Value="False" />
+                                <Condition Property="IsKeyboardFocusWithin" Value="True" />
+                            </MultiTrigger.Conditions>
                             <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-                        </Trigger>
+                        </MultiTrigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
                             <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
@@ -963,9 +995,12 @@
 
     <!-- Borderless variant used inside the floating panel's own cards.
          The 1 DIP border is permanently reserved (transparent at rest) so the
-         inherited template's focus trigger can draw a crisp 1 DIP solid line
-         (FocusBrush) — flat panes had NO keyboard-focus cue at all. Thickness
-         never changes, so focus causes no layout shift; no blur halos. -->
+         element keeps a crisp geometry. It inherits the implicit TextBox
+         template, so the hover/focus border triggers only apply when
+         QuietTextSurface is False — the mouse gets an I-beam and text
+         selection, never a pane-sized accent ring. Keyboard navigation draws
+         QuietSurfaceFocus (a FocusVisualStyle only the framework shows for
+         keyboard-initiated focus), so Tab still locates the field. -->
     <Style x:Key="FlatTextBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="1" />
@@ -974,15 +1009,18 @@
         <!-- Borderless boxes are the multi-line work areas (workbench panes, panel
              body, history detail): text starts at the top-left, never centered. -->
         <Setter Property="VerticalContentAlignment" Value="Top" />
+        <Setter Property="local:Ui.QuietTextSurface" Value="True" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource QuietSurfaceFocus}" />
     </Style>
 
     <!-- Reading surface variant used for translation outputs, readers, and stream viewers.
          Keeps background transparent so the parent reading canvas shows through seamlessly,
          without the IsReadOnly trigger forcing a muted input-box surface.
          Preserves ClearType, smooth text selection, copy support, and placeholder watermarks.
-         Reading surfaces answer to keyboard entry only (no hover ring on large panes):
-         a permanently reserved transparent border carries a 1 DIP FocusBrush line while
-         keyboard focus is inside. -->
+         Quiet under mouse and programmatic focus (P01): no hover ring, no
+         IsKeyboardFocusWithin ring — that property is true for mouse clicks
+         too, which painted whole reading panes. Tab navigation draws the
+         QuietSurfaceFocus focus visual instead. -->
     <Style x:Key="ResultTextBox" TargetType="TextBox">
         <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
         <Setter Property="FontSize" Value="14.5" />
@@ -996,7 +1034,8 @@
         <Setter Property="local:Ui.CornerRadius" Value="{StaticResource ControlRadius}" />
         <Setter Property="Padding" Value="0" />
         <Setter Property="VerticalContentAlignment" Value="Top" />
-        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="local:Ui.QuietTextSurface" Value="True" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource QuietSurfaceFocus}" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
         <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
         <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
@@ -1031,9 +1070,6 @@
                         <Trigger Property="local:Ui.HasText" Value="False">
                             <Setter TargetName="Placeholder" Property="Visibility" Value="Visible" />
                         </Trigger>
-                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource FocusBrush}" />
-                        </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
                         </Trigger>
@@ -1044,9 +1080,10 @@
     </Style>
 
     <!-- Read-only rich text reader (markdown results, help articles, history
-         detail). Same focus contract as ResultTextBox: a permanently reserved
-         transparent 1 DIP border that paints FocusBrush only while keyboard
-         focus is inside — flat at rest, crisp on keyboard entry, no halo. -->
+         detail). Same focus contract as ResultTextBox (P01): quiet under the
+         mouse and programmatic focus — the old IsKeyboardFocusWithin ring
+         fired on every click — while real Tab navigation draws the
+         QuietSurfaceFocus visual. Selection, links, and copy are untouched. -->
     <Style x:Key="FlatRichTextBox" TargetType="RichTextBox">
         <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
         <Setter Property="FontSize" Value="14.5" />
@@ -1060,7 +1097,8 @@
         <Setter Property="Padding" Value="0" />
         <Setter Property="IsReadOnly" Value="True" />
         <Setter Property="IsDocumentEnabled" Value="True" />
-        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="local:Ui.QuietTextSurface" Value="True" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource QuietSurfaceFocus}" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
         <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
         <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
@@ -1081,9 +1119,6 @@
                                       HorizontalScrollBarVisibility="{TemplateBinding HorizontalScrollBarVisibility}" />
                     </Border>
                     <ControlTemplate.Triggers>
-                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource FocusBrush}" />
-                        </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Foreground" Value="{DynamicResource TextDisabledBrush}" />
                         </Trigger>

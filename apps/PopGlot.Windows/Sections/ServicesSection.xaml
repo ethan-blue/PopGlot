@@ -47,6 +47,25 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="CliToolItem" TargetType="ListBoxItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/>
+            <Setter Property="Background" Value="{DynamicResource InputBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border Background="{TemplateBinding Background}" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1" CornerRadius="{DynamicResource CardRadius}">
+                            <ContentPresenter HorizontalAlignment="Stretch"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/><Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/></Trigger>
+                <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource SurfaceHoverBrush}"/></Trigger>
+            </Style.Triggers>
+        </Style>
         <Style x:Key="EditorSectionCard" TargetType="Border">
             <Setter Property="Padding" Value="12" />
             <Setter Property="Margin" Value="0,0,0,8" />
@@ -130,9 +149,54 @@
                         Click="ChooseAnotherProvider_Click" />
                 <Button x:Name="BackToListHeaderButton" Content="← 返回引擎列表" Visibility="Collapsed"
                         Style="{StaticResource GhostButton}" Padding="10,5" Click="BackToServices_Click" />
+                <Button x:Name="ConnectLocalToolHeaderButton" Content="连接本机工具"
+                        Style="{StaticResource GhostButton}" Padding="10,5" Margin="0,0,8,0"
+                        AutomationProperties.Name="连接本机工具"
+                        Click="OpenCliConnections_Click" />
                 <Button x:Name="AddEngineHeaderButton" Content="添加引擎"
                         Style="{StaticResource PrimaryButton}" Padding="16,8" Click="AddProfile_Click" />
             </StackPanel>
+        </Grid>
+
+        <Grid x:Name="CliConnectionsPanel" Grid.Row="1" Visibility="Collapsed">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,8,16">
+                <StackPanel>
+                    <TextBlock Text="连接本机工具" Style="{StaticResource SectionTitle}"/>
+                    <TextBlock FontSize="12" TextWrapping="Wrap" Margin="0,4,0,12" Foreground="{DynamicResource TextSecondaryBrush}"
+                               Text="使用 Codex 或 oh-my-pi 自己管理的登录。翻译内容会发送到工具配置的提供方，并使用该账号的额度。PopGlot 不读取或复制登录凭据。"/>
+                    <WrapPanel Margin="0,0,0,10">
+                        <Button x:Name="DetectCliToolsButton" Content="重新检测" Style="{StaticResource GhostButton}" Click="DetectCliTools_Click"/>
+                        <TextBlock x:Name="CliDetectStatusText" VerticalAlignment="Center" Margin="10,0,0,0" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    </WrapPanel>
+                    <ListBox x:Name="CliToolsListBox" MaxHeight="200" Background="Transparent" BorderThickness="0"
+                             ItemContainerStyle="{StaticResource CliToolItem}" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             SelectionChanged="CliToolsListBox_SelectionChanged" AutomationProperties.Name="选择本机工具">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="10,7">
+                                    <TextBlock Text="{Binding ToolName}" FontWeight="SemiBold"/>
+                                    <TextBlock Text="{Binding EntryPath}" TextWrapping="Wrap" FontSize="11" Margin="0,3,0,0" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <WrapPanel Margin="0,12,0,12">
+                        <Button x:Name="CliConnectButton" Content="连接 / 刷新账号" Style="{StaticResource GhostButton}" Click="CliConnect_Click" IsEnabled="False"/>
+                        <Button x:Name="CliDisconnectButton" Content="断开连接" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Click="CliDisconnect_Click" IsEnabled="False"/>
+                        <Button x:Name="CliCancelButton" Content="取消操作" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Click="CliCancel_Click" Visibility="Collapsed"/>
+                    </WrapPanel>
+                    <TextBlock Text="文字模型" Style="{StaticResource FieldLabel}"/>
+                    <ComboBox x:Name="CliModelCombo" DisplayMemberPath="DisplayName" Style="{StaticResource EditorComboField}"
+                              SelectionChanged="CliModel_SelectionChanged" AutomationProperties.Name="本机工具文字模型"/>
+                    <TextBlock x:Name="CliConnectionStatus" Text="连接后可选择模型并测试翻译。" Margin="0,10,0,10" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    <TextBlock Text="测试只发送 Hello world，并会使用所选模型的少量额度。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,8"/>
+                    <WrapPanel>
+                        <Button x:Name="CliTestButton" Content="测试翻译" Style="{StaticResource GhostButton}" Click="CliTest_Click" IsEnabled="False"/>
+                        <Button x:Name="CliSaveButton" Content="保存连接" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Click="CliSave_Click" IsEnabled="False"/>
+                        <Button x:Name="CliSaveUseButton" Content="保存并使用" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}" Click="CliSave_Click" IsEnabled="False"/>
+                    </WrapPanel>
+                </StackPanel>
+            </ScrollViewer>
         </Grid>
 
         <!-- 路由唯一入口是主窗口底部的快速切换器；设置页不再提供默认路由控件。 -->

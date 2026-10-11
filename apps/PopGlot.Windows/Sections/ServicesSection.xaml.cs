@@ -8,6 +8,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using PopGlot.Windows.Services;
+using PopGlot.Windows.Services.AiConnections;
 
 namespace PopGlot.Windows.Sections;
 
@@ -495,7 +496,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             }
         }
         textDpd.AddValueChanged(TextModelCombo, OnTextModelChanged);
-        Unloaded += (_, _) => textDpd.RemoveValueChanged(TextModelCombo, OnTextModelChanged);
+        Unloaded += (_, _) => { textDpd.RemoveValueChanged(TextModelCombo, OnTextModelChanged); CancelCliOperation(); };
 
         void WatchToggle(System.Windows.Controls.Primitives.ToggleButton toggle)
         {
@@ -713,6 +714,16 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         if (profile is null)
         {
             ShowOverview();
+            return;
+        }
+        if (profile.ExecutionFacts.IsCliExecution)
+        {
+            OpenCliConnections_Click(this, new RoutedEventArgs());
+            var rows = (CliToolsListBox.ItemsSource as IEnumerable<CliToolRow>)?.ToList() ?? [];
+            var selected = rows.FirstOrDefault(r => string.Equals(r.EntryPath, profile.CliConnection?.ExecutablePath, StringComparison.OrdinalIgnoreCase));
+            if (selected is not null) CliToolsListBox.SelectedItem = selected;
+            _cliProfileId = profile.Id;
+            CliConnectionStatus.Text = "点击连接以重新检查此引擎的账号和模型。";
             return;
         }
         _editingProfileId = profile.Id;
@@ -988,6 +999,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private static string? LoadStoredKey(ProviderProfile profile)
     {
+        if (profile.ExecutionFacts.IsCliExecution) return null;
         try
         {
             var profileKey = CredentialStore.LoadApiKey(profile.CredentialTarget);
@@ -1047,6 +1059,12 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     private static (string Text, StatusTone Tone) DescribeProfileState(
         ProviderProfile profile, bool hasKey, string? sessionOutcome)
     {
+        if (profile.ExecutionFacts.IsCliExecution)
+        {
+            if (!ProfileManager.IsTextEngineExecutable(profile)) return ("已断开 · 需重新连接", StatusTone.Warning);
+            var valid = ProfileVerification.EvidenceFingerprint(profile, false) == profile.LastTestFingerprint;
+            return valid && profile.LastTestOutcome == "ok" ? ("上次测试成功", StatusTone.Success) : ("已连接 · 请求待验证", StatusTone.Info);
+        }
         var currentFingerprint = CreateProfileFingerprint(profile, hasKey);
         var persistedMatches = !string.IsNullOrWhiteSpace(profile.LastTestFingerprint) &&
             string.Equals(profile.LastTestFingerprint, currentFingerprint, StringComparison.Ordinal);
@@ -1237,6 +1255,12 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         HideDraftGuard();
         EditorForm.Visibility = Visibility.Collapsed;
         EditorEmpty.Visibility = Visibility.Visible;
+        if (CliConnectionsPanel is not null)
+        {
+            CancelCliOperation();
+            CliConnectionsPanel.Visibility = Visibility.Collapsed;
+            ConnectLocalToolHeaderButton.Visibility = Visibility.Visible;
+        }
         _isAdding = false;
         ClearEditorDirty();
         RefreshProfilesList();
@@ -2144,6 +2168,12 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             return;
         }
+        if (profile.ExecutionFacts.IsCliExecution)
+        {
+            OpenProfileInEditor(profileId);
+            CliConnectionStatus.Text = "请连接后点击测试翻译；只发送测试句 Hello world。";
+            return;
+        }
         var key = LoadStoredKey(profile);
         if (ProfileVerification.IsMaskNotAKey(key))
         {
@@ -2528,6 +2558,16 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         var profile = ProfileManager.Load().Profiles.FirstOrDefault(p => p.Id == profileId);
         if (profile is null)
         {
+            return;
+        }
+        if (profile.ExecutionFacts.IsCliExecution)
+        {
+            OpenCliConnections_Click(this, new RoutedEventArgs());
+            var rows = (CliToolsListBox.ItemsSource as IEnumerable<CliToolRow>)?.ToList() ?? [];
+            var selected = rows.FirstOrDefault(r => string.Equals(r.EntryPath, profile.CliConnection?.ExecutablePath, StringComparison.OrdinalIgnoreCase));
+            if (selected is not null) CliToolsListBox.SelectedItem = selected;
+            _cliProfileId = profile.Id;
+            CliConnectionStatus.Text = "点击连接以重新检查此引擎的账号和模型。";
             return;
         }
         _editingProfileId = profile.Id;

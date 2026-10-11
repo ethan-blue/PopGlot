@@ -331,6 +331,44 @@ pub struct ProviderProfile {
     /// from the URL alone; older configs deserialize as false.
     #[serde(default)]
     pub allow_lan_endpoints: bool,
+    /// P05: the execution dimension (stable strings, never numbers). HTTP
+    /// protocol stays on `provider_type`; this says HOW the route executes.
+    /// Absent on legacy configs = native-api, and legacy fields are never
+    /// reset by the migration. An unknown value stays `Unknown` — loadable
+    /// but never executable, never a silent native-api fallback.
+    #[serde(default)]
+    pub execution_kind: ExecutionKind,
+    /// P05: connection details for CLI-backed profiles. Null for API profiles.
+    #[serde(default)]
+    pub cli_connection: Option<CliConnectionSettings>,
+}
+
+/// P05: how a profile executes. Stable serialization strings; unknown values
+/// deserialize to [`ExecutionKind::Unknown`] and stay unsupported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ExecutionKind {
+    #[serde(rename = "native-api")]
+    #[default]
+    NativeApi,
+    #[serde(rename = "codex-app-server")]
+    CodexAppServer,
+    #[serde(rename = "omp-rpc")]
+    OmpRpc,
+    #[serde(other)]
+    Unknown,
+}
+
+/// P05: CLI connection details. No credentials, no arbitrary arguments, no
+/// environment passthrough — authentication is owned by the tool itself.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CliConnectionSettings {
+    pub executable_path: String,
+    pub expected_version: String,
+    pub model_id: String,
+    pub upstream_provider_id: Option<String>,
+    /// A connection exists only after the user explicitly created it.
+    pub enabled: bool,
 }
 
 impl Default for ProviderProfile {
@@ -359,6 +397,8 @@ impl ProviderProfile {
             credential_target: "PopGlot/provider/openai-default".to_owned(),
             is_local: false,
             allow_lan_endpoints: false,
+            execution_kind: ExecutionKind::NativeApi,
+            cli_connection: None,
         }
     }
 
@@ -381,6 +421,8 @@ impl ProviderProfile {
             credential_target: "PopGlot/provider/deepseek".to_owned(),
             is_local: false,
             allow_lan_endpoints: false,
+            execution_kind: ExecutionKind::NativeApi,
+            cli_connection: None,
         }
     }
 
@@ -403,6 +445,8 @@ impl ProviderProfile {
             credential_target: "PopGlot/provider/ollama-local".to_owned(),
             is_local: true,
             allow_lan_endpoints: false,
+            execution_kind: ExecutionKind::NativeApi,
+            cli_connection: None,
         }
     }
 
@@ -425,6 +469,8 @@ impl ProviderProfile {
             credential_target: "PopGlot/provider/gemini".to_owned(),
             is_local: false,
             allow_lan_endpoints: false,
+            execution_kind: ExecutionKind::NativeApi,
+            cli_connection: None,
         }
     }
 
@@ -447,6 +493,8 @@ impl ProviderProfile {
             credential_target: "PopGlot/provider/claude".to_owned(),
             is_local: false,
             allow_lan_endpoints: false,
+            execution_kind: ExecutionKind::NativeApi,
+            cli_connection: None,
         }
     }
 
@@ -1796,6 +1844,73 @@ mod tests {
             assert_eq!(restored.text, "值是 foo_bar 结束", "spelling: {spelling}");
             assert!(restored.dropped_terms.is_empty() && restored.duplicated_terms.is_empty());
         }
+    }
+
+    #[test]
+    fn execution_kind_migration_keeps_legacy_and_unknown_honest() {
+        // Legacy configs (pre-P05) carry no execution_kind: they load as
+        // native-api with every legacy field intact, and resave does not
+        // reset anything.
+        let legacy_json = r#"{
+            "id": "legacy",
+            "name": "Legacy",
+            "api_base_url": "https://api.example.com/v1",
+            "text_model": "m1",
+            "credential_target": "PopGlot/provider/legacy"
+        }"#;
+        let legacy: ProviderProfile =
+            serde_json::from_str(legacy_json).expect("legacy profile loads");
+        assert_eq!(legacy.execution_kind, ExecutionKind::NativeApi);
+        assert!(legacy.cli_connection.is_none());
+        assert_eq!(legacy.text_model, "m1");
+
+        // Unknown values stay Unknown — loadable, never executable, never a
+        // silent native-api fallback.
+        let future_json = r#"{
+            "id": "future",
+            "name": "Future",
+            "api_base_url": "https://api.example.com/v1",
+            "execution_kind": "some-future-backend"
+        }"#;
+        let future: ProviderProfile =
+            serde_json::from_str(future_json).expect("future profile loads");
+        assert_eq!(future.execution_kind, ExecutionKind::Unknown);
+
+        // Known kinds round-trip through the stable strings.
+        for (kind, text) in [
+            (ExecutionKind::NativeApi, "\"native-api\""),
+            (ExecutionKind::CodexAppServer, "\"codex-app-server\""),
+            (ExecutionKind::OmpRpc, "\"omp-rpc\""),
+        ] {
+            let json = format!(
+                "{{\"id\":\"x\",\"execution_kind\":{text},\"api_base_url\":\"https://api.example.com/v1\"}}"
+            );
+            let parsed: ProviderProfile = serde_json::from_str(&json).expect("kind round-trip");
+            assert_eq!(parsed.execution_kind, kind);
+        }
+
+        // CLI connection details round-trip without touching HTTP fields.
+        let cli_json = r#"{
+            "id": "codex",
+            "name": "Codex",
+            "api_base_url": "https://placeholder.invalid",
+            "execution_kind": "codex-app-server",
+            "cli_connection": {
+                "executable_path": "C:/tools/codex.exe",
+                "expected_version": "1.2.3",
+                "model_id": "gpt-x",
+                "enabled": true
+            }
+        }"#;
+        let cli: ProviderProfile = serde_json::from_str(cli_json).expect("cli profile loads");
+        let connection = cli.cli_connection.as_ref().expect("cli connection");
+        assert_eq!(connection.executable_path, "C:/tools/codex.exe");
+        assert_eq!(connection.expected_version, "1.2.3");
+        assert_eq!(connection.model_id, "gpt-x");
+        assert!(connection.enabled);
+        assert_eq!(connection.upstream_provider_id, None);
+        let resaved = serde_json::to_string(&cli).expect("cli profile saves");
+        assert!(resaved.contains("\"codex-app-server\""));
     }
 
     #[test]

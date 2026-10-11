@@ -537,6 +537,12 @@ public partial class QuickSearchWindow : Window
         _cts = cts;
         var token = cts.Token;
 
+        // P02: one trace per query interaction. The origin is the dispatcher
+        // entry that begins the query (the user pressed Enter), and the
+        // session's terminal close publishes it with the full timeline.
+        var queryTrace = new Services.InteractionTrace("quicksearch-query");
+        queryTrace.Mark(Services.TracePoint.DispatcherEntered);
+
         _state.StartNewSearch(text);
         var epoch = _state.CurrentEpoch;
         SyncUiWithState();
@@ -557,6 +563,14 @@ public partial class QuickSearchWindow : Window
         var progress = new Progress<TranslationStreamUpdate>(update =>
         {
             if (_isClosed) return;
+            if (update.Kind == TranslationStreamUpdateKind.Delta &&
+                !string.IsNullOrEmpty(update.Delta) &&
+                queryTrace is not null)
+            {
+                queryTrace.Mark(Services.TracePoint.FirstVisibleDeltaApplied);
+                Services.InteractionTraceWindow.MarkAtNextRenderCallback(
+                    queryTrace, Services.TracePoint.FirstDeltaRenderCallback);
+            }
             if (_state.OnStreamUpdate(update, SearchBox.Text.Trim()))
             {
                 SyncUiWithState();
@@ -588,7 +602,8 @@ public partial class QuickSearchWindow : Window
                     });
                 },
                 progress: progress,
-                epoch: epoch);
+                epoch: epoch,
+                trace: queryTrace);
 
             if (_isClosed || token.IsCancellationRequested) return;
 

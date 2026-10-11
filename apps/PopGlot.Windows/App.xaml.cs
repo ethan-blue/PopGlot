@@ -133,6 +133,244 @@ public partial class App : Application
         Shutdown(failure is null ? 0 : 1);
     }
 
+    // ================= Wake measurement (P02) =================
+
+    private sealed record WakeMeasureArgs(
+        string MarkerPath, string DataDir, string Scenario, int DelaySeconds, int Samples);
+
+    private static WakeMeasureArgs? ReadWakeMeasureArgs(string[] args)
+    {
+        var markerPath = (string?)null;
+        var dataDir = (string?)null;
+        var scenario = "warm-wake";
+        var delaySeconds = 1;
+        var samples = 30;
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (!args[i].Equals("--measure-wake", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            if (i + 1 >= args.Length)
+            {
+                return null;
+            }
+            markerPath = args[i + 1];
+            if (i + 2 < args.Length && !args[i + 2].StartsWith("--", StringComparison.Ordinal))
+            {
+                dataDir = args[i + 2];
+            }
+            for (var j = i + 2; j < args.Length; j++)
+            {
+                if (args[j].Equals("--scenario", StringComparison.OrdinalIgnoreCase) && j + 1 < args.Length)
+                {
+                    scenario = args[j + 1];
+                }
+                else if (args[j].Equals("--delay", StringComparison.OrdinalIgnoreCase) && j + 1 < args.Length &&
+                         int.TryParse(args[j + 1], out var parsedDelay))
+                {
+                    delaySeconds = Math.Clamp(parsedDelay, 0, 3600);
+                }
+                else if (args[j].Equals("--samples", StringComparison.OrdinalIgnoreCase) && j + 1 < args.Length &&
+                         int.TryParse(args[j + 1], out var parsedSamples))
+                {
+                    samples = Math.Clamp(parsedSamples, 1, 200);
+                }
+            }
+            break;
+        }
+        if (markerPath is null)
+        {
+            return null;
+        }
+        if (scenario is not ("first-open" or "warm-wake"))
+        {
+            return null;
+        }
+        return new WakeMeasureArgs(
+            markerPath,
+            dataDir ?? Path.Combine(Path.GetTempPath(), $"popglot-wake-{Guid.NewGuid():N}"),
+            scenario,
+            delaySeconds,
+            samples);
+    }
+
+    /// <summary>
+    /// Drives the REAL wake chain against an isolated data root: the same
+    /// ShowMainWindow / Close-to-tray paths the tray and hotkeys use, timed by
+    /// the same InteractionTrace the production entries emit. The scenario
+    /// actions are scheduled in-instance — no synthetic hotkeys, no clipboard
+    /// access, no touching of user processes or credentials.
+    /// </summary>
+    private async Task RunWakeMeasurementAsync(WakeMeasureArgs args)
+    {
+        var failures = new List<string>();
+        var samples = new List<Dictionary<string, object?>>();
+        var hotkeysRegistered = false;
+        try
+        {
+            StoragePaths.RootOverride = args.DataDir;
+            CredentialStore.OverrideVault = new Services.MemoryCredentialVault();
+            _shellSettings = ShellSettingsStore.Load();
+            // The wake loop closes the main window between samples; only the
+            // close-to-tray variant is a wake (the other variant exits).
+            if (!_shellSettings.CloseMainWindowToTray)
+            {
+                _shellSettings = _shellSettings with { CloseMainWindowToTray = true };
+                ShellSettingsStore.Save(_shellSettings);
+            }
+            ThemeService.Apply(_shellSettings.Theme);
+            CoreBridge.Initialize();
+            TtsService.CleanupStaleTempFiles();
+            _hotkeyOwner = CreateHotkeyOwnerWindow();
+            _hotkeys = new HotkeyService(_hotkeyOwner);
+            _hotkeys.Pressed += (_, action) => HandleHotkey(action);
+            hotkeysRegistered = _hotkeys.TryRegisterAll(_shellSettings.Hotkeys, out _);
+            CreateTrayIcon();
+            try
+            {
+                Directory.CreateDirectory(StoragePaths.Logs);
+                InteractionTraceCollector.Enable(
+                    Path.Combine(StoragePaths.Logs, "interaction-trace.jsonl"));
+            }
+            catch (Exception enableException) when (enableException is IOException or UnauthorizedAccessException)
+            {
+                failures.Add("trace-sink-disabled");
+            }
+
+            if (args.Scenario == "first-open")
+            {
+                // One first-use sample per process: the OS file cache may be
+                // warm from a previous launch, so this is "process first
+                // open", never reported as a cold disk start.
+                var trace = new InteractionTrace("measure-first-open");
+                trace.Mark(TracePoint.DispatcherEntered);
+                ShowMainWindow(trace);
+                var (ok, failure) = await WaitForTracePointAsync(trace, TracePoint.InteractiveReady, TimeSpan.FromSeconds(15));
+                if (!ok)
+                {
+                    failures.Add(failure);
+                }
+                var constructionMs = TraceSpanMs(trace, TracePoint.WindowConstructionStarted, TracePoint.WindowConstructionEnded);
+                samples.Add(SampleShape(trace, constructionMs, memoryAfterHideBytes: null));
+            }
+            else
+            {
+                // Warm the window once, untimed, then alternate the REAL
+                // close-to-tray path with the REAL wake path.
+                ShowMainWindow(null);
+                await Task.Delay(TimeSpan.FromSeconds(0.5));
+                for (var index = 0; index < args.Samples; index++)
+                {
+                    _mainWindow!.Close(); // close-to-tray: Hide + working-set policy
+                    await Task.Delay(TimeSpan.FromMilliseconds(200));
+                    long? wsAfterHide = null;
+                    try
+                    {
+                        using var self = System.Diagnostics.Process.GetCurrentProcess();
+                        self.Refresh();
+                        wsAfterHide = self.WorkingSet64;
+                    }
+                    catch
+                    {
+                        // Memory sampling is best effort; the sample survives.
+                    }
+
+                    if (args.DelaySeconds > 0)
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(args.DelaySeconds));
+                    }
+
+                    var trace = new InteractionTrace("measure-warm-wake");
+                    trace.Mark(TracePoint.DispatcherEntered);
+                    ShowMainWindow(trace);
+                    var (ok, failure) = await WaitForTracePointAsync(trace, TracePoint.InteractiveReady, TimeSpan.FromSeconds(15));
+                    if (!ok)
+                    {
+                        failures.Add($"sample {index}: {failure}");
+                    }
+                    long? wsAfterWake = null;
+                    long? privateAfterWake = null;
+                    try
+                    {
+                        using var self = System.Diagnostics.Process.GetCurrentProcess();
+                        self.Refresh();
+                        wsAfterWake = self.WorkingSet64;
+                        privateAfterWake = self.PrivateMemorySize64;
+                    }
+                    catch
+                    {
+                    }
+                    samples.Add(SampleShape(trace, constructionMs: null, wsAfterHide, wsAfterWake, privateAfterWake));
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            failures.Add($"{exception.GetType().Name}: {exception.Message}");
+        }
+
+        try
+        {
+            var payload = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                scenario = args.Scenario,
+                delaySeconds = args.DelaySeconds,
+                sampleCount = samples.Count,
+                requestedSamples = args.Samples,
+                hotkeysRegistered,
+                trimOnHide = TrimOnHideEnabled,
+                failures,
+                samples,
+                startedUtc = DateTimeOffset.UtcNow,
+                version = typeof(App).Assembly.GetName().Version?.ToString(),
+            });
+            File.WriteAllText(args.MarkerPath, payload);
+        }
+        catch
+        {
+            // A marker write failure must not keep the process alive.
+        }
+        InteractionTraceCollector.Flush(TimeSpan.FromSeconds(2));
+        Shutdown(failures.Count == 0 ? 0 : 1);
+        return;
+
+        static async Task<(bool Ok, string Failure)> WaitForTracePointAsync(
+            InteractionTrace trace, TracePoint point, TimeSpan budget)
+        {
+            var deadline = Environment.TickCount64 + (long)budget.TotalMilliseconds;
+            while (!trace.IsMarked(point))
+            {
+                if (Environment.TickCount64 > deadline)
+                {
+                    return (false, $"timeout waiting for {point}");
+                }
+                await Task.Delay(10);
+            }
+            return (true, string.Empty);
+        }
+
+        static double? TraceSpanMs(InteractionTrace trace, TracePoint from, TracePoint to) =>
+            trace.Milliseconds(from) is { } begin && trace.Milliseconds(to) is { } end
+                ? Math.Max(0, end - begin)
+                : null;
+
+        static Dictionary<string, object?> SampleShape(
+            InteractionTrace trace,
+            double? constructionMs,
+            long? memoryAfterHideBytes = null,
+            long? workingSetAfterWakeBytes = null,
+            long? privateBytesAfterWakeBytes = null) => new()
+        {
+            ["showToInteractiveMs"] = TraceSpanMs(trace, TracePoint.ShowRequested, TracePoint.InteractiveReady),
+            ["showToRenderCallbackMs"] = TraceSpanMs(trace, TracePoint.ShowRequested, TracePoint.FirstRenderCallback),
+            ["constructionMs"] = constructionMs,
+            ["memoryAfterHideBytes"] = memoryAfterHideBytes,
+            ["workingSetAfterWakeBytes"] = workingSetAfterWakeBytes,
+            ["privateBytesAfterWakeBytes"] = privateBytesAfterWakeBytes,
+        };
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -146,6 +384,20 @@ public partial class App : Application
         if (smoke is not null)
         {
             RunStartupSmoke(smoke.Value.markerPath, smoke.Value.dataDir);
+            return;
+        }
+
+        // ---- Wake measurement mode (P02): `--measure-wake <marker> [dataDir]
+        //      [--scenario first-open|warm-wake] [--delay <sec>] [--samples <n>]` ----
+        // Drives the REAL first-use / wake paths in-instance (the production
+        // ShowMainWindow + Close-to-tray chain, the same InteractionTrace the
+        // production entries use), against an isolated data directory, and
+        // records every sample to the marker file. No synthetic hotkeys, no
+        // clipboard, no user processes, no network model calls.
+        var wake = ReadWakeMeasureArgs(e.Args);
+        if (wake is not null)
+        {
+            _ = RunWakeMeasurementAsync(wake);
             return;
         }
 
@@ -166,6 +418,26 @@ public partial class App : Application
         {
             StoragePaths.RootOverride = dataRootOverride;
             CredentialStore.OverrideVault = new Services.MemoryCredentialVault();
+        }
+
+        // P02: durable interaction-trace recording is an explicit opt-in
+        // (measurement harness / debugging), never a default. The JSONL holds
+        // only point names, millisecond offsets, channels and outcomes —
+        // never text, addresses, headers or account data — and is written by
+        // a background worker, never on the hotkey/UI critical path.
+        if (Environment.GetEnvironmentVariable("POPGLOT_TRACE") == "1")
+        {
+            try
+            {
+                Directory.CreateDirectory(StoragePaths.Logs);
+                InteractionTraceCollector.Enable(
+                    Path.Combine(StoragePaths.Logs, "interaction-trace.jsonl"));
+            }
+            catch (Exception traceEnableException) when (traceEnableException is IOException or UnauthorizedAccessException)
+            {
+                // A disabled sink is a silent degradation: the in-memory ring
+                // still serves diagnostics.
+            }
         }
 
         // C06 crash barriers: classified, recoverable exceptions are logged
@@ -715,12 +987,13 @@ public partial class App : Application
     };
 
     /// <summary>Builds the main window on first use, not at startup.</summary>
-    private MainWindow EnsureMainWindow()
+    private MainWindow EnsureMainWindow(InteractionTrace? trace = null)
     {
         if (_mainWindow is not null)
         {
             return _mainWindow;
         }
+        trace?.Mark(TracePoint.WindowConstructionStarted);
         _mainWindow = new MainWindow(_shellSettings, _history, _vocabulary)
         {
             OpenSettings = () => ShowSettings(),
@@ -735,6 +1008,7 @@ public partial class App : Application
         {
             _mainWindow.ShowShortcutConflict(_hotkeyFailure.ActiveDetail!);
         }
+        trace?.Mark(TracePoint.WindowConstructionEnded);
         return _mainWindow;
     }
 
@@ -837,6 +1111,17 @@ public partial class App : Application
         }
     }
 
+    /// <summary>
+    /// P02: a tray-originated interaction. The origin is the tray action
+    /// itself, on the same monotonic clock the rest of the timeline uses.
+    /// </summary>
+    private static InteractionTrace TrayActionTrace(string channel)
+    {
+        var trace = new InteractionTrace(channel);
+        trace.Mark(TracePoint.TrayActionReceived);
+        return trace;
+    }
+
     /// <summary>Brings the window up when a second launch asks for it.</summary>
     private void StartShowWindowListener()
     {
@@ -861,7 +1146,11 @@ public partial class App : Application
                 {
                     return;
                 }
-                Dispatcher.BeginInvoke(ShowMainWindow);
+                // P02: the second-instance signal is a wake entry too; the
+                // dispatcher entry point below is where UI work begins.
+                var trace = new InteractionTrace("wake-main");
+                trace.Mark(TracePoint.DispatcherEntered);
+                Dispatcher.BeginInvoke(() => ShowMainWindow(trace));
             }
         }, CancellationToken.None);
     }
@@ -874,13 +1163,24 @@ public partial class App : Application
         {
             return;
         }
+        // P02: the timeline origin is the user's input reaching the app —
+        // the hotkey callback — never the moment a request is sent.
+        var trace = new InteractionTrace(action switch
+        {
+            HotkeyAction.TranslateSelection => "selection",
+            HotkeyAction.CaptureScreen => "screenshot",
+            HotkeyAction.ShowWindow => "wake-main",
+            HotkeyAction.QuickSearch => "quicksearch",
+            _ => "hotkey",
+        });
+        trace.Mark(TracePoint.HotkeyReceived);
         switch (action)
         {
             case HotkeyAction.TranslateSelection:
-                _ = BeginSelectionTranslationAsync();
+                _ = BeginSelectionTranslationAsync(trace);
                 break;
             case HotkeyAction.CaptureScreen:
-                BeginCapture();
+                BeginCapture(trace: trace);
                 break;
             case HotkeyAction.ClosePanel:
                 // A05: the close hotkey is a user intent — cancel the
@@ -889,10 +1189,10 @@ public partial class App : Application
                 CloseActiveOverlay();
                 break;
             case HotkeyAction.ShowWindow:
-                ShowMainWindow();
+                ShowMainWindow(trace);
                 break;
             case HotkeyAction.QuickSearch:
-                ShowQuickSearch();
+                ShowQuickSearch(trace);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(action));
@@ -935,8 +1235,10 @@ public partial class App : Application
     internal static async Task<SelectionPrereadResult> ReadSelectionPrereadAsync(
         ClipboardSelectionService selectionService,
         nint targetWindow,
-        TimeSpan? timeoutOverride = null)
+        TimeSpan? timeoutOverride = null,
+        InteractionTrace? trace = null)
     {
+        trace?.Mark(TracePoint.SelectionStarted);
         using var bounded = new CancellationTokenSource(timeoutOverride ?? SelectionPrereadTimeout);
         var readTask = selectionService.ReadSelectionAsync(bounded.Token, targetWindow);
         var completed = await Task.WhenAny(readTask, Task.Delay(Timeout.InfiniteTimeSpan, bounded.Token));
@@ -950,22 +1252,26 @@ public partial class App : Application
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
+            trace?.Mark(TracePoint.SelectionEnded);
             return new SelectionPrereadResult(null, null, TimedOut: true);
         }
         try
         {
-            return new SelectionPrereadResult(await readTask, null, TimedOut: false);
+            var result = new SelectionPrereadResult(await readTask, null, TimedOut: false);
+            trace?.Mark(TracePoint.SelectionEnded);
+            return result;
         }
         catch (Exception exception)
         {
+            trace?.Mark(TracePoint.SelectionEnded);
             return new SelectionPrereadResult(null, exception, TimedOut: false);
         }
     }
 
-    private async Task BeginSelectionTranslationAsync()
+    private async Task BeginSelectionTranslationAsync(InteractionTrace? trace = null)
     {
         var targetWindow = NativeMethods.GetForegroundWindow();
-        var outcome = await ReadSelectionPrereadAsync(_selectionService, targetWindow);
+        var outcome = await ReadSelectionPrereadAsync(_selectionService, targetWindow, trace: trace);
         if (outcome.TimedOut)
         {
             // Bounded pre-read: recoverable — land in quick search with an
@@ -974,14 +1280,14 @@ public partial class App : Application
             // first-show's queued Loaded sync re-applies it, and the next
             // real query clears it — a raw footer write here would lose the
             // race against Loaded on a freshly created window.
-            ShowQuickSearch();
+            ShowQuickSearch(trace);
             _activeQuickSearch?.PostPendingNotice(SelectionPrereadTimeoutNotice);
             return;
         }
         if (outcome.Failure is InvalidOperationException noSelection && IsNoSelectionException(noSelection))
         {
             // 空选区：静默降级极速查词，不加打扰。
-            ShowQuickSearch();
+            ShowQuickSearch(trace);
             return;
         }
         if (outcome.Failure is OperationCanceledException)
@@ -990,22 +1296,32 @@ public partial class App : Application
         }
         if (outcome.Failure is not null)
         {
-            var errorPanel = CreatePanel(CursorAnchorPixels());
+            var errorPanel = CreatePanel(CursorAnchorPixels(), trace);
+            trace?.Mark(TracePoint.ShowRequested);
             errorPanel.Show();
             errorPanel.ShowImmediateFailure(outcome.Failure.Message);
+            if (trace is not null)
+            {
+                trace.SetOutcome("failed");
+                InteractionTraceWindow.MarkNextRenderCallback(trace);
+                InteractionTraceWindow.MarkInteractiveReadyAfterShow(
+                    trace, errorPanel, onReady: static t => InteractionTraceCollector.Publish(t));
+            }
             return;
         }
         if (string.IsNullOrWhiteSpace(outcome.Text))
         {
-            ShowQuickSearch();
+            ShowQuickSearch(trace);
             return;
         }
 
-        var panel = CreatePanel(CursorAnchorPixels());
+        var panel = CreatePanel(CursorAnchorPixels(), trace);
+        trace?.Mark(TracePoint.ShowRequested);
         panel.Show();
         await panel.StartSelectionAsync(
             new ClipboardSelectionService(new PreloadedSelectionClipboardAdapter(outcome.Text)),
-            targetWindow);
+            targetWindow,
+            trace);
     }
 
     internal static bool IsNoSelectionException(InvalidOperationException? ex) =>
@@ -1037,7 +1353,7 @@ public partial class App : Application
         }
     }
 
-    private void BeginCapture(bool ocrOnly = false)
+    private void BeginCapture(bool ocrOnly = false, InteractionTrace? trace = null)
     {
         Dispatcher.Invoke(() =>
         {
@@ -1059,21 +1375,23 @@ public partial class App : Application
             };
             overlay.Captured += async (_, capture) =>
             {
-                var panel = CreatePanel(capture.PixelBounds);
+                var panel = CreatePanel(capture.PixelBounds, trace);
                 panel.Show();
+                trace?.Mark(TracePoint.ShowRequested);
                 if (capture.IsOcrOnly)
                 {
-                    await panel.StartScreenshotOcrAsync(capture.Png);
+                    await panel.StartScreenshotOcrAsync(capture.Png, trace);
                 }
                 else
                 {
-                    await panel.StartScreenshotAsync(capture.Png);
+                    await panel.StartScreenshotAsync(capture.Png, trace);
                 }
             };
             overlay.Failed += (_, message) =>
             {
-                var panel = CreatePanel(ScreenGeometry.WorkAreaForPixel(ScreenGeometry.CursorPixels()));
+                var panel = CreatePanel(ScreenGeometry.WorkAreaForPixel(ScreenGeometry.CursorPixels()), trace);
                 panel.Show();
+                trace?.Mark(TracePoint.ShowRequested);
                 panel.ShowImmediateFailure(message);
             };
             overlay.Show();
@@ -1081,10 +1399,11 @@ public partial class App : Application
         });
     }
 
-    private TranslationPanelWindow CreatePanel(Rect anchorPixels)
+    private TranslationPanelWindow CreatePanel(Rect anchorPixels, InteractionTrace? trace = null)
     {
         DestroyActivePanel();
         _panelLastUsedUtc = DateTime.UtcNow;
+        trace?.Mark(TracePoint.WindowConstructionStarted);
         var panel = new TranslationPanelWindow(
             anchorPixels,
             _history,
@@ -1092,6 +1411,7 @@ public partial class App : Application
             () => ShowSettings(),
             OpenInMainWindow,
             _vocabulary);
+        trace?.Mark(TracePoint.WindowConstructionEnded);
         _activePanel = panel;
         panel.Closed += (_, _) =>
         {
@@ -1117,7 +1437,7 @@ public partial class App : Application
         _mainWindow?.FocusTranslate(source, targetLang, sourceLang, translation, sessionState);
     }
 
-    private void ShowQuickSearch()
+    private void ShowQuickSearch(InteractionTrace? trace = null)
     {
         Dispatcher.Invoke(() =>
         {
@@ -1125,22 +1445,39 @@ public partial class App : Application
             {
                 // C05: the instance may be hidden (X/Esc/focus-loss); Show
                 // restores it with its previous session intact.
+                trace?.Mark(TracePoint.ShowRequested);
                 _activeQuickSearch.Show();
 
                 _activeQuickSearch.Activate();
                 _activeQuickSearch.Focus();
                 _quickSearchLastUsedUtc = DateTime.UtcNow;
+                if (trace is not null)
+                {
+                    InteractionTraceWindow.MarkNextRenderCallback(trace);
+                    InteractionTraceWindow.MarkInteractiveReadyAfterShow(
+                        trace, _activeQuickSearch, onReady: static t => InteractionTraceCollector.Publish(t));
+                }
                 return;
             }
             _quickSearchLastUsedUtc = DateTime.UtcNow;
             // The settings callback routes through App's production path
             // (panel/overlay teardown, owner, first-show convergence); without
             // it QuickSearch falls back to a bare SettingsWindow.
+            trace?.Mark(TracePoint.WindowConstructionStarted);
             _activeQuickSearch = new QuickSearchWindow(_history, _vocabulary, () => ShowSettings());
+            trace?.Mark(TracePoint.WindowConstructionEnded);
             _activeQuickSearch.Closed += (_, _) => _activeQuickSearch = null;
+            trace?.Mark(TracePoint.ShowRequested);
             _activeQuickSearch.Show();
             _activeQuickSearch.Activate();
             _activeQuickSearch.Focus();
+            if (trace is not null)
+            {
+                InteractionTraceWindow.ObserveFirstLoad(trace, _activeQuickSearch);
+                InteractionTraceWindow.MarkNextRenderCallback(trace);
+                InteractionTraceWindow.MarkInteractiveReadyAfterShow(
+                    trace, _activeQuickSearch, onReady: static t => InteractionTraceCollector.Publish(t));
+            }
         });
     }
 
@@ -1156,9 +1493,13 @@ public partial class App : Application
             }
             panel.Hide();
         }
-        // 面板隐藏后把截图/渲染留下的临时页换出，避免常驻内存随使用次数
-        // 只增不减。真实分配不受影响，需要时系统会自动调页回来。
-        TrimWorkingSet();
+        // P03: hide-time working-set trim stays ON by default — the A/B on
+        // the reference machine found no wake penalty and a ~10x lower
+        // resting footprint. POPGLOT_TRIM_ON_HIDE=0 disables it for A/B.
+        if (TrimOnHideEnabled)
+        {
+            TrimWorkingSet();
+        }
     }
 
     /// <summary>
@@ -1401,15 +1742,15 @@ public partial class App : Application
             ShowImageMargin = false,
             ShowItemToolTips = true,
         };
-        _trayMenu.Items.Add("打开", null, (_, _) => ShowMainWindow());
-        var quickSearchItem = _trayMenu.Items.Add("查词", null, (_, _) => ShowQuickSearch());
+        _trayMenu.Items.Add("打开", null, (_, _) => ShowMainWindow(TrayActionTrace("wake-main")));
+        var quickSearchItem = _trayMenu.Items.Add("查词", null, (_, _) => ShowQuickSearch(TrayActionTrace("quicksearch")));
         _trayMenu.Items.Add("最近翻译", null, (_, _) => RestoreRecentSurface());
         var sessionsSubMenu = new Forms.ToolStripMenuItem("暂存");
         _trayMenu.Items.Add(sessionsSubMenu);
         _trayMenu.Items.Add(new Forms.ToolStripSeparator());
-        var selectionItem = _trayMenu.Items.Add("划词翻译", null, (_, _) => _ = BeginSelectionTranslationAsync());
-        var captureItem = _trayMenu.Items.Add("截图翻译", null, (_, _) => BeginCapture(ocrOnly: false));
-        var ocrItem = _trayMenu.Items.Add("截图取字", null, (_, _) => BeginCapture(ocrOnly: true));
+        var selectionItem = _trayMenu.Items.Add("划词翻译", null, (_, _) => _ = BeginSelectionTranslationAsync(TrayActionTrace("selection")));
+        var captureItem = _trayMenu.Items.Add("截图翻译", null, (_, _) => BeginCapture(ocrOnly: false, trace: TrayActionTrace("screenshot")));
+        var ocrItem = _trayMenu.Items.Add("截图取字", null, (_, _) => BeginCapture(ocrOnly: true, trace: TrayActionTrace("screenshot-ocr")));
         _trayMenu.Items.Add(new Forms.ToolStripSeparator());
         _trayMenu.Items.Add("设置", null, (_, _) => ShowSettings());
         _trayMenu.Items.Add("退出", null, (_, _) => ExitApplication());
@@ -1470,7 +1811,7 @@ public partial class App : Application
             ContextMenuStrip = _trayMenu,
             Visible = true,
         };
-        _trayIcon.DoubleClick += (_, _) => ShowMainWindow();
+        _trayIcon.DoubleClick += (_, _) => ShowMainWindow(TrayActionTrace("wake-main"));
         UpdateTrayTooltip();
     }
 
@@ -1543,13 +1884,13 @@ public partial class App : Application
         _trayIcon.ShowBalloonTip(5000);
     }
 
-    private void ShowMainWindow()
+    private void ShowMainWindow(InteractionTrace? trace = null)
     {
-        var mainWindow = EnsureMainWindow();
+        var mainWindow = EnsureMainWindow(trace);
         // One-shot first-show convergence: a small work area must not push the
         // caption/footer off screen. Later resizes/maximizes are never touched.
         WindowPositioner.ConvergeFirstShow(mainWindow);
-        mainWindow.ReloadHistory();
+        trace?.Mark(TracePoint.ShowRequested);
         mainWindow.Show();
         if (mainWindow.WindowState == WindowState.Minimized)
         {
@@ -1557,6 +1898,21 @@ public partial class App : Application
         }
         mainWindow.Activate();
         mainWindow.Focus();
+        // P03: history/vocabulary no longer refresh BEFORE the show — the
+        // window paints with its existing rows first and the (revision-gated)
+        // refresh lands right after the frame is interactive.
+        mainWindow.RequestLibraryRefreshAfterFirstFrame();
+        if (trace is not null)
+        {
+            // P02: logical lifecycle + render OPPORTUNITY + interactive-ready.
+            // None of these claim a DWM frame was presented. Publishing waits
+            // for the async marks (render callback / interactive-ready), so a
+            // wake trace lands in the collector only once it is complete.
+            InteractionTraceWindow.ObserveFirstLoad(trace, mainWindow);
+            InteractionTraceWindow.MarkNextRenderCallback(trace);
+            InteractionTraceWindow.MarkInteractiveReadyAfterShow(
+                trace, mainWindow, onReady: static t => InteractionTraceCollector.Publish(t));
+        }
     }
 
     private async void ExitApplication()
@@ -1614,6 +1970,7 @@ public partial class App : Application
                 _vocabulary.Flush();
                 _history.Flush();
                 DiagnosticsLog.Flush();
+                InteractionTraceCollector.Flush(TimeSpan.FromSeconds(2));
             });
             _storesFlushedForExit = true;
         }
@@ -1633,6 +1990,7 @@ public partial class App : Application
             _vocabulary.Flush();
             _history.Flush();
             DiagnosticsLog.Flush();
+            InteractionTraceCollector.Flush(TimeSpan.FromSeconds(1));
         }
         _signalListener?.Cancel();
         _signalListener?.Dispose();
@@ -1686,6 +2044,18 @@ public partial class App : Application
     /// 使用的页换出；常驻托盘、面板关闭后调用可显著降低任务管理器里的
     /// 内存读数，需要时系统会自动把页调回。
     /// </summary>
+    /// <summary>
+    /// P03 A/B experiment gate. The measured hypothesis "hide-time working
+    /// set trimming causes slow re-shows" was NOT supported on the reference
+    /// machine (wake P95 within noise at 1/30/300 s idle; the trimmed build
+    /// rests at ~14-19 MB vs ~152 MB): production therefore KEEPS the
+    /// original trim-on-hide behaviour, and this switch only disables it for
+    /// A/B runs (POPGLOT_TRIM_ON_HIDE=0) — e.g. on an older machine where
+    /// page-in cost may differ. A measurement switch, never a user setting.
+    /// </summary>
+    internal static bool TrimOnHideEnabled =>
+        Environment.GetEnvironmentVariable("POPGLOT_TRIM_ON_HIDE") != "0";
+
     internal static void TrimWorkingSet()
     {
         try

@@ -874,6 +874,12 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         var operation = new CancellationTokenSource();
         _translateOperation = operation;
 
+        // P02: one trace per workbench translation. The origin is the
+        // dispatcher entry that begins the request (Enter / button / rerun);
+        // the session's terminal close publishes the full timeline.
+        var trace = new Services.InteractionTrace("workbench-text");
+        trace.Mark(Services.TracePoint.DispatcherEntered);
+
         var sourceLang = Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto);
         var targetLang = Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN");
 
@@ -903,6 +909,12 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             {
                 return;
             }
+            if (update.Kind == TranslationStreamUpdateKind.Delta && !string.IsNullOrEmpty(update.Delta))
+            {
+                trace.Mark(Services.TracePoint.FirstVisibleDeltaApplied);
+                Services.InteractionTraceWindow.MarkAtNextRenderCallback(
+                    trace, Services.TracePoint.FirstDeltaRenderCallback);
+            }
             ApplyState(TranslateSectionReducer.ApplyStreamUpdate(_currentState, update, epoch));
         });
 
@@ -927,7 +939,8 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
                     });
                 },
                 progress: progress,
-                epoch: epoch);
+                epoch: epoch,
+                trace: trace);
 
             if (_isUnloaded || epoch != _currentEpoch || _translateOperation != operation)
             {

@@ -10,6 +10,8 @@ pub mod provider;
 pub mod provider_sdk;
 pub mod sse;
 pub mod streaming;
+pub mod text_job;
+pub mod transport_pool;
 
 pub use benchmark::{
     BenchmarkFixtureItem, BenchmarkItemResult, BenchmarkSafetyError, BenchmarkSubset,
@@ -249,7 +251,13 @@ impl AppCore {
         validate_settings(draft_settings)
             .map_err(|e| ProviderError::new(ProviderErrorKind::Configuration, e.to_string()))?;
         validate_provider_settings(draft_settings)?;
-        let client = ProviderClient::new(Self::limits_for(draft_settings))?;
+        // P04: the draft connection test rides the pooled transport (same
+        // origin/limits key as the draft execution paths) instead of paying
+        // TCP + TLS setup per click.
+        let client = crate::transport_pool::pooled_client(
+            &draft_settings.api_base_url,
+            &Self::limits_for(draft_settings),
+        )?;
         let generated_id = format!(
             "connection-draft-{}",
             REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)

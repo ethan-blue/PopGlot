@@ -102,6 +102,14 @@ internal sealed class VocabularyStore : IVocabularyRepository
     public VocabularyLoadState LoadState { get; private set; } = VocabularyLoadState.Ok;
 
     /// <summary>
+    /// P03: revision of the in-memory data, incremented at every successful
+    /// mutation (star toggle / take / clear / insert-missing / restore /
+    /// retry-load / rollback). Consumers converge on this number instead of
+    /// rebuilding identical lists.
+    /// </summary>
+    public long Revision { get; private set; }
+
+    /// <summary>
     /// A08: true when a corrupt file was copied aside AND the copy was
     /// verified byte-identical, so the original content is recoverable
     /// elsewhere even though the live file stays read-only.
@@ -122,6 +130,7 @@ internal sealed class VocabularyStore : IVocabularyRepository
     {
         _storagePath = customPath ?? DefaultStoragePath;
         Load();
+        Revision = 1;
         _writerTask = Task.Run(ProcessPersistenceQueueAsync);
     }
 
@@ -272,6 +281,7 @@ internal sealed class VocabularyStore : IVocabularyRepository
 
             previous = _words;
             _words = next;
+            Revision++;
             tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _persistChannel.Writer.TryWrite(new PersistRequest(json, tcs));
         }
@@ -282,6 +292,7 @@ internal sealed class VocabularyStore : IVocabularyRepository
             lock (_gate)
             {
                 _words = previous;
+                Revision++;
             }
             return new VocabularySaveResult(false, !willBeStarred, VocabularySaveStatus.WriteFailed);
         }
@@ -320,6 +331,7 @@ internal sealed class VocabularyStore : IVocabularyRepository
 
             previous = _words;
             _words = next;
+            Revision++;
             tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _persistChannel.Writer.TryWrite(new PersistRequest(json, tcs));
             removed = hit;
@@ -331,6 +343,7 @@ internal sealed class VocabularyStore : IVocabularyRepository
             lock (_gate)
             {
                 _words = previous;
+                Revision++;
             }
 
             removed = null;
@@ -371,6 +384,7 @@ internal sealed class VocabularyStore : IVocabularyRepository
             }
             previous = _words;
             _words = next;
+            Revision++;
             tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _persistChannel.Writer.TryWrite(new PersistRequest(json, tcs));
         }
@@ -380,6 +394,7 @@ internal sealed class VocabularyStore : IVocabularyRepository
             lock (_gate)
             {
                 _words = previous;
+                Revision++;
             }
             return false;
         }
@@ -411,6 +426,7 @@ internal sealed class VocabularyStore : IVocabularyRepository
             var json = JsonSerializer.Serialize(next, new JsonSerializerOptions { WriteIndented = true });
             previous = _words;
             _words = next;
+            Revision++;
             tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _persistChannel.Writer.TryWrite(new PersistRequest(json, tcs));
         }
@@ -421,6 +437,7 @@ internal sealed class VocabularyStore : IVocabularyRepository
             lock (_gate)
             {
                 _words = previous;
+                Revision++;
             }
 
             return false;
@@ -493,6 +510,7 @@ internal sealed class VocabularyStore : IVocabularyRepository
 
             previous = _words;
             _words = next;
+            Revision++;
             inserted = adding.Count;
             tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _persistChannel.Writer.TryWrite(new PersistRequest(json, tcs));
@@ -511,6 +529,7 @@ internal sealed class VocabularyStore : IVocabularyRepository
                 if (previous is not null)
                 {
                     _words = previous;
+                    Revision++;
                 }
             }
 
@@ -554,6 +573,7 @@ internal sealed class VocabularyStore : IVocabularyRepository
             }
             previous = _words;
             _words = capped;
+            Revision++;
             tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _persistChannel.Writer.TryWrite(new PersistRequest(json, tcs));
         }
@@ -563,6 +583,7 @@ internal sealed class VocabularyStore : IVocabularyRepository
             lock (_gate)
             {
                 _words = previous;
+                Revision++;
             }
             return false;
         }
@@ -840,6 +861,7 @@ internal sealed class VocabularyStore : IVocabularyRepository
                 LoadState = VocabularyLoadState.Ok;
                 QuarantinedSafely = false;
                 _words = fresh.GetAll().ToList();
+                Revision++;
                 return true;
             }
             // V04: keep the previous valid snapshot; only the state metadata

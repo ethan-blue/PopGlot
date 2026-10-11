@@ -8,7 +8,7 @@
     <RootNamespace>PopGlot.Windows</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets/PopGlot-v5.ico</ApplicationIcon>
-    <Version>0.1.15</Version>
+    <Version>0.1.16</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <NoWarn>$(NoWarn);WFO0003</NoWarn>
@@ -17,6 +17,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="PopGlot.Windows.LogicTests" />
     <InternalsVisibleTo Include="PopGlot.Windows.PureTests" />
+    <InternalsVisibleTo Include="PopGlot.Windows.CliTests" />
     <!-- 一次性 UI 证据宿主（artifacts/ 下，git-ignored）：离屏截图取证用。 -->
     <InternalsVisibleTo Include="PopGlot.UiEvidence" />
     <Resource Include="Assets/PopGlot-v5.ico" />

@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -357,7 +358,7 @@ internal static class WaveRegressionTests
             // The real production path: a streamed delta lands in the gate
             // AND the panel's live translation field.
             InvokePrivate(panel, "OnStreamUpdate", new TranslationStreamUpdate(
-                "s1", epoch, TranslationStreamUpdateKind.Delta, "部分", "部分流式译文", 6));
+                "s1", epoch, TranslationStreamUpdateKind.Delta, "部分", "部分流式译文", 6), null);
             Equal(TranslationPanelStage.Streaming, gate.Stage, "setup: the gate is mid-stream");
             Equal("部分流式译文", gate.StreamedText, "setup: the gate holds the real delta");
 
@@ -1556,22 +1557,51 @@ internal static class WaveRegressionTests
             "returning to horizontal restores the outer-only rounding");
     }
 
-    /// <summary>U02: the flat text surfaces (FlatTextBox input, ResultTextBox
-    /// and FlatRichTextBox readers) must show a crisp keyboard-focus line —
-    /// a 1 DIP border that is transparent at rest and paints FocusBrush while
-    /// keyboard focus is inside. The old styles had no focus cue at all.</summary>
-    public static void FlatTextSurfacesShowKeyboardFocusBorder()
+    /// <summary>U02 (P01 rewrite): the flat text surfaces (FlatTextBox input,
+    /// ResultTextBox and FlatRichTextBox readers) must stay visually quiet
+    /// under the mouse and programmatic focus — no whole-pane accent ring —
+    /// while real keyboard navigation (Tab through the InputManager, which is
+    /// the production path KeyboardNavigation hooks) still locates the surface
+    /// via the framework's FocusVisualStyle adorner. Normal form fields keep
+    /// the original hover/focus border contract.</summary>
+    public static void FlatTextSurfacesAreQuietUnderMouseFocusKeyboard()
     {
         EnsureApp();
-        var focusBrush = (Brush)Application.Current!.Resources["FocusBrush"];
+        var accentBrush = (Brush)Application.Current!.Resources["AccentBrush"];
+
+        // ---- 1. Structural contract: the implicit TextBox template's
+        // hover/focus border triggers must be conditioned on
+        // QuietTextSurface=False, and the reading templates must not carry an
+        // IsKeyboardFocusWithin border trigger at all (that property is true
+        // for mouse clicks too — the old bug).
+        var form = new TextBox { Style = (Style)Application.Current.Resources["FormTextBox"] };
+        var flat = new TextBox { Style = (Style)Application.Current.Resources["FlatTextBox"] };
+        var result = new TextBox { Style = (Style)Application.Current.Resources["ResultTextBox"] };
+        var rich = new RichTextBox { Style = (Style)Application.Current.Resources["FlatRichTextBox"] };
+
+        True(!Ui.GetQuietTextSurface(form), "normal form fields default to the original border contract");
+        foreach (var (name, control) in new (string, Control)[]
+                 {
+                     ("FlatTextBox", flat), ("ResultTextBox", result), ("FlatRichTextBox", rich),
+                 })
+        {
+            True(Ui.GetQuietTextSurface(control), $"{name} opts into the quiet text surface contract");
+            True(control.FocusVisualStyle is not null,
+                $"{name} must keep a FocusVisualStyle so keyboard navigation remains locatable");
+        }
+
+        AssertBorderTriggersQuieted(form.Template, "implicit TextBox template (via FormTextBox)");
+        AssertBorderTriggersQuieted(result.Template, "ResultTextBox template");
+        AssertBorderTriggersQuieted(rich.Template, "FlatRichTextBox template");
+
+        // ---- 2. Behavior with a shown window: programmatic focus (the same
+        // IsKeyboardFocusWithin path a mouse click drives) must not paint the
+        // pane; a normal form field must still paint its focus border.
         var host = new Window { Width = 640, Height = 480, WindowStyle = WindowStyle.None,
                                 ShowInTaskbar = false, ShowActivated = false };
         try
         {
-            var flat = new TextBox { Style = (Style)Application.Current.Resources["FlatTextBox"] };
-            var result = new TextBox { Style = (Style)Application.Current.Resources["ResultTextBox"] };
-            var rich = new RichTextBox { Style = (Style)Application.Current.Resources["FlatRichTextBox"] };
-            host.Content = new StackPanel { Children = { flat, result, rich } };
+            host.Content = new StackPanel { Children = { form, flat, result, rich } };
             host.Show();
             host.UpdateLayout();
 
@@ -1589,17 +1619,265 @@ internal static class WaveRegressionTests
                 control.Focus();
                 PumpOnce();
                 True(control.IsKeyboardFocused, $"{name} takes keyboard focus");
-                True(BrushesEqual(focusBrush, surface.BorderBrush),
-                    $"{name} paints the 1 DIP FocusBrush line on keyboard focus");
+                True(BrushesEqual(Brushes.Transparent, surface.BorderBrush),
+                    $"{name} stays borderless when focus arrives without keyboard navigation " +
+                    "(programmatic focus — the same IsKeyboardFocusWithin state a mouse click produces)");
+                var quietAdorners = AdornerLayer.GetAdornerLayer(control)?.GetAdorners(control);
+                True(quietAdorners is null || quietAdorners.Length == 0,
+                    $"{name} shows no focus visual adorner for non-keyboard focus");
             }
+
+            var formSurface = (Border)form.Template.FindName("Surface", form)!;
+            form.Focus();
+            PumpOnce();
+            True(form.IsKeyboardFocused, "the form field takes keyboard focus");
+            True(BrushesEqual(accentBrush, formSurface.BorderBrush),
+                "normal form fields keep their focus border (original contract preserved)");
         }
         finally
         {
             host.Close();
         }
 
+        // ---- 3. Real keyboard navigation: a real WM_KEYDOWN posted to the
+        // window's HWND goes through the genuine Win32 keyboard provider
+        // (ReportInput → MostRecentInputDevice=keyboard → KeyDown routing →
+        // KeyboardNavigation.ProcessInput → Navigate + ShowFocusVisual). This
+        // is the production path, not a hand-set focus state.
+        var keyHost = new Window { Width = 640, Height = 480, WindowStyle = WindowStyle.None,
+                                   ShowInTaskbar = false, ShowActivated = false };
+        try
+        {
+            var keyFlat = new TextBox { Style = (Style)Application.Current.Resources["FlatTextBox"] };
+            keyHost.Content = keyFlat;
+            keyHost.Show();
+            keyHost.UpdateLayout();
+            keyFlat.Focus();
+            PumpOnce();
+
+            var hwnd = new System.Windows.Interop.WindowInteropHelper(keyHost).Handle;
+            True(hwnd != IntPtr.Zero, "keyboard navigation test needs a window handle");
+            // VK_TAB=0x09, WM_KEYDOWN=0x0100. Repeat count 1, scan code 0x0F.
+            var lParam = (IntPtr)(0x00000001 | (0x0F << 16));
+            True(PostMessage(hwnd, 0x0100, (IntPtr)0x09, lParam) != 0,
+                "posting the Tab WM_KEYDOWN must succeed");
+            PumpUntilCondition(() => AdornerLayer.GetAdornerLayer(keyFlat)?.GetAdorners(keyFlat) is
+                { Length: > 0 }, "the Tab keydown must be processed through the dispatcher");
+
+            True(keyFlat.IsKeyboardFocused, "the flat surface keeps focus through the Tab keydown");
+            var adorners = AdornerLayer.GetAdornerLayer(keyFlat)?.GetAdorners(keyFlat);
+            True(adorners is not null && adorners.Length > 0,
+                "keyboard navigation must show the FocusVisualStyle adorner on the flat surface");
+            var keySurface = (Border)keyFlat.Template.FindName("Surface", keyFlat)!;
+            True(BrushesEqual(Brushes.Transparent, keySurface.BorderBrush),
+                "keyboard navigation draws the adorner, not a whole-pane border");
+        }
+        finally
+        {
+            keyHost.Close();
+        }
+
+        // ---- 4. Real mouse hover and click through the input pipeline: the
+        // window is placed under the real cursor so a synthetic MouseMove
+        // flips IsMouseOver via the genuine MouseDevice hit-test.
+        AssertRealMouseHoverAndClickQuiet("FlatTextBox", () =>
+            new Control[] { new TextBox { Style = (Style)Application.Current.Resources["FlatTextBox"] } },
+            expectQuiet: true);
+        AssertRealMouseHoverAndClickQuiet("FormTextBox", () =>
+            new Control[] { new TextBox { Style = (Style)Application.Current.Resources["FormTextBox"] } },
+            expectQuiet: false);
+
+        static void AssertBorderTriggersQuieted(ControlTemplate template, string name)
+        {
+            foreach (var trigger in template.Triggers)
+            {
+                if (trigger is not (Trigger or MultiTrigger) ||
+                    !SetsSurfaceBorder(trigger))
+                {
+                    continue;
+                }
+                switch (trigger)
+                {
+                    case Trigger single when IsHoverOrFocusProperty(single.Property):
+                        throw new InvalidOperationException(
+                            $"{name}: an unconditional {single.Property.OwnerType.Name}.{single.Property.Name} " +
+                            "trigger paints the Surface border — hover/click would ring the whole pane " +
+                            "(disabled/read-only states are intentionally allowed to restyle the border)");
+                    case MultiTrigger multi:
+                        True(multi.Conditions.Any(c =>
+                                c.Property == Ui.QuietTextSurfaceProperty && Equals(c.Value, false)),
+                            $"{name}: border triggers must be conditioned on QuietTextSurface=False " +
+                            "so flat surfaces can opt out");
+                        break;
+                }
+            }
+
+            static bool IsHoverOrFocusProperty(System.Windows.DependencyProperty property) =>
+                property == UIElement.IsMouseOverProperty ||
+                property == UIElement.IsKeyboardFocusWithinProperty;
+
+            static bool SetsSurfaceBorder(TriggerBase trigger) => trigger switch
+            {
+                Trigger t => SetsBorder(t.Setters),
+                MultiTrigger m => SetsBorder(m.Setters),
+                _ => false,
+            };
+
+            static bool SetsBorder(System.Collections.Generic.IEnumerable<SetterBase> setters) =>
+                setters.OfType<Setter>().Any(s =>
+                    s.TargetName == "Surface" && s.Property == System.Windows.Controls.Border.BorderBrushProperty);
+        }
+
+        static void AssertRealMouseHoverAndClickQuiet(
+            string name, Func<Control[]> makeTarget, bool expectQuiet)
+        {
+            if (!GetCursorPos(out var originalCursor))
+            {
+                throw new InvalidOperationException($"{name}: GetCursorPos failed — cannot run the real mouse test");
+            }
+            var host = new Window
+            {
+                Width = 300, Height = 120,
+                WindowStyle = WindowStyle.None,
+                ShowInTaskbar = false,
+                ShowActivated = false,
+                ResizeMode = ResizeMode.NoResize,
+            };
+            var restored = false;
+            try
+            {
+                var target = makeTarget()[0];
+                target.Width = 300;
+                target.Height = 120;
+                host.Content = target;
+                host.Show();
+                host.UpdateLayout();
+
+                // Real input, the strongest form available to the harness:
+                // SendInput moves the physical cursor onto the target window
+                // (the OS then delivers a genuine WM_MOUSEMOVE through the
+                // HwndMouseInputProvider — Activate + AbsoluteMove — which is
+                // what flips IsMouseOver), and SendInput button events perform
+                // a genuine click with the real focus path. The original
+                // cursor position is restored afterwards.
+                var hwnd = new System.Windows.Interop.WindowInteropHelper(host).Handle;
+                True(hwnd != IntPtr.Zero, $"{name}: mouse test needs a window handle");
+                True(GetWindowRect(hwnd, out var rect),
+                    $"{name}: GetWindowRect must succeed");
+                var centerX = (rect.Left + rect.Right) / 2;
+                var centerY = (rect.Top + rect.Bottom) / 2;
+                True(SendMouseMove(centerX, centerY), $"{name}: the real cursor move must be injected");
+                PumpUntilCondition(() => target.IsMouseOver,
+                    $"{name}: the real mouse move must land on the target through the OS input pipeline " +
+                    "(if the real cursor was moved away mid-test, rerun on an idle desktop)");
+
+                var surface = (Border)target.Template.FindName("Surface", target)!;
+                if (expectQuiet)
+                {
+                    True(BrushesEqual(Brushes.Transparent, surface.BorderBrush),
+                        $"{name}: hovering with the mouse must not paint a pane-sized border");
+                }
+                else
+                {
+                    True(!BrushesEqual(Brushes.Transparent, surface.BorderBrush),
+                        $"{name}: normal form fields keep their hover border (original contract)");
+                }
+
+                // Real click: OS button events through the same pipeline a
+                // physical click takes, including the focus handover.
+                True(SendClick(), $"{name}: the real click must be injected");
+                PumpUntilCondition(() => target.IsKeyboardFocused,
+                    $"{name}: the real click must focus the target (mouse clicks own keyboard focus in WPF)");
+
+                if (expectQuiet)
+                {
+                    True(BrushesEqual(Brushes.Transparent, surface.BorderBrush),
+                        $"{name}: clicking with the mouse must not paint a pane-sized border");
+                }
+                else
+                {
+                    True(!BrushesEqual(Brushes.Transparent, surface.BorderBrush),
+                        $"{name}: normal form fields keep their click-focus border");
+                }
+
+                SetCursorPos(originalCursor.X, originalCursor.Y);
+                restored = true;
+            }
+            finally
+            {
+                if (!restored)
+                {
+                    SetCursorPos(originalCursor.X, originalCursor.Y);
+                }
+                host.Close();
+            }
+        }
+
         static bool BrushesEqual(Brush left, Brush right) =>
             left is SolidColorBrush a && right is SolidColorBrush b && a.Color == b.Color;
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct NativePoint { public int X; public int Y; }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct NativeRect { public int Left; public int Top; public int Right; public int Bottom; }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out NativePoint point);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr PostMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr window, out NativeRect rect);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetCursorPos(int x, int y);
+
+    // INPUT layout comes from the app's ABI-verified NativeInput (the suite
+    // separately asserts its size); DllImport keeps the same binary shape.
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint inputCount, PopGlot.Windows.WindowsSelectionClipboardAdapter.NativeInput[] inputs, int size);
+
+    private const uint MouseMoveRelative = 0x0001; // MOUSEEVENTF_MOVE
+    private const uint MouseLeftDown = 0x0002;
+    private const uint MouseLeftUp = 0x0004;
+
+    private static PopGlot.Windows.WindowsSelectionClipboardAdapter.NativeInput MouseInput(int dx, int dy, uint flags) => new()
+    {
+        Type = 0, // INPUT_MOUSE
+        Union = new PopGlot.Windows.WindowsSelectionClipboardAdapter.NativeInputUnion
+        {
+            Mouse = new PopGlot.Windows.WindowsSelectionClipboardAdapter.NativeMouseInput
+            {
+                X = dx,
+                Y = dy,
+                Flags = flags,
+            },
+        },
+    };
+
+    /// <summary>Places the physical cursor with SetCursorPos (absolute screen
+    /// pixels, no DPI math) and then generates two tiny REAL relative moves
+    /// (±1 px, net zero) so the OS delivers genuine WM_MOUSEMOVE input to the
+    /// window under the cursor.</summary>
+    private static bool SendMouseMove(int x, int y)
+    {
+        if (!SetCursorPos(x, y))
+        {
+            return false;
+        }
+        var inputs = new[] { MouseInput(1, 0, MouseMoveRelative), MouseInput(-1, 0, MouseMoveRelative) };
+        return SendInput((uint)inputs.Length, inputs, WindowsSelectionClipboardAdapter.InputStructureSize) == 2;
+    }
+
+    /// <summary>A real left click at the current cursor position through the
+    /// OS input pipeline, including the WPF focus handover.</summary>
+    private static bool SendClick()
+    {
+        var inputs = new[] { MouseInput(0, 0, MouseLeftDown), MouseInput(0, 0, MouseLeftUp) };
+        return SendInput((uint)inputs.Length, inputs, WindowsSelectionClipboardAdapter.InputStructureSize) == 2;
     }
 
     /// <summary>U03: built-in tones are mutually exclusive choices, so they

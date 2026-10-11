@@ -897,59 +897,6 @@ internal static partial class CoreBridge
         return await FreeTranslateService.TranslateAsync(source, sourceLang, targetLang, authorization, cancellationToken);
     }
 
-    /// The OCR fallback path: recognise locally, then translate the text via
-    /// the unified entry — configured provider when present, the authorised
-    /// free engine otherwise. Never bypasses the free-engine decision.
-    /// </summary>
-    public static async Task<(TranslationResponse Response, ulong OcrElapsedMs, ulong NetworkElapsedMs)>
-        TranslateScreenshotViaOcrAsync(
-            string? apiKey,
-            byte[] image,
-            string sourceLang,
-            string targetLang,
-            string? requestId = null,
-            CancellationToken cancellationToken = default,
-            ProviderSettings? textRouteSettings = null)
-    {
-        var ocrStopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var recognized = await WindowsOcrService.RecognizeTextAsync(image, sourceLang);
-        ocrStopwatch.Stop();
-        if (string.IsNullOrWhiteSpace(recognized))
-        {
-            throw new InvalidOperationException(
-                "本地 OCR 未能在所选区域识别到文字。请重新框选更清晰的区域，或在设置中开启截图上传以使用视觉模型。");
-        }
-        cancellationToken.ThrowIfCancellationRequested();
-
-        var networkStopwatch = System.Diagnostics.Stopwatch.StartNew();
-        TranslationResponse response;
-        if (textRouteSettings is not null &&
-            (textRouteSettings.TextIsConfigured || textRouteSettings.TargetsLocalRuntime))
-        {
-            response = await TranslateTextDraftAsync(
-                textRouteSettings,
-                apiKey ?? string.Empty,
-                recognized,
-                sourceLang,
-                targetLang,
-                requestId,
-                cancellationToken);
-        }
-        else
-        {
-            response = await TranslateRecognizedTextAsync(
-                apiKey, recognized, sourceLang, targetLang, requestId, cancellationToken);
-        }
-        networkStopwatch.Stop();
-
-        return (response with
-            {
-                Result = response.Result with { Transcription = recognized },
-            },
-            (ulong)ocrStopwatch.ElapsedMilliseconds,
-            (ulong)networkStopwatch.ElapsedMilliseconds);
-    }
-
     public static void CancelRequest(string requestId)
     {
         if (!string.IsNullOrWhiteSpace(requestId))
@@ -1134,6 +1081,72 @@ internal static partial class CoreBridge
     {
         return ProcessStreamDelta(userData, eventType, payloadPtr, byteLen);
     }
+
+    // ================= P06: versioned pure-text jobs =================
+    //
+    // The external-executor text protocol: one Rust implementation of the
+    // prompt (random delimiter + source-as-data payload), token protection
+    // and the text-first assembler, reused by every backend. The C# side
+    // never rebuilds prompts and never parses the delimiter protocol itself.
+
+    internal sealed record PreparedTextJob(
+        string JobHandle,
+        string PromptVersion,
+        string SystemInstructions,
+        string UserPayload,
+        string Delimiter);
+
+    internal sealed record TextJobPushResult(string VisibleDelta);
+
+    internal sealed record TextJobFinishResult(
+        string State,
+        string TranslatedText,
+        string Explanation,
+        IReadOnlyList<string> ProtectedTerms,
+        IReadOnlyList<string> Warnings,
+        int VisibleCharCount);
+
+    /// <summary>Request for <see cref="PrepareTextJob"/>. Source rides as its
+    /// own JSON field — never interpolated into instructions; no credentials.</summary>
+    internal sealed record TextJobRequestDto(
+        string Source,
+        string? SourceLanguage,
+        string? TargetLanguage,
+        string Task = "translate",
+        bool IncludeExplanation = true,
+        bool ProtectCodeTokens = false,
+        string? Preference = null,
+        string? TemplateId = null,
+        ulong? TemplateRevision = null);
+
+    /// <summary>Prepares a pure-text job: versioned prompt + opaque handle.</summary>
+    public static PreparedTextJob PrepareTextJob(TextJobRequestDto request)
+    {
+        var json = JsonSerializer.Serialize(request, JsonOptions);
+        return EnsureSuccess<PreparedTextJob>(Invoke(() => NativeMethods.TextJobPrepare(json)));
+    }
+
+    /// <summary>Feeds one executor output chunk; returns the newly visible text.</summary>
+    public static string PushTextJobDelta(string jobHandle, string utf8Delta)
+    {
+        var result = EnsureSuccess<TextJobPushResult>(
+            Invoke(() => NativeMethods.TextJobPush(jobHandle, utf8Delta)));
+        return result.VisibleDelta;
+    }
+
+    /// <summary>Completes the job: "completed" | "cancelled" | "failed".</summary>
+    public static TextJobFinishResult FinishTextJob(string jobHandle, string completionState)
+    {
+        if (completionState is not ("completed" or "cancelled" or "failed"))
+        {
+            throw new ArgumentOutOfRangeException(nameof(completionState));
+        }
+        return EnsureSuccess<TextJobFinishResult>(
+            Invoke(() => NativeMethods.TextJobFinish(jobHandle, completionState)));
+    }
+
+    /// <summary>Releases a job handle; idempotent, safe from finally paths.</summary>
+    public static void FreeTextJob(string jobHandle) => NativeMethods.TextJobFree(jobHandle);
 
     private static string Invoke(Func<nint> nativeCall)
     {
@@ -1325,6 +1338,18 @@ internal static partial class CoreBridge
 
         [LibraryImport(LibraryName, EntryPoint = "popglot_free_string")]
         internal static partial void FreeString(nint value);
+
+        [LibraryImport(LibraryName, EntryPoint = "popglot_text_job_prepare_v1", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint TextJobPrepare(string requestJson);
+
+        [LibraryImport(LibraryName, EntryPoint = "popglot_text_job_push_v1", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint TextJobPush(string jobHandle, string utf8Delta);
+
+        [LibraryImport(LibraryName, EntryPoint = "popglot_text_job_finish_v1", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint TextJobFinish(string jobHandle, string completionState);
+
+        [LibraryImport(LibraryName, EntryPoint = "popglot_text_job_free_v1", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial void TextJobFree(string jobHandle);
     }
 }
 
@@ -1596,14 +1621,32 @@ internal sealed record ProviderDiagnostics(
     ushort StatusCode,
     ulong ElapsedMs);
 
+/// <summary>
+/// P05: diagnostics for a CLI-executed turn. Deliberately a SEPARATE type
+/// from <see cref="ProviderDiagnostics"/>: a CLI turn has no HTTP endpoint,
+/// status or attempts, and those facts stay NULL here instead of being
+/// faked with a 200 or a placeholder URL. Populated only by a CLI backend
+/// that actually ran; the HTTP record stays null in that case.
+/// </summary>
+internal sealed record CliBackendDiagnostics(
+    string Backend,
+    string? ModelId,
+    string? ToolVersion,
+    ulong? TurnElapsedMs,
+    bool? ToolReportedCompletion,
+    ulong? RequestPreparationMs = null,
+    ulong? FirstProtocolDeltaMs = null);
+
 internal sealed record TranslationResponse(
     TranslationResult Result,
-    ProviderDiagnostics Diagnostics,
-    string? OverrideEngineLabel = null)
+    ProviderDiagnostics? Diagnostics,
+    string? OverrideEngineLabel = null,
+    CliBackendDiagnostics? CliDiagnostics = null)
 {
     public bool IsFreeEngine =>
-        string.Equals(Diagnostics.RequestId, FreeTranslateService.RequestId, StringComparison.Ordinal);
+        string.Equals(Diagnostics?.RequestId, FreeTranslateService.RequestId, StringComparison.Ordinal);
 
-    public string EngineLabel => OverrideEngineLabel ?? (IsFreeEngine ? "免费引擎" : Diagnostics.ProviderType.ToString());
+    public string EngineLabel => OverrideEngineLabel ?? (IsFreeEngine ? "免费引擎" : Diagnostics?.ProviderType.ToString() ?? CliDiagnostics?.Backend ?? "模型引擎");
+    public ulong ElapsedMs => CliDiagnostics?.TurnElapsedMs ?? Diagnostics?.ElapsedMs ?? 0;
 }
 

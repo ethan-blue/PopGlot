@@ -10,6 +10,7 @@
 use base64::Engine as _;
 use popglot_core::AppCore;
 use popglot_core::provider::ProviderClient;
+use popglot_core::transport_pool;
 use popglot_domain::{
     BUILTIN_FAITHFUL_ID, LanguagePair, PromptTemplate, PromptVariables, ProviderSettings,
     compile_prompt,
@@ -30,6 +31,19 @@ static CORE: OnceLock<RwLock<AppCore>> = OnceLock::new();
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 static ACTIVE_REQUESTS: OnceLock<Mutex<HashMap<String, CancellationToken>>> = OnceLock::new();
 static REQUEST_TICKET: AtomicU64 = AtomicU64::new(1);
+
+/// P04: the draft execution paths (profile text/vision streaming, draft
+/// snapshots) share bounded per-origin transport clients instead of paying
+/// TCP + TLS setup on every call. The pool key carries every
+/// transport-affecting parameter — origin from the SAME validated URL
+/// builder the request path uses, plus timeouts, size caps, retry policy and
+/// TLS strictness — so a strict-TLS request can never ride a relaxed client.
+/// API keys, `Authorization` and `ExtraHeaders` stay per-request exactly
+/// as before; the pool never stores credentials.
+fn pooled_client_for(settings: &ProviderSettings) -> Result<ProviderClient, String> {
+    transport_pool::pooled_client(&settings.api_base_url, &AppCore::limits_for(settings))
+        .map_err(|error| error.to_string())
+}
 
 /// Version 1 stack-scoped stream callback. `payload` is borrowed UTF-8 and is
 /// valid only for the duration of the call; the callback must copy it before
@@ -603,8 +617,7 @@ pub unsafe extern "C" fn popglot_text_task_draft_v1(
         let custom_id = unsafe { read_optional_utf8(request_id) }?;
         let settings = serde_json::from_str::<ProviderSettings>(settings_json)
             .map_err(|error| format!("文字任务设置无效：{error}"))?;
-        let client = ProviderClient::new(AppCore::limits_for(&settings))
-            .map_err(|error| error.to_string())?;
+        let client = pooled_client_for(&settings)?;
         let languages = resolve_languages(&settings, source_lang, target_lang);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
@@ -649,8 +662,7 @@ pub unsafe extern "C" fn popglot_translate_text_draft_v1(
         let custom_id = unsafe { read_optional_utf8(request_id) }?;
         let settings = serde_json::from_str::<popglot_domain::ProviderSettings>(settings_json)
             .map_err(|error| format!("文字草稿设置无效：{error}"))?;
-        let client = ProviderClient::new(AppCore::limits_for(&settings))
-            .map_err(|error| error.to_string())?;
+        let client = pooled_client_for(&settings)?;
         let languages = resolve_languages(&settings, source_lang, target_lang);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
@@ -792,8 +804,7 @@ pub unsafe extern "C" fn popglot_translate_vision_v3(
         };
         // A draft may target a completely different provider and TLS policy;
         // the global Core client is therefore never safe to reuse here.
-        let client = ProviderClient::new(AppCore::limits_for(&settings))
-            .map_err(|error| error.to_string())?;
+        let client = pooled_client_for(&settings)?;
         let languages = resolve_languages(&settings, source_lang, target_lang);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
@@ -996,8 +1007,7 @@ pub unsafe extern "C" fn popglot_translate_text_draft_stream_v2(
 
         let settings: ProviderSettings = serde_json::from_str(settings_json)
             .map_err(|error| format!("文字草稿设置无效：{error}"))?;
-        let client = ProviderClient::new(AppCore::limits_for(&settings))
-            .map_err(|error| error.to_string())?;
+        let client = pooled_client_for(&settings)?;
 
         let resolved_pref = if explicit_pref.is_none() {
             core_read()
@@ -1084,8 +1094,7 @@ pub unsafe extern "C" fn popglot_translate_vision_draft_stream_v1(
             serde_json::from_str::<ProviderSettings>(settings_json)
                 .map_err(|error| format!("视觉草稿设置无效：{error}"))?
         };
-        let client = ProviderClient::new(AppCore::limits_for(&settings))
-            .map_err(|error| error.to_string())?;
+        let client = pooled_client_for(&settings)?;
         let languages = resolve_languages(&settings, source_lang, target_lang);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
@@ -1347,6 +1356,106 @@ pub unsafe extern "C" fn popglot_plan_segments(
         };
         Ok(success(payload))
     })
+}
+
+// ==================== P06: versioned pure-text jobs ====================
+
+/// Prepares a pure-text job: the versioned system instructions, the
+/// source-as-data user payload and an opaque job handle. Reuses the exact
+/// production prompt/protection/delimiter machinery so an external executor
+/// (a local AI tool subprocess) never gets a second copy of the translation
+/// semantics. The request JSON carries task/languages/preference — never
+/// credentials; the source travels as its own JSON field, never
+/// interpolated into instructions.
+///
+/// # Safety
+///
+/// `request_json` must be a valid null-terminated UTF-8 string for the
+/// duration of the call. The returned pointer must be released with
+/// `popglot_free_string`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_text_job_prepare_v1(request_json: *const c_char) -> *mut c_char {
+    ffi_guard(|| {
+        let request_json = unsafe { read_utf8(request_json) }?;
+        let request: popglot_core::text_job::TextJobRequest = serde_json::from_str(request_json)
+            .map_err(|error| format!("文本任务请求无效：{error}"))?;
+        let prepared = popglot_core::text_job::TextJobManager::global()
+            .prepare(&request)
+            .map_err(|error| error.to_string())?;
+        Ok(success(prepared))
+    })
+}
+
+/// Feeds one executor output chunk into the job's delimiter assembler and
+/// token restorer; returns the newly VISIBLE text (never reasoning, never
+/// trailer metadata).
+///
+/// # Safety
+///
+/// Both pointers must be valid null-terminated UTF-8 for the duration of the
+/// call. The returned pointer must be released with `popglot_free_string`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_text_job_push_v1(
+    job_handle: *const c_char,
+    utf8_delta: *const c_char,
+) -> *mut c_char {
+    ffi_guard(|| {
+        let job_handle = unsafe { read_utf8(job_handle) }?;
+        let utf8_delta = unsafe { read_utf8(utf8_delta) }?;
+        let visible = popglot_core::text_job::TextJobManager::global()
+            .push(job_handle, utf8_delta)
+            .map_err(|error| error.to_string())?;
+        // snake_case key: the host decodes FFI envelopes with its
+        // snake_case policy — a camelCase key would silently bind to null.
+        Ok(success(serde_json::json!({ "visible_delta": visible })))
+    })
+}
+
+/// Completes a job with the executor's terminal state ("completed" |
+/// "cancelled" | "failed") and returns the structured result: restored
+/// visible text, explanation, protected terms and warnings. A finished or
+/// unknown handle is an error, never a silent empty result.
+///
+/// # Safety
+///
+/// Both pointers must be valid null-terminated UTF-8 for the duration of the
+/// call. The returned pointer must be released with `popglot_free_string`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_text_job_finish_v1(
+    job_handle: *const c_char,
+    completion_state: *const c_char,
+) -> *mut c_char {
+    ffi_guard(|| {
+        let job_handle = unsafe { read_utf8(job_handle) }?;
+        let completion_state = unsafe { read_utf8(completion_state) }?;
+        let completion = match completion_state {
+            "completed" => popglot_core::text_job::TextJobCompletion::Completed,
+            "cancelled" => popglot_core::text_job::TextJobCompletion::Cancelled,
+            "failed" => popglot_core::text_job::TextJobCompletion::Failed,
+            other => return Err(format!("未知的任务完成状态：{other}")),
+        };
+        let result = popglot_core::text_job::TextJobManager::global()
+            .finish(job_handle, completion)
+            .map_err(|error| error.to_string())?;
+        Ok(success(result))
+    })
+}
+
+/// Releases a job handle. Idempotent; safe from any error/cancel/finally
+/// path. A freed handle is rejected by push/finish, never silently reused.
+///
+/// # Safety
+///
+/// `job_handle` must be null or a valid null-terminated UTF-8 string for the
+/// duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_text_job_free_v1(job_handle: *const c_char) {
+    if job_handle.is_null() {
+        return;
+    }
+    if let Ok(handle) = unsafe { read_utf8(job_handle) } {
+        popglot_core::text_job::TextJobManager::global().free(handle);
+    }
 }
 
 #[cfg(test)]

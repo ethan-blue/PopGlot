@@ -84,6 +84,9 @@ public partial class TranslationPanelWindow : Window
     private string _sessionId = Guid.NewGuid().ToString("N");
     private int _openDropDowns;
     private long _inputAcquisitionMs;
+    /// <summary>P02: the trace of the in-flight operation, for the UI-level
+    /// cancel-request mark. Cleared when a new operation begins.</summary>
+    private Services.InteractionTrace? _operationTrace;
     private long _lastStreamRenderTicks;
     // 风格预提示（免费引擎或截图视觉直译）：随本次操作传入或于截图操作
     // 起点就地设置，准备态状态文本不得瞬间覆盖它；真实流式文本或终态
@@ -227,7 +230,10 @@ public partial class TranslationPanelWindow : Window
 
     // ================= Entry points =================
 
-    internal async Task StartSelectionAsync(ClipboardSelectionService selectionService, nint targetWindow = 0)
+    internal async Task StartSelectionAsync(
+        ClipboardSelectionService selectionService,
+        nint targetWindow = 0,
+        Services.InteractionTrace? trace = null)
     {
         ArgumentNullException.ThrowIfNull(selectionService);
         _sourceKind = "划词";
@@ -249,11 +255,11 @@ public partial class TranslationPanelWindow : Window
             AllowKeyboardInteraction();
 
             _retry = (token, ep) => TranslateTextAsync(source, token, ep);
-            await TranslateTextAsync(source, cancellation, epoch);
+            await TranslateTextAsync(source, cancellation, epoch, trace);
         });
     }
 
-    internal async Task StartScreenshotAsync(byte[] image)
+    internal async Task StartScreenshotAsync(byte[] image, Services.InteractionTrace? trace = null)
     {
         ArgumentNullException.ThrowIfNull(image);
         _sourceKind = "截图";
@@ -262,10 +268,10 @@ public partial class TranslationPanelWindow : Window
         SourceLabel.Text = "画面文字";
         AllowKeyboardInteraction();
         _retry = (token, ep) => TranslateScreenshotAsync(image, token, ep);
-        await RunOperationAsync((cancellation, epoch) => TranslateScreenshotAsync(image, cancellation, epoch));
+        await RunOperationAsync((cancellation, epoch) => TranslateScreenshotAsync(image, cancellation, epoch, trace));
     }
 
-    internal async Task StartScreenshotOcrAsync(byte[] image)
+    internal async Task StartScreenshotOcrAsync(byte[] image, Services.InteractionTrace? trace = null)
     {
         ArgumentNullException.ThrowIfNull(image);
         _sourceKind = "取字";
@@ -275,6 +281,13 @@ public partial class TranslationPanelWindow : Window
         AllowKeyboardInteraction();
         _retry = (token, ep) => RecognizeOcrAsync(image, token, ep);
         await RunOperationAsync((cancellation, epoch) => RecognizeOcrAsync(image, cancellation, epoch));
+        // P02: an OCR-only run has no translation session to close the trace;
+        // publish once the interaction is terminal.
+        if (trace is not null)
+        {
+            trace.SetOutcome("ocr-only");
+            Services.InteractionTraceCollector.Publish(trace);
+        }
     }
 
     private async Task RecognizeOcrAsync(byte[] image, CancellationToken cancellationToken, long epoch)
@@ -591,8 +604,10 @@ public partial class TranslationPanelWindow : Window
         ResultSpeakBtn.IsEnabled = !string.IsNullOrWhiteSpace(text);
     }
 
-    private async Task TranslateTextAsync(string source, CancellationToken cancellation, long epoch)
+    private async Task TranslateTextAsync(
+        string source, CancellationToken cancellation, long epoch, Services.InteractionTrace? trace = null)
     {
+        _operationTrace = trace;
         if (string.IsNullOrWhiteSpace(source))
         {
             return;
@@ -609,7 +624,7 @@ public partial class TranslationPanelWindow : Window
             {
                 return;
             }
-            OnStreamUpdate(update);
+            OnStreamUpdate(update, trace);
         });
 
         var session = await _coordinator.TranslateTextAsync(
@@ -625,7 +640,8 @@ public partial class TranslationPanelWindow : Window
                 OnStageChanged(stage);
             },
             progress: progress,
-            epoch: epoch);
+            epoch: epoch,
+            trace: trace);
 
         if (!_gate.ShouldAcceptUpdate(epoch, _closing, IsLoaded || IsVisible))
         {
@@ -635,8 +651,10 @@ public partial class TranslationPanelWindow : Window
         await HandleSessionResultAsync(source, session, epoch, pipelineNote: string.Empty);
     }
 
-    private async Task TranslateScreenshotAsync(byte[] image, CancellationToken cancellation, long epoch)
+    private async Task TranslateScreenshotAsync(
+        byte[] image, CancellationToken cancellation, long epoch, Services.InteractionTrace? trace = null)
     {
+        _operationTrace = trace;
         // Honesty before the request goes out: when the resolved screenshot
         // route is vision-direct, the active TEXT style will not take part
         // (0.1.6 has no vision prompt support). Stated up front, rides above
@@ -658,7 +676,7 @@ public partial class TranslationPanelWindow : Window
             {
                 return;
             }
-            OnStreamUpdate(update);
+            OnStreamUpdate(update, trace);
         });
 
         var session = await _coordinator.TranslateScreenshotAsync(
@@ -673,7 +691,8 @@ public partial class TranslationPanelWindow : Window
                 OnStageChanged(stage);
             },
             progress: progress,
-            epoch: epoch);
+            epoch: epoch,
+            trace: trace);
 
         if (!_gate.ShouldAcceptUpdate(epoch, _closing, IsLoaded || IsVisible))
         {
@@ -689,7 +708,7 @@ public partial class TranslationPanelWindow : Window
         await HandleSessionResultAsync(recognized, session, epoch, pipelineNote: session.RoutingReason ?? string.Empty);
     }
 
-    private void OnStreamUpdate(TranslationStreamUpdate update)
+    private void OnStreamUpdate(TranslationStreamUpdate update, Services.InteractionTrace? trace = null)
     {
         if (!_gate.ApplyUpdate(update))
         {
@@ -739,6 +758,15 @@ public partial class TranslationPanelWindow : Window
                 return;
             }
             _lastStreamRenderTicks = now;
+            // P02: the first delta that actually lands in the visible text
+            // (past the throttle) is the applied point; the next render
+            // callback after it is the render opportunity.
+            if (trace is not null && !trace.IsMarked(Services.TracePoint.FirstVisibleDeltaApplied))
+            {
+                trace.Mark(Services.TracePoint.FirstVisibleDeltaApplied);
+                Services.InteractionTraceWindow.MarkAtNextRenderCallback(
+                    trace, Services.TracePoint.FirstDeltaRenderCallback);
+            }
 
             // Stick-to-bottom: follow the stream only while the reader sits at
             // the bottom, so scrolling up to re-read is never overridden.
@@ -2230,6 +2258,10 @@ public partial class TranslationPanelWindow : Window
     {
         var operation = _operation;
         _operation = null;
+        // P02: the UI-level cancel request, as close to the user's intent
+        // (X / Esc / close hotkey / new request replacing this one) as the
+        // panel can record it.
+        _operationTrace?.Mark(Services.TracePoint.CancelRequested);
         if (operation is null)
         {
             return;

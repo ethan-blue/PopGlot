@@ -33,6 +33,11 @@ internal sealed class ProviderProfile
         LastTestedAtUtc = source.LastTestedAtUtc;
         LastTestFingerprint = source.LastTestFingerprint;
         CredentialRevision = source.CredentialRevision;
+        // P05: the execution dimension is part of the profile identity.
+        // Serialized as a stable string so unknown values from newer builds
+        // round-trip (as unsupported) instead of failing the whole config.
+        ExecutionKind = source.ExecutionKind;
+        CliConnection = source.CliConnection?.Clone();
     }
 
     public ProviderProfile Clone() => new(this);
@@ -75,6 +80,50 @@ internal sealed class ProviderProfile
     /// for the revision captured when the test started.
     /// </summary>
     public int CredentialRevision { get; set; }
+
+    /// <summary>
+    /// P05: the execution dimension, serialized as a stable string
+    /// ("native-api" | "codex-app-server" | "omp-rpc"). Anything else loads
+    /// as unsupported — an unknown backend never silently executes as
+    /// NativeApi. Absent on legacy configs = native-api, and legacy fields
+    /// are never reset by the migration.
+    /// </summary>
+    public string ExecutionKind { get; set; } =
+        AiConnections.EngineExecutionKindNames.NativeApi;
+
+    /// <summary>
+    /// P05: connection details when <see cref="ExecutionKind"/> routes this
+    /// profile through a local AI tool subprocess. Null for API profiles.
+    /// </summary>
+    public AiConnections.CliConnectionSettings? CliConnection { get; set; }
+
+    /// <summary>Typed view of <see cref="ExecutionKind"/>; unknown stays unknown.</summary>
+    public AiConnections.EngineExecutionKind ResolvedExecutionKind =>
+        AiConnections.EngineExecutionKindNames.Parse(ExecutionKind);
+
+    /// <summary>
+    /// P05: the typed execution facts every routing surface consumes. The
+    /// CLI adapters ship disabled, so a CLI profile is only text-capable
+    /// when its adapter is actually enabled for this build; vision is never
+    /// claimed for CLI execution (screenshots never enter a CLI channel).
+    /// </summary>
+    public AiConnections.EngineExecutionFacts ExecutionFacts => new(
+        ResolvedExecutionKind,
+        CliConnection,
+        TextCapable:
+            ResolvedExecutionKind == AiConnections.EngineExecutionKind.NativeApi
+                ? SupportsText && !string.IsNullOrWhiteSpace(TextModel)
+                : ResolvedExecutionKind is AiConnections.EngineExecutionKind.CodexAppServer or AiConnections.EngineExecutionKind.OmpRpc
+                    && CliConnection is { Enabled: true }
+                    && AiConnections.EngineExecutionFacts.AdapterEnabledFor(ResolvedExecutionKind)
+                    && CliConnection.ExpectedVersion == AiConnections.CliLauncher.ProtocolVersion(ResolvedExecutionKind)
+                    && !string.IsNullOrWhiteSpace(CliConnection.ExecutablePath)
+                    && !string.IsNullOrWhiteSpace(CliConnection.ModelId)
+                    && (ResolvedExecutionKind != AiConnections.EngineExecutionKind.OmpRpc || !string.IsNullOrWhiteSpace(CliConnection.UpstreamProviderId)),
+        VisionCapable:
+            ResolvedExecutionKind == AiConnections.EngineExecutionKind.NativeApi
+                && SupportsVision && !string.IsNullOrWhiteSpace(VisionModel),
+        NetworkRoute: ResolvedExecutionKind != AiConnections.EngineExecutionKind.Unknown);
 
     public static ProviderProfile CreateOpenAi() => new()
     {
@@ -157,7 +206,13 @@ internal sealed class ProviderProfile
     };
 
     public ProviderSettings ToProviderSettings(ProviderSettings baseSettings) =>
-        baseSettings with
+        ExecutionFacts.IsCliExecution ? baseSettings with
+        {
+            // The native core must never execute a CLI route as an HTTP profile.
+            TextModel = string.Empty, SupportsText = true, VisionModel = string.Empty, SupportsVision = false,
+            ApiBaseUrl = "https://api.openai.com/v1", TextEndpoint = "/chat/completions", VisionEndpoint = "/chat/completions",
+            ExtraHeaders = new Dictionary<string, string>(), VisionProvider = null,
+        } : baseSettings with
         {
             ProviderType = ProviderType,
             ApiBaseUrl = ApiBaseUrl,
@@ -231,7 +286,9 @@ internal sealed class CoreProductConfig
     /// <summary>
     /// The configured default text service, or null when nothing is
     /// configured. Never invents a provider: an empty config means no
-    /// provider, no model and no capability.
+    /// provider, no model and no capability. A CLI-backed profile stays the
+    /// active profile when selected (its execution verdict is the
+    /// coordinator's typed capability, never a silent fallback to free).
     /// </summary>
     public ProviderProfile? TryGetActiveProfile() =>
         PreferFreeEngine
@@ -242,11 +299,22 @@ internal sealed class CoreProductConfig
     /// <summary>
     /// The explicit default vision service, or the text service when vision
     /// is configured to follow it. Empty configuration still resolves null.
+    /// P05: vision eligibility consumes the typed execution facts — a CLI
+    /// profile never claims vision, so screenshots never enter a CLI channel.
     /// </summary>
-    public ProviderProfile? TryGetVisionProfile() =>
-        string.IsNullOrEmpty(VisionProfileId)
-            ? TryGetActiveProfile() is { SupportsVision: true } active ? active : null
-            : Profiles.FirstOrDefault(p => p.Id == VisionProfileId);
+    public ProviderProfile? TryGetVisionProfile()
+    {
+        if (string.IsNullOrEmpty(VisionProfileId))
+        {
+            return TryGetActiveProfile() is { } active && active.ExecutionFacts.VisionCapable
+                ? active
+                : null;
+        }
+        return Profiles.FirstOrDefault(p => p.Id == VisionProfileId) is { } explicitVision &&
+            explicitVision.ExecutionFacts.VisionCapable
+            ? explicitVision
+            : null;
+    }
 }
 
 /// <summary>
@@ -566,6 +634,36 @@ internal static class ProfileManager
 
     public static Task SaveProfilesAsync(CoreProductConfig config) => SaveAsync(config);
 
+    public static void SaveCliProfile(ProviderProfile profile, string? editingId, bool use)
+    {
+        lock (Gate)
+        {
+            var config = Load();
+            var index = config.Profiles.FindIndex(p => p.Id == editingId);
+            if (editingId is not null && index < 0) throw new InvalidOperationException("该连接已被删除，请重新连接后保存。");
+            if (!profile.ExecutionFacts.TextCapable) throw new InvalidOperationException("连接未配置完整。");
+            if (index >= 0) config.Profiles[index] = profile.Clone();
+            else config.Profiles.Add(profile.Clone());
+            if (use) { config.ActiveProfileId = profile.Id; config.PreferFreeEngine = false; }
+            SaveLocked(config);
+            if (use || config.ActiveProfileId == profile.Id) ApplyActiveToCore(config);
+        }
+    }
+
+    public static void DisableCliProfile(string id)
+    {
+        lock (Gate)
+        {
+            var config = Load();
+            var profile = config.Profiles.FirstOrDefault(p => p.Id == id);
+            if (profile?.CliConnection is not { } connection) return;
+            connection.Enabled = false;
+            profile.LastTestOutcome = null; profile.LastTestedAtUtc = null; profile.LastTestFingerprint = null;
+            SaveLocked(config);
+            AiConnections.CliTranslationExecutor.CancelProfile(id);
+        }
+    }
+
     private static void SaveLocked(CoreProductConfig config)
     {
         var targetPath = EffectivePath;
@@ -773,6 +871,15 @@ internal static class ProfileManager
 
     private static bool IsProfileExecutable(ProviderProfile profile, out string notReady)
     {
+        if (profile.ResolvedExecutionKind != AiConnections.EngineExecutionKind.NativeApi)
+        {
+            var facts = profile.ExecutionFacts;
+            var ready = facts.TextCapable && facts.CliConnection is { } connection &&
+                !string.IsNullOrWhiteSpace(connection.ExecutablePath) && File.Exists(connection.ExecutablePath) &&
+                (facts.ExecutionKind != AiConnections.EngineExecutionKind.OmpRpc || !string.IsNullOrWhiteSpace(connection.UpstreamProviderId));
+            notReady = ready ? string.Empty : "本机工具连接未配置完整或入口已失效";
+            return ready;
+        }
         if (string.IsNullOrWhiteSpace(profile.TextModel))
         {
             notReady = "缺少文字模型";
@@ -1042,6 +1149,7 @@ internal static class ProfileManager
     /// <summary>Resolves the credential target for a specific profile.</summary>
     public static string ResolveCredentialTargetFor(ProviderProfile profile)
     {
+        if (profile.ExecutionFacts.IsCliExecution) return string.Empty;
         if (string.IsNullOrWhiteSpace(profile.CredentialTarget))
         {
             return $"PopGlot/provider/{profile.Id}";
