@@ -169,7 +169,26 @@ internal sealed class CliRuntimeHost : IDisposable
                     var target = Path.GetFullPath(_workDirectory);
                     var ownedRoot = Path.GetFullPath(Path.Combine(StoragePaths.CoreConfigDirectory, "cli-run")) + Path.DirectorySeparatorChar;
                     if (target.StartsWith(ownedRoot, StringComparison.OrdinalIgnoreCase))
-                        Directory.Delete(target, recursive: true);
+                    {
+                        // A just-killed process (or an AV scanner holding its
+                        // handles open) can pin the empty work directory for a
+                        // moment after exit; a bounded retry keeps the reclaim
+                        // real on slow machines instead of leaking the
+                        // directory under our config root.
+                        for (var attempt = 0; attempt < 8; attempt++)
+                        {
+                            try
+                            {
+                                Directory.Delete(target, recursive: true);
+                                break;
+                            }
+                            catch (Exception pinned) when (
+                                pinned is IOException or UnauthorizedAccessException && attempt < 7)
+                            {
+                                Thread.Sleep(250);
+                            }
+                        }
+                    }
                 }
                 catch (Exception exception) when (
                     exception is IOException or UnauthorizedAccessException)
