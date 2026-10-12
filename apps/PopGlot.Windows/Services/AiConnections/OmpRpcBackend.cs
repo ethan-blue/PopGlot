@@ -6,6 +6,112 @@ namespace PopGlot.Windows.Services.AiConnections;
 /// <summary>OMP 18.2.11 JSONL RPC; no token/database access.</summary>
 internal sealed class OmpRpcBackend : ICliBackend
 {
+    internal sealed record LoginProvider(string Id, string Name, bool Available, bool Authenticated)
+    {
+        public string DisplayName => $"{Name} · {(Authenticated ? "已登录" : Available ? "未登录" : "暂不可用")}";
+        public override string ToString() => DisplayName;
+    }
+
+    public async Task<IReadOnlyList<LoginProvider>> ListLoginProvidersAsync(CancellationToken ct)
+    {
+        var transport = await ConnectAsync(ct).ConfigureAwait(false);
+        var result = await RequestAsync(transport, "get_login_providers", new(), ct).ConfigureAwait(false);
+        var providers = new List<LoginProvider>();
+        foreach (var item in result.GetProperty("providers").EnumerateArray())
+        {
+            var id = item.GetProperty("id").GetString()!;
+            if (id is "anthropic" or "claude-code") continue;
+            providers.Add(new(id, item.GetProperty("name").GetString() ?? id,
+                item.GetProperty("available").GetBoolean(), item.GetProperty("authenticated").GetBoolean()));
+            if (providers.Count > 100) throw new InvalidOperationException("OMP 返回的登录提供方超过上限。");
+        }
+        return providers;
+    }
+
+    // Only explicit login consumes interactive UI events. Translation remains non-interactive.
+    // OMP owns all credentials, refresh and persistence; none are returned to PopGlot.
+    public async Task LoginAsync(string providerId, Func<Uri, string?, CancellationToken, Task> openBrowser,
+        Func<string, CancellationToken, Task<string>> requestInput, CancellationToken ct)
+    {
+        var providers = await ListLoginProvidersAsync(ct).ConfigureAwait(false);
+        if (!providers.Any(p => p.Id == providerId && p.Available))
+            throw new InvalidOperationException("此提供方暂不支持 OMP 登录。");
+        var transport = await ConnectAsync(ct).ConfigureAwait(false);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var events = transport.Subscribe();
+        var authorizedUrl = false;
+        async Task MonitorPolicyAsync()
+        {
+            while (true)
+            {
+                await Task.Delay(250, lifetime.Token).ConfigureAwait(false);
+                CliLauncher.RequirePolicy(EngineExecutionKind.OmpRpc, _connection);
+            }
+        }
+        async Task ConsumeAsync()
+        {
+            await foreach (var line in events.Reader.ReadAllAsync(lifetime.Token).ConfigureAwait(false))
+            {
+                using var doc = JsonDocument.Parse(line);
+                var root = doc.RootElement;
+                var type = root.GetProperty("type").GetString();
+                if (type is "tool_execution_start" or "host_tool_request" or "host_tool_call")
+                    throw new InvalidOperationException("OMP 登录尝试执行额外工具，已停止。");
+                if (type != "extension_ui_request") continue;
+                var method = root.GetProperty("method").GetString();
+                if (method == "open_url")
+                {
+                    var url = root.TryGetProperty("launchUrl", out var launch) && launch.ValueKind == JsonValueKind.String
+                        ? launch.GetString() : root.GetProperty("url").GetString();
+                    var uri = ValidateLoginUrl(url);
+                    var instructions = root.TryGetProperty("instructions", out var hint) && hint.ValueKind == JsonValueKind.String ? hint.GetString() : null;
+                    if (instructions?.Length > 4096) throw new InvalidOperationException("OMP 授权说明超过上限。");
+                    await openBrowser(uri, instructions, lifetime.Token).ConfigureAwait(false);
+                    authorizedUrl = true;
+                }
+                else if (method == "input" && authorizedUrl)
+                {
+                    var value = await requestInput(root.TryGetProperty("title", out var title) ? title.GetString() ?? "授权回调" : "授权回调", lifetime.Token).ConfigureAwait(false);
+                    if (value.Length > 16384 || value.Contains('\n') || value.Contains('\r'))
+                        throw new InvalidOperationException("授权回调格式无效。");
+                    await transport.NotifyAsync(JsonSerializer.Serialize(new { type = "extension_ui_response", id = root.GetProperty("id").GetString(), value }), lifetime.Token).ConfigureAwait(false);
+                }
+                else if (method is not ("notify" or "setStatus" or "setWidget" or "setTitle" or "set_editor_text" or "cancel"))
+                    throw new InvalidOperationException("此登录需要 OMP 终端交互，请在 OMP 中完成后刷新账号。");
+            }
+            throw new InvalidOperationException("OMP 登录连接提前关闭。");
+        }
+        var consume = ConsumeAsync();
+        var policy = MonitorPolicyAsync();
+        var login = RequestAsync(transport, "login", new() { ["providerId"] = providerId }, lifetime.Token);
+        try
+        {
+            var first = await Task.WhenAny(login, consume, policy).ConfigureAwait(false);
+            if (first == consume) await consume.ConfigureAwait(false);
+            if (first == policy) await policy.ConfigureAwait(false);
+            await login.ConfigureAwait(false); // URL opening is not login success.
+            ct.ThrowIfCancellationRequested();
+            CliLauncher.RequirePolicy(EngineExecutionKind.OmpRpc, _connection);
+        }
+        finally
+        {
+            lifetime.Cancel();
+            _host.Disconnect(); _transport = null;
+            try { await consume.ConfigureAwait(false); } catch { /* Primary failure is propagated above. */ }
+            try { await policy.ConfigureAwait(false); } catch { /* Policy failure is propagated above. */ }
+            // Observe the pending request even when the UI/event handler failed.
+            if (!login.IsCompletedSuccessfully) { try { await login.ConfigureAwait(false); } catch { } }
+        }
+    }
+
+    internal static Uri ValidateLoginUrl(string? url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps ||
+            !string.IsNullOrEmpty(uri.UserInfo) || !uri.IsDefaultPort ||
+            uri.Host is not ("accounts.google.com" or "auth.openai.com" or "github.com" or "login.microsoftonline.com" or "login.live.com"))
+            throw new InvalidOperationException("OMP 返回了不支持的授权地址，请在 OMP 中完成登录。");
+        return uri;
+    }
     private readonly CliConnectionSettings _connection;
     private readonly CliRuntimeHost _host;
     private JsonLineTransport? _transport;
@@ -85,6 +191,7 @@ internal sealed class OmpRpcBackend : ICliBackend
         if (ack.ValueKind == JsonValueKind.Object && ack.TryGetProperty("agentInvoked", out var invoked) && !invoked.GetBoolean())
             throw new InvalidOperationException("OMP 没有调用模型，翻译未完成。");
         bool failed = false, sawText = false;
+        string? providerFailure = null;
         await foreach (var line in events.Reader.ReadAllAsync(ct).ConfigureAwait(false))
         {
             using var doc = JsonDocument.Parse(line);
@@ -106,13 +213,20 @@ internal sealed class OmpRpcBackend : ICliBackend
             if (type == "message_end" && root.TryGetProperty("message", out var message) && message.TryGetProperty("stopReason", out var reason))
             {
                 failed |= reason.GetString() is "error" or "aborted";
+                if (reason.GetString() == "error" && message.TryGetProperty("errorMessage", out var errorMessage) && errorMessage.ValueKind == JsonValueKind.String)
+                {
+                    // Expose only an HTTP code, never upstream text (which can contain credentials).
+                    var error = errorMessage.GetString() ?? "";
+                    var status = System.Text.RegularExpressions.Regex.Match(error[..Math.Min(error.Length, 2000)], @"(?:^|\bHTTP(?:/\d(?:\.\d)?)?\s+|\bstatus(?:\s+code)?[=: ]+)(400|401|403|404|408|409|429|500|502|503|504)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    providerFailure = status.Success ? $"OMP 提供方请求失败（状态 {status.Groups[1].Value}）。请检查账号权限、额度和网络后重试。" : "OMP 提供方返回了请求错误。请检查账号权限、额度和网络后重试。";
+                }
                 if (!sawText && message.TryGetProperty("content", out var content))
                     foreach (var block in content.EnumerateArray()) if (block.GetProperty("type").GetString() == "text")
                     { sawText = true; delta(block.GetProperty("text").GetString() ?? ""); }
             }
             if (type == "agent_end" && (!root.TryGetProperty("isTerminal", out var terminal) || terminal.GetBoolean()))
             {
-                if (failed || !sawText) throw new InvalidOperationException("OMP 未完成翻译。请检查账号额度、模型权限及网络后重试。");
+                if (failed || !sawText) throw new InvalidOperationException(providerFailure ?? "OMP 未完成翻译。请检查账号额度、模型权限及网络后重试。");
                 return;
             }
             if (type == "prompt_result" && root.TryGetProperty("agentInvoked", out var active) && !active.GetBoolean())

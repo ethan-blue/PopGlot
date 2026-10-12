@@ -161,7 +161,61 @@
         <Grid x:Name="CliConnectionsPanel" Grid.Row="1" Visibility="Collapsed">
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,8,16">
                 <StackPanel>
-                    <Border Background="{DynamicResource SurfaceMutedBrush}" CornerRadius="{DynamicResource CardRadius}" Padding="12" Margin="0,0,0,14">
+
+                    <TextBlock Text="连接本机工具" Style="{StaticResource SectionTitle}"/>
+                    <TextBlock FontSize="12" TextWrapping="Wrap" Margin="0,4,0,12" Foreground="{DynamicResource TextSecondaryBrush}"
+                               Text="CLI 连接使用 Codex 或 oh-my-pi 管理的登录，内容会发送到工具配置的提供方并使用其额度。普通 API Key 导入需要你单独确认。"/>
+                    <WrapPanel Margin="0,0,0,10">
+                        <Button x:Name="DetectCliToolsButton" Content="重新检测" Style="{StaticResource GhostButton}" Click="DetectCliTools_Click"/>
+                        <TextBlock x:Name="CliDetectStatusText" VerticalAlignment="Center" Margin="10,0,0,0" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    </WrapPanel>
+                    <ListBox x:Name="CliToolsListBox" MaxHeight="200" Background="Transparent" BorderThickness="0"
+                             ItemContainerStyle="{StaticResource CliToolItem}" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             SelectionChanged="CliToolsListBox_SelectionChanged" AutomationProperties.Name="选择本机工具">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="10,7">
+                                    <TextBlock Text="{Binding ToolName}" FontWeight="SemiBold"/>
+                                    <TextBlock Text="{Binding EntryPath}" TextWrapping="Wrap" FontSize="11" Margin="0,3,0,0" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <WrapPanel Margin="0,12,0,12">
+                        <Button x:Name="CliConnectButton" Content="连接 / 刷新账号" Style="{StaticResource GhostButton}" Click="CliConnect_Click" IsEnabled="False"/>
+                        <Button x:Name="CliDisconnectButton" Content="断开连接" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Click="CliDisconnect_Click" IsEnabled="False"/>
+                        <Button x:Name="CliCancelButton" Content="取消操作" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Click="CliCancel_Click" Visibility="Collapsed"/>
+                    </WrapPanel>
+                    <StackPanel x:Name="OmpLoginPanel" Visibility="Collapsed" Margin="0,0,0,12">
+                        <TextBlock Text="OMP 管理的账号" Style="{StaticResource FieldLabel}"/>
+                        <TextBlock Text="已有登录直接复用。仅首次添加或授权失效时需要登录；凭据保存和刷新由 OMP 负责。" TextWrapping="Wrap" FontSize="12" Margin="0,0,0,8" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        <ComboBox x:Name="OmpLoginProviderCombo" DisplayMemberPath="DisplayName" Style="{StaticResource EditorComboField}" SelectionChanged="OmpLoginProvider_Changed" AutomationProperties.Name="OMP 登录提供方"/>
+                        <Button x:Name="OmpLoginButton" Content="通过 OMP 登录所选提供方" Style="{StaticResource GhostButton}" HorizontalAlignment="Left" Margin="0,8,0,0" Click="OmpLogin_Click"/>
+                        <TextBlock x:Name="OmpAuthorizationInstructions" TextWrapping="Wrap" Visibility="Collapsed" Margin="0,8,0,0" AutomationProperties.Name="OMP 浏览器授权说明"/>
+                        <StackPanel x:Name="OmpCallbackPanel" Visibility="Collapsed" Margin="0,10,0,0">
+                            <TextBlock Text="授权回调（仅在浏览器无法自动返回时需要）" Style="{StaticResource FieldLabel}"/>
+                            <TextBox x:Name="OmpCallbackInput" AutomationProperties.Name="粘贴 OMP 授权回调"/>
+                            <Button x:Name="OmpSubmitCallbackButton" Content="提交回调" Style="{StaticResource GhostButton}" HorizontalAlignment="Left" Margin="0,8,0,0" Click="OmpSubmitCallback_Click"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <TextBlock Text="文字模型" Style="{StaticResource FieldLabel}"/>
+                    <ComboBox x:Name="CliModelCombo" DisplayMemberPath="DisplayName" Style="{StaticResource EditorComboField}"
+                              SelectionChanged="CliModel_SelectionChanged" AutomationProperties.Name="本机工具文字模型"/>
+                    <StackPanel x:Name="OmpImportPanel" Visibility="Collapsed" Margin="0,10,0,0">
+                        <CheckBox x:Name="OmpImportConsent" FontSize="12" Margin="0,0,0,8" HorizontalContentAlignment="Stretch"
+                                  Checked="OmpImportConsent_Changed" Unchecked="OmpImportConsent_Changed">
+                            <TextBlock Text="允许将所选提供方的普通 API Key 保存到 Windows 凭据库，用于 PopGlot API 直连。" TextWrapping="Wrap"/>
+                        </CheckBox>
+                        <Button x:Name="OmpImportButton" Content="导入所选 OMP 模型的 API 直连" Style="{StaticResource GhostButton}" HorizontalAlignment="Left" Margin="0,0,0,10" Click="OmpImport_Click" IsEnabled="False"/>
+                    </StackPanel>
+                    <TextBlock x:Name="CliConnectionStatus" Text="连接后可选择模型并测试翻译。" Margin="0,10,0,10" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    <TextBlock Text="测试只发送 Hello world，并会使用所选模型的少量额度。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,8"/>
+                    <WrapPanel>
+                        <Button x:Name="CliTestButton" Content="测试翻译" Style="{StaticResource GhostButton}" Click="CliTest_Click" IsEnabled="False"/>
+                        <Button x:Name="CliSaveButton" Content="保存连接" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Click="CliSave_Click" IsEnabled="False"/>
+                        <Button x:Name="CliSaveUseButton" Content="保存并使用" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}" Click="CliSave_Click" IsEnabled="False"/>
+                    </WrapPanel>
+                    <Border Background="{DynamicResource SurfaceMutedBrush}" CornerRadius="{DynamicResource CardRadius}" Padding="12" Margin="0,16,0,14">
                         <StackPanel>
                             <TextBlock Text="ChatGPT 官方直连" Style="{StaticResource SectionTitle}"/>
                             <TextBlock Text="通过官方浏览器授权，由 PopGlot 直接请求模型，无需启动 Codex。内容会使用所选 ChatGPT 计划的额度。"
@@ -187,47 +241,6 @@
                             <TextBlock x:Name="ChatGptStatus" Text="登录由官方页面完成。测试会发送 Hello world 并使用少量额度。" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
                         </StackPanel>
                     </Border>
-                    <TextBlock Text="连接本机工具" Style="{StaticResource SectionTitle}"/>
-                    <TextBlock FontSize="12" TextWrapping="Wrap" Margin="0,4,0,12" Foreground="{DynamicResource TextSecondaryBrush}"
-                               Text="CLI 连接使用 Codex 或 oh-my-pi 管理的登录，内容会发送到工具配置的提供方并使用其额度。普通 API Key 导入需要你单独确认。"/>
-                    <WrapPanel Margin="0,0,0,10">
-                        <Button x:Name="DetectCliToolsButton" Content="重新检测" Style="{StaticResource GhostButton}" Click="DetectCliTools_Click"/>
-                        <TextBlock x:Name="CliDetectStatusText" VerticalAlignment="Center" Margin="10,0,0,0" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
-                    </WrapPanel>
-                    <ListBox x:Name="CliToolsListBox" MaxHeight="200" Background="Transparent" BorderThickness="0"
-                             ItemContainerStyle="{StaticResource CliToolItem}" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             SelectionChanged="CliToolsListBox_SelectionChanged" AutomationProperties.Name="选择本机工具">
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <StackPanel Margin="10,7">
-                                    <TextBlock Text="{Binding ToolName}" FontWeight="SemiBold"/>
-                                    <TextBlock Text="{Binding EntryPath}" TextWrapping="Wrap" FontSize="11" Margin="0,3,0,0" Foreground="{DynamicResource TextSecondaryBrush}"/>
-                                </StackPanel>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
-                    <WrapPanel Margin="0,12,0,12">
-                        <Button x:Name="CliConnectButton" Content="连接 / 刷新账号" Style="{StaticResource GhostButton}" Click="CliConnect_Click" IsEnabled="False"/>
-                        <Button x:Name="CliDisconnectButton" Content="断开连接" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Click="CliDisconnect_Click" IsEnabled="False"/>
-                        <Button x:Name="CliCancelButton" Content="取消操作" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Click="CliCancel_Click" Visibility="Collapsed"/>
-                    </WrapPanel>
-                    <TextBlock Text="文字模型" Style="{StaticResource FieldLabel}"/>
-                    <ComboBox x:Name="CliModelCombo" DisplayMemberPath="DisplayName" Style="{StaticResource EditorComboField}"
-                              SelectionChanged="CliModel_SelectionChanged" AutomationProperties.Name="本机工具文字模型"/>
-                    <StackPanel x:Name="OmpImportPanel" Visibility="Collapsed" Margin="0,10,0,0">
-                        <CheckBox x:Name="OmpImportConsent" FontSize="12" Margin="0,0,0,8" HorizontalContentAlignment="Stretch"
-                                  Checked="OmpImportConsent_Changed" Unchecked="OmpImportConsent_Changed">
-                            <TextBlock Text="允许将所选提供方的普通 API Key 保存到 Windows 凭据库，用于 PopGlot API 直连。" TextWrapping="Wrap"/>
-                        </CheckBox>
-                        <Button x:Name="OmpImportButton" Content="导入所选 OMP 模型的 API 直连" Style="{StaticResource GhostButton}" HorizontalAlignment="Left" Margin="0,0,0,10" Click="OmpImport_Click" IsEnabled="False"/>
-                    </StackPanel>
-                    <TextBlock x:Name="CliConnectionStatus" Text="连接后可选择模型并测试翻译。" Margin="0,10,0,10" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
-                    <TextBlock Text="测试只发送 Hello world，并会使用所选模型的少量额度。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,8"/>
-                    <WrapPanel>
-                        <Button x:Name="CliTestButton" Content="测试翻译" Style="{StaticResource GhostButton}" Click="CliTest_Click" IsEnabled="False"/>
-                        <Button x:Name="CliSaveButton" Content="保存连接" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Click="CliSave_Click" IsEnabled="False"/>
-                        <Button x:Name="CliSaveUseButton" Content="保存并使用" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}" Click="CliSave_Click" IsEnabled="False"/>
-                    </WrapPanel>
                 </StackPanel>
             </ScrollViewer>
         </Grid>

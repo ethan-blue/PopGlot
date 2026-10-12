@@ -31,7 +31,10 @@ internal static class Program
         {
             Check("Codex protocol + FFI stream", () => StreamFake(EngineExecutionKind.CodexAppServer));
             Check("OMP protocol + FFI stream", () => StreamFake(EngineExecutionKind.OmpRpc));
+            Check("OMP login browser/callback/final confirmation", OmpLoginSuccess);
+            Check("OMP login failure/cancel/unsafe URL isolation", OmpLoginFailures);
             Check("late OMP prompt error is not success", () => FailureFake("late_error"));
+            Check("OMP HTTP error shows status without leaking upstream text", OmpHttpFailure);
             Check("process crash completes turn", () => FailureFake("crash"));
             Check("no tool access accepted", () => FailureFake("tools"));
             Check("cancel kills owned process", CancellationFake);
@@ -53,6 +56,7 @@ internal static class Program
                 Check("installed Codex login/models/translation", () => Live("codex"));
                 Check("installed OMP zero tools/models/translation", () => Live("omp"));
             }
+            if (args.Contains("--live-omp")) Check("installed OMP providers/models/translation", () => Live("omp"));
             if (args.Contains("--ui")) Check("WPF connection screen and buttons", () => { UiScenario.Run(root); return Task.CompletedTask; });
         }
         finally { DirectTests.Restore(); Environment.SetEnvironmentVariable("POPGLOT_FAKE_PROTOCOL", null); Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", null); }
@@ -103,6 +107,54 @@ internal static class Program
         catch (InvalidOperationException) { failed = true; }
         Assert(failed, "must fail without reporting completed");
         Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", null);
+    }
+    private static async Task OmpLoginSuccess()
+    {
+        var profile = FakeProfile(EngineExecutionKind.OmpRpc);
+        Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", "login_input");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var backend = new OmpRpcBackend(profile.CliConnection!);
+        var providers = await backend.ListLoginProvidersAsync(timeout.Token);
+        Assert(providers.Count == 2 && providers[0].Authenticated && !providers[1].Available, "provider state comes from OMP; disallowed provider filtered");
+        Assert(providers[0].ToString() == "Google Antigravity · 已登录", "selection displays a provider label, never record internals");
+        int browser = 0, input = 0;
+        await backend.LoginAsync("google-antigravity", (uri, instructions, ct) => { browser++; Assert(uri.Host == "accounts.google.com" && instructions == "fixture device instructions", "browser URL and device instructions"); return Task.CompletedTask; },
+            (_, ct) => { input++; return Task.FromResult("fixture-oauth-code"); }, timeout.Token);
+        Assert(browser == 1 && input == 1, "must handle browser and matching callback input");
+        Assert((await backend.ListModelsAsync(timeout.Token)).Count == 1, "models refresh after final login response on a fresh process");
+    }
+    private static async Task OmpHttpFailure()
+    {
+        var profile = FakeProfile(EngineExecutionKind.OmpRpc);
+        Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", "http_error");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try { await CliTranslationExecutor.Stream(profile, "Hello", "en", "zh", null, timeout.Token).Completion; }
+        catch (InvalidOperationException ex)
+        {
+            Assert(ex.Message.Contains("429") && !ex.Message.Contains("private-upstream-text"), "only HTTP status may be displayed");
+            return;
+        }
+        throw new InvalidOperationException("HTTP failure must not complete a translation");
+    }
+    private static async Task OmpLoginFailures()
+    {
+        foreach (var scenario in new[] { "login_error", "login_unsafe", "login_hang", "login_preinput", "login_policy" })
+        {
+            var profile = FakeProfile(EngineExecutionKind.OmpRpc);
+            Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", scenario);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(scenario == "login_hang" ? 1200 : 10000));
+            using var backend = new OmpRpcBackend(profile.CliConnection!);
+            bool failed = false; int browser = 0;
+            var settings = CoreBridge.GetSettings();
+            try { await backend.LoginAsync("google-antigravity", (_, instructions, ct) => {
+                browser++;
+                if (scenario == "login_policy") CoreBridge.SaveSettings(settings with { NetworkEnabled = false });
+                return Task.CompletedTask;
+            }, (_, ct) => Task.FromResult("fixture-oauth-code"), timeout.Token); }
+            catch (Exception ex) when (ex is InvalidOperationException or OperationCanceledException) { failed = true; }
+            finally { CoreBridge.SaveSettings(settings); }
+            Assert(failed && (scenario != "login_unsafe" || browser == 0), "failed/cancelled/unsafe login cannot become success");
+        }
     }
     private static async Task CancellationFake()
     {
@@ -201,6 +253,12 @@ internal static class Program
         var status = await backend.CheckAccountAsync(timeout.Token);
         var models = await backend.ListModelsAsync(timeout.Token);
         Console.WriteLine($"LIVE {tool}: state={status.State}, models={models.Count}, version={connection.ExpectedVersion}");
+        if (backend is OmpRpcBackend ompBackend)
+        {
+            var providers = await ompBackend.ListLoginProvidersAsync(timeout.Token);
+            Assert(providers.Count > 0, "installed OMP must return login providers");
+            Console.WriteLine($"LIVE OMP: login providers={providers.Count}; authenticated={providers.Count(p => p.Authenticated)}; Antigravity listed={providers.Any(p => p.Id == "google-antigravity")}");
+        }
         Assert(models.Count > 0, "no available models");
         var model = tool == "codex" ? models.FirstOrDefault(m => m.IsDefault) ?? models[0] :
             models.FirstOrDefault(m => m.Provider == "zhipu-coding-plan" && m.Id == "glm-4.7") ?? models[0];
@@ -237,6 +295,26 @@ internal static class Program
                 case "account/read": Reply(new { account = new { type = "chatgpt" }, requiresOpenaiAuth = true }); break;
                 case "model/list": Reply(new { data = new[] { new { model = "fixture", displayName = "fixture", isDefault = true } } }); break;
                 case "get_available_models": Reply(new { models = new[] { new { id = "fixture", name = "fixture", provider = "fixture-provider" } } }); break;
+                case "get_login_providers": Reply(new { providers = new[] {
+                    new { id = "google-antigravity", name = "Google Antigravity", available = true, authenticated = true },
+                    new { id = "unavailable", name = "Unavailable", available = false, authenticated = false },
+                    new { id = "anthropic", name = "Anthropic", available = true, authenticated = false } } }); break;
+                case "login":
+                    if (scenario == "login_preinput") { Emit(new { type = "extension_ui_request", id = "auth-ui", method = "input", title = "Account" }); break; }
+                    Emit(new { type = "extension_ui_request", id = "auth-url", method = "open_url",
+                        url = scenario == "login_unsafe" ? "https://accounts.google.com.evil.test/oauth" : "https://accounts.google.com/o/oauth2/v2/auth?state=fixture", instructions = "fixture device instructions" });
+                    if (scenario is "login_hang" or "login_policy") { Thread.Sleep(30000); break; }
+                    if (scenario == "login_input")
+                    {
+                        Emit(new { type = "extension_ui_request", id = "auth-ui", method = "input", title = "Paste callback" });
+                        using var answer = JsonDocument.Parse(Console.ReadLine()!);
+                        Assert(answer.RootElement.GetProperty("type").GetString() == "extension_ui_response" &&
+                            answer.RootElement.GetProperty("id").GetString() == "auth-ui" &&
+                            answer.RootElement.GetProperty("value").GetString() == "fixture-oauth-code", "OAuth callback matches UI request id");
+                    }
+                    if (scenario == "login_error") Emit(new { id, type = "response", command = "login", success = false, error = "fixture auth failure" });
+                    else Reply(new { providerId = "google-antigravity" });
+                    break;
                 case "get_state": Reply(new { dumpTools = scenario == "tools" ? new[] { new { name = "bash" } } : Array.Empty<object>() }); break;
                 case "set_model": case "set_thinking_level": Reply(null); break;
                 case "thread/start":
@@ -246,6 +324,11 @@ internal static class Program
                 case "turn/start": case "prompt":
                     if (scenario == "crash") return 3;
                     Reply(omp ? null : new { turn = new { id = "turn" } });
+                    if (scenario == "http_error")
+                    {
+                        Emit(new { type = "message_end", message = new { stopReason = "error", errorMessage = "HTTP 429 private-upstream-text" } });
+                        Emit(new { type = "agent_end", isTerminal = true }); break;
+                    }
                     if (scenario == "hang") { Thread.Sleep(30000); break; }
                     if (scenario == "late_error") { Emit(new { id, type = "response", command = "prompt", success = false, error = "fixture" }); break; }
                     var marker = System.Text.RegularExpressions.Regex.Match(instructions, @"PGMETA-[a-f0-9-]+").Value;

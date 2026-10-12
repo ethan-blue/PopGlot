@@ -87,6 +87,30 @@ internal static class UiScenario
             Until(() => ((TextBlock)section.FindName("ChatGptStatus")).Text.StartsWith("已断开"), "direct UI disconnect must complete");
             Program.Assert(ProfileManager.Load().TryGetActiveProfile()?.ExecutionFacts.TextCapable == false, "direct route disabled after disconnect");
             DirectTests.Restore();
+            Environment.SetEnvironmentVariable("POPGLOT_FAKE_PROTOCOL", "omp");
+            Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", "login_input");
+            list.ItemsSource = new[] { new ServicesSection.CliToolRow { ToolId = "omp", ToolName = "oh-my-pi", EntryPath = Environment.ProcessPath! } };
+            list.SelectedIndex = 0; Click("CliConnectButton");
+            Until(() => Find("OmpLoginButton").IsEnabled, "OMP login provider list must be populated");
+            var browserOpened = false;
+            section.OmpOpenBrowser = _ => browserOpened = true;
+            Click("OmpLoginButton");
+            Until(() => ((StackPanel)section.FindName("OmpCallbackPanel")).Visibility == Visibility.Visible, "OMP callback entry must appear");
+            Program.Assert(browserOpened && Find("CliCancelButton").Visibility == Visibility.Visible, "browser authorization and visible cancel");
+            ((TextBox)section.FindName("OmpCallbackInput")).Text = "fixture-oauth-code";
+            Click("OmpSubmitCallbackButton");
+            Until(() => ((TextBlock)section.FindName("CliConnectionStatus")).Text.StartsWith("OMP 已确认登录"), "OMP final login and model refresh must complete");
+            Program.Assert(((TextBox)section.FindName("OmpCallbackInput")).Text.Length == 0, "callback input cleared after completion");
+            window.UpdateLayout();
+            var ompBitmap = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+            ompBitmap.Render(window); var ompEncoder = new PngBitmapEncoder(); ompEncoder.Frames.Add(BitmapFrame.Create(ompBitmap));
+            using (var stream = File.Create(Path.GetFullPath("artifacts/cli-repair/omp-login-panel.png"))) ompEncoder.Save(stream);
+            Click("OmpLoginButton");
+            Until(() => ((StackPanel)section.FindName("OmpCallbackPanel")).Visibility == Visibility.Visible, "second login awaits callback");
+            Click("CliCancelButton");
+            Program.Assert(((StackPanel)section.FindName("OmpCallbackPanel")).Visibility == Visibility.Collapsed && Find("OmpLoginButton").IsEnabled,
+                "cancel hides callback and releases UI; old completion cannot overwrite it");
+            Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", null);
         }
         finally { DirectTests.Restore(); window.Close(); Pump(); }
     }

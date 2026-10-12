@@ -39,7 +39,7 @@ public partial class ServicesSection
     {
         if (_cliOperation is not null) return;
         var rows = new List<CliToolRow>();
-        foreach (var (id, name) in new[] { (CliDiscovery.CodexToolId, "Codex CLI"), (CliDiscovery.OmpToolId, "oh-my-pi") })
+        foreach (var (id, name) in new[] { (CliDiscovery.OmpToolId, "oh-my-pi"), (CliDiscovery.CodexToolId, "Codex CLI") })
             rows.AddRange(CliDiscovery.Discover(id).Select(tool => new CliToolRow { ToolId = id, ToolName = name, EntryPath = tool.ExecutablePath }));
         CliToolsListBox.ItemsSource = rows;
         CliToolsListBox.SelectedIndex = rows.Count > 0 ? 0 : -1;
@@ -52,6 +52,7 @@ public partial class ServicesSection
         CancelCliOperation();
         _cliConnection = null; _cliProfileId = null; _cliTestedModel = null; _cliTestedAt = null;
         CliModelCombo.ItemsSource = null;
+        OmpLoginProviderCombo.ItemsSource = null;
         CliConnectionStatus.Text = "连接后可选择模型并测试翻译。登录由工具自己管理，无需复制 API Key。";
         UpdateCliButtons();
     }
@@ -62,6 +63,7 @@ public partial class ServicesSection
         var operation = new CancellationTokenSource(TimeSpan.FromSeconds(40));
         _cliOperation = operation;
         _cliConnection = null; _cliTestedModel = null; _cliTestedAt = null; CliModelCombo.ItemsSource = null;
+        OmpLoginProviderCombo.ItemsSource = null;
         _cliKind = row.ToolId == CliDiscovery.CodexToolId ? EngineExecutionKind.CodexAppServer : EngineExecutionKind.OmpRpc;
         var connection = new CliConnectionSettings { Enabled = true, ExecutablePath = row.EntryPath };
         CliConnectionStatus.Text = "正在检查版本、账号状态和模型…";
@@ -73,10 +75,13 @@ public partial class ServicesSection
                 using var backend = CliTranslationExecutor.CreateBackend(_cliKind, connection);
                 var account = await backend.CheckAccountAsync(operation.Token);
                 var models = account.State == CliConnectionState.NeedsLogin ? Array.Empty<CliModel>() : await backend.ListModelsAsync(operation.Token);
-                return (account, models);
+                var providers = backend is OmpRpcBackend omp ? await omp.ListLoginProvidersAsync(operation.Token) : Array.Empty<OmpRpcBackend.LoginProvider>();
+                return (account, models, providers);
             });
             if (!ReferenceEquals(_cliOperation, operation)) return;
             _cliConnection = connection;
+            OmpLoginProviderCombo.ItemsSource = result.providers;
+            OmpLoginProviderCombo.SelectedItem = result.providers.FirstOrDefault(p => p.Authenticated) ?? result.providers.FirstOrDefault(p => p.Available);
             CliModelCombo.ItemsSource = result.models;
             var existing = ProfileManager.Load().Profiles.FirstOrDefault(p => p.ResolvedExecutionKind == _cliKind &&
                 string.Equals(p.CliConnection?.ExecutablePath, row.EntryPath, StringComparison.OrdinalIgnoreCase));
@@ -194,7 +199,7 @@ public partial class ServicesSection
     private void CliCancel_Click(object sender, RoutedEventArgs e)
     { CancelCliOperation(); CliConnectionStatus.Text = ChatGptStatus.Text = "操作已取消。"; UpdateCliButtons(); }
     private void CancelCliOperation()
-    { var operation = _cliOperation; _cliOperation = null; operation?.Cancel(); }
+    { var operation = _cliOperation; _cliOperation = null; operation?.Cancel(); _ompCallback?.TrySetCanceled(); HideOmpCallback(); }
     private string ModelIdentity() => $"{_cliConnection?.ExecutablePath}|{_cliConnection?.ExpectedVersion}|{_cliConnection?.UpstreamProviderId}|{_cliConnection?.ModelId}";
     private void UpdateCliButtons()
     {
@@ -205,6 +210,7 @@ public partial class ServicesSection
         CliTestButton.IsEnabled = CliSaveButton.IsEnabled = CliSaveUseButton.IsEnabled = ready && !busy;
         CliDisconnectButton.IsEnabled = !busy && (_cliConnection is not null || _cliProfileId is not null);
         CliCancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+        UpdateOmpLoginButtons(busy);
         UpdateChatGptButtons();
     }
     private static string CliFailureText(Exception ex) => ex is InvalidOperationException
