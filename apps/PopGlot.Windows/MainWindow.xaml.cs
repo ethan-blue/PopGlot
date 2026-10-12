@@ -1406,7 +1406,7 @@ internal static class TranslationStyleMenu
             // 类型化执行维度，不从标签/IsLocal 推断）。
             var settings = CoreBridge.GetSettings();
             var (textRoute, _) = ProfileManager.ResolveRoutes();
-            var textApiKey = textRoute is null || textRoute.Profile.ExecutionFacts.IsCliExecution
+            var textApiKey = textRoute is null || textRoute.Profile.ExecutionFacts.IsManagedExecution
                 ? null
                 : CredentialStore.LoadApiKey(textRoute.CredentialTarget);
             var textRuntimeSettings = textRoute?.Profile.ToProviderSettings(settings);

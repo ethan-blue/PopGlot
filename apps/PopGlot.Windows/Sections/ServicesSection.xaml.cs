@@ -716,6 +716,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             ShowOverview();
             return;
         }
+        if (profile.ResolvedExecutionKind == EngineExecutionKind.ChatGptDirect) { OpenDirectProfile(profile); return; }
         if (profile.ExecutionFacts.IsCliExecution)
         {
             OpenCliConnections_Click(this, new RoutedEventArgs());
@@ -999,7 +1000,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private static string? LoadStoredKey(ProviderProfile profile)
     {
-        if (profile.ExecutionFacts.IsCliExecution) return null;
+        if (profile.ExecutionFacts.IsManagedExecution) return null;
         try
         {
             var profileKey = CredentialStore.LoadApiKey(profile.CredentialTarget);
@@ -1059,7 +1060,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     private static (string Text, StatusTone Tone) DescribeProfileState(
         ProviderProfile profile, bool hasKey, string? sessionOutcome)
     {
-        if (profile.ExecutionFacts.IsCliExecution)
+        if (profile.ExecutionFacts.IsManagedExecution)
         {
             if (!ProfileManager.IsTextEngineExecutable(profile)) return ("已断开 · 需重新连接", StatusTone.Warning);
             var valid = ProfileVerification.EvidenceFingerprint(profile, false) == profile.LastTestFingerprint;
@@ -2168,6 +2169,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             return;
         }
+        if (profile.ResolvedExecutionKind == EngineExecutionKind.ChatGptDirect) { OpenDirectProfile(profile); return; }
         if (profile.ExecutionFacts.IsCliExecution)
         {
             OpenProfileInEditor(profileId);
@@ -2560,6 +2562,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             return;
         }
+        if (profile.ResolvedExecutionKind == EngineExecutionKind.ChatGptDirect) { OpenDirectProfile(profile); return; }
         if (profile.ExecutionFacts.IsCliExecution)
         {
             OpenCliConnections_Click(this, new RoutedEventArgs());

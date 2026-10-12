@@ -16,6 +16,7 @@ internal enum EngineExecutionKind
 
     /// <summary>oh-my-pi RPC subprocess (JSONL over stdio).</summary>
     OmpRpc,
+    ChatGptDirect,
 
     /// <summary>
     /// A value this build does not know. The profile stays loadable but is
@@ -34,12 +35,14 @@ internal static class EngineExecutionKindNames
     public const string NativeApi = "native-api";
     public const string CodexAppServer = "codex-app-server";
     public const string OmpRpc = "omp-rpc";
+    public const string ChatGptDirect = "chatgpt-direct";
 
     public static EngineExecutionKind Parse(string? value) => value switch
     {
         NativeApi => EngineExecutionKind.NativeApi,
         CodexAppServer => EngineExecutionKind.CodexAppServer,
         OmpRpc => EngineExecutionKind.OmpRpc,
+        ChatGptDirect => EngineExecutionKind.ChatGptDirect,
         _ => EngineExecutionKind.Unknown,
     };
 
@@ -48,6 +51,7 @@ internal static class EngineExecutionKindNames
         EngineExecutionKind.NativeApi => NativeApi,
         EngineExecutionKind.CodexAppServer => CodexAppServer,
         EngineExecutionKind.OmpRpc => OmpRpc,
+        EngineExecutionKind.ChatGptDirect => ChatGptDirect,
         // Unknown serializes explicitly as unknown — a loadable, visibly
         // unsupported state, never a silent rewrite to native-api.
         _ => "unknown",
@@ -117,6 +121,7 @@ internal sealed record EngineExecutionFacts(
     /// </summary>
     public bool IsCliExecution => ExecutionKind is
         EngineExecutionKind.CodexAppServer or EngineExecutionKind.OmpRpc;
+    public bool IsManagedExecution => IsCliExecution || ExecutionKind == EngineExecutionKind.ChatGptDirect;
 
     /// <summary>
     /// Supported adapters. Per-version verification, connection state and

@@ -48,6 +48,7 @@ internal static class ProfileVerification
             // or vice versa, and a CLI connection change (path/version/model)
             // invalidates it the same way an address change does.
             (profile.ExecutionKind ?? string.Empty).Trim(),
+            profile.DirectConnection is { } direct ? $"{direct.AccountId}\n{direct.ModelId}\n{direct.Enabled}" : "",
             profile.CliConnection is { } cli
                 ? string.Join('\n',
                     cli.ExecutablePath.Trim(),
@@ -142,7 +143,7 @@ internal static class ProfileVerification
 
     public static bool CredentialAvailable(ProviderProfile profile)
     {
-        if (profile.ExecutionFacts.IsCliExecution) return false;
+        if (profile.ExecutionFacts.IsManagedExecution) return false;
         if (ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl))
         {
             return true;

@@ -59,6 +59,7 @@ internal enum TranslationTextExecutor
 
     /// <summary>P05: an oh-my-pi RPC subprocess runs the text request.</summary>
     OmpRpc,
+    ChatGptDirect,
 }
 
 /// <summary>

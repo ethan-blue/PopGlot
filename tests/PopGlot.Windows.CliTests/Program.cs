@@ -22,6 +22,7 @@ internal static class Program
         var root = Path.Combine(Path.GetTempPath(), $"popglot-cli-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         StoragePaths.RootOverride = root;
+        CredentialStore.OverrideVault = new MemoryCredentialVault();
         Environment.SetEnvironmentVariable("POPGLOT_DATA_ROOT", root);
         CoreBridge.Initialize(root);
         var settings = CoreBridge.GetSettings();
@@ -39,6 +40,14 @@ internal static class Program
             Check("main translation/history/summary/recognized-text route", CoordinatorRoutes);
             Check("disconnect cancels active saved connection", DisconnectActive);
             Check("immediate disconnect fences queued request", DisconnectQueued);
+            Check("official OAuth/PKCE/callback/JWT/encrypted credentials", DirectTests.SignInAndValidation);
+            Check("direct HTTP main route/model list/summary/quick switch", DirectTests.DirectRoutes);
+            Check("direct late failure and EOF never become success", DirectTests.TerminalFailures);
+            Check("direct offline and disconnect fence HTTP requests", DirectTests.OfflineAndDisconnect);
+            Check("serialized refresh rotation and logout isolation", DirectTests.RefreshAndLogout);
+            Check("OMP API-key import consent and provider/OAuth isolation", DirectTests.ImportBoundaries);
+            DirectTests.Restore();
+            if (args.Contains("--live-import")) Check("installed OMP selected API key -> native HTTP translation", DirectTests.LiveImportedNative);
             if (args.Contains("--live"))
             {
                 Check("installed Codex login/models/translation", () => Live("codex"));
@@ -46,7 +55,7 @@ internal static class Program
             }
             if (args.Contains("--ui")) Check("WPF connection screen and buttons", () => { UiScenario.Run(root); return Task.CompletedTask; });
         }
-        finally { Environment.SetEnvironmentVariable("POPGLOT_FAKE_PROTOCOL", null); Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", null); }
+        finally { DirectTests.Restore(); Environment.SetEnvironmentVariable("POPGLOT_FAKE_PROTOCOL", null); Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", null); }
         Console.WriteLine($"RESULT {_passes} passed / {_failures} failed; isolated data: {root}");
         return _failures == 0 ? 0 : 1;
     }

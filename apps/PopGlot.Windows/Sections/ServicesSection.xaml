@@ -161,9 +161,34 @@
         <Grid x:Name="CliConnectionsPanel" Grid.Row="1" Visibility="Collapsed">
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,8,16">
                 <StackPanel>
+                    <Border Background="{DynamicResource SurfaceMutedBrush}" CornerRadius="{DynamicResource CardRadius}" Padding="12" Margin="0,0,0,14">
+                        <StackPanel>
+                            <TextBlock Text="ChatGPT 官方直连" Style="{StaticResource SectionTitle}"/>
+                            <TextBlock Text="通过官方浏览器授权，由 PopGlot 直接请求模型，无需启动 Codex。内容会使用所选 ChatGPT 计划的额度。"
+                                       TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,10"/>
+                            <WrapPanel>
+                                <Button x:Name="ChatGptLoginButton" Content="Continue with ChatGPT" Style="{StaticResource GhostButton}" Click="ChatGptLogin_Click" Margin="0,0,8,8"/>
+                                <Button x:Name="ChatGptAddAccountButton" Content="添加其他账号" Style="{StaticResource GhostButton}" Click="ChatGptLogin_Click" Margin="0,0,8,8"/>
+                                <Button x:Name="ChatGptRefreshButton" Content="刷新模型" Style="{StaticResource GhostButton}" Click="ChatGptRefresh_Click" Margin="0,0,8,8"/>
+                                <Button x:Name="ChatGptLogoutButton" Content="退出此账号" Style="{StaticResource GhostButton}" Click="ChatGptLogout_Click" Margin="0,0,8,8"/>
+                            </WrapPanel>
+                            <StackPanel x:Name="ChatGptAccountDetails" Visibility="Collapsed">
+                                <TextBlock Text="账号与工作区" FontSize="12" Margin="0,2,0,5"/>
+                                <ComboBox x:Name="ChatGptAccountCombo" SelectionChanged="ChatGptAccount_Changed" Margin="0,0,0,10" AutomationProperties.Name="选择 ChatGPT 账号与工作区"/>
+                                <TextBlock Text="文字模型" FontSize="12" Margin="0,0,0,5"/>
+                                <ComboBox x:Name="ChatGptModelCombo" SelectionChanged="ChatGptModel_Changed" Margin="0,0,0,10" AutomationProperties.Name="选择 ChatGPT 直连文字模型"/>
+                                <WrapPanel>
+                                    <Button x:Name="ChatGptTestButton" Content="测试翻译" Style="{StaticResource GhostButton}" Click="ChatGptTest_Click" Margin="0,0,8,8"/>
+                                    <Button x:Name="ChatGptSaveUseButton" Content="保存并使用直连" Style="{StaticResource PrimaryButton}" Click="ChatGptSaveUse_Click" Margin="0,0,8,8"/>
+                                    <Button x:Name="ChatGptDisconnectButton" Content="断开此引擎" Style="{StaticResource GhostButton}" Click="ChatGptDisconnect_Click" Margin="0,0,8,8"/>
+                                </WrapPanel>
+                            </StackPanel>
+                            <TextBlock x:Name="ChatGptStatus" Text="登录由官方页面完成。测试会发送 Hello world 并使用少量额度。" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        </StackPanel>
+                    </Border>
                     <TextBlock Text="连接本机工具" Style="{StaticResource SectionTitle}"/>
                     <TextBlock FontSize="12" TextWrapping="Wrap" Margin="0,4,0,12" Foreground="{DynamicResource TextSecondaryBrush}"
-                               Text="使用 Codex 或 oh-my-pi 自己管理的登录。翻译内容会发送到工具配置的提供方，并使用该账号的额度。PopGlot 不读取或复制登录凭据。"/>
+                               Text="CLI 连接使用 Codex 或 oh-my-pi 管理的登录，内容会发送到工具配置的提供方并使用其额度。普通 API Key 导入需要你单独确认。"/>
                     <WrapPanel Margin="0,0,0,10">
                         <Button x:Name="DetectCliToolsButton" Content="重新检测" Style="{StaticResource GhostButton}" Click="DetectCliTools_Click"/>
                         <TextBlock x:Name="CliDetectStatusText" VerticalAlignment="Center" Margin="10,0,0,0" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
@@ -188,6 +213,13 @@
                     <TextBlock Text="文字模型" Style="{StaticResource FieldLabel}"/>
                     <ComboBox x:Name="CliModelCombo" DisplayMemberPath="DisplayName" Style="{StaticResource EditorComboField}"
                               SelectionChanged="CliModel_SelectionChanged" AutomationProperties.Name="本机工具文字模型"/>
+                    <StackPanel x:Name="OmpImportPanel" Visibility="Collapsed" Margin="0,10,0,0">
+                        <CheckBox x:Name="OmpImportConsent" FontSize="12" Margin="0,0,0,8" HorizontalContentAlignment="Stretch"
+                                  Checked="OmpImportConsent_Changed" Unchecked="OmpImportConsent_Changed">
+                            <TextBlock Text="允许将所选提供方的普通 API Key 保存到 Windows 凭据库，用于 PopGlot API 直连。" TextWrapping="Wrap"/>
+                        </CheckBox>
+                        <Button x:Name="OmpImportButton" Content="导入所选 OMP 模型的 API 直连" Style="{StaticResource GhostButton}" HorizontalAlignment="Left" Margin="0,0,0,10" Click="OmpImport_Click" IsEnabled="False"/>
+                    </StackPanel>
                     <TextBlock x:Name="CliConnectionStatus" Text="连接后可选择模型并测试翻译。" Margin="0,10,0,10" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
                     <TextBlock Text="测试只发送 Hello world，并会使用所选模型的少量额度。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,8"/>
                     <WrapPanel>

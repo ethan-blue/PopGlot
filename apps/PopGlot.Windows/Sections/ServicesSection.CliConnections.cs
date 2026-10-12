@@ -31,6 +31,7 @@ public partial class ServicesSection
         EditorForm.Visibility = Visibility.Collapsed;
         CliConnectionsPanel.Visibility = Visibility.Visible;
         if (CliToolsListBox.Items.Count == 0) DetectCliTools_Click(sender, e);
+        ReloadChatGptAccounts();
         EditorOpenStateChanged?.Invoke();
     }
 
@@ -98,6 +99,7 @@ public partial class ServicesSection
     {
         if (CliTestButton is null) return;
         _cliTestedModel = null; _cliTestedAt = null;
+        OmpImportConsent.IsChecked = false;
         if (_cliConnection is { } connection && CliModelCombo.SelectedItem is CliModel model)
         { connection.ModelId = model.Id; connection.UpstreamProviderId = model.Provider; }
         UpdateCliButtons();
@@ -127,7 +129,7 @@ public partial class ServicesSection
         UpdateCliButtons();
         try
         {
-            var stream = CliTranslationExecutor.Stream(profile, "Hello world", "en", "zh", null, operation.Token);
+            var stream = CliTranslationExecutor.Stream(profile, "Hello world", "en", "zh", null, operation.Token, enforceSavedState: false);
             var response = await stream.Completion;
             if (!ReferenceEquals(_cliOperation, operation)) return;
             if (response.Result.IsPartial || response.Result.Warnings.Count > 0 || string.IsNullOrWhiteSpace(response.Result.TranslatedText))
@@ -190,7 +192,7 @@ public partial class ServicesSection
     }
 
     private void CliCancel_Click(object sender, RoutedEventArgs e)
-    { CancelCliOperation(); CliConnectionStatus.Text = "操作已取消。"; UpdateCliButtons(); }
+    { CancelCliOperation(); CliConnectionStatus.Text = ChatGptStatus.Text = "操作已取消。"; UpdateCliButtons(); }
     private void CancelCliOperation()
     { var operation = _cliOperation; _cliOperation = null; operation?.Cancel(); }
     private string ModelIdentity() => $"{_cliConnection?.ExecutablePath}|{_cliConnection?.ExpectedVersion}|{_cliConnection?.UpstreamProviderId}|{_cliConnection?.ModelId}";
@@ -203,7 +205,8 @@ public partial class ServicesSection
         CliTestButton.IsEnabled = CliSaveButton.IsEnabled = CliSaveUseButton.IsEnabled = ready && !busy;
         CliDisconnectButton.IsEnabled = !busy && (_cliConnection is not null || _cliProfileId is not null);
         CliCancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+        UpdateChatGptButtons();
     }
     private static string CliFailureText(Exception ex) => ex is InvalidOperationException
-        ? ex.Message : "本机工具操作失败。请检查程序入口、登录状态和网络后重试。";
+        ? ex.Message : "账号或工具操作失败。请检查登录状态、程序入口和网络后重试。";
 }

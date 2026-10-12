@@ -38,6 +38,7 @@ internal sealed class ProviderProfile
         // round-trip (as unsupported) instead of failing the whole config.
         ExecutionKind = source.ExecutionKind;
         CliConnection = source.CliConnection?.Clone();
+        DirectConnection = source.DirectConnection?.Clone();
     }
 
     public ProviderProfile Clone() => new(this);
@@ -96,6 +97,7 @@ internal sealed class ProviderProfile
     /// profile through a local AI tool subprocess. Null for API profiles.
     /// </summary>
     public AiConnections.CliConnectionSettings? CliConnection { get; set; }
+    public AiConnections.DirectConnectionSettings? DirectConnection { get; set; }
 
     /// <summary>Typed view of <see cref="ExecutionKind"/>; unknown stays unknown.</summary>
     public AiConnections.EngineExecutionKind ResolvedExecutionKind =>
@@ -113,6 +115,9 @@ internal sealed class ProviderProfile
         TextCapable:
             ResolvedExecutionKind == AiConnections.EngineExecutionKind.NativeApi
                 ? SupportsText && !string.IsNullOrWhiteSpace(TextModel)
+                : ResolvedExecutionKind == AiConnections.EngineExecutionKind.ChatGptDirect
+                    ? DirectConnection is { Enabled: true } direct && !string.IsNullOrWhiteSpace(direct.ModelId)
+                        && AiConnections.ChatGptAccountStore.HasCredentials(direct.AccountId)
                 : ResolvedExecutionKind is AiConnections.EngineExecutionKind.CodexAppServer or AiConnections.EngineExecutionKind.OmpRpc
                     && CliConnection is { Enabled: true }
                     && AiConnections.EngineExecutionFacts.AdapterEnabledFor(ResolvedExecutionKind)
@@ -206,7 +211,7 @@ internal sealed class ProviderProfile
     };
 
     public ProviderSettings ToProviderSettings(ProviderSettings baseSettings) =>
-        ExecutionFacts.IsCliExecution ? baseSettings with
+        ExecutionFacts.IsManagedExecution ? baseSettings with
         {
             // The native core must never execute a CLI route as an HTTP profile.
             TextModel = string.Empty, SupportsText = true, VisionModel = string.Empty, SupportsVision = false,
@@ -656,8 +661,9 @@ internal static class ProfileManager
         {
             var config = Load();
             var profile = config.Profiles.FirstOrDefault(p => p.Id == id);
-            if (profile?.CliConnection is not { } connection) return;
-            connection.Enabled = false;
+            if (profile?.CliConnection is { } connection) connection.Enabled = false;
+            else if (profile?.DirectConnection is { } direct) direct.Enabled = false;
+            else return;
             profile.LastTestOutcome = null; profile.LastTestedAtUtc = null; profile.LastTestFingerprint = null;
             SaveLocked(config);
             AiConnections.CliTranslationExecutor.CancelProfile(id);
@@ -871,6 +877,8 @@ internal static class ProfileManager
 
     private static bool IsProfileExecutable(ProviderProfile profile, out string notReady)
     {
+        if (profile.ResolvedExecutionKind == AiConnections.EngineExecutionKind.ChatGptDirect)
+        { var ready = profile.ExecutionFacts.TextCapable; notReady = ready ? "" : "请登录 ChatGPT 并选择模型"; return ready; }
         if (profile.ResolvedExecutionKind != AiConnections.EngineExecutionKind.NativeApi)
         {
             var facts = profile.ExecutionFacts;
@@ -1149,7 +1157,7 @@ internal static class ProfileManager
     /// <summary>Resolves the credential target for a specific profile.</summary>
     public static string ResolveCredentialTargetFor(ProviderProfile profile)
     {
-        if (profile.ExecutionFacts.IsCliExecution) return string.Empty;
+        if (profile.ExecutionFacts.IsManagedExecution) return string.Empty;
         if (string.IsNullOrWhiteSpace(profile.CredentialTarget))
         {
             return $"PopGlot/provider/{profile.Id}";

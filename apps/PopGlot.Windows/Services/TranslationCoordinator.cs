@@ -315,7 +315,9 @@ internal sealed class TranslationCoordinator
             {
                 var reason = textProfile.ResolvedExecutionKind == AiConnections.EngineExecutionKind.Unknown
                     ? "该引擎使用当前版本不认识的后端类型；请更新 PopGlot 或改用 API 引擎。"
-                    : "本机工具连接未配置完整、已断开或版本不兼容；请重新连接并选择模型。";
+                    : textProfile.ResolvedExecutionKind == AiConnections.EngineExecutionKind.ChatGptDirect
+                        ? "ChatGPT 直连尚未登录或没有选择模型；请在设置中重新授权并选择模型。"
+                        : "本机工具连接未配置完整、已断开或版本不兼容；请重新连接并选择模型。";
                 return new TextRouteCapability(
                     HasConfiguredProvider: true,
                     IsLocal: false,
@@ -531,7 +533,7 @@ internal sealed class TranslationCoordinator
             // 绝不从旧版默认凭据槽取 key：残留 key 会把空模型名的请求
             // 打到 Provider 上然后报「尚未配置文本模型」。旧版单服务安装
             // 由 ProfileManager 合成档案，不依赖这个回退。
-            var textApiKey = textRoute is null || textRoute.Profile.ExecutionFacts.IsCliExecution
+            var textApiKey = textRoute is null || textRoute.Profile.ExecutionFacts.IsManagedExecution
                 ? null
                 : _executor.LoadApiKey(textRoute.CredentialTarget);
             var textRuntimeSettings = textRoute?.Profile.ToProviderSettings(settings);
@@ -601,6 +603,7 @@ internal sealed class TranslationCoordinator
                 {
                     AiConnections.EngineExecutionKind.CodexAppServer => TranslationTextExecutor.CodexAppServer,
                     AiConnections.EngineExecutionKind.OmpRpc => TranslationTextExecutor.OmpRpc,
+                    AiConnections.EngineExecutionKind.ChatGptDirect => TranslationTextExecutor.ChatGptDirect,
                     _ => isLocal ? TranslationTextExecutor.LocalModel : TranslationTextExecutor.UserProvider,
                 };
                 // snapshot 非 null 即已冻结身份并编译锚点；null 且首次快照失败
@@ -800,7 +803,7 @@ internal sealed class TranslationCoordinator
         var settings = _executor.GetSettings();
         var routes = _executor.ResolveRoutes();
         var textRoute = routes.Text;
-        var apiKey = textRoute is null || textRoute.Profile.ExecutionFacts.IsCliExecution ? null : _executor.LoadApiKey(textRoute.CredentialTarget);
+        var apiKey = textRoute is null || textRoute.Profile.ExecutionFacts.IsManagedExecution ? null : _executor.LoadApiKey(textRoute.CredentialTarget);
         var shell = ShellSettingsStore.Load();
         var preferFree = false;
         try
@@ -837,14 +840,14 @@ internal sealed class TranslationCoordinator
         {
             throw new OperationCanceledException("引擎已切换，请重新打开要点。", cancellationToken);
         }
-        var apiKey = textRoute is null || textRoute.Profile.ExecutionFacts.IsCliExecution ? null : _executor.LoadApiKey(textRoute.CredentialTarget);
+        var apiKey = textRoute is null || textRoute.Profile.ExecutionFacts.IsManagedExecution ? null : _executor.LoadApiKey(textRoute.CredentialTarget);
         var routeSettings = textRoute?.Profile.ToProviderSettings(settings);
         var isLocal = routeSettings?.TargetsLocalRuntime ?? settings.TargetsLocalRuntime;
         if (textRoute is null && !isLocal)
         {
             throw new InvalidOperationException("请先在设置中配置模型引擎，再使用要点。免费引擎不能整理要点。");
         }
-        if (textRoute?.Profile.ExecutionFacts.IsCliExecution == true)
+        if (textRoute?.Profile.ExecutionFacts.IsManagedExecution == true)
         {
             var stream = AiConnections.CliTranslationExecutor.Stream(textRoute.Profile, snapshot.Identity.Source,
                 snapshot.Identity.SourceLanguage, snapshot.Identity.TargetLanguage, null, cancellationToken,
@@ -935,7 +938,7 @@ internal sealed class TranslationCoordinator
             var textRoute = route.Text;
             var visionRoute = route.Vision;
 
-            var textApiKey = textRoute is null || textRoute.Profile.ExecutionFacts.IsCliExecution
+            var textApiKey = textRoute is null || textRoute.Profile.ExecutionFacts.IsManagedExecution
                 ? null
                 : _executor.LoadApiKey(textRoute.CredentialTarget);
             var visionApiKey = visionRoute is null
@@ -1237,7 +1240,7 @@ internal sealed class TranslationCoordinator
             session.ImageSentToProvider = imageSentToProvider;
             session.ImageLeftDevice = imageLeftDevice;
             session.ImageUploaded = imageLeftDevice;
-            var textLeavesDevice = session.TextEngineProfile?.ExecutionFacts.IsCliExecution == true || textRuntimeSettings is not null && !textRuntimeSettings.TargetsLocalRuntime;
+            var textLeavesDevice = session.TextEngineProfile?.ExecutionFacts.IsManagedExecution == true || textRuntimeSettings is not null && !textRuntimeSettings.TargetsLocalRuntime;
             session.OutboundOccurred = imageLeftDevice || textLeavesDevice ||
                 (textRuntimeSettings is null && !string.IsNullOrWhiteSpace(textApiKey));
 
@@ -1429,6 +1432,7 @@ internal sealed class TranslationCoordinator
         {
             AiConnections.EngineExecutionKind.CodexAppServer => TranslationTextExecutor.CodexAppServer,
             AiConnections.EngineExecutionKind.OmpRpc => TranslationTextExecutor.OmpRpc,
+                    AiConnections.EngineExecutionKind.ChatGptDirect => TranslationTextExecutor.ChatGptDirect,
             _ => textIsLocal ? TranslationTextExecutor.LocalModel : TranslationTextExecutor.UserProvider,
         };
         session.PromptSupport = promptSnapshot is not null || session.PromptTemplateId is not null
@@ -1622,7 +1626,7 @@ internal sealed class TranslationCoordinator
         CancellationToken cancellationToken,
         ProviderProfile? engineProfile)
     {
-        if (engineProfile?.ExecutionFacts.IsCliExecution == true)
+        if (engineProfile?.ExecutionFacts.IsManagedExecution == true)
             return AiConnections.CliTranslationExecutor.Stream(engineProfile, segment, sourceLang, targetLang, preferenceAnchor, cancellationToken, maxResponseBytes);
         if (textRuntimeSettings is not null &&
             (textRuntimeSettings.TextIsConfigured || textRuntimeSettings.TargetsLocalRuntime))

@@ -20,7 +20,7 @@ internal static class CliTranslationExecutor
 
     public static TranslationStreamSession Stream(ProviderProfile profile, string source, string sourceLanguage,
         string targetLanguage, PromptAnchorSnapshot? preference, CancellationToken ct, long maxBytes = TranslationStreamBuffer.DefaultMaxBytes,
-        string task = "translate")
+        string task = "translate", bool enforceSavedState = true)
     {
         var snapshot = profile.Clone();
         var buffer = new TranslationStreamBuffer(Guid.NewGuid().ToString("N"), maxBytes: maxBytes);
@@ -39,10 +39,11 @@ internal static class CliTranslationExecutor
             try
             {
                 deadline.Token.ThrowIfCancellationRequested();
-                if (snapshot.CliConnection is not { } connection || !snapshot.ExecutionFacts.TextCapable)
-                    throw new InvalidOperationException("本机工具连接未配置完整，请重新连接并选择模型。");
-                backend = CreateBackend(snapshot.ResolvedExecutionKind, connection);
-                CliLauncher.RequirePolicy(snapshot.ResolvedExecutionKind, connection);
+                if (!snapshot.ExecutionFacts.TextCapable) throw new InvalidOperationException("连接未配置完整，请重新连接并选择模型。");
+                var connection = snapshot.CliConnection;
+                backend = snapshot.ResolvedExecutionKind == EngineExecutionKind.ChatGptDirect
+                    ? new ChatGptDirectBackend(snapshot.DirectConnection!) : CreateBackend(snapshot.ResolvedExecutionKind, connection!);
+                RequirePolicy(snapshot, enforceSavedState);
                 var settings = CoreBridge.GetSettings();
                 job = CoreBridge.PrepareTextJob(new(source, sourceLanguage, targetLanguage, Task: task,
                     IncludeExplanation: task == "translate", ProtectCodeTokens: settings.ProtectCodeTokens,
@@ -58,20 +59,24 @@ internal static class CliTranslationExecutor
                 {
                     await Task.WhenAny(run, Task.Delay(250, deadline.Token)).ConfigureAwait(false);
                     if (deadline.IsCancellationRequested) break;
-                    CliLauncher.RequirePolicy(snapshot.ResolvedExecutionKind, connection);
+                    RequirePolicy(snapshot, enforceSavedState);
                 }
                 await run.ConfigureAwait(false);
                 deadline.Token.ThrowIfCancellationRequested();
+                RequirePolicy(snapshot, enforceSavedState);
                 var result = CoreBridge.FinishTextJob(job.JobHandle, "completed"); finished = true;
                 buffer.Complete();
                 return new TranslationResponse(new(result.TranslatedText, "", result.Explanation, result.ProtectedTerms, result.Warnings,
-                    IsPartial: result.State != "completed"), null, snapshot.Name,
-                    new(snapshot.ExecutionKind, connection.ModelId, connection.ExpectedVersion, (ulong)watch.ElapsedMilliseconds, true, submittedMs, firstDeltaMs));
+                    IsPartial: result.State != "completed"), backend is ChatGptDirectBackend http
+                        ? new ProviderDiagnostics("chatgpt-direct", ProviderType.OpenAiCompatible, "https://api.openai.com/v1/responses", 1, http.LastStatusCode, (ulong)watch.ElapsedMilliseconds) : null,
+                    snapshot.Name, connection is not null && snapshot.ExecutionFacts.IsCliExecution
+                        ? new(snapshot.ExecutionKind, connection.ModelId, connection.ExpectedVersion, (ulong)watch.ElapsedMilliseconds, true, submittedMs, firstDeltaMs) : null,
+                    backend is ChatGptDirectBackend ? new("chatgpt-direct", snapshot.DirectConnection?.ModelId, submittedMs, firstDeltaMs) : null);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            { buffer.Abort("本机工具请求已取消或超时。"); throw new InvalidOperationException("本机工具请求已取消或超时，请检查连接状态后重试。"); }
+            { buffer.Abort("模型连接请求已取消或超时。"); throw new InvalidOperationException("模型连接请求已取消或超时，请检查连接状态后重试。"); }
             catch
-            { buffer.Abort("本机工具请求未完成。"); throw; }
+            { buffer.Abort("模型连接请求未完成。"); throw; }
             finally
             {
                 // Closing our process also fences all late events from the next request.
@@ -87,5 +92,16 @@ internal static class CliTranslationExecutor
             }
         }, CancellationToken.None);
         return new(buffer, completion);
+    }
+    private static void RequirePolicy(ProviderProfile profile, bool enforceSavedState)
+    {
+        if (enforceSavedState)
+        {
+            var saved = ProfileManager.Load().Profiles.FirstOrDefault(p => p.Id == profile.Id);
+            if (saved is not null && (saved.CliConnection is { Enabled: false } || saved.DirectConnection is { Enabled: false }))
+                throw new InvalidOperationException("此连接已断开，未提交新的模型请求。");
+        }
+        if (profile.ResolvedExecutionKind == EngineExecutionKind.ChatGptDirect) DirectHttp.RequirePolicy();
+        else CliLauncher.RequirePolicy(profile.ResolvedExecutionKind, profile.CliConnection!);
     }
 }

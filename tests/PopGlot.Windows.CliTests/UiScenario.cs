@@ -8,6 +8,7 @@ using System.Windows.Threading;
 using PopGlot.Windows;
 using PopGlot.Windows.Sections;
 using PopGlot.Windows.Services;
+using PopGlot.Windows.Services.AiConnections;
 
 namespace PopGlot.Windows.CliTests;
 
@@ -61,8 +62,26 @@ internal static class UiScenario
             Until(() => ((TextBlock)section.FindName("CliConnectionStatus")).Text.StartsWith("已断开"), "disconnect revokes saved connection");
             Program.Assert(!Find("CliSaveUseButton").IsEnabled && ProfileManager.Load().TryGetActiveProfile()?.ExecutionFacts.TextCapable == false,
                 "disconnected UI and saved profile must both be disabled");
+            var directProfile = DirectTests.UiProfile();
+            typeof(ServicesSection).GetMethod("OpenDirectProfile", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(section, new object[] { directProfile });
+            Click("ChatGptRefreshButton");
+            Until(() => Find("ChatGptTestButton").IsEnabled, "direct model list should enable testing");
+            Click("ChatGptTestButton");
+            Until(() => ((TextBlock)section.FindName("ChatGptStatus")).Text.StartsWith("直连测试通过"), "direct UI translation must pass");
+            Click("ChatGptSaveUseButton");
+            Until(() => ((TextBlock)section.FindName("ChatGptStatus")).Text.StartsWith("已保存并切换"), "direct UI save/use must persist");
+            Program.Assert(ProfileManager.Load().TryGetActiveProfile()?.ResolvedExecutionKind == EngineExecutionKind.ChatGptDirect,
+                "direct UI must activate the HTTP route");
+            window.UpdateLayout();
+            var directBitmap = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+            directBitmap.Render(window); var directEncoder = new PngBitmapEncoder(); directEncoder.Frames.Add(BitmapFrame.Create(directBitmap));
+            using (var stream = File.Create(Path.GetFullPath("artifacts/cli-repair/direct-panel.png"))) directEncoder.Save(stream);
+            Click("ChatGptDisconnectButton");
+            Until(() => ((TextBlock)section.FindName("ChatGptStatus")).Text.StartsWith("已断开"), "direct UI disconnect must complete");
+            Program.Assert(ProfileManager.Load().TryGetActiveProfile()?.ExecutionFacts.TextCapable == false, "direct route disabled after disconnect");
+            DirectTests.Restore();
         }
-        finally { window.Close(); Pump(); }
+        finally { DirectTests.Restore(); window.Close(); Pump(); }
     }
     private static void Until(Func<bool> test, string error)
     {

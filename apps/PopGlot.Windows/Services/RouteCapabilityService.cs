@@ -109,14 +109,15 @@ internal static class RouteCapabilityService
         var executionKind = activeProfile.ResolvedExecutionKind;
         if (executionKind is AiConnections.EngineExecutionKind.CodexAppServer or
             AiConnections.EngineExecutionKind.OmpRpc or
+            AiConnections.EngineExecutionKind.ChatGptDirect or
             AiConnections.EngineExecutionKind.Unknown)
         {
             if (activeProfile.ExecutionFacts.TextCapable)
                 return new SummaryCapability(
                     settings.SafeDevMode || !settings.NetworkEnabled ? RouteCapabilityState.Unsupported : RouteCapabilityState.Available,
                     RouteKind.ValidRemote,
-                    settings.SafeDevMode || !settings.NetworkEnabled ? "离线策略禁止本机工具出网。" : "本机工具文字模型已配置。",
-                    "本机工具", CanNavigateToAddEngine: false);
+                    settings.SafeDevMode || !settings.NetworkEnabled ? "离线策略禁止此引擎出网。" : "账号或本机工具的文字模型已配置。",
+                    executionKind == AiConnections.EngineExecutionKind.ChatGptDirect ? "ChatGPT 直连" : "本机工具", CanNavigateToAddEngine: false);
             return new SummaryCapability(
                 RouteCapabilityState.Unsupported,
                 RouteKind.UnknownModel,

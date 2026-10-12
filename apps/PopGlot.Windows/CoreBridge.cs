@@ -1641,7 +1641,8 @@ internal sealed record TranslationResponse(
     TranslationResult Result,
     ProviderDiagnostics? Diagnostics,
     string? OverrideEngineLabel = null,
-    CliBackendDiagnostics? CliDiagnostics = null)
+    CliBackendDiagnostics? CliDiagnostics = null,
+    DirectBackendDiagnostics? DirectDiagnostics = null)
 {
     public bool IsFreeEngine =>
         string.Equals(Diagnostics?.RequestId, FreeTranslateService.RequestId, StringComparison.Ordinal);
@@ -1649,4 +1650,5 @@ internal sealed record TranslationResponse(
     public string EngineLabel => OverrideEngineLabel ?? (IsFreeEngine ? "免费引擎" : Diagnostics?.ProviderType.ToString() ?? CliDiagnostics?.Backend ?? "模型引擎");
     public ulong ElapsedMs => CliDiagnostics?.TurnElapsedMs ?? Diagnostics?.ElapsedMs ?? 0;
 }
+internal sealed record DirectBackendDiagnostics(string Backend, string? ModelId, ulong? PreparationMs, ulong? FirstProtocolDeltaMs);
 
