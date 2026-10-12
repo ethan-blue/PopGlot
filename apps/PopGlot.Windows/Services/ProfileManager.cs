@@ -105,8 +105,8 @@ internal sealed class ProviderProfile
 
     /// <summary>
     /// P05: the typed execution facts every routing surface consumes. The
-    /// CLI adapters ship disabled, so a CLI profile is only text-capable
-    /// when its adapter is actually enabled for this build; vision is never
+    /// CLI profiles require an enabled adapter and complete connection. OMP
+    /// protocol compatibility is checked at runtime; vision is never
     /// claimed for CLI execution (screenshots never enter a CLI channel).
     /// </summary>
     public AiConnections.EngineExecutionFacts ExecutionFacts => new(
@@ -121,7 +121,8 @@ internal sealed class ProviderProfile
                 : ResolvedExecutionKind is AiConnections.EngineExecutionKind.CodexAppServer or AiConnections.EngineExecutionKind.OmpRpc
                     && CliConnection is { Enabled: true }
                     && AiConnections.EngineExecutionFacts.AdapterEnabledFor(ResolvedExecutionKind)
-                    && CliConnection.ExpectedVersion == AiConnections.CliLauncher.ProtocolVersion(ResolvedExecutionKind)
+                    && (ResolvedExecutionKind == AiConnections.EngineExecutionKind.OmpRpc
+                        || CliConnection.ExpectedVersion == AiConnections.CliLauncher.ReferenceToolVersion(ResolvedExecutionKind))
                     && !string.IsNullOrWhiteSpace(CliConnection.ExecutablePath)
                     && !string.IsNullOrWhiteSpace(CliConnection.ModelId)
                     && (ResolvedExecutionKind != AiConnections.EngineExecutionKind.OmpRpc || !string.IsNullOrWhiteSpace(CliConnection.UpstreamProviderId)),

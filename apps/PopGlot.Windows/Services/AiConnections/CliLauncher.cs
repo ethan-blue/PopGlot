@@ -5,7 +5,8 @@ namespace PopGlot.Windows.Services.AiConnections;
 
 internal static class CliLauncher
 {
-    public static string ProtocolVersion(EngineExecutionKind kind) => kind switch
+    // Reference release numbers, not JSONL protocol versions. OMP is probed at runtime.
+    public static string ReferenceToolVersion(EngineExecutionKind kind) => kind switch
     { EngineExecutionKind.CodexAppServer => "0.150.1", EngineExecutionKind.OmpRpc => "18.2.11", _ => "" };
     // Resolve npm shims to the packaged native executable; never run a shell.
     public static string Resolve(string toolId, string entry)
@@ -35,7 +36,7 @@ internal static class CliLauncher
         info.ArgumentList.Add("--version");
         using var process = Process.Start(info) ?? throw new InvalidOperationException("无法检查工具版本。");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        deadline.CancelAfter(TimeSpan.FromSeconds(10));
+        deadline.CancelAfter(TimeSpan.FromSeconds(toolId == CliDiscovery.OmpToolId ? 3 : 10));
         try
         {
             var stdout = process.StandardOutput.ReadToEndAsync(deadline.Token);
@@ -43,12 +44,23 @@ internal static class CliLauncher
             await process.WaitForExitAsync(deadline.Token).ConfigureAwait(false);
             var text = (await stdout.ConfigureAwait(false)).Trim();
             _ = await stderr.ConfigureAwait(false);
-            var expected = toolId == CliDiscovery.CodexToolId ? "0.150.1" : "18.2.11";
-            var version = System.Text.RegularExpressions.Regex.Match(text, @"(?:^|\s|/)v?(?<version>\d+\.\d+\.\d+)(?:$|\s)").Groups["version"].Value;
+            var version = System.Text.RegularExpressions.Regex.Match(text, @"(?:^|\s|/)v?(?<version>\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)*)(?:$|\s)").Groups["version"].Value;
+            if (toolId == CliDiscovery.OmpToolId)
+            {
+                // OMP version is diagnostics, not a protocol compatibility decision.
+                connection.ExpectedVersion = string.IsNullOrEmpty(version) ? "unknown" : version;
+                return connection.ExpectedVersion;
+            }
+            var expected = ReferenceToolVersion(EngineExecutionKind.CodexAppServer);
             if (process.ExitCode != 0 || version != expected || (!string.IsNullOrWhiteSpace(connection.ExpectedVersion) && connection.ExpectedVersion != version))
                 throw new InvalidOperationException($"当前适配器支持 {toolId} {expected}；检测到的版本不匹配，请更新工具或 PopGlot 后重试。");
             connection.ExpectedVersion = expected;
             return expected;
+        }
+        catch (OperationCanceledException) when (toolId == CliDiscovery.OmpToolId && !ct.IsCancellationRequested)
+        {
+            connection.ExpectedVersion = "unknown";
+            return connection.ExpectedVersion;
         }
         finally { try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { } }
     }

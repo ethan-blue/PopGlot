@@ -17,7 +17,12 @@ internal static class Program
     {
         Console.OutputEncoding = Encoding.UTF8;
         if (args.Contains("--version"))
-        { Console.WriteLine(Environment.GetEnvironmentVariable("POPGLOT_FAKE_PROTOCOL") == "omp" ? "18.2.11" : "codex-cli 0.150.1"); return 0; }
+        {
+            var version = Environment.GetEnvironmentVariable("POPGLOT_FAKE_VERSION");
+            if (version == "unsupported-version-query") return 2;
+            if (version == "hanging-version-query") { Thread.Sleep(30000); return 2; }
+            Console.WriteLine(Environment.GetEnvironmentVariable("POPGLOT_FAKE_PROTOCOL") == "omp" ? version ?? "18.2.11" : "codex-cli 0.150.1"); return 0;
+        }
         if (args.Contains("app-server") || args.Contains("rpc")) return FakeServer(args.Contains("rpc"));
         var root = Path.Combine(Path.GetTempPath(), $"popglot-cli-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -31,6 +36,7 @@ internal static class Program
         {
             Check("Codex protocol + FFI stream", () => StreamFake(EngineExecutionKind.CodexAppServer));
             Check("OMP protocol + FFI stream", () => StreamFake(EngineExecutionKind.OmpRpc));
+            Check("OMP compatibility follows protocol, not exact version or saved pin", OmpVersionCompatibility);
             Check("OMP login browser/callback/final confirmation", OmpLoginSuccess);
             Check("OMP login failure/cancel/unsafe URL isolation", OmpLoginFailures);
             Check("late OMP prompt error is not success", () => FailureFake("late_error"));
@@ -57,6 +63,7 @@ internal static class Program
                 Check("installed OMP zero tools/models/translation", () => Live("omp"));
             }
             if (args.Contains("--live-omp")) Check("installed OMP providers/models/translation", () => Live("omp"));
+            if (args.Contains("--probe-omp")) Check("installed OMP RPC with stale saved version, without inference", ProbeOmp);
             if (args.Contains("--ui")) Check("WPF connection screen and buttons", () => { UiScenario.Run(root); return Task.CompletedTask; });
         }
         finally { DirectTests.Restore(); Environment.SetEnvironmentVariable("POPGLOT_FAKE_PROTOCOL", null); Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", null); }
@@ -78,7 +85,7 @@ internal static class Program
         Environment.SetEnvironmentVariable("POPGLOT_FAKE_PROTOCOL", kind == EngineExecutionKind.OmpRpc ? "omp" : "codex");
         return new() { Id = "fake-" + kind, Name = "fixture", ApiBaseUrl = "", CredentialTarget = "", SupportsVision = false,
             ExecutionKind = EngineExecutionKindNames.Format(kind), TextModel = "fixture",
-            CliConnection = new() { ExecutablePath = Environment.ProcessPath!, ExpectedVersion = CliLauncher.ProtocolVersion(kind), ModelId = "fixture", UpstreamProviderId = "fixture-provider", Enabled = true } };
+            CliConnection = new() { ExecutablePath = Environment.ProcessPath!, ExpectedVersion = CliLauncher.ReferenceToolVersion(kind), ModelId = "fixture", UpstreamProviderId = "fixture-provider", Enabled = true } };
     }
     private static async Task StreamFake(EngineExecutionKind kind)
     {
@@ -122,6 +129,32 @@ internal static class Program
             (_, ct) => { input++; return Task.FromResult("fixture-oauth-code"); }, timeout.Token);
         Assert(browser == 1 && input == 1, "must handle browser and matching callback input");
         Assert((await backend.ListModelsAsync(timeout.Token)).Count == 1, "models refresh after final login response on a fresh process");
+    }
+    private static async Task OmpVersionCompatibility()
+    {
+        try
+        {
+            foreach (var version in new[] { "omp/18.2.12", "omp/20.0.0-beta.1", "custom omp build", "unsupported-version-query", "hanging-version-query" })
+            {
+                var profile = FakeProfile(EngineExecutionKind.OmpRpc);
+                profile.CliConnection!.ExpectedVersion = "old-saved-version";
+                Assert(profile.ExecutionFacts.TextCapable, "saved OMP version cannot disable a configured route");
+                Environment.SetEnvironmentVariable("POPGLOT_FAKE_VERSION", version);
+                using var ct = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                var response = await CliTranslationExecutor.Stream(profile, "Hello world", "en", "zh", null, ct.Token).Completion;
+                Assert(response.Result.TranslatedText == "你好，世界", "compatible RPC must work regardless of reported version");
+                var expected = version.StartsWith("omp/") ? version[4..] : "unknown";
+                Assert(response.CliDiagnostics?.ToolVersion == expected, "diagnostics record the observed version, not a hardcoded pin");
+            }
+            Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", "incompatible_state");
+            using var backend = new OmpRpcBackend(FakeProfile(EngineExecutionKind.OmpRpc).CliConnection!);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            bool refused = false;
+            try { await backend.RunAsync("translate", "Hello", _ => { }, timeout.Token); }
+            catch (InvalidOperationException ex) { refused = ex.Message.Contains("RPC") && ex.Message.Contains("工具状态"); }
+            Assert(refused && backend.PromptCount == 0, "missing isolation proof must reject before sending source text");
+        }
+        finally { Environment.SetEnvironmentVariable("POPGLOT_FAKE_VERSION", null); Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", null); }
     }
     private static async Task OmpHttpFailure()
     {
@@ -270,6 +303,20 @@ internal static class Program
         Console.WriteLine($"LIVE {tool}: {response.Result.TranslatedText} ({response.ElapsedMs} ms)");
         Console.WriteLine($"LIVE {tool}: preparation={response.CliDiagnostics?.RequestPreparationMs} ms; submit-to-first-text={response.CliDiagnostics?.FirstProtocolDeltaMs - response.CliDiagnostics?.RequestPreparationMs} ms");
     }
+    private static async Task ProbeOmp()
+    {
+        Environment.SetEnvironmentVariable("POPGLOT_FAKE_PROTOCOL", null);
+        Environment.SetEnvironmentVariable("POPGLOT_FAKE_VERSION", null);
+        var entry = CliDiscovery.Discover(CliDiscovery.OmpToolId).First();
+        var connection = new CliConnectionSettings { ExecutablePath = entry.ExecutablePath, ExpectedVersion = "stale-saved-version", Enabled = true };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(40));
+        using var backend = new OmpRpcBackend(connection);
+        var providers = await backend.ListLoginProvidersAsync(timeout.Token);
+        var models = await backend.ListModelsAsync(timeout.Token);
+        Assert(providers.Count > 0 && models.Count > 0 && connection.ExpectedVersion != "stale-saved-version", "actual RPC handshake and catalogs must work with old saved metadata");
+        Assert(backend.PromptCount == 0, "probe never sends text for inference");
+        Console.WriteLine($"OMP PROBE: observed={connection.ExpectedVersion}; providers={providers.Count}; models={models.Count}; inference prompts=0");
+    }
     private static int FakeServer(bool omp)
     {
         var scenario = Environment.GetEnvironmentVariable("POPGLOT_FAKE_SCENARIO");
@@ -315,7 +362,7 @@ internal static class Program
                     if (scenario == "login_error") Emit(new { id, type = "response", command = "login", success = false, error = "fixture auth failure" });
                     else Reply(new { providerId = "google-antigravity" });
                     break;
-                case "get_state": Reply(new { dumpTools = scenario == "tools" ? new[] { new { name = "bash" } } : Array.Empty<object>() }); break;
+                case "get_state": Reply(scenario == "incompatible_state" ? new { unsupported = true } : (object)new { dumpTools = scenario == "tools" ? new[] { new { name = "bash" } } : Array.Empty<object>() }); break;
                 case "set_model": case "set_thinking_level": Reply(null); break;
                 case "thread/start":
                     instructions = root.GetProperty("params").GetProperty("baseInstructions").GetString()!;

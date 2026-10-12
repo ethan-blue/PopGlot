@@ -124,7 +124,7 @@ internal sealed record EngineExecutionFacts(
     public bool IsManagedExecution => IsCliExecution || ExecutionKind == EngineExecutionKind.ChatGptDirect;
 
     /// <summary>
-    /// Supported adapters. Per-version verification, connection state and
+    /// Supported adapters. Protocol compatibility, connection state and
     /// network permission are checked separately before process launch.
     /// </summary>
     public static bool AdapterEnabledFor(EngineExecutionKind kind) =>

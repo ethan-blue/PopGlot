@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace PopGlot.Windows.Services.AiConnections;
 
-/// <summary>OMP 18.2.11 JSONL RPC; no token/database access.</summary>
+/// <summary>OMP JSONL RPC; compatibility is checked through actual responses, not version equality.</summary>
 internal sealed class OmpRpcBackend : ICliBackend
 {
     internal sealed record LoginProvider(string Id, string Name, bool Available, bool Authenticated)
@@ -127,8 +127,7 @@ internal sealed class OmpRpcBackend : ICliBackend
         await CliLauncher.VerifyVersionAsync(CliDiscovery.OmpToolId, _connection, ct).ConfigureAwait(false);
         var transport = _host.EnsureTransport(BuildStartInfo);
         var state = await RequestAsync(transport, "get_state", new Dictionary<string, object?>(), ct).ConfigureAwait(false);
-        if (!state.TryGetProperty("dumpTools", out var tools) || tools.GetArrayLength() != 0)
-            throw new InvalidOperationException("OMP 没有禁用全部工具，已拒绝提交翻译。");
+        RequireToolIsolation(state);
         _transport = transport;
         return transport;
     }
@@ -162,8 +161,14 @@ internal sealed class OmpRpcBackend : ICliBackend
         var transport = await ConnectAsync(ct).ConfigureAwait(false);
         var result = await RequestAsync(transport, "get_available_models", new(), ct).ConfigureAwait(false);
         var models = new List<CliModel>();
-        foreach (var model in result.GetProperty("models").EnumerateArray())
+        if (result.ValueKind != JsonValueKind.Object || !result.TryGetProperty("models", out var entries) || entries.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException("OMP RPC 未返回可解析的模型列表，请检查该工具的 RPC 支持。");
+        foreach (var model in entries.EnumerateArray())
         {
+            if (model.ValueKind != JsonValueKind.Object || !model.TryGetProperty("provider", out var providerValue) ||
+                providerValue.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(providerValue.GetString()) ||
+                !model.TryGetProperty("id", out var idValue) || idValue.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(idValue.GetString()))
+                throw new InvalidOperationException("OMP RPC 返回了无效的提供方或模型标识，请检查该工具的 RPC 支持。");
             var provider = model.GetProperty("provider").GetString()!;
             if (provider is "anthropic" or "claude-code") continue;
             var id = model.GetProperty("id").GetString()!;
@@ -181,8 +186,7 @@ internal sealed class OmpRpcBackend : ICliBackend
         await RequestAsync(transport, "set_model", new() { ["provider"] = _connection.UpstreamProviderId, ["modelId"] = _connection.ModelId }, ct).ConfigureAwait(false);
         await RequestAsync(transport, "set_thinking_level", new() { ["level"] = "low" }, ct).ConfigureAwait(false);
         var state = await RequestAsync(transport, "get_state", new(), ct).ConfigureAwait(false);
-        if (!state.TryGetProperty("dumpTools", out var tools) || tools.GetArrayLength() != 0)
-            throw new InvalidOperationException("OMP 切换模型后启用了工具，已拒绝提交翻译。");
+        RequireToolIsolation(state);
         CliLauncher.RequirePolicy(EngineExecutionKind.OmpRpc, _connection);
         using var events = transport.Subscribe();
         _host.RecordPromptSubmission();
@@ -235,4 +239,11 @@ internal sealed class OmpRpcBackend : ICliBackend
         throw new InvalidOperationException("OMP 连接提前关闭，翻译未完成。");
     }
     public void Dispose() => _host.Dispose();
+    private static void RequireToolIsolation(JsonElement state)
+    {
+        if (state.ValueKind != JsonValueKind.Object || !state.TryGetProperty("dumpTools", out var tools) || tools.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException("OMP RPC 没有提供可验证的工具状态，未提交翻译；请检查该工具的 RPC 支持。");
+        if (tools.GetArrayLength() != 0)
+            throw new InvalidOperationException("OMP 没有禁用全部工具，已拒绝提交翻译。");
+    }
 }

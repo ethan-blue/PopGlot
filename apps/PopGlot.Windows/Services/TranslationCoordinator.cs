@@ -317,7 +317,9 @@ internal sealed class TranslationCoordinator
                     ? "该引擎使用当前版本不认识的后端类型；请更新 PopGlot 或改用 API 引擎。"
                     : textProfile.ResolvedExecutionKind == AiConnections.EngineExecutionKind.ChatGptDirect
                         ? "ChatGPT 直连尚未登录或没有选择模型；请在设置中重新授权并选择模型。"
-                        : "本机工具连接未配置完整、已断开或版本不兼容；请重新连接并选择模型。";
+                        : textProfile.ResolvedExecutionKind == AiConnections.EngineExecutionKind.OmpRpc
+                            ? "OMP 连接未配置完整或已断开；请连接并选择提供方和模型。"
+                            : "本机工具连接未配置完整、已断开或版本不兼容；请重新连接并选择模型。";
                 return new TextRouteCapability(
                     HasConfiguredProvider: true,
                     IsLocal: false,
