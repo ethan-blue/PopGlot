@@ -30,6 +30,7 @@ public partial class ServicesSection
         var account = ChatGptAccountCombo.SelectedItem as ChatGptAccount;
         var signedIn = account is not null && ChatGptAccountStore.HasCredentials(account.Id);
         ChatGptLoginButton.IsEnabled = ChatGptAddAccountButton.IsEnabled = !busy;
+        ChatGptCancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         ChatGptAccountCombo.IsEnabled = ChatGptModelCombo.IsEnabled = !busy;
         ChatGptRefreshButton.IsEnabled = ChatGptLogoutButton.IsEnabled = !busy && signedIn;
         ChatGptTestButton.IsEnabled = ChatGptSaveUseButton.IsEnabled = !busy && signedIn && ChatGptModelCombo.SelectedItem is CliModel;

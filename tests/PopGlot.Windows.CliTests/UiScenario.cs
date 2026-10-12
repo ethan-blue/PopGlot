@@ -66,6 +66,13 @@ internal static class UiScenario
             typeof(ServicesSection).GetMethod("OpenDirectProfile", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(section, new object[] { directProfile });
             Click("ChatGptRefreshButton");
             Until(() => Find("ChatGptTestButton").IsEnabled, "direct model list should enable testing");
+            DirectTests.HoldUiRequest(); Click("ChatGptTestButton");
+            Until(() => DirectTests.UiRequestEntered, "direct UI request must reach the pending boundary");
+            Program.Assert(Find("ChatGptCancelButton").Visibility == Visibility.Visible, "cancel is visible beside direct login/model actions");
+            Click("ChatGptCancelButton");
+            Until(() => ((TextBlock)section.FindName("ChatGptStatus")).Text == "操作已取消。" && Find("ChatGptTestButton").IsEnabled,
+                "cancel must clear waiting state without saving a success");
+            DirectTests.ReleaseUiScenario();
             Click("ChatGptTestButton");
             Until(() => ((TextBlock)section.FindName("ChatGptStatus")).Text.StartsWith("直连测试通过"), "direct UI translation must pass");
             Click("ChatGptSaveUseButton");

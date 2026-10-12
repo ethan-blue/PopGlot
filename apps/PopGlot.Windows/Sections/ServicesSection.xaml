@@ -171,6 +171,7 @@
                                 <Button x:Name="ChatGptAddAccountButton" Content="添加其他账号" Style="{StaticResource GhostButton}" Click="ChatGptLogin_Click" Margin="0,0,8,8"/>
                                 <Button x:Name="ChatGptRefreshButton" Content="刷新模型" Style="{StaticResource GhostButton}" Click="ChatGptRefresh_Click" Margin="0,0,8,8"/>
                                 <Button x:Name="ChatGptLogoutButton" Content="退出此账号" Style="{StaticResource GhostButton}" Click="ChatGptLogout_Click" Margin="0,0,8,8"/>
+                                <Button x:Name="ChatGptCancelButton" Content="取消操作" Style="{StaticResource GhostButton}" Click="CliCancel_Click" Margin="0,0,8,8" Visibility="Collapsed"/>
                             </WrapPanel>
                             <StackPanel x:Name="ChatGptAccountDetails" Visibility="Collapsed">
                                 <TextBlock Text="账号与工作区" FontSize="12" Margin="0,2,0,5"/>

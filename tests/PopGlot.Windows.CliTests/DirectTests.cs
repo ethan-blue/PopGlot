@@ -82,6 +82,9 @@ internal static class DirectTests
             DirectConnection = new() { AccountId = account.Id, ModelId = "fixture", Enabled = true }, TextModel = "fixture", SupportsVision = false, CredentialTarget = "" };
     }
     internal static ProviderProfile UiProfile() => Profile();
+    internal static void HoldUiRequest() { _scenario = "hold"; _requestEntered = new(TaskCreationOptions.RunContinuationsAsynchronously); }
+    internal static bool UiRequestEntered => _requestEntered?.Task.IsCompleted == true;
+    internal static void ReleaseUiScenario() => _scenario = null;
     public static async Task SignInAndValidation()
     {
         Setup(); using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15)); Task? callback = null;
