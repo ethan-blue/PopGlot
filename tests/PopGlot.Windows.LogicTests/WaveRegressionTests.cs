@@ -1742,6 +1742,7 @@ internal static class WaveRegressionTests
                 ShowInTaskbar = false,
                 ShowActivated = false,
                 ResizeMode = ResizeMode.NoResize,
+                Topmost = true, // The real-input target must not be obscured by another window.
             };
             var restored = false;
             try
@@ -1766,6 +1767,10 @@ internal static class WaveRegressionTests
                     $"{name}: GetWindowRect must succeed");
                 var centerX = (rect.Left + rect.Right) / 2;
                 var centerY = (rect.Top + rect.Bottom) / 2;
+                // A new HWND can occupy the previous target's position. Move
+                // away first so the OS delivers motion even when the physical
+                // cursor was already at the final center point.
+                True(SendMouseMove(centerX - 8, centerY - 8), $"{name}: the preparatory real cursor move must be injected");
                 True(SendMouseMove(centerX, centerY), $"{name}: the real cursor move must be injected");
                 PumpUntilCondition(() => target.IsMouseOver,
                     $"{name}: the real mouse move must land on the target through the OS input pipeline " +

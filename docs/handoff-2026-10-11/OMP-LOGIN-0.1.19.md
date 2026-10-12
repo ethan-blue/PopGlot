@@ -1,6 +1,8 @@
-# OMP 管理账号与请求：0.1.18
+# OMP 管理账号与请求：0.1.19
 
 PopGlot 通过本机 OMP 18.2.11 JSONL RPC 获取登录提供方并发起授权。账号、凭据保存及刷新、上游模型请求继续由 OMP 管理，不实现第二套 Google OAuth，也不读取 OMP OAuth 数据库记录。
+
+0.1.18 首次发布检查遇到真实鼠标目标未命中；重跑又暴露交互日志 Flush 等队列完成但未等文件关闭的竞态。0.1.19 修正 Flush 等待写入线程退出，并改善真实鼠标测试前置条件，不跳过检查或覆盖已推送标签。
 
 ## 使用
 
@@ -23,10 +25,11 @@ PopGlot 通过本机 OMP 18.2.11 JSONL RPC 获取登录提供方并发起授权�
 ## 验证范围
 
 - 协议与 WPF 自动化：提供方可用/登录状态、浏览器 URL、匹配回调 ID、最终确认、登录错误、不安全地址、授权前输入拒绝、超时、回调等待取消、模型刷新。
-- 本机 OMP 18.2.11 实测返回 77 个登录提供方（经过界面过滤），其中 3 个存在授权，包含 Antigravity；模型列表成功读取。不发起新的真人授权。
+- 本机 OMP 18.2.11 实测返回 77 个登录提供方（经过界面过滤），列表包含 Antigravity，其中 3 个提供方存在授权；未单独验证 Antigravity 已授权。模型列表成功读取。不发起新的真人授权。
 - 已有智谱账号的短句翻译两次未完成；第二次捕获提供方状态 429，属于请求失败证据，不能宣称该账号当前可翻译。界面会保留失败状态；服务额度或限流需另行处理。错误反馈只显示识别到的状态码，不显示原始提供方错误文本。
-- `scripts/verify.ps1` 通过：Rust 测试、fmt、clippy、Windows 编译、47 项 PureTests、318 项 LogicTests。
-- 最终 CLI 协议与 WPF 检查 21 通过、0 失败，包括运行中关闭联网中止登录及提供方 HTTP 错误脱敏。日志：`artifacts/cli-repair/v18-cli-final.log`；界面截图：`artifacts/cli-repair/omp-login-panel.png`。Google 新账号真人授权未验证。
+- 0.1.18 本地 `scripts/verify.ps1` 通过：Rust 测试、fmt、clippy、Windows 编译、47 项 PureTests、318 项 LogicTests；同一提交两次完整 CI 通过，但发布检查失败。不能用这些通过记录掩盖发布检查失败。
+- OMP 登录实现的 CLI 协议与 WPF 检查 21 通过、0 失败，包括运行中关闭联网中止登录及提供方 HTTP 错误脱敏。0.1.19 最终验证日志：`artifacts/cli-repair/v19-verify.log`、`v19-cli-final.log`；界面截图：`artifacts/cli-repair/omp-login-panel.png`。Google 新账号真人授权未验证。
+- 0.1.19 最终本地验证通过：完整 Rust 检查、47 项 PureTests（新增 Flush 后文件独占打开断言）、318 项 LogicTests、21 项 CLI/WPF 检查。文件关闭与真实鼠标行为检查未被跳过。
 - Google Antigravity 新账号浏览器授权与资格检查未验证；模拟授权结果不得作为真实登录证据。旧机器唤醒性能未在此改动中重新测量。
 
 协议来源：[OMP 18.2.11 RPC 文档](https://github.com/can1357/oh-my-pi/blob/v18.2.11/docs/rpc.md)。

@@ -250,6 +250,7 @@ internal static class InteractionTraceCollector
     private static int _ringCount;
     private static Channel<(string Line, long OriginTicks)>? _writerChannel;
     private static string? _outputPath;
+    private static Thread? _writerThread;
     private static int _enabled;
     private static readonly object EnableGate = new();
 
@@ -282,6 +283,7 @@ internal static class InteractionTraceCollector
                 IsBackground = true,
                 Name = "PopGlot.TraceWriter",
             };
+            _writerThread = worker;
             worker.Start();
             Volatile.Write(ref _enabled, 1);
         }
@@ -328,7 +330,10 @@ internal static class InteractionTraceCollector
             return;
         }
         _writerChannel.Writer.TryComplete();
-        _writerChannel.Reader.Completion.Wait(wait);
+        // Channel completion only means the last item was DEQUEUED. The
+        // worker can still be writing/flushing with the file handle open.
+        // Join waits for StreamWriter.Dispose as well, within the same budget.
+        _writerThread?.Join(wait);
     }
 
     private static void WriteLoop()

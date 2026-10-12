@@ -631,6 +631,8 @@ internal static class Program
         InteractionTraceCollector.Publish(durable);
         InteractionTraceCollector.Flush(TimeSpan.FromSeconds(5));
         True(File.Exists(sinkPath), "the flushed sink file must exist");
+        using (File.Open(sinkPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        { /* Flush must return after the writer has released its file handle. */ }
         var lines = File.ReadAllLines(sinkPath);
         True(lines.Length >= 1, "at least the published trace must be on disk");
         var payload = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(lines[^1]);
