@@ -739,7 +739,7 @@ public partial class SettingsWindow : Window
             var previousCoreSettings = CoreBridge.GetSettings();
             try
             {
-                await CoreBridge.SaveSettingsAsync(policySettings);
+                await CoreBridge.UpdateSettingsAsync(current => MergePolicySettings(current, policySettings));
             }
             catch (Exception commitException)
             {
@@ -763,7 +763,7 @@ public partial class SettingsWindow : Window
                 string rollbackReport;
                 try
                 {
-                    await CoreBridge.SaveSettingsAsync(previousCoreSettings);
+                    await CoreBridge.UpdateSettingsAsync(current => MergePolicySettings(current, previousCoreSettings));
                     var hotkeysRestored = ApplyShellSettings is null || ApplyShellSettings(_shellSettings).Applied;
                     rollbackReport = hotkeysRestored
                         ? "已回滚本次全部修改。"
@@ -911,6 +911,16 @@ public partial class SettingsWindow : Window
             ProtectCodeTokens = GeneralSection.ProtectTokens.IsChecked == true,
         };
     }
+
+    internal static ProviderSettings MergePolicySettings(ProviderSettings current, ProviderSettings policy) => current with
+    {
+        NetworkEnabled = policy.NetworkEnabled,
+        SafeDevMode = policy.SafeDevMode,
+        AllowImageUploadInAuto = policy.AllowImageUploadInAuto,
+        Mode = policy.Mode,
+        IncludeExplanation = policy.IncludeExplanation,
+        ProtectCodeTokens = policy.ProtectCodeTokens,
+    };
 
     private void WarnAboutGates()
     {

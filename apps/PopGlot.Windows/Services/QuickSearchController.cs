@@ -214,10 +214,12 @@ internal sealed class QuickSearchState
                 AccumulatedText = session.TranslatedText;
             }
             Phonetic = session.Phonetic;
-            Explanation = session.Explanation;
+            Explanation = string.Join("\n", new[] { session.Explanation }
+                .Concat(session.Warnings).Where(note => !string.IsNullOrWhiteSpace(note)).Distinct());
             // 与 Failed 分支一致：partial+error 的状态行同时给出 Message 与
             // 非空 ActionableSuggestion（已含建议时去重），而不是只报 Message。
-            var partialError = session.Error is not null ? ComposeErrorText(session.Error) : null;
+            var partialError = session.Error is not null ? ComposeErrorText(session.Error)
+                : session.Warnings.Count > 0 ? string.Join("\n", session.Warnings) : null;
             ErrorMessage = partialError;
             IsResultVisible = !string.IsNullOrEmpty(AccumulatedText);
             IsStreamLayerVisible = !string.IsNullOrEmpty(AccumulatedText);

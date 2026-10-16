@@ -4714,14 +4714,14 @@ internal static class Program
             FindProjectRoot(), "apps", "PopGlot.Windows", "SettingsWindow.xaml.cs"));
         var validate = source.IndexOf("shellSettings.ValidateHotkeys()", StringComparison.Ordinal);
         var register = source.IndexOf("ApplyShellSettings?.Invoke(shellSettings)", StringComparison.Ordinal);
-        var coreSave = source.IndexOf("CoreBridge.SaveSettingsAsync(policySettings)", StringComparison.Ordinal);
+        var coreSave = source.IndexOf("CoreBridge.UpdateSettingsAsync(current => MergePolicySettings(current, policySettings))", StringComparison.Ordinal);
         var shellSave = source.IndexOf("ShellSettingsStore.Save(shellSettings)", StringComparison.Ordinal);
         True(validate >= 0, "hotkey validation must exist in the save flow");
         True(register > validate, "hotkey registration must follow validation");
         True(coreSave > register, "the core policy must be committed only after full validation");
         True(shellSave > coreSave, "shell settings must be committed after the core policy");
-        True(source.Contains("previousCoreSettings", StringComparison.Ordinal),
-            "a failed shell write must roll back the core policy via the captured snapshot");
+        True(source.Contains("CoreBridge.UpdateSettingsAsync(current => MergePolicySettings(current, previousCoreSettings))", StringComparison.Ordinal),
+            "a failed shell write rolls back policy fields without overwriting concurrently changed language or engine settings");
         True(source.Contains("已回滚本次全部修改", StringComparison.Ordinal),
             "a failed commit must tell the user the rollback happened");
         True(source.Contains("未保存任何修改", StringComparison.Ordinal),

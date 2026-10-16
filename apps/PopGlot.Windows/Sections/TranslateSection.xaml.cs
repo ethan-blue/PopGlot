@@ -308,6 +308,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     private string? _pendingStyleNotice;
     private bool _languageChangeSuspended = true;
     private bool _isUnloaded;
+    private int _languageSavesPending;
     // 恢复暂存按钮的启用态跟随内存会话仓：仓的变化也可能来自浮窗/托盘，
     // 轻量轮询（纯内存计数）保证按钮状态在变化后最迟 2 秒内跟上。
     private readonly System.Windows.Threading.DispatcherTimer _sessionStorePollTimer;
@@ -355,6 +356,8 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     {
         _isUnloaded = false;
         TtsService.SpeakingStateChanged += OnTtsSpeakingStateChanged;
+        CoreBridge.LanguagePairChanged += OnLanguagePairChanged;
+        SyncLanguagePair();
         UpdateServiceAvailability();
         RefreshStarState();
         RefreshStyleSelector();
@@ -366,6 +369,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     {
         _isUnloaded = true;
         TtsService.SpeakingStateChanged -= OnTtsSpeakingStateChanged;
+        CoreBridge.LanguagePairChanged -= OnLanguagePairChanged;
         _sessionStorePollTimer.Stop();
         _translateOperation?.Cancel();
         _translateOperation?.Dispose();
@@ -845,6 +849,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     private async Task TranslateAsync()
     {
         if (_coordinator is null) return;
+        SyncLanguagePair();
         var source = TranslateInput.Text.Trim();
         if (string.IsNullOrEmpty(source))
         {
@@ -1250,6 +1255,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     /// </summary>
     internal void RefreshAfterSettingsChanged()
     {
+        SyncLanguagePair();
         RefreshStyleSelector();
         UpdateServiceAvailability();
         UpdateSummaryCapabilityVisuals();
@@ -1538,6 +1544,10 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
     private void ClearResultForLanguageChange()
     {
+        _reading.ClearSummaryDisplay();
+        _reading.CaptureTranslation(string.Empty, string.Empty);
+        _holdingSummary = false;
+        ShowTranslationChoice.IsChecked = true;
         if (_currentState.Phase == TranslateUiPhase.Idle &&
             string.IsNullOrWhiteSpace(_currentState.FinalText) &&
             string.IsNullOrWhiteSpace(_currentState.StreamText))
@@ -1548,31 +1558,59 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         ApplyState(TranslateUiState.Initial with { Epoch = epoch, StatusText = "语言已更新，点击翻译后生效" });
     }
 
-    /// <summary>Remembers the pair so the floating panel opens the same way.</summary>
-    private void PersistLanguagePair()
+    private void OnLanguagePairChanged(object? sender, EventArgs e)
     {
-        if (_languageChangeSuspended)
-        {
-            return;
-        }
+        if (!Dispatcher.HasShutdownStarted)
+            _ = Dispatcher.BeginInvoke(new Action(() => { if (!_isUnloaded) SyncLanguagePair(); }));
+    }
+
+    private void SyncLanguagePair()
+    {
+        // Never relabel an in-flight result. The next request/activation will
+        // adopt the global pair; own queued saves must not undo newer edits.
+        if (_languageChangeSuspended || _languageSavesPending > 0 ||
+            _translateOperation is not null || _summaryLifecycle.IsRunning) return;
+        var settings = CoreBridge.GetSettings();
+        var source = LanguageCatalog.ResolveSource(settings.SourceLanguage);
+        var target = LanguageCatalog.ResolveTarget(settings.TargetLanguage);
+        if (Equals(TranslateSourceLang.SelectedItem, source) && Equals(TranslateTargetLang.SelectedItem, target)) return;
+        _languageChangeSuspended = true;
         try
         {
-            var settings = CoreBridge.GetSettings();
-            var source = Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto);
-            var target = Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN");
-            if (settings.SourceLanguage == source && settings.TargetLanguage == target)
-            {
-                return;
-            }
-            _ = CoreBridge.SaveSettingsAsync(settings with
+            TranslateSourceLang.SelectedItem = source;
+            TranslateTargetLang.SelectedItem = target;
+        }
+        finally { _languageChangeSuspended = false; }
+        CancelSummary();
+        if (_holdingSummary) ShowTranslationReading();
+        ClearResultForLanguageChange();
+    }
+
+    /// <summary>Persist only the pair, preserving concurrent privacy/engine updates.</summary>
+    private async void PersistLanguagePair()
+    {
+        if (_languageChangeSuspended) return;
+        var source = Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto);
+        var target = Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN");
+        _languageSavesPending++;
+        var saved = false;
+        try
+        {
+            await CoreBridge.UpdateSettingsAsync(settings => settings with
             {
                 SourceLanguage = source,
                 TargetLanguage = target,
             });
+            saved = true;
         }
-        catch (InvalidOperationException)
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or UnauthorizedAccessException)
         {
-            // Remembering the pair is a convenience, never a reason to fail.
+            if (!_isUnloaded) TranslateStatus.Text = "语言未能保存，请重试；当前窗口仍使用所选语言。";
+        }
+        finally
+        {
+            _languageSavesPending--;
+            if (saved && !_isUnloaded) SyncLanguagePair();
         }
     }
 

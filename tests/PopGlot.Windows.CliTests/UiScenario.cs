@@ -111,9 +111,54 @@ internal static class UiScenario
             Program.Assert(((StackPanel)section.FindName("OmpCallbackPanel")).Visibility == Visibility.Collapsed && Find("OmpLoginButton").IsEnabled,
                 "cancel hides callback and releases UI; old completion cannot overwrite it");
             Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", null);
+            VerifyLanguageSync(window, root);
         }
         finally { DirectTests.Restore(); window.Close(); Pump(); }
     }
+    private static void VerifyLanguageSync(Window host, string root)
+    {
+        var original = CoreBridge.GetSettings();
+        var workbench = new TranslateSection();
+        var panel = new TranslationPanelWindow(new Rect(0, 0, 1, 1),
+            new HistoryStore(Path.Combine(root, "language-sync-history.json")), () => ShellSettings.Default)
+        { Opacity = 0, ShowInTaskbar = false, ShowActivated = false };
+        try
+        {
+            host.Content = workbench;
+            panel.Show(); Pump();
+            var panelSource = (ComboBox)panel.FindName("SourceLangCombo");
+            var panelTarget = (ComboBox)panel.FindName("TargetLangCombo");
+            panelSource.SelectedItem = LanguageCatalog.ResolveSource("ja");
+            panelTarget.SelectedItem = LanguageCatalog.ResolveTarget("en");
+            Until(() => CoreBridge.GetSettings().TargetLanguage == "en" &&
+                (workbench.SourceLangCombo.SelectedItem as LanguageOption)?.Tag == "ja" &&
+                (workbench.TargetLangCombo.SelectedItem as LanguageOption)?.Tag == "en",
+                "floating panel pair must reach the already loaded workbench");
+            workbench.TargetLangCombo.SelectedItem = LanguageCatalog.ResolveTarget("zh-CN");
+            Until(() => (panelTarget.SelectedItem as LanguageOption)?.Tag == "zh-CN" &&
+                CoreBridge.GetSettings().TargetLanguage == "zh-CN",
+                "workbench pair must reach the existing floating panel and global quick-search settings");
+
+            // A language change must clear the stored reading as well as the
+            // visible box; toggling back to translation cannot resurrect it.
+            var reading = (ReadingModeState)typeof(TranslationPanelWindow).GetField("_reading",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(panel)!;
+            reading.CaptureTranslation("old result", "old note");
+            panelTarget.SelectedItem = LanguageCatalog.ResolveTarget("en");
+            Until(() => CoreBridge.GetSettings().TargetLanguage == "en", "new pair persists");
+            Program.Assert(reading.TranslationText.Length == 0 && reading.TranslationNote.Length == 0,
+                "changing language must invalidate hidden translation and explanation too");
+            Console.WriteLine("UI language synchronization and stale-reading regression passed");
+        }
+        finally
+        {
+            panel.Close();
+            host.Content = null;
+            Pump();
+            CoreBridge.SaveSettings(original);
+        }
+    }
+
     private static void Until(Func<bool> test, string error)
     {
         var watch = Stopwatch.StartNew();

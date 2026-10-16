@@ -8,7 +8,7 @@ internal static class CliLauncher
     // Reference release numbers, not JSONL protocol versions. OMP is probed at runtime.
     public static string ReferenceToolVersion(EngineExecutionKind kind) => kind switch
     { EngineExecutionKind.CodexAppServer => "0.150.1", EngineExecutionKind.OmpRpc => "18.2.11", _ => "" };
-    // Resolve npm shims to the packaged native executable; never run a shell.
+    // Resolve known package layouts; never execute cmd/ps1 shims or a shell.
     public static string Resolve(string toolId, string entry)
     {
         var full = Path.GetFullPath(entry);
@@ -26,13 +26,87 @@ internal static class CliLauncher
                 Path.Combine(package, "vendor", triple, "bin", "codex.exe"),
             }) if (File.Exists(path)) return path;
         }
-        throw new InvalidOperationException("无法解析工具的原生程序入口；请使用 codex.exe 或 omp.exe 安装版后重新检测。");
+        if (toolId == CliDiscovery.OmpToolId)
+        {
+            var script = ResolveOmpPackage(full);
+            if (script is not null && FindBun(script) is not null) return script;
+        }
+        throw new InvalidOperationException("无法解析工具入口；OMP 支持原生 omp.exe 或已安装 Bun 的官方包入口，请选择对应入口后重新检测。");
+    }
+
+    internal static string? ResolveOmpPackage(string full)
+    {
+        var directory = Path.GetDirectoryName(full)!;
+        // The shim's CONTENT is deliberately ignored. Only the official
+        // package name and a confined, known bin target may select a script.
+        var roots = new[]
+        {
+            Path.Combine(directory, "node_modules", "@oh-my-pi", "pi-coding-agent"),
+            Path.Combine(directory, "..", "install", "global", "node_modules", "@oh-my-pi", "pi-coding-agent"),
+            Path.Combine(directory, ".."), // an explicitly selected src/cli.ts or dist/cli.js
+        };
+        foreach (var root in roots)
+        {
+            try
+            {
+                var package = Path.GetFullPath(root);
+                var manifest = Path.Combine(package, "package.json");
+                if (!File.Exists(manifest) || new FileInfo(manifest).Length > 256 * 1024) continue;
+                using var document = JsonDocument.Parse(File.ReadAllText(manifest));
+                var json = document.RootElement;
+                if (!json.TryGetProperty("name", out var name) || name.GetString() != "@oh-my-pi/pi-coding-agent" ||
+                    !json.TryGetProperty("bin", out var bin) || bin.ValueKind != JsonValueKind.Object ||
+                    !bin.TryGetProperty("omp", out var entry) || entry.ValueKind != JsonValueKind.String) continue;
+                var relative = entry.GetString();
+                if (relative is not ("src/cli.ts" or "dist/cli.js" or "./src/cli.ts" or "./dist/cli.js")) continue;
+                var script = Path.GetFullPath(Path.Combine(package, relative));
+                if (File.Exists(script) &&
+                    (Path.GetExtension(full) is not (".ts" or ".js") || string.Equals(full, script, StringComparison.OrdinalIgnoreCase)))
+                    return script;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or ArgumentException) { }
+        }
+        return null;
+    }
+
+    private static string? FindBun(string script)
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var install = Environment.GetEnvironmentVariable("BUN_INSTALL");
+        var directories = new List<string>
+        {
+            Path.GetDirectoryName(script)!,
+            Path.GetFullPath(Path.Combine(Path.GetDirectoryName(script)!, "..", "..", "..", "..", "..", "..", "bin")),
+            Path.Combine(home, ".bun", "bin"),
+        };
+        if (!string.IsNullOrWhiteSpace(install) && Path.IsPathFullyQualified(install)) directories.Add(Path.Combine(install, "bin"));
+        directories.AddRange((Environment.GetEnvironmentVariable("PATH") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        foreach (var directory in directories)
+        {
+            if (!Path.IsPathFullyQualified(directory)) continue;
+            var candidate = Path.Combine(directory, "bun.exe");
+            if (File.Exists(candidate)) return candidate;
+        }
+        return null;
+    }
+
+    public static ProcessStartInfo CreateStartInfo(string toolId, string entry)
+    {
+        var resolved = Resolve(toolId, entry);
+        if (resolved.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) return new ProcessStartInfo(resolved);
+        var info = new ProcessStartInfo(FindBun(resolved) ?? throw new InvalidOperationException("未找到 Bun 运行时，请安装 Bun 或改用原生 omp.exe。"));
+        info.ArgumentList.Add(resolved);
+        return info;
     }
 
     public static async Task<string> VerifyVersionAsync(string toolId, CliConnectionSettings connection, CancellationToken ct)
     {
-        var info = new ProcessStartInfo(Resolve(toolId, connection.ExecutablePath))
-        { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = Path.GetTempPath() };
+        var info = CreateStartInfo(toolId, connection.ExecutablePath);
+        info.UseShellExecute = false;
+        info.CreateNoWindow = true;
+        info.RedirectStandardOutput = true;
+        info.RedirectStandardError = true;
+        info.WorkingDirectory = Path.GetTempPath();
         info.ArgumentList.Add("--version");
         using var process = Process.Start(info) ?? throw new InvalidOperationException("无法检查工具版本。");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);

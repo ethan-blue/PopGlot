@@ -51,8 +51,10 @@ internal static class WindowsOcrService
     /// </param>
     public static async Task<string> RecognizeTextAsync(
         byte[] imageBytes,
-        string? sourceLanguageTag = null)
+        string? sourceLanguageTag = null,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(imageBytes);
         if (imageBytes.Length == 0)
         {
@@ -67,18 +69,22 @@ internal static class WindowsOcrService
         using (var writer = new DataWriter(memoryStream))
         {
             writer.WriteBytes(imageBytes);
-            await writer.StoreAsync();
-            await writer.FlushAsync();
+            await writer.StoreAsync().AsTask(cancellationToken);
+            await writer.FlushAsync().AsTask(cancellationToken);
             writer.DetachStream();
         }
 
         memoryStream.Seek(0);
-        var decoder = await BitmapDecoder.CreateAsync(memoryStream);
+        var decoder = await BitmapDecoder.CreateAsync(memoryStream).AsTask(cancellationToken);
+        var size = FitDimensions(decoder.PixelWidth, decoder.PixelHeight, OcrEngine.MaxImageDimension);
         using var softwareBitmap = await decoder.GetSoftwareBitmapAsync(
             BitmapPixelFormat.Bgra8,
-            BitmapAlphaMode.Premultiplied);
+            BitmapAlphaMode.Premultiplied,
+            new BitmapTransform { ScaledWidth = size.Width, ScaledHeight = size.Height },
+            ExifOrientationMode.IgnoreExifOrientation,
+            ColorManagementMode.DoNotColorManage).AsTask(cancellationToken);
 
-        var result = await engine.RecognizeAsync(softwareBitmap);
+        var result = await engine.RecognizeAsync(softwareBitmap).AsTask(cancellationToken);
         if (result is null || result.Lines.Count == 0)
         {
             return string.Empty;
@@ -96,6 +102,14 @@ internal static class WindowsOcrService
         return builder.ToString().TrimEnd();
     }
 
+    internal static (uint Width, uint Height) FitDimensions(uint width, uint height, uint maximum)
+    {
+        if (width == 0 || height == 0 || maximum == 0)
+            throw new ArgumentOutOfRangeException(nameof(width), "OCR 图片尺寸必须大于零。");
+        var scale = Math.Min(1d, (double)maximum / Math.Max(width, height));
+        return (Math.Max(1u, (uint)(width * scale)), Math.Max(1u, (uint)(height * scale)));
+    }
+
     private static OcrEngine? ResolveEngine(string? sourceLanguageTag)
     {
         var normalized = LanguageCatalog.Normalize(sourceLanguageTag);
@@ -106,6 +120,8 @@ internal static class WindowsOcrService
             {
                 return preferred;
             }
+            throw new InvalidOperationException(
+                $"系统未安装所选原文语言（{normalized}）的 OCR 语言包。请安装对应的光学字符识别功能，或改选原文语言；未使用其他语言代替识别。");
         }
 
         // Fall back to the user's profile languages, then to anything installed.
@@ -133,8 +149,13 @@ internal static class WindowsOcrService
         // `zh-CN` will not match an installed `zh-Hans-CN` pack by exact tag, so
         // also accept any installed recognizer sharing the primary subtag.
         var primary = tag.Split('-')[0];
-        var match = OcrEngine.AvailableRecognizerLanguages.FirstOrDefault(
-            language => language.LanguageTag.StartsWith(primary, StringComparison.OrdinalIgnoreCase));
+        var chineseScript = tag is "zh-CN" ? "zh-Hans" : tag is "zh-TW" ? "zh-Hant" : null;
+        var match = OcrEngine.AvailableRecognizerLanguages.FirstOrDefault(language =>
+            chineseScript is not null
+                ? language.LanguageTag.Equals(chineseScript, StringComparison.OrdinalIgnoreCase) ||
+                  language.LanguageTag.StartsWith(chineseScript + "-", StringComparison.OrdinalIgnoreCase)
+                : language.LanguageTag.Equals(primary, StringComparison.OrdinalIgnoreCase) ||
+                  language.LanguageTag.StartsWith(primary + "-", StringComparison.OrdinalIgnoreCase));
         return match is null ? null : OcrEngine.TryCreateFromLanguage(match);
     }
 }

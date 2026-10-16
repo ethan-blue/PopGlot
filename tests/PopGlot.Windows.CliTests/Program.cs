@@ -8,7 +8,7 @@ using PopGlot.Windows.Services.AiConnections;
 
 namespace PopGlot.Windows.CliTests;
 
-internal static class Program
+internal static partial class Program
 {
     private static int _passes;
     private static int _failures;
@@ -21,7 +21,9 @@ internal static class Program
             var version = Environment.GetEnvironmentVariable("POPGLOT_FAKE_VERSION");
             if (version == "unsupported-version-query") return 2;
             if (version == "hanging-version-query") { Thread.Sleep(30000); return 2; }
-            Console.WriteLine(Environment.GetEnvironmentVariable("POPGLOT_FAKE_PROTOCOL") == "omp" ? version ?? "18.2.11" : "codex-cli 0.150.1"); return 0;
+            Console.WriteLine(Environment.GetEnvironmentVariable("POPGLOT_FAKE_PROTOCOL") == "omp"
+                ? version ?? (Environment.GetEnvironmentVariable("POPGLOT_FAKE_SCENARIO") == "legacy_terminal" ? "18.2.11" : "18.11.2")
+                : "codex-cli 0.150.1"); return 0;
         }
         if (args.Contains("app-server") || args.Contains("rpc")) return FakeServer(args.Contains("rpc"));
         var root = Path.Combine(Path.GetTempPath(), $"popglot-cli-test-{Guid.NewGuid():N}");
@@ -36,6 +38,8 @@ internal static class Program
         {
             Check("Codex protocol + FFI stream", () => StreamFake(EngineExecutionKind.CodexAppServer));
             Check("OMP protocol + FFI stream", () => StreamFake(EngineExecutionKind.OmpRpc));
+            Check("OMP prompt terminal is correlated and cannot succeed at agent_end", OmpPromptTerminals);
+            Check("settings field updates merge inside the queue and notify saved language", SettingsFieldUpdates);
             Check("OMP compatibility follows protocol, not exact version or saved pin", OmpVersionCompatibility);
             Check("OMP login browser/callback/final confirmation", OmpLoginSuccess);
             Check("OMP login failure/cancel/unsafe URL isolation", OmpLoginFailures);
@@ -47,6 +51,7 @@ internal static class Program
             Check("offline gate: zero processes/prompts", Offline);
             Check("save, reload, switch, disable", Persistence);
             Check("main translation/history/summary/recognized-text route", CoordinatorRoutes);
+            Check("wrong-language final stays partial and never enters history", WrongLanguageFinal);
             Check("disconnect cancels active saved connection", DisconnectActive);
             Check("immediate disconnect fences queued request", DisconnectQueued);
             Check("official OAuth/PKCE/callback/JWT/encrypted credentials", DirectTests.SignInAndValidation);
@@ -382,11 +387,21 @@ internal static class Program
                     var metadata = "\n" + marker + "\n{\"explanation\":\"\",\"warnings\":[]}";
                     if (omp)
                     {
-                        Emit(new { type = "message_update", assistantMessageEvent = new { type = "text_delta", delta = "你好，" } });
-                        Emit(new { type = "message_update", assistantMessageEvent = new { type = "text_delta", delta = "世界" } });
+                        if (scenario == "multi_run") Emit(new { type = "agent_end", isTerminal = false });
+                        Emit(new { type = "message_update", assistantMessageEvent = new { type = "text_delta", delta = scenario == "wrong_language"
+                            ? "Please restart the application before changing the translation settings again." : "你好，" } });
+                        if (scenario != "wrong_language") Emit(new { type = "message_update", assistantMessageEvent = new { type = "text_delta", delta = "世界" } });
                         Emit(new { type = "message_update", assistantMessageEvent = new { type = "text_delta", delta = metadata } });
                         Emit(new { type = "message_end", message = new { stopReason = "stop" } });
-                        Emit(new { type = "agent_end", isTerminal = true });
+                        if (scenario != "terminal_only") Emit(new { type = "agent_end", isTerminal = true });
+                        if (scenario == "terminal_eof") return 0;
+                        if (scenario == "legacy_terminal") break;
+                        // A later prompt failure must override an earlier run end.
+                        if (scenario is "terminal_error" or "terminal_aborted" or "terminal_wrong_id") Thread.Sleep(50);
+                        if (scenario == "terminal_wrong_id") Emit(new { type = "prompt_result", id = "unrelated", agentInvoked = true, status = "completed" });
+                        Emit(new { type = "prompt_result", id, agentInvoked = true,
+                            status = scenario == "terminal_aborted" ? "aborted" : scenario is "terminal_error" or "terminal_wrong_id" ? "error" : "completed",
+                            error = new { httpStatus = 429, message = "private-upstream-text", retryable = true }, sessionSettled = true });
                     }
                     else
                     {

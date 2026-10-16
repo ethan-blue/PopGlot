@@ -65,6 +65,7 @@ public partial class TranslationPanelWindow : Window
     private readonly System.Windows.Data.Binding? _resultCopyIconFillBinding;
 
     private CancellationTokenSource? _operation;
+    private int _languageSavesPending;
     private readonly SummaryLifecycleCoordinator _summaryLifecycle = new();
     private bool _holdingSummary;
     private Func<CancellationToken, long, Task>? _retry;
@@ -125,6 +126,7 @@ public partial class TranslationPanelWindow : Window
         TrackDropDown(SourceLangCombo);
         TrackDropDown(TargetLangCombo);
         IsVisibleChanged += OnIsVisibleChanged;
+        CoreBridge.LanguagePairChanged += OnLanguagePairChanged;
 
         TtsService.SpeakingStateChanged += OnTtsSpeakingStateChanged;
 
@@ -150,6 +152,7 @@ public partial class TranslationPanelWindow : Window
         Closed += (_, _) =>
         {
             _closing = true;
+            CoreBridge.LanguagePairChanged -= OnLanguagePairChanged;
             ThemeService.ThemeChanged -= _themeChangedHandler;
             TtsService.SpeakingStateChanged -= OnTtsSpeakingStateChanged;
             CancelOperation();
@@ -299,8 +302,7 @@ public partial class TranslationPanelWindow : Window
             throw new InvalidOperationException("系统未安装 Windows OCR 语言包，无法进行离线文字提取。");
         }
 
-        var sourceLang = SourceLanguage == LanguageCatalog.Auto ? "zh-Hans-CN" : SourceLanguage;
-        var recognized = await WindowsOcrService.RecognizeTextAsync(image, sourceLang);
+        var recognized = await WindowsOcrService.RecognizeTextAsync(image, SourceLanguage, cancellationToken);
         if (string.IsNullOrWhiteSpace(recognized))
         {
             throw new InvalidOperationException("未能在所选区域识别出有效文字。");
@@ -363,6 +365,9 @@ public partial class TranslationPanelWindow : Window
         // all carry it). Entry points with nothing at stake start clean.
         _pendingStyleNotice = styleNotice;
         CancelOperation();
+        var retry = _retry;
+        SyncLanguagePair();
+        _retry = retry;
         var (epoch, _) = _gate.BeginNewOperation();
         // A new operation starts from a clean slate: the previous attempt's
         // text — including a previously rendered failure message — must never
@@ -867,9 +872,10 @@ public partial class TranslationPanelWindow : Window
             // gate records FailedWithPartial so result actions, auto-copy and
             // starring stay blocked while the retained text stays readable.
             var message = session.Error?.Message
-                ?? (session.Stage == TranslationSessionStage.Partial
-                    ? "译文不完整，未执行自动复制等动作"
-                    : "翻译未完成");
+                ?? (session.Warnings.Count > 0 ? string.Join("\n", session.Warnings)
+                    : session.Stage == TranslationSessionStage.Partial
+                        ? "译文不完整，未执行自动复制等动作"
+                        : "翻译未完成");
             var suggestion = session.Error?.ActionableSuggestion;
             var fullMessage = string.IsNullOrWhiteSpace(suggestion) ? message : $"{message} {suggestion}".Trim();
             _gate.OnFailed(fullMessage, session.TranslatedText);
@@ -1841,15 +1847,8 @@ public partial class TranslationPanelWindow : Window
         {
             return;
         }
-        CancelSummary();
-        if (_holdingSummary)
-        {
-            ShowStoredTranslation();
-        }
         PersistLanguagePair();
-        SetTranslationContent(string.Empty);
-        SetResultActionsEnabled(false);
-        _retry = null;
+        ClearResultForLanguageChange();
         StatusText.Text = "语言已更新，按 Enter 翻译";
     }
 
@@ -1891,31 +1890,77 @@ public partial class TranslationPanelWindow : Window
         }
         PersistLanguagePair();
 
-        _retry = null;
-        SetResultActionsEnabled(false);
+        ClearResultForLanguageChange();
         StatusText.Text = "语言已交换，按 Enter 翻译";
     }
 
-    /// <summary>Remembers the pair so the next popup opens the same way.</summary>
-    private void PersistLanguagePair()
+    private void OnLanguagePairChanged(object? sender, EventArgs e)
     {
+        if (!Dispatcher.HasShutdownStarted)
+            _ = Dispatcher.BeginInvoke(new Action(() => { if (!_closing) SyncLanguagePair(); }));
+    }
+
+    private void SyncLanguagePair()
+    {
+        if (_languageChangeSuspended || _languageSavesPending > 0 ||
+            _operation is not null || _summaryLifecycle.IsRunning) return;
+        var settings = CoreBridge.GetSettings();
+        var source = LanguageCatalog.ResolveSource(settings.SourceLanguage);
+        var target = LanguageCatalog.ResolveTarget(settings.TargetLanguage);
+        if (Equals(SourceLangCombo.SelectedItem, source) && Equals(TargetLangCombo.SelectedItem, target)) return;
+        _languageChangeSuspended = true;
         try
         {
-            var settings = CoreBridge.GetSettings();
-            if (settings.SourceLanguage == SourceLanguage && settings.TargetLanguage == TargetLanguage)
-            {
-                return;
-            }
-            _ = CoreBridge.SaveSettingsAsync(settings with
-            {
-                SourceLanguage = SourceLanguage,
-                TargetLanguage = TargetLanguage,
-            });
+            SourceLangCombo.SelectedItem = source;
+            TargetLangCombo.SelectedItem = target;
         }
-        catch (InvalidOperationException)
+        finally { _languageChangeSuspended = false; }
+        ClearResultForLanguageChange();
+        StatusText.Text = "语言已同步，按 Enter 翻译";
+    }
+
+    private void ClearResultForLanguageChange()
+    {
+        CancelSummary();
+        _holdingSummary = false;
+        _reading.ClearSummaryDisplay();
+        _reading.CaptureTranslation(string.Empty, string.Empty);
+        _translationNote = string.Empty;
+        ShowTranslationChoice.IsChecked = true;
+        SetTranslationContent(string.Empty);
+        SetResultActionsEnabled(false);
+        ExplanationText.Text = string.Empty;
+        ExplanationBox.Visibility = Visibility.Collapsed;
+        WarningBox.Visibility = Visibility.Collapsed;
+        TermsList.Visibility = Visibility.Collapsed;
+        PhoneticText.Visibility = Visibility.Collapsed;
+        _retry = null;
+    }
+
+    /// <summary>Remembers the pair without overwriting other settings.</summary>
+    private async void PersistLanguagePair()
+    {
+        var source = SourceLanguage;
+        var target = TargetLanguage;
+        _languageSavesPending++;
+        var saved = false;
+        try
         {
-            // Remembering the pair is a convenience, never a reason to fail a
-            // translation the user asked for.
+            await CoreBridge.UpdateSettingsAsync(settings => settings with
+            {
+                SourceLanguage = source,
+                TargetLanguage = target,
+            });
+            saved = true;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            if (!_closing) StatusText.Text = "语言未能保存，请重试；当前窗口仍使用所选语言。";
+        }
+        finally
+        {
+            _languageSavesPending--;
+            if (saved && !_closing) SyncLanguagePair();
         }
     }
 
@@ -1953,6 +1998,7 @@ public partial class TranslationPanelWindow : Window
         {
             // The panel lives across shows: the engine (and therefore style
             // support) may have changed since it was last on screen.
+            SyncLanguagePair();
             RefreshStyleSelector();
             RefreshSummaryCapability();
         }

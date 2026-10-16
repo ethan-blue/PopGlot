@@ -130,7 +130,7 @@ internal sealed class DefaultTranslationExecutor : ITranslationExecutor
     public bool IsOcrSupported => WindowsOcrService.IsSupported;
 
     public Task<string> RecognizeOcrTextAsync(byte[] imageBytes, string sourceLang, CancellationToken cancellationToken = default) =>
-        WindowsOcrService.RecognizeTextAsync(imageBytes, sourceLang);
+        WindowsOcrService.RecognizeTextAsync(imageBytes, sourceLang, cancellationToken);
 
     public TranslationStreamSession StreamText(
         string? apiKey,
@@ -1835,13 +1835,17 @@ internal sealed class TranslationCoordinator
         session.Explanation = response.Result.Explanation;
         session.Phonetic = response.Result.Phonetic;
         session.ProtectedTerms = response.Result.ProtectedTerms;
-        session.Warnings = response.Result.Warnings;
+        var qualityWarning = TranslationQuality.Check(
+            session.SourceText, response.Result.TranslatedText, session.SourceLanguage, session.TargetLanguage);
+        session.Warnings = qualityWarning is null
+            ? response.Result.Warnings
+            : [.. response.Result.Warnings, qualityWarning];
 
         // Integrity comes from the provider contract, not just warnings: an
         // is_partial final, integrity warnings, or an empty translation are
         // all incomplete states. They stay visible but never qualify.
         var incomplete =
-            response.Result.Warnings.Count > 0 ||
+            session.Warnings.Count > 0 ||
             response.Result.IsPartial ||
             string.IsNullOrWhiteSpace(response.Result.TranslatedText);
         session.Stage = incomplete

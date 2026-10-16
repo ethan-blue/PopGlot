@@ -73,6 +73,7 @@ internal static class FreeTranslateService
     /// refuse non-loopback destinations. Production leaves it null.
     /// </summary>
     internal static Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? HttpSenderOverride { get; set; }
+    internal static HttpClient? HttpClientOverrideForTest { get; set; }
 
     private static readonly HttpClient HttpClient = new(new SocketsHttpHandler
     {
@@ -196,7 +197,7 @@ internal static class FreeTranslateService
         {
             throw new FreeTranslateException(
                 FreeTranslateFailureKind.LongContent,
-                $"{EngineWording.FreeEngineName}单次最多翻译 {MaxSourceCharacters} 个字符。请缩短选区，或在设置中配置自己的模型服务。");
+                $"{EngineWording.FreeEngineName}原文最多 {MaxSourceCharacters} 个字符，实际容量还受当前服务的编码字节预算限制。请缩短选区，或在设置中配置自己的模型服务。");
         }
 
         var sl = LanguageCatalog.Normalize(sourceLang);
@@ -287,7 +288,7 @@ internal static class FreeTranslateService
                 }
                 using var response = HttpSenderOverride is { } sender
                     ? await sender(request, cancellationToken)
-                    : await HttpClient.SendAsync(request, cancellationToken);
+                    : await (HttpClientOverrideForTest ?? HttpClient).SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
                 if ((int)response.StatusCode == 429)
                 {
@@ -523,21 +524,22 @@ internal static class FreeTranslateService
             return normalized;
         }
 
-        var cjk = 0;
-        var latin = 0;
-        foreach (var ch in text)
-        {
-            if (ch is >= '\u4e00' and <= '\u9fff')
-            {
-                cjk++;
-            }
-            else if (char.IsAsciiLetter(ch))
-            {
-                latin++;
-            }
-        }
+        // MyMemory cannot detect languages. Never label kana, Hangul,
+        // Cyrillic, accented Latin, etc. as English merely by default.
+        if (text.Any(ch => ch is >= '\u3040' and <= '\u30ff' or >= '\u31f0' and <= '\u31ff'))
+            return "ja";
+        if (text.Any(ch => ch is >= '\uac00' and <= '\ud7af' or >= '\u1100' and <= '\u11ff' or >= '\u3130' and <= '\u318f'))
+            return "ko";
+        if (text.Any(ch => char.IsLetter(ch) && !char.IsAsciiLetter(ch) && ch is not (>= '\u4e00' and <= '\u9fff')))
+            throw new FreeTranslateException(FreeTranslateFailureKind.Unavailable,
+                "MyMemory 不支持可靠的自动语言检测，请先选择原文语言后重试。");
 
-        return cjk > latin ? "zh-CN" : "en";
+        var cjk = text.Count(ch => ch is >= '\u4e00' and <= '\u9fff');
+        var latin = text.Count(char.IsAsciiLetter);
+        if (cjk > 0 && latin == 0) return "zh-CN";
+        if (latin > 0 && cjk == 0) return "en";
+        throw new FreeTranslateException(FreeTranslateFailureKind.Unavailable,
+            "MyMemory 无法可靠判断这段混合文本的原文语言，请先选择原文语言后重试。");
     }
 
     private static HttpRequestMessage BuildMyMemoryRequest(string sourceLang, string targetLang, string text)

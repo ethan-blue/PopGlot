@@ -137,15 +137,18 @@ internal sealed class OmpRpcBackend : ICliBackend
         File.WriteAllText(config, "autolearn:\n  enabled: false\n  autoContinue: false\nmemory:\n  backend: off\nskills:\n  enabled: false\nbrowser:\n  enabled: false\ncomputer:\n  enabled: false\n", new System.Text.UTF8Encoding(false));
         var prompt = Path.Combine(directory, "instructions.txt");
         File.WriteAllText(prompt, _instructions, new System.Text.UTF8Encoding(false));
-        var info = new ProcessStartInfo(CliLauncher.Resolve(CliDiscovery.OmpToolId, connection.ExecutablePath));
+        var info = CliLauncher.CreateStartInfo(CliDiscovery.OmpToolId, connection.ExecutablePath);
         foreach (var argument in new[] { "--mode", "rpc", "--no-session", "--no-tools", "--no-lsp", "--no-pty", "--no-extensions", "--no-skills", "--no-rules", "--no-title", "--config", config, "--system-prompt", prompt })
             info.ArgumentList.Add(argument);
         return info;
     }
-    private static async Task<JsonElement> RequestAsync(JsonLineTransport transport, string command, Dictionary<string, object?> parameters, CancellationToken ct)
+    private static async Task<JsonElement> RequestAsync(JsonLineTransport transport, string command, Dictionary<string, object?> parameters, CancellationToken ct,
+        Action<string>? onRequestId = null)
         => CliWire.Result(await transport.SendAsync(id =>
         {
-            var frame = new Dictionary<string, object?>(parameters) { ["id"] = id.ToString(System.Globalization.CultureInfo.InvariantCulture), ["type"] = command };
+            var requestId = id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            onRequestId?.Invoke(requestId);
+            var frame = new Dictionary<string, object?>(parameters) { ["id"] = requestId, ["type"] = command };
             return JsonSerializer.Serialize(frame);
         }, line => CliWire.ResponseId(line, true), ct).ConfigureAwait(false), true);
 
@@ -191,7 +194,9 @@ internal sealed class OmpRpcBackend : ICliBackend
         using var events = transport.Subscribe();
         _host.RecordPromptSubmission();
         promptSubmitted?.Invoke();
-        var ack = await RequestAsync(transport, "prompt", new() { ["message"] = payload }, ct).ConfigureAwait(false);
+        string? promptId = null;
+        var ack = await RequestAsync(transport, "prompt", new() { ["message"] = payload }, ct,
+            id => promptId = id).ConfigureAwait(false);
         if (ack.ValueKind == JsonValueKind.Object && ack.TryGetProperty("agentInvoked", out var invoked) && !invoked.GetBoolean())
             throw new InvalidOperationException("OMP 没有调用模型，翻译未完成。");
         bool failed = false, sawText = false;
@@ -228,13 +233,38 @@ internal sealed class OmpRpcBackend : ICliBackend
                     foreach (var block in content.EnumerateArray()) if (block.GetProperty("type").GetString() == "text")
                     { sawText = true; delta(block.GetProperty("text").GetString() ?? ""); }
             }
-            if (type == "agent_end" && (!root.TryGetProperty("isTerminal", out var terminal) || terminal.GetBoolean()))
+            // Current OMP settles each prompt with prompt_result. The audited
+            // v18.2.11 source emits prompt_result only for local/no-agent work,
+            // so retain its terminal agent_end contract for that exact known
+            // release. Unknown/new versions must prove prompt completion.
+            if (type == "agent_end")
             {
-                if (failed || !sawText) throw new InvalidOperationException(providerFailure ?? "OMP 未完成翻译。请检查账号额度、模型权限及网络后重试。");
+                if (failed) throw new InvalidOperationException(providerFailure ?? "OMP 未完成翻译。请检查账号额度、模型权限及网络后重试。");
+                if (_connection.ExpectedVersion == "18.2.11" &&
+                    root.TryGetProperty("isTerminal", out var terminal) && terminal.ValueKind == JsonValueKind.True)
+                {
+                    if (!sawText) throw new InvalidOperationException("OMP 未返回翻译内容。");
+                    return;
+                }
+            }
+            if (type == "prompt_result")
+            {
+                if (!root.TryGetProperty("id", out var resultId) || resultId.ToString() != promptId) continue;
+                if (!root.TryGetProperty("agentInvoked", out var active) || active.ValueKind != JsonValueKind.True)
+                    throw new InvalidOperationException("OMP 未调用模型，翻译未完成。");
+                var status = root.TryGetProperty("status", out var statusValue) ? statusValue.GetString() : null;
+                if (status != "completed" || failed || !sawText)
+                {
+                    // Only a numeric status is safe to expose, never the raw
+                    // provider message (which may echo source or credentials).
+                    var code = root.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.Object &&
+                        error.TryGetProperty("httpStatus", out var http) && http.ValueKind == JsonValueKind.Number &&
+                        http.TryGetInt32(out var value) && value is >= 400 and <= 599
+                        ? $"（HTTP {value}）" : "";
+                    throw new InvalidOperationException(providerFailure ?? $"OMP 翻译未完成{code}，请检查连接后重试。");
+                }
                 return;
             }
-            if (type == "prompt_result" && root.TryGetProperty("agentInvoked", out var active) && !active.GetBoolean())
-                throw new InvalidOperationException("OMP 未调用模型，翻译未完成。");
         }
         throw new InvalidOperationException("OMP 连接提前关闭，翻译未完成。");
     }

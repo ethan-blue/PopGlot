@@ -24,7 +24,7 @@ namespace PopGlot.Windows.PureTests;
 /// here. WPF-resource tests, native-loopback probes and E3 scenarios stay in
 /// the LogicTests host — see tests/TEST-RESOURCE-CLASSIFICATION.md.
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     private static int _passed;
     private static int _failed;
@@ -75,6 +75,11 @@ internal static class Program
         Run("P05 execution kinds stay typed: CLI unsupported, never free fallback", ExecutionKindsStayTypedNeverFreeFallback);
         Run("free engine provider round-trips and stays on Google when missing", FreeEngineProviderRoundTrip);
         await RunAsync("alternate free engine contacts only MyMemory", AlternateFreeEngineContactsMyMemory);
+        await RunAsync("free HTTP limits body before buffering, including unknown or false length", FreeResponseStreamingCap);
+        Run("translation quality warns without rejecting code or same-language content", TranslationLanguageQuality);
+        Run("OCR scales long images within the per-edge engine limit", OcrDimensionLimits);
+        Run("MyMemory never guesses unsupported scripts as English", MyMemoryScriptBoundaries);
+        Run("OMP resolves official Bun package without executing shims", () => OmpBunDiscovery(root));
         Run("session store enforces max 5 sessions and LRU eviction", SessionStoreCapacityAndLru);
         Run("session store enforces 2MiB byte budget", SessionStoreByteBudget);
         Run("session store evicts sessions after 30 minute TTL", SessionStoreTtlEviction);

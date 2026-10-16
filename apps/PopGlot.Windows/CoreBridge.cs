@@ -50,6 +50,10 @@ internal static partial class CoreBridge
 
     private static ProviderSettings? _cachedSettings;
 
+    // Raised after a successful save; subscribers marshal to their dispatcher
+    // and read the latest pair rather than replaying stale queued snapshots.
+    public static event EventHandler? LanguagePairChanged;
+
     public static void Initialize(string? configDirectory = null)
     {
         var resolvedDirectory = configDirectory ?? StoragePaths.CoreConfigDirectory;
@@ -90,11 +94,15 @@ internal static partial class CoreBridge
     {
         ArgumentNullException.ThrowIfNull(settings);
         var json = JsonSerializer.Serialize(settings, JsonOptions);
+        bool languageChanged;
         lock (SettingsGate)
         {
+            languageChanged = _cachedSettings?.SourceLanguage != settings.SourceLanguage ||
+                              _cachedSettings?.TargetLanguage != settings.TargetLanguage;
             EnsureSuccess<string>(Invoke(() => NativeMethods.SaveSettings(json)));
             _cachedSettings = settings;
         }
+        if (languageChanged) LanguagePairChanged?.Invoke(null, EventArgs.Empty);
     }
 
     /// <summary>
@@ -112,6 +120,22 @@ internal static partial class CoreBridge
         {
             SaveQueue.Release();
         }
+    }
+
+    /// <summary>Merge a field update into the latest settings INSIDE the save
+    /// queue. Serializing prebuilt full snapshots alone still loses updates.</summary>
+    public static async Task UpdateSettingsAsync(Func<ProviderSettings, ProviderSettings> update)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+        await SaveQueue.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await Task.Run(() =>
+            {
+                lock (SettingsGate) SaveSettings(update(GetSettings()));
+            }).ConfigureAwait(false);
+        }
+        finally { SaveQueue.Release(); }
     }
 
     /// <summary>Asks the core which screenshot pipeline the settings imply.</summary>
