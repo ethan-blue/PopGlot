@@ -223,6 +223,7 @@ public partial class CaptureOverlayWindow : Window
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
         _closing = true;
+        _tinySelectionTimer.Stop();
         base.OnClosing(e);
     }
 

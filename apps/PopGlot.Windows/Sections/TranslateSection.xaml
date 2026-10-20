@@ -244,7 +244,7 @@
 
                                     Click="TranslateSourceCopy_Click">
 
-                                <Path Width="12" Height="12" Stretch="Uniform"
+                                <Path x:Name="TranslateSourceCopyIcon" Width="12" Height="12" Stretch="Uniform"
 
                                       Fill="{DynamicResource TextSecondaryBrush}"
 
@@ -584,9 +584,9 @@
                             </Button>
                             <Button x:Name="TranslateResultCopyButton" Style="{StaticResource IconButton}"
                                     Width="32" Height="32" Margin="4,0,0,0"
-                                    AutomationProperties.Name="复制译文" ToolTip="复制译文"
+                                    AutomationProperties.Name="复制译文" ToolTip="复制译文 (Ctrl+Shift+C)"
                                     Click="TranslateResultCopy_Click">
-                                <Path Width="12" Height="12" Stretch="Uniform"
+                                <Path x:Name="TranslateResultCopyIcon" Width="12" Height="12" Stretch="Uniform"
                                       Fill="{DynamicResource TextSecondaryBrush}"
                                       Data="{StaticResource IconCopy}" />
                             </Button>

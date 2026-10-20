@@ -240,6 +240,19 @@ internal static class Ui
     public static void SetIsComposing(DependencyObject element, bool value) =>
         element.SetValue(IsComposingProperty, value);
 
+    public static readonly DependencyProperty EscapeCancelledCompositionProperty =
+        DependencyProperty.RegisterAttached(
+            "EscapeCancelledComposition",
+            typeof(bool),
+            typeof(Ui),
+            new PropertyMetadata(false));
+
+    public static bool GetEscapeCancelledComposition(DependencyObject element) =>
+        (bool)element.GetValue(EscapeCancelledCompositionProperty);
+
+    public static void SetEscapeCancelledComposition(DependencyObject element, bool value) =>
+        element.SetValue(EscapeCancelledCompositionProperty, value);
+
     public static void AttachCompositionTracker(TextBox textBox)
     {
         TextCompositionManager.AddPreviewTextInputStartHandler(textBox, OnCompositionStart);
@@ -254,6 +267,7 @@ internal static class Ui
     {
         if (sender is DependencyObject d)
         {
+            SetEscapeCancelledComposition(d, false);
             SetIsComposing(d, true);
         }
     }
@@ -268,11 +282,19 @@ internal static class Ui
         // composition down without raising a composition-end event — the
         // IsComposing flag would stay stuck true and every later Enter be
         // swallowed as "the composition owns it". Reset on Escape (some IMEs
-        // surface it as an ImeProcessed Escape) so the next Enter submits.
-        // Never mark the key handled: the IME still needs it to cancel.
+        // surface it as an ImeProcessed Escape) so the next Enter submits,
+        // while recording that THIS Escape was owned by an active composition
+        // so bubbling KeyDown handlers (like TranslateSection_KeyDown) do not
+        // misinterpret it as a task-cancellation Escape.
         if (e.Key == Key.Escape || e.ImeProcessedKey == Key.Escape)
         {
+            var wasComposing = GetIsComposing(d);
+            SetEscapeCancelledComposition(d, wasComposing);
             SetIsComposing(d, false);
+        }
+        else
+        {
+            SetEscapeCancelledComposition(d, false);
         }
     }
 

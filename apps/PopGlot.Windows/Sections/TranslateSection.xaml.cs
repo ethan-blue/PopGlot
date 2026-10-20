@@ -802,16 +802,47 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         await TranslateAsync();
     }
 
-    private void TranslateSection_KeyDown(object sender, KeyEventArgs e)
+    private long _lastStreamRenderTicks;
+
+    private async void TranslateSection_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Escape)
+        if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.C)
+        {
+            if (TranslateResultCopyButton?.IsEnabled == true)
+            {
+                e.Handled = true;
+                await CopyResultToClipboardAsync();
+            }
+            return;
+        }
+        if (Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            switch (e.Key)
+            {
+                case Key.P when TranslateResultSpeakButton?.IsEnabled == true:
+                    e.Handled = true;
+                    TranslateResultSpeak_Click(this, new RoutedEventArgs());
+                    return;
+                case Key.S when TranslateStarButton?.IsEnabled == true:
+                    e.Handled = true;
+                    TranslateStar_Click(this, new RoutedEventArgs());
+                    return;
+                case Key.R when TranslateButton?.IsEnabled == true:
+                    e.Handled = true;
+                    await TranslateAsync();
+                    return;
+            }
+        }
+
+        if (e.Key != Key.Escape && e.ImeProcessedKey != Key.Escape)
         {
             return;
         }
         var target = (e.OriginalSource as DependencyObject) ?? (e.Source as DependencyObject) ?? (Keyboard.FocusedElement as DependencyObject) ?? TranslateInput;
-        if (target is not null && Ui.GetIsComposing(target))
+        if (target is not null && (Ui.GetIsComposing(target) || Ui.GetEscapeCancelledComposition(target)))
         {
             Ui.SetIsComposing(target, false);
+            Ui.SetEscapeCancelledComposition(target, false);
             return;
         }
         if (_holdingSummary)
@@ -905,6 +936,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         _holdingSummary = false;
         _reading.ShowTranslation();
         ShowTranslationChoice.IsChecked = true;
+        _lastStreamRenderTicks = 0;
         ApplyState(TranslateSectionReducer.StartTranslation(_currentState, epoch));
 
         var progress = new Progress<TranslationStreamUpdate>(update =>
@@ -914,13 +946,24 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             {
                 return;
             }
+            var wasEmpty = string.IsNullOrEmpty(_currentState.StreamText);
             if (update.Kind == TranslationStreamUpdateKind.Delta && !string.IsNullOrEmpty(update.Delta))
             {
                 trace.Mark(Services.TracePoint.FirstVisibleDeltaApplied);
                 Services.InteractionTraceWindow.MarkAtNextRenderCallback(
                     trace, Services.TracePoint.FirstDeltaRenderCallback);
             }
-            ApplyState(TranslateSectionReducer.ApplyStreamUpdate(_currentState, update, epoch));
+            var nextState = TranslateSectionReducer.ApplyStreamUpdate(_currentState, update, epoch);
+            var nowTicks = Environment.TickCount64;
+            if (wasEmpty || update.Kind != TranslationStreamUpdateKind.Delta || nowTicks - _lastStreamRenderTicks >= 60)
+            {
+                _lastStreamRenderTicks = nowTicks;
+                ApplyState(nextState);
+            }
+            else
+            {
+                _currentState = nextState;
+            }
         });
 
         try
@@ -1035,7 +1078,15 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             // Stick-to-bottom: follow the stream only while the reader sits at
             // the bottom, so scrolling up to re-read is never overridden.
             var stickToBottom = Ui.IsScrolledToBottom(Ui.FindScrollViewer(TranslateStreamResult));
-            TranslateStreamResult.Text = state.StreamText;
+            var accumulated = state.StreamText ?? string.Empty;
+            if (accumulated.StartsWith(TranslateStreamResult.Text, StringComparison.Ordinal))
+            {
+                TranslateStreamResult.AppendText(accumulated[TranslateStreamResult.Text.Length..]);
+            }
+            else
+            {
+                TranslateStreamResult.Text = accumulated;
+            }
             if (stickToBottom)
             {
                 TranslateStreamResult.ScrollToEnd();
@@ -1164,12 +1215,12 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         if (TranslateStarIcon is null || TranslateStarButton is null) return;
         if (isStarred)
         {
-            TranslateStarIcon.Fill = (Brush)FindResource("AccentBrush");
+            TranslateStarIcon.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "AccentBrush");
             TranslateStarButton.ToolTip = "从生词本移除";
         }
         else
         {
-            TranslateStarIcon.Fill = (Brush)FindResource("TextSecondaryBrush");
+            TranslateStarIcon.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "TextSecondaryBrush");
             TranslateStarButton.ToolTip = "收藏到生词本";
         }
         // The accessibility name must follow the dynamic state so screen
@@ -1284,12 +1335,11 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     private void UpdateServiceAvailability()
     {
         var hasUserEngine = HasConfiguredUserEngine();
-        var hasFallbackRoute = HasFallbackRoute();
-        var consent = FreeEngineConsent.Unset;
+        var hasFallbackRoute = false;
         try
         {
             var settings = ShellSettingsStore.Load();
-            consent = settings.FreeEngineConsent;
+            hasFallbackRoute = settings.FreeEngineConsent == FreeEngineConsent.Allowed;
             if (ShortcutEntriesHint is not null)
             {
                 var sel = settings.SelectionHotkey?.DisplayName ?? "Ctrl+Alt+W";
@@ -1389,7 +1439,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             var updated = shell with { FreeEngineConsent = FreeEngineConsent.Allowed };
             ShellSettingsStore.Save(updated);
             UpdateServiceAvailability();
-            var provider = ShellSettingsStore.Load().FreeEngineProvider;
+            var provider = updated.FreeEngineProvider;
             var host = provider == FreeEngineProvider.MyMemory
                 ? "api.mymemory.translated.net"
                 : "translate.googleapis.com";
@@ -1723,6 +1773,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         if (await Helpers.CopyToClipboardAsync(TranslateInput.Text))
         {
             TranslateStatus.Text = "已复制原文。";
+            _ = FlashCopyCheckAsync(TranslateSourceCopyIcon);
         }
     }
 
@@ -1734,6 +1785,30 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         if (await Helpers.CopyToClipboardAsync(clean))
         {
             TranslateStatus.Text = _holdingSummary ? "已复制要点。" : "已复制译文。";
+            _ = FlashCopyCheckAsync(TranslateResultCopyIcon);
+        }
+    }
+
+    private async Task FlashCopyCheckAsync(System.Windows.Shapes.Path? icon)
+    {
+        if (icon is null) return;
+        try
+        {
+            if (TryFindResource("IconCheck") is System.Windows.Media.Geometry checkGeometry)
+            {
+                icon.Data = checkGeometry;
+            }
+            icon.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "SuccessBrush");
+            await Task.Delay(1400);
+            if (_isUnloaded) return;
+            if (TryFindResource("IconCopy") is System.Windows.Media.Geometry copyGeometry)
+            {
+                icon.Data = copyGeometry;
+            }
+            icon.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "TextSecondaryBrush");
+        }
+        catch
+        {
         }
     }
 

@@ -668,6 +668,7 @@ impl CoreProductConfig {
         active.supports_text = settings.supports_text;
         active.supports_vision = settings.supports_vision;
         active.allow_insecure_tls = settings.allow_insecure_tls;
+        active.allow_lan_endpoints = settings.allow_lan_endpoints;
         active.is_local = is_local_base_url(&settings.api_base_url);
     }
 }
@@ -846,15 +847,24 @@ impl RoutingContext {
         local_ocr_available: bool,
         credential_present: bool,
     ) -> Self {
-        let can_reach_model = settings.network_enabled
-            && !settings.safe_dev_mode
-            && (credential_present || settings.targets_local_runtime());
+        let effective = match &settings.vision_provider {
+            Some(vision) => std::borrow::Cow::Owned(settings.with_vision_provider(vision)),
+            None => std::borrow::Cow::Borrowed(settings),
+        };
+        let endpoint_class = match classify_endpoint(&effective.api_base_url) {
+            EndpointClass::Loopback => "loopback",
+            EndpointClass::PrivateNetwork => "private",
+            EndpointClass::Internet => "internet",
+        };
+        let can_reach_model = effective.network_enabled
+            && !effective.safe_dev_mode
+            && (credential_present || effective.targets_local_runtime());
         Self {
-            requested_mode: settings.mode,
-            vision_configured: settings.vision_is_configured() && can_reach_model,
-            vision_endpoint_class: "internet".to_owned(),
-            image_upload_allowed: settings.allow_image_upload_in_auto,
-            allow_lan_endpoints: settings.allow_lan_endpoints,
+            requested_mode: effective.mode,
+            vision_configured: effective.vision_is_configured() && can_reach_model,
+            vision_endpoint_class: endpoint_class.to_owned(),
+            image_upload_allowed: effective.allow_image_upload_in_auto,
+            allow_lan_endpoints: effective.allow_lan_endpoints,
             local_ocr_available,
             text_route_available: true,
         }

@@ -115,6 +115,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             _previewDebounce.Stop();
             RefreshPreview();
         };
+        Unloaded += (_, _) => _previewDebounce.Stop();
         _ = LoadTemplatesAsync();
     }
 

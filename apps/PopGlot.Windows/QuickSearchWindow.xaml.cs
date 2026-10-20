@@ -472,10 +472,13 @@ public partial class QuickSearchWindow : Window
     {
         _escapeOwnedByComposition =
             (e.Key == Key.Escape || e.ImeProcessedKey == Key.Escape) &&
-            Ui.GetIsComposing(SearchBox);
+            (Ui.GetIsComposing(SearchBox) || Ui.GetEscapeCancelledComposition(SearchBox));
         if (_escapeOwnedByComposition)
         {
             Ui.SetIsComposing(SearchBox, false);
+            _ = Dispatcher.BeginInvoke(
+                DispatcherPriority.Input,
+                new Action(() => _escapeOwnedByComposition = false));
         }
     }
 
@@ -662,7 +665,7 @@ public partial class QuickSearchWindow : Window
     {
         if (_isClosed) return;
 
-        if (SizeToContent != SizeToContent.Height)
+        if (!_state.IsStreamLayerVisible && SizeToContent != SizeToContent.Height)
         {
             SizeToContent = SizeToContent.Height;
             ClearValue(HeightProperty);
@@ -800,7 +803,10 @@ public partial class QuickSearchWindow : Window
             ErrorCard.Visibility = Visibility.Collapsed;
         }
 
-        UpdateStarButton();
+        if (_state.Stage is not QuickSearchUiStage.Streaming || string.IsNullOrEmpty(_state.AccumulatedText))
+        {
+            UpdateStarButton();
+        }
         UpdateEmptyStateVisuals();
         UpdateStatusDot();
     }
@@ -1209,7 +1215,7 @@ public partial class QuickSearchWindow : Window
 
     private void Window_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Escape)
+        if (e.Key == Key.Escape || e.ImeProcessedKey == Key.Escape)
         {
             // E3: a live IME composition owns this Escape — hiding or
             // cancelling the window out from under the composition would

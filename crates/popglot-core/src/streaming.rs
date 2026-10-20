@@ -157,6 +157,7 @@ pub struct StreamingTokenRestorer {
     variants: Vec<Vec<String>>,
     pending: String,
     restored: String,
+    unmatched_stream: String,
     /// Exactly-once bookkeeping: how many times each placeholder echoed.
     match_counts: Vec<usize>,
     finished: bool,
@@ -174,6 +175,7 @@ impl StreamingTokenRestorer {
                 .collect(),
             pending: String::new(),
             restored: String::new(),
+            unmatched_stream: String::new(),
             match_counts: vec![0; tokens.len()],
             finished: false,
         }
@@ -200,9 +202,10 @@ impl StreamingTokenRestorer {
     pub fn finish(&mut self) -> popglot_domain::RestoredText {
         let _ = self.finish_delta();
         // Every known placeholder has been consumed by emit(); whatever
-        // placeholder-shaped text remains in the restored output was never
-        // issued for this request.
-        let unknown = popglot_domain::unknown_placeholders_in(&self.restored, self.tokens.len());
+        // placeholder-shaped text remains in the unmatched model output was
+        // never issued for this request (excluding restored user literals).
+        let unknown =
+            popglot_domain::unknown_placeholders_in(&self.unmatched_stream, self.tokens.len());
         popglot_domain::RestoredText {
             text: self.restored.clone(),
             dropped_terms: self
@@ -243,11 +246,15 @@ impl StreamingTokenRestorer {
                     longest_incomplete_special_suffix(&self.pending, &self.variants)
                 };
                 let emit_len = self.pending.len() - keep;
-                output.push_str(&self.pending[..emit_len]);
+                let unmatched = &self.pending[..emit_len];
+                output.push_str(unmatched);
+                self.unmatched_stream.push_str(unmatched);
                 self.pending.drain(..emit_len);
                 break;
             };
-            output.push_str(&self.pending[..start]);
+            let before = &self.pending[..start];
+            output.push_str(before);
+            self.unmatched_stream.push_str(before);
             self.pending.drain(..start + variant.len());
             output.push_str(&self.tokens[token_index].original);
             self.match_counts[token_index] += 1;

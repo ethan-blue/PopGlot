@@ -798,21 +798,23 @@ impl AppCore {
                 "当前模式为本地 OCR，截图不应上传；请由外壳使用本地 OCR 后翻译文字。",
             ));
         }
-        // The upload consent protects images leaving the device. A loopback
-        // vision provider still receives the image, but it remains local and
-        // must work in Network Off / Safe Mode.
-        if !settings.allow_image_upload_in_auto && !settings.targets_local_runtime() {
-            return Err(ProviderError::new(
-                ProviderErrorKind::NetworkDisabled,
-                "隐私设置未授权上传截图；未发送图片。可在设置中勾选“允许截图上传”，或使用本地 OCR 模式。",
-            ));
-        }
-
         // A dedicated vision provider replaces the text provider's connection
         // details wholesale - base URL, protocol, endpoint, model, headers -
         // and is authenticated with its own key, never the text key.
         let (effective_settings, effective_key) =
             resolve_vision_runtime(settings, api_key, vision_api_key);
+
+        // The upload consent protects images leaving the device. A loopback
+        // vision provider still receives the image, but it remains local and
+        // must work in Network Off / Safe Mode.
+        if !effective_settings.allow_image_upload_in_auto
+            && !effective_settings.targets_local_runtime()
+        {
+            return Err(ProviderError::new(
+                ProviderErrorKind::NetworkDisabled,
+                "隐私设置未授权上传截图；未发送图片。可在设置中勾选“允许截图上传”，或使用本地 OCR 模式。",
+            ));
+        }
 
         let provider = provider_for(effective_settings.provider_type);
         let mut request = TranslationRequest::vision(
@@ -872,14 +874,16 @@ impl AppCore {
                 "当前模式为本地 OCR，截图不应上传；请由外壳使用本地 OCR 后翻译文字。",
             ));
         }
-        if !settings.allow_image_upload_in_auto && !settings.targets_local_runtime() {
+        let (effective_settings, effective_key) =
+            resolve_vision_runtime(settings, api_key, vision_api_key);
+        if !effective_settings.allow_image_upload_in_auto
+            && !effective_settings.targets_local_runtime()
+        {
             return Err(ProviderError::new(
                 ProviderErrorKind::NetworkDisabled,
                 "隐私设置未授权上传截图；未发送图片。可在设置中勾选“允许截图上传”，或使用本地 OCR 模式。",
             ));
         }
-        let (effective_settings, effective_key) =
-            resolve_vision_runtime(settings, api_key, vision_api_key);
         let provider = provider_for(effective_settings.provider_type);
         let mut request = TranslationRequest::vision(
             ImageInput::Bytes {

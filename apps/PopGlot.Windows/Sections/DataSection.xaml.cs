@@ -24,7 +24,7 @@ public partial class DataSection : System.Windows.Controls.UserControl
         InitializeComponent();
         _undoTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _undoTimer.Tick += (_, _) => RefreshUndoButtons();
-        Loaded += (_, _) => { RefreshUndoButtons(); _undoTimer.Start(); };
+        Loaded += (_, _) => RefreshUndoButtons();
         Unloaded += (_, _) => _undoTimer.Stop();
     }
 
@@ -52,10 +52,24 @@ public partial class DataSection : System.Windows.Controls.UserControl
 
     private void RefreshUndoButtons()
     {
-        UndoHistoryButton.Visibility = _historyUndoId is { } historyId &&
-            LibraryUndoJournal.IsAvailable(historyId, DateTime.UtcNow) ? Visibility.Visible : Visibility.Collapsed;
-        UndoVocabularyButton.Visibility = _vocabularyUndoId is { } vocabularyId &&
-            LibraryUndoJournal.IsAvailable(vocabularyId, DateTime.UtcNow) ? Visibility.Visible : Visibility.Collapsed;
+        var now = DateTime.UtcNow;
+        var hasHistoryUndo = _historyUndoId is { } historyId &&
+            LibraryUndoJournal.IsAvailable(historyId, now);
+        var hasVocabularyUndo = _vocabularyUndoId is { } vocabularyId &&
+            LibraryUndoJournal.IsAvailable(vocabularyId, now);
+        UndoHistoryButton.Visibility = hasHistoryUndo ? Visibility.Visible : Visibility.Collapsed;
+        UndoVocabularyButton.Visibility = hasVocabularyUndo ? Visibility.Visible : Visibility.Collapsed;
+        if (hasHistoryUndo || hasVocabularyUndo)
+        {
+            if (!_undoTimer.IsEnabled)
+            {
+                _undoTimer.Start();
+            }
+        }
+        else
+        {
+            _undoTimer.Stop();
+        }
     }
 
     // ================= Event handlers =================
@@ -76,7 +90,7 @@ public partial class DataSection : System.Windows.Controls.UserControl
         if (removed.Count > 0)
         {
             _historyUndoId = LibraryUndoJournal.OfferHistory(removed, DateTime.UtcNow).Id;
-            UndoHistoryButton.Visibility = Visibility.Visible;
+            RefreshUndoButtons();
         }
 
         StatusChanged?.Invoke("历史记录已清空。", StatusTone.Info);
@@ -100,7 +114,7 @@ public partial class DataSection : System.Windows.Controls.UserControl
         if (removed.Count > 0)
         {
             _vocabularyUndoId = LibraryUndoJournal.OfferVocabulary(removed, DateTime.UtcNow).Id;
-            UndoVocabularyButton.Visibility = Visibility.Visible;
+            RefreshUndoButtons();
         }
 
         StatusChanged?.Invoke("生词本已清空。", StatusTone.Info);
@@ -120,7 +134,7 @@ public partial class DataSection : System.Windows.Controls.UserControl
         if (!_history.InsertMissing(ticket.HistoryItems, out var inserted, out var remaining))
         {
             _historyUndoId = LibraryUndoJournal.OfferHistory(remaining.Count > 0 ? remaining : ticket.HistoryItems, DateTime.UtcNow).Id;
-            UndoHistoryButton.Visibility = Visibility.Visible;
+            RefreshUndoButtons();
             StatusChanged?.Invoke("撤销没有写回。请确认历史文件可写后重试。", StatusTone.Error);
             return;
         }
@@ -128,7 +142,7 @@ public partial class DataSection : System.Windows.Controls.UserControl
         if (remaining.Count > 0)
         {
             _historyUndoId = LibraryUndoJournal.OfferHistory(remaining, DateTime.UtcNow).Id;
-            UndoHistoryButton.Visibility = Visibility.Visible;
+            RefreshUndoButtons();
             StatusChanged?.Invoke($"已恢复 {inserted} 条，{remaining.Count} 条因容量限制待恢复。清理历史后可再次撤销。", StatusTone.Warning);
             DataCleared?.Invoke();
             return;
@@ -159,7 +173,7 @@ public partial class DataSection : System.Windows.Controls.UserControl
         if (!_vocabulary.InsertMissing(ticket.VocabularyItems, out var inserted) || inserted == 0)
         {
             _vocabularyUndoId = LibraryUndoJournal.OfferVocabulary(ticket.VocabularyItems, DateTime.UtcNow).Id;
-            UndoVocabularyButton.Visibility = Visibility.Visible;
+            RefreshUndoButtons();
             StatusChanged?.Invoke("撤销没有写回。请确认生词本文件可写后重试。", StatusTone.Error);
             return;
         }

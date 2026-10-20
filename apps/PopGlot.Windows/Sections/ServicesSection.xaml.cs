@@ -496,7 +496,14 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             }
         }
         textDpd.AddValueChanged(TextModelCombo, OnTextModelChanged);
-        Unloaded += (_, _) => { textDpd.RemoveValueChanged(TextModelCombo, OnTextModelChanged); CancelCliOperation(); };
+        Loaded += (_, _) => ThemeService.ThemeChanged += OnThemeChanged;
+        Unloaded += (_, _) =>
+        {
+            ThemeService.ThemeChanged -= OnThemeChanged;
+            _recommendationDebounce.Stop();
+            textDpd.RemoveValueChanged(TextModelCombo, OnTextModelChanged);
+            CancelCliOperation();
+        };
 
         void WatchToggle(System.Windows.Controls.Primitives.ToggleButton toggle)
         {
@@ -926,6 +933,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     // ================= List & default routes =================
 
+    private void OnThemeChanged(object? sender, EventArgs _) => RefreshProfilesList();
+
     internal void RefreshProfilesList()
     {
         // One config read for the whole refresh: rows, brushes and the route
@@ -933,7 +942,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         var config = ProfileManager.Load();
         ProfilesListBox.ItemsSource = config.Profiles.Select(profile =>
         {
-            var hasKey = HasStoredKey(profile);
+            var hasKey = HasStoredKey(profile, config.ActiveProfileId);
             var (stateText, stateTone) = DescribeProfileState(profile, hasKey,
                 _testOutcomes.TryGetValue(profile.Id, out var outcome) ? outcome : null);
             return new ProfilesRow(
@@ -998,7 +1007,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
     }
 
-    private static string? LoadStoredKey(ProviderProfile profile)
+    private static string? LoadStoredKey(ProviderProfile profile, string? activeProfileId = null)
     {
         if (profile.ExecutionFacts.IsManagedExecution) return null;
         try
@@ -1008,7 +1017,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             {
                 return profileKey;
             }
-            var activeId = ProfileManager.Load().ActiveProfileId;
+            var activeId = activeProfileId ?? ProfileManager.Load().ActiveProfileId;
             // A key saved before profiles existed stays at the legacy target
             // until edited; it still counts for the active profile.
             return profile.Id == activeId
@@ -1022,8 +1031,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
     }
 
-    private static bool HasStoredKey(ProviderProfile profile) =>
-        !string.IsNullOrWhiteSpace(LoadStoredKey(profile));
+    private static bool HasStoredKey(ProviderProfile profile, string? activeProfileId = null) =>
+        !string.IsNullOrWhiteSpace(LoadStoredKey(profile, activeProfileId));
 
     /// <summary>
     /// Health state for one service. Brand colour never appears here — states
@@ -1826,19 +1835,13 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         System.Windows.Shapes.Ellipse? evidenceDot,
         RecommendationEvidenceSource sources)
     {
-        var (text, bgKey, fgKey, borderKey) = ResolveEvidenceBadgeVisualKeys(sources, hasBenchmarkMetric: false);
+        var (text, _, fgKey, _) = ResolveEvidenceBadgeVisualKeys(sources, hasBenchmarkMetric: false);
         badgeText.Text = text;
         badgeBorder.Background = Brushes.Transparent;
         badgeBorder.BorderBrush = Brushes.Transparent;
         badgeBorder.BorderThickness = new Thickness(0);
-        if (TryFindResource(fgKey) is Brush fg)
-        {
-            badgeText.Foreground = fg;
-            if (evidenceDot is not null)
-            {
-                evidenceDot.Fill = fg;
-            }
-        }
+        badgeText.SetResourceReference(TextBlock.ForegroundProperty, fgKey);
+        evidenceDot?.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, fgKey);
     }
 
     internal IReadOnlyList<ModelDescriptor> GetCandidateDescriptors()
@@ -1949,12 +1952,14 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     private void SetModelCatalogStatus(string message, StatusTone tone)
     {
         ModelCatalogStatusText.Text = message;
-        ModelCatalogStatusText.Foreground = tone switch
+        var brushKey = tone switch
         {
-            StatusTone.Success => (Brush)FindResource("SuccessBrush"),
-            StatusTone.Error => (Brush)FindResource("DangerBrush"),
-            _ => (Brush)FindResource("TextTertiaryBrush"),
+            StatusTone.Success => "SuccessBrush",
+            StatusTone.Warning => "WarningBrush",
+            StatusTone.Error => "DangerBrush",
+            _ => "TextTertiaryBrush",
         };
+        ModelCatalogStatusText.SetResourceReference(TextBlock.ForegroundProperty, brushKey);
         ModelCatalogStatusText.Visibility = Visibility.Visible;
     }
 
@@ -2279,15 +2284,15 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         TestStatusPanel.Visibility = string.IsNullOrWhiteSpace(summary)
             ? Visibility.Collapsed
             : Visibility.Visible;
-        TestStateDot.Fill = ToneBrush(tone);
         TestSummaryText.Text = summary;
-        var (textBrushKey, bgBrushKey, borderBrushKey) = tone switch
+        var (dotBrushKey, textBrushKey, bgBrushKey, borderBrushKey) = tone switch
         {
-            StatusTone.Success => ("SuccessBrush", "SuccessSoftBrush", "BorderSubtleBrush"),
-            StatusTone.Error => ("DangerBrush", "DangerSoftBrush", "DangerBrush"),
-            StatusTone.Warning => ("WarningBrush", "WarningSoftBrush", "WarningBrush"),
-            _ => ("TextSecondaryBrush", "SurfaceMutedBrush", "BorderSubtleBrush"),
+            StatusTone.Success => ("SuccessBrush", "SuccessBrush", "SuccessSoftBrush", "BorderSubtleBrush"),
+            StatusTone.Error => ("DangerBrush", "DangerBrush", "DangerSoftBrush", "DangerBrush"),
+            StatusTone.Warning => ("WarningBrush", "WarningBrush", "WarningSoftBrush", "WarningBrush"),
+            _ => ("TextTertiaryBrush", "TextSecondaryBrush", "SurfaceMutedBrush", "BorderSubtleBrush"),
         };
+        TestStateDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, dotBrushKey);
         TestSummaryText.SetResourceReference(TextBlock.ForegroundProperty, textBrushKey);
         TestStatusPanel.SetResourceReference(Border.BackgroundProperty, bgBrushKey);
         TestStatusPanel.SetResourceReference(Border.BorderBrushProperty, borderBrushKey);

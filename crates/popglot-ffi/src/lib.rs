@@ -804,7 +804,11 @@ pub unsafe extern "C" fn popglot_translate_vision_v3(
         };
         // A draft may target a completely different provider and TLS policy;
         // the global Core client is therefore never safe to reuse here.
-        let client = pooled_client_for(&settings)?;
+        let effective_vision = settings
+            .vision_provider
+            .as_ref()
+            .map_or_else(|| settings.clone(), |v| settings.with_vision_provider(v));
+        let client = pooled_client_for(&effective_vision)?;
         let languages = resolve_languages(&settings, source_lang, target_lang);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
@@ -1094,7 +1098,11 @@ pub unsafe extern "C" fn popglot_translate_vision_draft_stream_v1(
             serde_json::from_str::<ProviderSettings>(settings_json)
                 .map_err(|error| format!("视觉草稿设置无效：{error}"))?
         };
-        let client = pooled_client_for(&settings)?;
+        let effective_vision = settings
+            .vision_provider
+            .as_ref()
+            .map_or_else(|| settings.clone(), |v| settings.with_vision_provider(v));
+        let client = pooled_client_for(&effective_vision)?;
         let languages = resolve_languages(&settings, source_lang, target_lang);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
@@ -1208,8 +1216,11 @@ fn provider_runtime() -> Result<&'static Runtime, String> {
     if let Some(runtime) = RUNTIME.get() {
         return Ok(runtime);
     }
-    let runtime =
-        Runtime::new().map_err(|error| format!("无法启动异步 Provider Runtime：{error}"))?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()
+        .build()
+        .map_err(|error| format!("无法启动异步 Provider Runtime：{error}"))?;
     let _ = RUNTIME.set(runtime);
     RUNTIME
         .get()

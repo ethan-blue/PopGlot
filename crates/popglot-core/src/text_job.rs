@@ -172,10 +172,14 @@ impl TextJobManager {
     /// full registry.
     pub fn prepare(&self, request: &TextJobRequest) -> Result<PreparedTextJob, ProviderError> {
         let source = request.source.trim();
-        if source.is_empty() {
+        if source.is_empty() || source.len() > crate::MAX_SOURCE_BYTES {
             return Err(ProviderError::new(
                 ProviderErrorKind::Configuration,
-                "翻译原文不能为空。",
+                if source.is_empty() {
+                    "翻译原文不能为空。".to_owned()
+                } else {
+                    format!("翻译原文不能超过 {} KiB。", crate::MAX_SOURCE_BYTES / 1024)
+                },
             ));
         }
         let task = request.task()?;
@@ -302,6 +306,7 @@ impl TextJobManager {
             ));
         }
         job.finished = true;
+        let tail = job.assembler.finish_delta();
         let assembled = job.assembler.finish();
         // The restorer's finish() returns the COMPLETE restored text plus
         // exactly-once integrity findings — a protected token split across
@@ -309,6 +314,9 @@ impl TextJobManager {
         // placeholder surfaces as an honest warning.
         let (text, integrity_warnings) = match &mut job.restorer {
             Some(restorer) => {
+                if !tail.is_empty() {
+                    let _ = restorer.push(&tail);
+                }
                 let outcome = restorer.finish();
                 let mut warnings = Vec::new();
                 if !outcome.dropped_terms.is_empty() {

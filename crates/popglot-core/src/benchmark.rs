@@ -231,48 +231,43 @@ pub fn compute_endpoint_fingerprint(base_url: &str, endpoint: &str) -> String {
 /// API keys, and sensitive authorization patterns.
 #[must_use]
 pub fn sanitize_error_string(input: &str) -> String {
-    let mut result = input.to_owned();
+    use std::sync::LazyLock;
 
-    // 1. Redact URL queries (?key=..., ?token=..., etc.)
-    if let Ok(re_url_query) = regex::Regex::new(r"\?[a-zA-Z0-9_&=%\-\.\+~]+") {
-        result = re_url_query
-            .replace_all(&result, "?[QUERY_REDACTED]")
-            .to_string();
-    }
-
-    // 2. Redact Bearer tokens
-    if let Ok(re_bearer) = regex::Regex::new(r"(?i)bearer\s+[a-zA-Z0-9_\-\.]{6,}") {
-        result = re_bearer
-            .replace_all(&result, "Bearer [REDACTED]")
-            .to_string();
-    }
-
-    // 3. Redact common API key patterns (OpenAI sk-..., Google AIza..., GitHub ghp_...)
-    if let Ok(re_sk) = regex::Regex::new(r"sk-[a-zA-Z0-9_\-]{8,}") {
-        result = re_sk.replace_all(&result, "[KEY_REDACTED]").to_string();
-    }
-    if let Ok(re_aiza) = regex::Regex::new(r"AIza[a-zA-Z0-9_\-]{10,}") {
-        result = re_aiza.replace_all(&result, "[KEY_REDACTED]").to_string();
-    }
-    if let Ok(re_ghp) = regex::Regex::new(r"ghp_[a-zA-Z0-9]{10,}") {
-        result = re_ghp.replace_all(&result, "[KEY_REDACTED]").to_string();
-    }
-
-    // 4. Redact JSON fields containing api_key / key / secret
-    if let Ok(re_json_key) =
+    static RE_URL_QUERY: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"\?[a-zA-Z0-9_&=%\-\.\+~]+").expect("valid url query regex")
+    });
+    static RE_BEARER: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"(?i)bearer\s+[a-zA-Z0-9_\-\.]{6,}").expect("valid bearer regex")
+    });
+    static RE_SK: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"sk-[a-zA-Z0-9_\-]{8,}").expect("valid sk regex"));
+    static RE_AIZA: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"AIza[a-zA-Z0-9_\-]{10,}").expect("valid aiza regex"));
+    static RE_GHP: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"ghp_[a-zA-Z0-9]{10,}").expect("valid ghp regex"));
+    static RE_JSON_KEY: LazyLock<regex::Regex> = LazyLock::new(|| {
         regex::Regex::new(r#""(api_key|apiKey|key|secret|token|password)":\s*"[^"]*""#)
-    {
-        result = re_json_key
-            .replace_all(&result, r#""$1": "[REDACTED]""#)
-            .to_string();
-    }
+            .expect("valid json key regex")
+    });
+    static RE_USERINFO: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"https?://([^/@:]+):([^/@]+)@").expect("valid userinfo regex")
+    });
 
-    // 5. Redact HTTP basic auth credentials in URLs: http://user:pass@host
-    if let Ok(re_userinfo) = regex::Regex::new(r"https?://([^/@:]+):([^/@]+)@") {
-        result = re_userinfo
-            .replace_all(&result, "http://[REDACTED]@")
-            .to_string();
-    }
+    let mut result = RE_URL_QUERY
+        .replace_all(input, "?[QUERY_REDACTED]")
+        .into_owned();
+    result = RE_BEARER
+        .replace_all(&result, "Bearer [REDACTED]")
+        .into_owned();
+    result = RE_SK.replace_all(&result, "[KEY_REDACTED]").into_owned();
+    result = RE_AIZA.replace_all(&result, "[KEY_REDACTED]").into_owned();
+    result = RE_GHP.replace_all(&result, "[KEY_REDACTED]").into_owned();
+    result = RE_JSON_KEY
+        .replace_all(&result, r#""$1": "[REDACTED]""#)
+        .into_owned();
+    result = RE_USERINFO
+        .replace_all(&result, "http://[REDACTED]@")
+        .into_owned();
 
     result
 }

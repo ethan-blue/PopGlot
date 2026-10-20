@@ -500,12 +500,12 @@ public partial class MainWindow : Window
             var hasKey = activeProfile is not null &&
                 CredentialStore.HasApiKey(ProfileManager.ResolveCredentialTargetFor(activeProfile));
             var consent = ShellSettingsStore.Load().FreeEngineConsent;
-            var (_, tone) = DescribeEngine(settings, hasKey, consent);
+            var (summary, tone) = DescribeEngine(settings, hasKey, consent);
             EngineSummary.Text = UsesFreeEngine(settings, hasKey, consent)
                 ? EngineWording.ActiveFreeEngineName()
                 : activeProfile is not null
                     ? activeProfile.Name
-                    : DescribeEngine(settings, hasKey, consent).Summary;
+                    : summary;
             EngineDot.SetResourceReference(Border.BackgroundProperty, tone switch
             {
                 StatusTone.Error => "DangerBrush",

@@ -34,6 +34,11 @@ public partial class HelpWindow : Window
     public HelpWindow(string? initialArticleFile)
     {
         InitializeComponent();
+        SourceInitialized += (_, _) => SyncMaximizeButton();
+        StateChanged += (_, _) => SyncMaximizeButton();
+        ThemeService.ThemeChanged += OnThemeChanged;
+        Closed += (_, _) => ThemeService.ThemeChanged -= OnThemeChanged;
+
         var missing = new List<string>();
         foreach (var (title, file) in Articles)
         {
@@ -208,6 +213,12 @@ public partial class HelpWindow : Window
             resultActionsEnabled: false);
     }
 
+    private void OnThemeChanged(object? sender, EventArgs _)
+    {
+        ThemeService.ApplyWindowChrome(this);
+        LoadSelectedArticle();
+    }
+
     private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
 
     private void MinimizeButton_Click(object sender, RoutedEventArgs e) =>
@@ -218,11 +229,16 @@ public partial class HelpWindow : Window
         WindowState = WindowState == WindowState.Maximized
             ? WindowState.Normal
             : WindowState.Maximized;
+        SyncMaximizeButton();
+    }
+
+    private void SyncMaximizeButton()
+    {
         var maximized = WindowState == WindowState.Maximized;
         Ui.SetIcon(MaximizeBtn, (System.Windows.Media.Geometry)FindResource(
             maximized ? "IconCaptionRestore" : "IconCaptionMax"));
-        AutomationProperties.SetName(MaximizeBtn, maximized ? "还原" : "最大化");
-        MaximizeBtn.ToolTip = maximized ? "还原" : "最大化";
+        AutomationProperties.SetName(MaximizeBtn, maximized ? "向下还原" : "最大化");
+        MaximizeBtn.ToolTip = maximized ? "向下还原" : "最大化";
     }
 
     private void HelpWindow_KeyDown(object sender, KeyEventArgs e)

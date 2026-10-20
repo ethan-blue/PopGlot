@@ -64,6 +64,7 @@ internal sealed class ConfirmButton
 
     private readonly Button _button;
     private readonly string _normalContent;
+    private readonly string _normalAutomationName;
     private readonly Func<string> _armedContentProvider;
     private readonly Action _fire;
     private readonly DispatcherTimer _timer;
@@ -73,11 +74,13 @@ internal sealed class ConfirmButton
     {
         _button = button;
         _normalContent = (string)button.Content;
+        _normalAutomationName = System.Windows.Automation.AutomationProperties.GetName(button);
         _armedContentProvider = armedContentProvider;
         _fire = fire;
         _timer = new DispatcherTimer { Interval = ArmTimeout };
         _timer.Tick += (_, _) => Disarm();
         button.Click += OnClick;
+        button.Unloaded += (_, _) => Disarm();
     }
 
     public static ConfirmButton Attach(Button button, string armedContent, Action fire) =>
@@ -91,7 +94,9 @@ internal sealed class ConfirmButton
         if (!_armed)
         {
             _armed = true;
-            _button.Content = _armedContentProvider();
+            var armedText = _armedContentProvider();
+            _button.Content = armedText;
+            System.Windows.Automation.AutomationProperties.SetName(_button, armedText);
             _button.SetResourceReference(System.Windows.Controls.Control.BackgroundProperty, "DangerSoftBrush");
             _button.SetResourceReference(System.Windows.Controls.Control.ForegroundProperty, "DangerBrush");
             _timer.Start();
@@ -110,6 +115,9 @@ internal sealed class ConfirmButton
         }
         _armed = false;
         _button.Content = _normalContent;
+        System.Windows.Automation.AutomationProperties.SetName(
+            _button,
+            string.IsNullOrEmpty(_normalAutomationName) ? _normalContent : _normalAutomationName);
         _button.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
         _button.ClearValue(System.Windows.Controls.Control.ForegroundProperty);
     }

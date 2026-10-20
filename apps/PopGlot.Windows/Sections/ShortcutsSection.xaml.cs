@@ -25,4 +25,7 @@ public partial class ShortcutsSection : System.Windows.Controls.UserControl
         CloseHotkey.BindingValue = HotkeyBinding.CloseDefault;
         ShowWindowHotkey.BindingValue = HotkeyBinding.ShowWindowDefault;
     }
+
+    private void ResetDefaultsButton_Click(object sender, System.Windows.RoutedEventArgs e) =>
+        ResetDefaults();
 }

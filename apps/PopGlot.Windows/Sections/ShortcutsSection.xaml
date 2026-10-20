@@ -5,7 +5,18 @@
 
     <!-- Compact desktop property list -->
     <StackPanel>
-        <TextBlock Text="快捷键" Style="{StaticResource PageTitle}" Margin="0,0,0,14" />
+        <Grid Margin="0,0,0,14">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="快捷键" Style="{StaticResource PageTitle}" VerticalAlignment="Center" />
+            <Button x:Name="ResetDefaultsButton" Grid.Column="1"
+                    Content="恢复默认快捷键"
+                    Style="{StaticResource GhostButton}"
+                    Click="ResetDefaultsButton_Click"
+                    AutomationProperties.Name="恢复默认快捷键" />
+        </Grid>
 
         <TextBlock Text="全局快捷键" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
 

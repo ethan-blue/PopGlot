@@ -39,6 +39,24 @@ internal static partial class MarkdownPresenter
     [GeneratedRegex(@"(\*\*|\*|__|_)([^\s*_]+(?:[ \t]+[^\s*_]+)*)\1")]
     private static partial Regex EmphasisRegex();
 
+    [GeneratedRegex(@"^(\d+[\.\)])\s+(.*)$")]
+    private static partial Regex OrderedListRegex();
+
+    [GeneratedRegex(MarkdownLinkPattern)]
+    private static partial Regex MarkdownLinkRegex();
+
+    [GeneratedRegex("^" + MarkdownLinkPattern + "$")]
+    private static partial Regex ExactMarkdownLinkRegex();
+
+    [GeneratedRegex("(" + MarkdownLinkPattern + @"|`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|⟦PG_\d{4}⟧)")]
+    private static partial Regex FormattedSpanSplitRegex();
+
+    [GeneratedRegex(@"^:?-{3,}:?$")]
+    private static partial Regex TableDelimiterCellRegex();
+
+    [GeneratedRegex(@"(\*\*|__)(?<content>.*?)\1")]
+    private static partial Regex PlainTableBoldUnwrapRegex();
+
     public static string FormatPangu(string text)
     {
         if (string.IsNullOrEmpty(text)) return text;
@@ -257,13 +275,13 @@ internal static partial class MarkdownPresenter
             // Ordered list: 1. , 2) , etc.
             else
             {
-                var match = Regex.Match(trimmed, @"^\d+[\.\)]\s+(.*)$");
+                var match = OrderedListRegex().Match(trimmed);
                 if (match.Success)
                 {
                     outputPrefix = preserveListStructure
                         ? line[..(line.Length - trimmed.Length)] + match.Groups[0].Value[..match.Groups[0].Value.IndexOfAny([' ', '\t'])] + " "
                         : string.Empty;
-                    prose = match.Groups[1].Value.Trim();
+                    prose = match.Groups[2].Value.Trim();
                 }
                 else if (trimmed.StartsWith('>'))
                 {
@@ -278,7 +296,7 @@ internal static partial class MarkdownPresenter
             {
                 // Link conversion is a prose operation. Inline-code spans are
                 // removed from the transform stream and copied verbatim.
-                var linksExpanded = Regex.Replace(segment, MarkdownLinkPattern, match =>
+                var linksExpanded = MarkdownLinkRegex().Replace(segment, match =>
                 {
                     var label = match.Groups["text"].Value;
                     var url = match.Groups["url"].Value;
@@ -507,7 +525,7 @@ internal static partial class MarkdownPresenter
             var isBullet = trimmedLine.StartsWith("- ", StringComparison.Ordinal) ||
                            trimmedLine.StartsWith("* ", StringComparison.Ordinal) ||
                            trimmedLine.StartsWith("+ ", StringComparison.Ordinal);
-            var numberedMatch = Regex.Match(trimmedLine, @"^(\d+[\.\)])\s+(.*)$");
+            var numberedMatch = OrderedListRegex().Match(trimmedLine);
 
             var indentSpaces = line.Length - trimmedLine.Length;
             var nestLevel = Math.Clamp(indentSpaces / 2, 0, 5);
@@ -605,8 +623,7 @@ internal static partial class MarkdownPresenter
 
         // Structure first: split on links / code spans / bold / protected tokens, then
         // apply Pangu spacing per natural-language segment only.
-        var pattern = $"({MarkdownLinkPattern}|`[^`]+`|\\*\\*[^*]+\\*\\*|__[^_]+__|⟦PG_\\d{{4}}⟧)";
-        var parts = Regex.Split(text, pattern);
+        var parts = FormattedSpanSplitRegex().Split(text);
 
         var pieces = new List<FormattedPiece>();
         foreach (var part in parts)
@@ -627,7 +644,7 @@ internal static partial class MarkdownPresenter
             }
             else if (part.StartsWith('[') && part.EndsWith(')'))
             {
-                var match = Regex.Match(part, "^" + MarkdownLinkPattern + "$" );
+                var match = ExactMarkdownLinkRegex().Match(part);
                 if (match.Success)
                 {
                     pieces.Add(new FormattedPiece(PieceKind.Link, match.Groups["text"].Value, match.Groups["url"].Value));
@@ -893,7 +910,7 @@ internal static partial class MarkdownPresenter
         foreach (var cell in cells)
         {
             var c = cell.Trim();
-            if (!Regex.IsMatch(c, @"^:?-{3,}:?$"))
+            if (!TableDelimiterCellRegex().IsMatch(c))
             {
                 return false;
             }
@@ -994,13 +1011,7 @@ internal static partial class MarkdownPresenter
                 TextWrapping = TextWrapping.Wrap,
             };
             cellText.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
-            var headerParagraph = new Paragraph();
-            AppendFormattedSpans(headerParagraph.Inlines, headerCells[c], resources);
-            foreach (var inline in headerParagraph.Inlines.ToList())
-            {
-                headerParagraph.Inlines.Remove(inline);
-                cellText.Inlines.Add(inline);
-            }
+            AppendFormattedSpans(cellText.Inlines, headerCells[c], resources);
             cellBorder.Child = cellText;
 
             Grid.SetRow(cellBorder, 0);
@@ -1031,14 +1042,7 @@ internal static partial class MarkdownPresenter
                     TextWrapping = TextWrapping.Wrap,
                 };
                 cellText.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
-
-                var cellPara = new Paragraph();
-                AppendFormattedSpans(cellPara.Inlines, cellContent, resources);
-                foreach (var inline in cellPara.Inlines.ToList())
-                {
-                    cellPara.Inlines.Remove(inline);
-                    cellText.Inlines.Add(inline);
-                }
+                AppendFormattedSpans(cellText.Inlines, cellContent, resources);
 
                 cellBorder.Child = cellText;
                 Grid.SetRow(cellBorder, gridRow);
@@ -1091,7 +1095,7 @@ internal static partial class MarkdownPresenter
 
     private static string PlainTableCell(string cell) => TransformNaturalSegments(cell, static segment =>
     {
-        var unwrapped = Regex.Replace(segment, @"(\*\*|__)(?<content>.*?)\1", match => match.Groups["content"].Value);
+        var unwrapped = PlainTableBoldUnwrapRegex().Replace(segment, match => match.Groups["content"].Value);
         return StripNaturalEmphasis(unwrapped);
     });
 
