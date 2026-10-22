@@ -34,7 +34,7 @@ public partial class ServicesSection
         ChatGptCancelButton.Visibility = busy && !_cliCommitInProgress ? Visibility.Visible : Visibility.Collapsed;
         ChatGptAccountCombo.IsEnabled = ChatGptModelCombo.IsEnabled = !busy;
         ChatGptRefreshButton.IsEnabled = ChatGptLogoutButton.IsEnabled = !busy && signedIn;
-        ChatGptTestButton.IsEnabled = ChatGptSaveUseButton.IsEnabled = !busy && signedIn && _directModelsCurrent && ChatGptModelCombo.SelectedItem is CliModel;
+        ChatGptTestButton.IsEnabled = ChatGptSaveButton.IsEnabled = ChatGptSaveUseButton.IsEnabled = !busy && signedIn && _directModelsCurrent && ChatGptModelCombo.SelectedItem is CliModel;
         ChatGptDisconnectButton.IsEnabled = !busy && _directProfileId is not null;
         if (OmpImportButton is not null)
         {
@@ -47,17 +47,39 @@ public partial class ServicesSection
     private void ChatGptAccount_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (_loadingAccounts || ChatGptStatus is null) return;
-        CancelCliOperation(); _directProfileId = null; _directTestIdentity = null; _directTestedAt = null; _directModelsCurrent = false;
+        var selected = ChatGptAccountCombo.SelectedItem as ChatGptAccount;
+        if (_editorDirty && e.RemovedItems.Count > 0)
+        {
+            _loadingAccounts = true;
+            try { ChatGptAccountCombo.SelectedItem = e.RemovedItems[0]; }
+            finally { _loadingAccounts = false; }
+            BeginDraftGuard("更换账号前请先处理当前修改。", () =>
+            {
+                // Saving the previous new-account draft may have minted an
+                // ID. Continue editing that profile rather than resetting it.
+                ShowConnectionEditor(direct: true, adding: _directProfileId is null);
+                SetDirectSourceIdentity();
+                _loadingAccounts = true;
+                try { ChatGptAccountCombo.SelectedItem = selected; }
+                finally { _loadingAccounts = false; }
+                SelectDirectAccount();
+            });
+            return;
+        }
+        SelectDirectAccount();
+    }
+
+    private void SelectDirectAccount()
+    {
+        CancelCliOperation();
+        _directTestIdentity = null; _directTestedAt = null; _directModelsCurrent = false;
         ChatGptModelCombo.ItemsSource = null;
-        var accountId = (ChatGptAccountCombo.SelectedItem as ChatGptAccount)?.Id;
-        var saved = ProfileManager.Load().Profiles.FirstOrDefault(p => p.ResolvedExecutionKind == EngineExecutionKind.ChatGptDirect &&
-            p.DirectConnection?.AccountId == accountId);
-        if (saved is not null) RestoreDirectProfile(saved);
-        else ChatGptStatus.Text = "点击「刷新模型」，再选择文字模型。";
+        ChatGptStatus.Text = "刷新当前账号的模型后继续。";
         UpdateCliButtons();
+        MarkEditorDirty();
     }
     private void ChatGptModel_Changed(object sender, SelectionChangedEventArgs e)
-    { _directTestIdentity = null; _directTestedAt = null; UpdateChatGptButtons(); }
+    { _directTestIdentity = null; _directTestedAt = null; UpdateChatGptButtons(); MarkEditorDirty(); }
     private string DirectIdentity() => $"{(ChatGptAccountCombo.SelectedItem as ChatGptAccount)?.Id}|{(ChatGptModelCombo.SelectedItem as CliModel)?.Id}";
     private ProviderProfile CaptureDirectProfile()
     {
@@ -70,41 +92,49 @@ public partial class ServicesSection
             DirectConnection = new() { AccountId = account.Id, ModelId = model.Id, Enabled = true }, TextModel = model.Id,
             ApiBaseUrl = "https://api.openai.com/v1", TextEndpoint = "/responses", CredentialTarget = "", SupportsVision = false, VisionModel = "" };
     }
-    private async Task DirectOperation(Func<CancellationToken, Task<string>> work, string starting, bool committing = false)
+    private async Task<bool> DirectOperation(Func<CancellationToken, Task<string>> work, string starting, bool committing = false)
     {
-        if (_cliOperation is not null) return;
+        if (_cliOperation is not null) return false;
         using var operation = new CancellationTokenSource(TimeSpan.FromMinutes(6)); _cliOperation = operation;
         _cliCommitInProgress = committing;
-        ChatGptStatus.Text = starting; UpdateCliButtons();
+        var status = ChatGptConnectionPanel.Visibility == Visibility.Visible ? ChatGptStatus : CliConnectionStatus;
+        status.Text = starting; UpdateCliButtons();
         try
         {
             var message = await work(operation.Token);
-            if (ReferenceEquals(_cliOperation, operation)) ChatGptStatus.Text = message;
+            if (!ReferenceEquals(_cliOperation, operation)) return false;
+            status.Text = message;
+            return true;
         }
         catch (OperationCanceledException)
-        { if (ReferenceEquals(_cliOperation, operation)) ChatGptStatus.Text = "直连操作已取消或超时。"; }
+        { if (ReferenceEquals(_cliOperation, operation)) status.Text = "操作已取消或超时。"; return false; }
         catch (Exception ex)
         {
             if (ex is ProfileActivationException)
             { RefreshProfilesList(); EditorEmpty.Visibility = Visibility.Collapsed; ProfileChanged?.Invoke(); }
-            if (ReferenceEquals(_cliOperation, operation)) ChatGptStatus.Text = CliFailureText(ex);
+            if (ReferenceEquals(_cliOperation, operation)) status.Text = CliFailureText(ex);
+            return false;
         }
         finally { if (ReferenceEquals(_cliOperation, operation)) { _cliCommitInProgress = false; _cliOperation = null; UpdateCliButtons(); } }
     }
     private async void ChatGptLogin_Click(object sender, RoutedEventArgs e)
     {
         var selected = ReferenceEquals(sender, ChatGptAddAccountButton) ? null : ChatGptAccountCombo.SelectedItem as ChatGptAccount;
+        var selectedModel = (ChatGptModelCombo.SelectedItem as CliModel)?.Id;
         await DirectOperation(async ct =>
         {
             var account = await ChatGptOAuth.SignInAsync(selected, ct); ct.ThrowIfCancellationRequested();
-            ReloadChatGptAccounts(account.Id); _directProfileId = null; _directModelsCurrent = false;
-            _directTestIdentity = null; _directTestedAt = null; ChatGptModelCombo.ItemsSource = null;
-            var saved = ProfileManager.Load().Profiles.FirstOrDefault(p => p.ResolvedExecutionKind == EngineExecutionKind.ChatGptDirect && p.DirectConnection?.AccountId == account.Id);
-            if (saved is not null) RestoreDirectProfile(saved);
+            ReloadChatGptAccounts(account.Id); _directModelsCurrent = false;
+            _directTestIdentity = null; _directTestedAt = null;
+            if (selected?.Id != account.Id)
+            {
+                selectedModel = null;
+                ChatGptModelCombo.ItemsSource = null;
+            }
+            MarkEditorDirty();
             using var backend = new ChatGptDirectBackend(new() { AccountId = account.Id, Enabled = true });
             var models = await backend.ListModelsAsync(ct); ct.ThrowIfCancellationRequested();
             _directModelsCurrent = true;
-            var selectedModel = saved?.DirectConnection?.ModelId;
             ChatGptModelCombo.ItemsSource = models;
             ChatGptModelCombo.SelectedItem = selectedModel is null ? models.FirstOrDefault() : models.FirstOrDefault(m => m.Id == selectedModel);
             return selectedModel is not null && ChatGptModelCombo.SelectedItem is null
@@ -143,19 +173,25 @@ public partial class ServicesSection
             return $"直连测试通过：{response.Result.TranslatedText}（{response.ElapsedMs / 1000.0:F1} 秒）。";
         }, "正在通过官方 Responses API 测试翻译…");
     }
-    private async void ChatGptSaveUse_Click(object sender, RoutedEventArgs e)
+    private async void ChatGptSaveUse_Click(object sender, RoutedEventArgs e) =>
+        await SaveDirectConnectionAsync(ReferenceEquals(sender, ChatGptSaveUseButton));
+
+    private async Task<bool> SaveDirectConnectionAsync(bool use)
     {
-        if (_cliOperation is not null) return;
-        var profile = CaptureDirectProfile(); var editingId = _directProfileId;
-        if (_directTestIdentity == DirectIdentity())
-        { profile.LastTestOutcome = "ok"; profile.LastTestedAtUtc = _directTestedAt; profile.LastTestFingerprint = ProfileVerification.EvidenceFingerprint(profile, false); }
-        await DirectOperation(async ct =>
+        if (_cliOperation is not null) return false;
+        return await DirectOperation(async ct =>
         {
-            try { await Task.Run(() => ProfileManager.SaveCliProfile(profile, editingId, true)); }
+            var profile = CaptureDirectProfile();
+            var editingId = _directProfileId;
+            if (_directTestIdentity == DirectIdentity())
+            { profile.LastTestOutcome = "ok"; profile.LastTestedAtUtc = _directTestedAt; profile.LastTestFingerprint = ProfileVerification.EvidenceFingerprint(profile, false); }
+            try { await Task.Run(() => ProfileManager.SaveCliProfile(profile, editingId, use)); }
             catch (ProfileActivationException) { _directProfileId = profile.Id; throw; }
-            _directProfileId = profile.Id; RefreshProfilesList(); EditorEmpty.Visibility = Visibility.Collapsed; ProfileChanged?.Invoke();
-            return "已保存并切换为 ChatGPT 官方直连文字引擎。";
-        }, "正在保存直连引擎…", committing: true);
+            _directProfileId = _editingProfileId = profile.Id;
+            RefreshProfilesList(); EditorEmpty.Visibility = Visibility.Collapsed; ProfileChanged?.Invoke();
+            ClearEditorDirty();
+            return use ? "已保存并使用 ChatGPT。" : "已保存 ChatGPT 连接。";
+        }, "正在保存…", committing: true);
     }
     private async void ChatGptDisconnect_Click(object sender, RoutedEventArgs e)
     {
@@ -165,6 +201,7 @@ public partial class ServicesSection
             if (id is not null) await Task.Run(() => ProfileManager.DisableCliProfile(id));
             _directTestIdentity = null; _directTestedAt = null; _directModelsCurrent = false; ChatGptModelCombo.ItemsSource = null;
             RefreshProfilesList(); EditorEmpty.Visibility = Visibility.Collapsed; ProfileChanged?.Invoke();
+            ClearEditorDirty();
             return "已断开此引擎。ChatGPT 登录保留，可重新选择模型保存。";
         }, "正在断开直连引擎…", committing: true);
     }
@@ -178,18 +215,42 @@ public partial class ServicesSection
             {
                 if (!ct.IsCancellationRequested)
                 { _directTestIdentity = null; _directTestedAt = null; _directModelsCurrent = false; ChatGptModelCombo.ItemsSource = null; }
+                if (!ct.IsCancellationRequested) ClearEditorDirty();
                 ProfileChanged?.Invoke();
             }
             return "已退出此账号。账号与工作区注册保留，之后可重新授权。";
         }, "正在退出此账号并撤销官方会话…");
     }
+    private void ChatGptSource_Click(object sender, RoutedEventArgs e)
+    {
+        if (_cliCommitInProgress || _saveInProgress) return;
+        ShowConnectionEditor(direct: true, adding: true);
+        _editingProfileId = _directProfileId = null;
+        _directTestIdentity = null; _directTestedAt = null; _directModelsCurrent = false;
+        ChatGptModelCombo.ItemsSource = null;
+        SetDirectSourceIdentity();
+        ReloadChatGptAccounts();
+        ChatGptStatus.Text = ChatGptAccountCombo.SelectedItem is null
+            ? "在官方页面登录后选择模型。" : "已保存账号。刷新模型以检查当前授权。";
+        ClearEditorDirty();
+    }
+
+    private void SetDirectSourceIdentity()
+    {
+        ConnectionSourceTitle.Text = "ChatGPT";
+        ConnectionSourceDetail.Text = "官方账号直连，无需 CLI 或 API Key。";
+        ConnectionSourceDetail.ToolTip = "通过官方浏览器授权；内容直接发送到 OpenAI，并使用所选 ChatGPT 计划额度。账号授权独立保存并由 Windows 加密保护。请求可用性需显式测试确认。";
+    }
+
     private void OpenDirectProfile(ProviderProfile profile)
     {
         if (_cliCommitInProgress || _saveInProgress) return;
-        OpenCliConnections_Click(this, new RoutedEventArgs()); CancelCliOperation();
-        ChatGptExpander.IsExpanded = true;
+        ShowConnectionEditor(direct: true, adding: false);
+        _editingProfileId = profile.Id;
+        SetDirectSourceIdentity();
         ReloadChatGptAccounts(profile.DirectConnection?.AccountId);
         RestoreDirectProfile(profile);
+        ClearEditorDirty();
         UpdateCliButtons();
     }
     private void RestoreDirectProfile(ProviderProfile profile)

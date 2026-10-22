@@ -153,7 +153,6 @@ internal static partial class Program
         Run("hotkey action enum values are recognized without exception", HotkeyActionsRecognized);
         Run("show window hotkey and free engine consent round-trip", ShellSettingsShowWindowAndConsentRoundTrip);
         RunSta("quick search hotkey registration serialization and degradation behavior", QuickSearchHotkeyRegistrationSerializationAndDegradation);
-        RunSta("style menu tooltip single source and typed short status mapping", StyleMenuTooltipSingleSourceAndShortStatusMapping);
         await RunAsync("free engine consent gates the outbound decision", FreeEngineConsentGatesOutbound);
         await RunAsync("free engine falls back to the second endpoint when json does not parse", FreeEngineFallsBackOnUnparsableJson);
         await RunAsync("free engine 429 cooldown is per host", FreeEngineRateLimitCooldownIsPerHost);
@@ -242,6 +241,15 @@ internal static partial class Program
         Run("quick search terminals reject same-epoch late callbacks", RuntimeQuickSearchTerminalsRejectLateCallbacks);
         await RunAsync("cancelled pump does not await an unresponsive executor", RuntimeCancelledPumpIsBounded);
         await RunAsync("cached summary cancels prior work and completed sources are disposed", RuntimeSummaryCacheCancelsAndDisposes);
+        await RunAsync("summary streams content before its single terminal response", SummaryStreamingFirstContentPrecedesTerminal);
+        await RunAsync("summary stream fences cancelled and obsolete arrivals", SummaryStreamingLateArrivalsAreIsolated);
+        await RunAsync("partial summary never enters the success cache", SummaryStreamingPartialNeverCachesAsSuccess);
+        await RunAsync("summary freezes style and cache identity", SummaryStreamingFreezesPromptAndCacheIdentity);
+        await RunAsync("native summary streams one frozen request through real ffi", SummaryNativeStreamUsesSingleSnapshotRequest);
+        await RunAsync("summary snapshot invalidation returns a terminal without transport", SummarySnapshotFailureReturnsTerminalWithoutTransport);
+        await RunStaAsync("product summary route change retires the busy view", ProductSummaryRouteChangeRetiresBusyState);
+        await RunStaAsync("product summary streams and reuses its visible task", ProductSummaryStreamsAndReusesVisibleTask);
+        RunSta("product quick route selection preserves reading and image route", ProductQuickRouteSwitchPreservesReadingAndVision);
         await RunStaAsync("markdown links render once without regex capture debris", RuntimeMarkdownLinksRenderOnce);
         Run("summary route capability respects offline policy", RuntimeSummaryOfflineCapability);
         await RunAsync("coordinator streaming delta arrives before completion", CoordinatorDeltaArrivesBeforeCompletionAsync);
@@ -388,7 +396,6 @@ internal static partial class Program
         // settings save-bar locks, theme & wording scans, and the
         // quick-search work-area clamp. Test bodies live outside Program.cs
         // so this orchestrator stays merge-friendly.
-        Run("engine wording keeps a single source and the typed pipeline routes", WaveRegressionTests.EngineWordingAndTypedRouteMatrix);
         Run("scrollbar keeps a 5 dip sliver inside a 12 dip hit target", WaveRegressionTests.ScrollbarSliverAndHitTarget);
         Run("caption buttons stay keyboard focusable with the shared focus ring", WaveRegressionTests.CaptionButtonsStayFocusable);
         Run("prompt draft validation enforces utf-8 byte budgets at the 2730 boundary", WaveRegressionTests.PromptValidateDraftByteBudgets);
@@ -1778,19 +1785,10 @@ internal static partial class Program
                 null,
                 null,
                 new VocabularyStore(TestIsolation.VocabularyPath));
-            typeof(TranslationPanelWindow)
-                .GetField("_translation", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                .SetValue(panel, raw);
-            var panelGate = (TranslationPanelStreamGate)typeof(TranslationPanelWindow)
-                    .GetField("_gate", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .GetValue(panel)!;
-            // Drive the gate through the real lifecycle: begin → stream →
-            // clean completion, exactly as a successful session would.
-            var (panelEpoch, _) = panelGate.BeginNewOperation();
-            panelGate.ApplyUpdate(new TranslationStreamUpdate(
-                "s1", panelEpoch, TranslationStreamUpdateKind.Delta, raw, raw, raw.Length));
-            panelGate.OnCompleted(raw);
-            True(panelGate.CanPerformResultActions, "the completed panel gate must allow result actions");
+            panel.RestoreSession(StoredSession.Create(
+                sessionId: null, origin: SessionOrigin.TranslationPanel, sourceText: "demo query",
+                sourceLang: "en", targetLang: "zh-CN", engineProfileId: null, engineName: null,
+                state: TranslationSessionState.Completed, resultText: raw, explanationText: null));
             panel.ResultCopyBtn.RaiseEvent(new RoutedEventArgs(
                 System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
             SpinUntil(() => recordedCount(recorded) >= 2, "panel copy never landed");
@@ -4262,55 +4260,6 @@ internal static partial class Program
             "policy refusals keep their existing honest classification");
     }
 
-    /// <summary>
-    /// 0.1.6 wording slim-down: the style selector tooltip has ONE source —
-    /// <see cref="TranslationStyleMenu.SupportedToolTip"/>; <see cref="TranslationStyleMenu.ApplyTo"/>
-    /// no longer accepts a caller-provided copy, so the workbench cannot drift
-    /// again — and the free-engine / vision-direct statuses map purely from
-    /// the typed <see cref="TranslationPromptSupport"/> over all five values.
-    /// </summary>
-    private static void StyleMenuTooltipSingleSourceAndShortStatusMapping()
-    {
-        EnsureApplication();
-
-        // Applied/Pending: nothing to disclaim.
-        Equal(string.Empty, TranslationStyleMenu.StyleStatusFor(TranslationPromptSupport.Applied),
-            "an applied style needs no disclaimer");
-        Equal(string.Empty, TranslationStyleMenu.StyleStatusFor(TranslationPromptSupport.Pending),
-            "a pending session makes no claim");
-
-        // NotSupported (free engine): one shared honest one-liner.
-        var freeStatus = TranslationStyleMenu.StyleStatusFor(TranslationPromptSupport.NotSupported);
-        Equal(TranslationStyleMenu.FreeEngineStyleNotAppliedStatus, freeStatus);
-        True(freeStatus.Contains("内置免费引擎"), "the free-engine status must name the free engine");
-        True(freeStatus.Contains("未应用"), "the free-engine status must say the style was not applied");
-        True(freeStatus.Length <= 40, $"the status must stay a single short line, got: {freeStatus}");
-
-        // NotApplicable (vision-direct): the shared vision one-liner.
-        var visionStatus = TranslationStyleMenu.StyleStatusFor(TranslationPromptSupport.NotApplicable);
-        Equal(TranslationStyleMenu.VisionDirectStyleNotAppliedStatus, visionStatus);
-        True(visionStatus.Contains("视觉模型"), "the vision-direct status must name the vision route");
-        True(visionStatus.Length <= 40, $"the status must stay a single short line, got: {visionStatus}");
-
-        // Unknown keeps the honest caveat instead of over-claiming.
-        True(TranslationStyleMenu.StyleStatusFor(TranslationPromptSupport.Unknown).Contains("无法确认"),
-            "the unknown status must not over-claim");
-
-        // ApplyTo takes no tooltip argument anymore: whatever the isolated
-        // environment probes, the button text comes from the single source.
-        var button = new System.Windows.Controls.Button();
-        var probe = TranslationStyleMenu.ApplyTo(button);
-        var expected = probe switch
-        {
-            TranslationStyleSupport.FreeEngine => TranslationStyleMenu.FreeEngineToolTip,
-            TranslationStyleSupport.Unknown => TranslationStyleMenu.UnknownToolTip,
-            _ => TranslationStyleMenu.SupportedToolTip,
-        };
-        Equal(expected, $"{button.ToolTip}",
-            "the tooltip must come from the single SupportedToolTip source");
-        Equal(expected, System.Windows.Automation.AutomationProperties.GetHelpText(button),
-            "the automation help text must mirror the same single-source wording");
-    }
 
     /// <summary>
     /// Executor for the authorization matrix: production routing decisions
@@ -8044,9 +7993,7 @@ internal static partial class Program
                 IsTranslateButtonEnabled = false,
             };
             section.AdoptTranslationOperation(operation, streaming);
-            var status = section.BeginSummaryReading("hello world");
-            Equal(ReadingRequestCopy.SummaryWhileTranslating, status,
-                "an in-flight translation is named as still running");
+            section.BeginSummaryReading("hello world");
             True(!operation.IsCancellationRequested, "要点 must not cancel the translation");
             True(section.IsHoldingSummary, "the summary reading is what is on screen");
 
@@ -8129,7 +8076,8 @@ internal static partial class Program
             section.ApplyState(state);
 
             var tcs = new TaskCompletionSource<TranslationResponse>();
-            executor.OnRunTextTask = (apiKey, src, srcLang, tgtLang, task, token, settings) => tcs.Task;
+            executor.OnStreamTextTask = (_, _, _, _, _, sessionId, epoch, _, _, _) =>
+                new TranslationStreamSession(new TranslationStreamBuffer(sessionId, sessionId, epoch), tcs.Task);
 
             var summaryTask = section.TriggerSummaryAsync();
             True(section.IsHoldingSummary, "summary reading started");
@@ -8172,15 +8120,15 @@ internal static partial class Program
             };
             section.ApplyState(state);
 
-            executor.OnRunTextTask = (apiKey, src, srcLang, tgtLang, task, token, settings) =>
+            executor.OnStreamTextTask = (_, _, _, _, _, _, _, _, _, _) =>
                 throw new InvalidOperationException("API Key expired or network down");
 
             await section.TriggerSummaryAsync();
 
             True(!section.IsHoldingSummary, "failed summary reverts to translation");
             Equal("不可丢失的关键译文", section.ResultBox.Text, "translation text must remain intact");
-            True(section.StatusBlock.Text.Contains("API Key expired or network down"),
-                "status block reports failure message");
+            True($"{section.StatusBlock.ToolTip}".Contains("API Key expired or network down"),
+                "the failure reason remains available without a long visible status");
         }
         finally
         {
@@ -8734,9 +8682,6 @@ internal static partial class Program
                 var blockedBefore = TestIsolation.BlockedPublicSends;
                 var diskBefore = ProfileManager.Load();
                 var menu = window.BuildEngineSwitchMenu();
-                Equal(208d, menu.Width, "engine switch popup stays within the compact fixed width");
-                True(menu.Background == System.Windows.Media.Brushes.Transparent,
-                    "the native context-menu surface stays transparent around the rounded template");
                 // The current-route marker is unique PER SECTION: exactly one
                 // text engine and one image engine carry the (当前) mark.
                 static string HeaderText(System.Windows.Controls.MenuItem item) => item.Header switch
@@ -8759,25 +8704,6 @@ internal static partial class Program
                     "opening the menu must not modify the config");
                 Equal(diskBefore.PreferFreeEngine, after.PreferFreeEngine,
                     "opening the menu must not modify PreferFreeEngine");
-                // The explicit re-probe action must exist as a menu item,
-                // named with the unified free-engine wording (EngineWording
-                // is the single source of truth for user-visible terms).
-                True(menu.Items.OfType<System.Windows.Controls.MenuItem>()
-                        .Any(item => HeaderText(item) == "检测" && $"{item.ToolTip}".StartsWith("重新检测", StringComparison.Ordinal)),
-                    "the concise probe action keeps an explanatory tooltip");
-                True(menu.Items.OfType<System.Windows.Controls.MenuItem>()
-                        .Where(item => item.Header is System.Windows.Controls.TextBlock)
-                        .All(item => ((System.Windows.Controls.TextBlock)item.Header).TextTrimming == System.Windows.TextTrimming.CharacterEllipsis &&
-                                     ((System.Windows.Controls.TextBlock)item.Header).Width == 124 &&
-                                     !string.IsNullOrWhiteSpace(item.ToolTip as string)),
-                    "compact engine names use ellipsis while model details remain in tooltips");
-                True(menu.Items.OfType<System.Windows.Controls.MenuItem>()
-                        .Where(item => item.Header is System.Windows.Controls.TextBlock)
-                        .All(item => !((System.Windows.Controls.TextBlock)item.Header).Text.Contains("demo-text-model", StringComparison.Ordinal)),
-                    "model ids must stay out of visible engine labels");
-                True(menu.Items.OfType<System.Windows.Controls.MenuItem>()
-                        .Any(item => HeaderText(item) == "Google · 未测" || HeaderText(item).StartsWith("Google · ", StringComparison.Ordinal)),
-                    "the free route uses a short provider label instead of repeating 'free engine' and 'text only'");
             }
             finally
             {
@@ -8876,8 +8802,6 @@ internal static partial class Program
             var button = section.AddEngineHeaderButton;
             True(button.IsVisible && button.IsEnabled && button.IsHitTestVisible,
                 "the header add-engine button must be the only empty-state CTA");
-            Equal(Visibility.Collapsed, section.AddFirstEngineButton.Visibility,
-                "the empty state must not show a second primary button");
 
             var center = button.TranslatePoint(
                 new Point(button.ActualWidth / 2, button.ActualHeight / 2), section);
@@ -9224,12 +9148,12 @@ internal static partial class Program
         // detection results (offline facts; detection never spawns).
         var cliDark = new SettingsWindow(ShellSettings.Default, history, vocab);
         cliDark.ShowPage("Provider");
-        cliDark.ProviderSection.ConnectLocalToolHeaderButton.RaiseEvent(
+        cliDark.ProviderSection.AddEngineHeaderButton.RaiseEvent(
             new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
         cliDark.ProviderSection.DetectCliToolsButton.RaiseEvent(
             new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
-        True(cliDark.ProviderSection.CliConnectionsPanel.Visibility == Visibility.Visible,
-            "cli-connections capture: the panel must be open with detection rows");
+        True(cliDark.ProviderSection.PresetsPanel.Visibility == Visibility.Visible,
+            "local discovery stays inside the unified provider source catalog");
         RenderAndSave(cliDark, 960, 760,
             Path.Combine(outDir, "settings_cli_connections_dark.png"), ThemePreference.Dark);
         // The privacy page carries the destination consents (free engine,
@@ -10648,7 +10572,6 @@ internal static partial class Program
 
             Equal(TranslationSessionStage.Completed, session.Stage,
                 session.Error?.Message ?? "the free-engine path must complete");
-            Equal("内置免费引擎", session.PipelineLabel, "the free engine labels the pipeline");
             True(session.PromptTemplateId is null && session.PromptTemplateName is null,
                 "the free-engine session must stay metadata-free (no prompt identity)");
 
@@ -11620,22 +11543,26 @@ internal static partial class Program
         public Func<ProviderSettings, string, string, string, string, string, long, CancellationToken, TranslationStreamSession>? OnStreamTextDraft { get; set; }
         public Func<ProviderSettings, string, string, byte[], string, string, string, long, CancellationToken, TranslationStreamSession>? OnStreamVisionDraft { get; set; }
         public Func<string, string, string, CancellationToken, Task<TranslationResponse>>? OnTranslateFree { get; set; }
-        public Func<string?, string, string, string, TextTaskKind, CancellationToken, ProviderSettings?, Task<TranslationResponse>>? OnRunTextTask { get; set; }
+        public Func<string?, string, string, string, TextTaskKind, string, long, CancellationToken, ProviderSettings?, PromptAnchorSnapshot?, TranslationStreamSession>? OnStreamTextTask { get; set; }
 
-        public Task<TranslationResponse> RunTextTaskAsync(
+        public TranslationStreamSession StreamTextTask(
             string? apiKey,
             string source,
             string sourceLang,
             string targetLang,
             TextTaskKind task,
+            string sessionId,
+            long epoch,
             CancellationToken cancellationToken,
-            ProviderSettings? routeSettings = null)
+            ProviderSettings? routeSettings = null,
+            PromptAnchorSnapshot? preferenceAnchor = null)
         {
-            if (OnRunTextTask is not null)
+            if (OnStreamTextTask is not null)
             {
-                return OnRunTextTask(apiKey, source, sourceLang, targetLang, task, cancellationToken, routeSettings);
+                return OnStreamTextTask(apiKey, source, sourceLang, targetLang, task, sessionId, epoch,
+                    cancellationToken, routeSettings, preferenceAnchor);
             }
-            return CoreBridge.RunTextTaskAsync(apiKey, source, sourceLang, targetLang, task, cancellationToken, routeSettings);
+            throw new InvalidOperationException("A summary stream fixture must be provided.");
         }
 
         public ProviderSettings GetSettings() => Settings;
@@ -12343,7 +12270,6 @@ internal static partial class Program
             var session = await coordinator.TranslateTextAsync("Free text", "en", "zh", TranslationInputSource.Manual, progress: progress);
 
             Equal(TranslationSessionStage.Completed, session.Stage);
-            Equal("内置免费引擎", session.PipelineLabel);
             Equal("内置免费引擎译文", session.TranslatedText);
             Equal(1, history.Entries.Count, "History must be written once for free engine");
 

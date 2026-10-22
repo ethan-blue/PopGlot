@@ -47,9 +47,14 @@ internal sealed class QuickSearchState
     /// permanently occupy the footer.
     /// </summary>
     public string? PendingNotice { get; private set; }
+    public bool IsPendingNoticeError { get; private set; }
 
     /// <summary>Arms the one-shot footer notice (null clears it).</summary>
-    public void PostPendingNotice(string? notice) => PendingNotice = notice;
+    public void PostPendingNotice(string? notice, bool error = false)
+    {
+        PendingNotice = notice;
+        IsPendingNoticeError = notice is not null && error;
+    }
 
     // 页脚右侧的动态快捷键提示：随阶段刷新，只承诺当前真正可用的操作。
     public string HintsText { get; private set; } = IdleHintsText;

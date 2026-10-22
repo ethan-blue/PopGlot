@@ -20,7 +20,7 @@ public partial class ServicesSection
         OmpLoginButton.IsEnabled = !busy && _cliConnection is not null &&
             OmpLoginProviderCombo.SelectedItem is OmpRpcBackend.LoginProvider { Available: true };
         OmpLoginButton.Content = OmpLoginProviderCombo.SelectedItem is OmpRpcBackend.LoginProvider { Authenticated: true }
-            ? "通过 OMP 重新授权所选提供方" : "通过 OMP 登录所选提供方";
+            ? "重新授权" : "通过 OMP 登录";
     }
 
     private void OmpLoginProvider_Changed(object sender, SelectionChangedEventArgs e)

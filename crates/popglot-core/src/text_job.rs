@@ -188,21 +188,28 @@ impl TextJobManager {
             request.target_language.as_deref().unwrap_or("zh-CN"),
         );
 
-        let (text_for_prompt, restorer, protected_terms) = if request.protect_code_tokens {
-            let protected = protect_tokens(source);
-            let terms = protected
-                .tokens
-                .iter()
-                .map(|token| token.placeholder.clone())
-                .collect::<Vec<_>>();
-            (
-                protected.sanitized_text,
-                Some(StreamingTokenRestorer::new(&protected.tokens)),
-                terms,
-            )
-        } else {
-            (source.to_owned(), None, Vec::new())
-        };
+        // Placeholder protection exists to keep full translations faithful to
+        // every protected token. A summarize/explain job may legitimately omit
+        // source identifiers, so the same machinery here would both push the
+        // model to reproduce every placeholder and report honest omissions as
+        // integrity warnings. Reading tasks therefore always see the raw
+        // source; identifiers they do mention stay exact by instruction.
+        let (text_for_prompt, restorer, protected_terms) =
+            if request.protect_code_tokens && task == TextTask::Translate {
+                let protected = protect_tokens(source);
+                let terms = protected
+                    .tokens
+                    .iter()
+                    .map(|token| token.placeholder.clone())
+                    .collect::<Vec<_>>();
+                (
+                    protected.sanitized_text,
+                    Some(StreamingTokenRestorer::new(&protected.tokens)),
+                    terms,
+                )
+            } else {
+                (source.to_owned(), None, Vec::new())
+            };
 
         let mut translation_request = TranslationRequest::text(text_for_prompt, languages)
             .with_explanation(request.include_explanation)

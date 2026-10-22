@@ -504,15 +504,18 @@ impl AppCore {
         .await
     }
 
-    /// Runs a lightweight reading action through the same configured provider
-    /// and reusable HTTP client as translation.
+    /// Runs a reading task through the text-first stream protocol so the
+    /// shell can paint the body while it is still being generated.
+    ///
+    /// Uses the task's concise reading instructions and output budget with the
+    /// shared text-first body/metadata protocol.
     ///
     /// # Errors
     ///
     /// Returns a classified provider error for invalid input, configuration,
-    /// cancellation, transport failure, or invalid model output.
+    /// cancellation, transport failure, or stream protocol failures.
     #[allow(clippy::too_many_arguments)]
-    pub async fn execute_text_task_snapshot(
+    pub async fn execute_text_task_stream_snapshot<F>(
         settings: &ProviderSettings,
         client: &ProviderClient,
         api_key: &str,
@@ -520,8 +523,15 @@ impl AppCore {
         languages: &LanguagePair,
         request_id: &str,
         task: TextTask,
+        preference: Option<&str>,
+        template_id: Option<&str>,
+        template_revision: Option<u64>,
         cancellation: &CancellationToken,
-    ) -> Result<TranslationResponse, ProviderError> {
+        on_delta: F,
+    ) -> Result<TranslationResponse, ProviderError>
+    where
+        F: FnMut(&str),
+    {
         let source = source.trim();
         if source.is_empty() || source.len() > MAX_SOURCE_BYTES {
             return Err(ProviderError::new(
@@ -533,29 +543,41 @@ impl AppCore {
             ));
         }
         if task == TextTask::Translate {
-            return Self::execute_translate_text_snapshot(
+            return Self::execute_translate_text_stream_snapshot_with_preference(
                 settings,
                 client,
                 api_key,
                 source,
                 languages,
                 request_id,
+                preference,
+                template_id,
+                template_revision,
                 cancellation,
+                on_delta,
             )
             .await;
         }
         let provider = provider_for(settings.provider_type);
-        let request = TranslationRequest::text(source, languages.clone())
+        let mut request = TranslationRequest::text(source, languages.clone())
             .with_task(task)
             .with_explanation(task == TextTask::Explain);
+        if let Some(preference) = preference {
+            request = request.with_preference(preference);
+        }
+        if let (Some(template_id), Some(revision)) = (template_id, template_revision) {
+            request = request.with_template_snapshot(template_id, revision);
+        }
         client
-            .execute(
+            .execute_stream(
                 provider.as_ref(),
                 settings,
                 api_key,
                 request_id,
                 &request,
+                None,
                 cancellation,
+                on_delta,
             )
             .await
     }

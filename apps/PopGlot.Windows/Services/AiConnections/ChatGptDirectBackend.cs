@@ -8,6 +8,8 @@ namespace PopGlot.Windows.Services.AiConnections;
 /// <summary>Official ChatGPT-plan Responses endpoint; no CLI process or backend-api calls.</summary>
 internal sealed class ChatGptDirectBackend(DirectConnectionSettings connection) : ICliBackend
 {
+    private static readonly string UserAgent = "PopGlot/" +
+        typeof(ChatGptDirectBackend).Assembly.GetName().Version?.ToString(3);
     private readonly CancellationTokenSource _lifetime = new();
     public ushort LastStatusCode { get; private set; }
     private async Task<HttpRequestMessage> RequestAsync(HttpMethod method, string path, CancellationToken ct)
@@ -17,7 +19,8 @@ internal sealed class ChatGptDirectBackend(DirectConnectionSettings connection) 
         var token = await ChatGptOAuth.AccessTokenAsync(connection.AccountId, ct).ConfigureAwait(false);
         var request = new HttpRequestMessage(method, "https://api.openai.com/v1" + path);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        request.Headers.UserAgent.ParseAdd("PopGlot/0.1.17"); return request;
+        request.Headers.UserAgent.ParseAdd(UserAgent);
+        return request;
     }
     public Task<CliAccountStatus> CheckAccountAsync(CancellationToken ct)
     {

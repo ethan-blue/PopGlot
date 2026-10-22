@@ -608,23 +608,24 @@ internal static partial class CoreBridge
     }
 
     /// <summary>
-    /// Translates text through the configured Provider only. Whether the
-    /// built-in free engine may be used instead is a privacy decision owned by
-    /// <see cref="Services.TranslationCoordinator"/>, never by the bridge.
+    /// Streams a summary / explanation with its captured style anchor through
+    /// the shared text-first task protocol. Visible body deltas arrive while
+    /// the single request is still running; completion returns its terminal
+    /// envelope, not a second buffered request.
     /// </summary>
-    /// <remarks>
-    /// <paramref name="preferenceAnchor"/> 为 null 时保持旧默认：Rust 在请求
-    /// 起点按 active 模板自行解析编译后的偏好文本。非 null 时（会话起点经
-    /// CompilePrompt 编译出的快照）按显式锚点原样发送，多段/重试在途不变。
-    /// </remarks>
-    public static async Task<TranslationResponse> RunTextTaskAsync(
+    public static TranslationStreamSession RunTextTaskStream(
         string? apiKey,
         string source,
         string sourceLang,
         string targetLang,
         TextTaskKind task,
+        string? requestId = null,
+        string? sessionId = null,
+        long epoch = 0,
+        TranslationStreamBuffer? buffer = null,
         CancellationToken cancellationToken = default,
-        ProviderSettings? routeSettings = null)
+        ProviderSettings? routeSettings = null,
+        PromptAnchorSnapshot? preferenceAnchor = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(source);
         var settings = GetSettings();
@@ -640,17 +641,32 @@ internal static partial class CoreBridge
             throw new InvalidOperationException("请先配置模型服务，再使用要点。");
         }
         var effectiveKey = string.IsNullOrWhiteSpace(apiKey) ? "local" : apiKey;
-        var requestId = $"text-task-{Guid.NewGuid():N}";
+        var reqId = requestId ?? $"text-task-stream-{Guid.NewGuid():N}";
+        var activeBuffer = buffer ?? new TranslationStreamBuffer(
+            sessionId ?? Guid.NewGuid().ToString("N"),
+            reqId,
+            epoch);
         var wireTask = task == TextTaskKind.Summarize ? "summarize" : "explain";
-        return await RunCancellableAsync(
-            () => EnsureSuccess<TranslationResponse>(Invoke(() => routeSettings is null
-                ? NativeMethods.TextTaskV1(
-                    effectiveKey, source, sourceLang, targetLang, wireTask, requestId)
-                : NativeMethods.TextTaskDraftV1(
-                    JsonSerializer.Serialize(routeSettings, JsonOptions), effectiveKey, source,
-                    sourceLang, targetLang, wireTask, requestId))),
-            requestId,
-            cancellationToken);
+
+        unsafe
+        {
+            var completionTask = ExecuteStreamRequestAsync(
+                activeBuffer,
+                (cb, userData) => routeSettings is null
+                    ? NativeMethods.TextTaskStreamV1(
+                        effectiveKey, source, sourceLang, targetLang, wireTask, reqId,
+                        preferenceAnchor?.Preference, preferenceAnchor?.TemplateId,
+                        preferenceAnchor?.Revision ?? 0, cb, userData)
+                    : NativeMethods.TextTaskDraftStreamV1(
+                        JsonSerializer.Serialize(routeSettings, JsonOptions), effectiveKey, source,
+                        sourceLang, targetLang, wireTask, reqId,
+                        preferenceAnchor?.Preference, preferenceAnchor?.TemplateId,
+                        preferenceAnchor?.Revision ?? 0, cb, userData),
+                reqId,
+                cancellationToken);
+
+            return new TranslationStreamSession(activeBuffer, completionTask);
+        }
     }
 
     public static async Task<TranslationResponse> TranslateTextAsync(
@@ -1265,14 +1281,34 @@ internal static partial class CoreBridge
             string targetLang,
             string? requestId);
 
-        [LibraryImport(LibraryName, EntryPoint = "popglot_text_task_v1", StringMarshalling = StringMarshalling.Utf8)]
-        internal static partial nint TextTaskV1(
-            string apiKey, string source, string sourceLang, string targetLang, string task, string requestId);
+        [LibraryImport(LibraryName, EntryPoint = "popglot_text_task_stream_v1", StringMarshalling = StringMarshalling.Utf8)]
+        internal static unsafe partial nint TextTaskStreamV1(
+            string apiKey,
+            string source,
+            string sourceLang,
+            string targetLang,
+            string task,
+            string requestId,
+            string? preference,
+            string? templateId,
+            ulong templateRevision,
+            delegate* unmanaged[Cdecl]<nint, int, nint, nuint, int> callback,
+            nint userData);
 
-        [LibraryImport(LibraryName, EntryPoint = "popglot_text_task_draft_v1", StringMarshalling = StringMarshalling.Utf8)]
-        internal static partial nint TextTaskDraftV1(
-            string settingsJson, string apiKey, string source, string sourceLang,
-            string targetLang, string task, string requestId);
+        [LibraryImport(LibraryName, EntryPoint = "popglot_text_task_draft_stream_v1", StringMarshalling = StringMarshalling.Utf8)]
+        internal static unsafe partial nint TextTaskDraftStreamV1(
+            string settingsJson,
+            string apiKey,
+            string source,
+            string sourceLang,
+            string targetLang,
+            string task,
+            string requestId,
+            string? preference,
+            string? templateId,
+            ulong templateRevision,
+            delegate* unmanaged[Cdecl]<nint, int, nint, nuint, int> callback,
+            nint userData);
 
         [LibraryImport(LibraryName, EntryPoint = "popglot_translate_text_v3", StringMarshalling = StringMarshalling.Utf8)]
         internal static partial nint TranslateTextV3(

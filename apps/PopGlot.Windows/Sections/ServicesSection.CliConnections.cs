@@ -24,6 +24,7 @@ public partial class ServicesSection
     private DateTime? _cliTestedAt;
     private bool _cliReady;
     private bool _cliCommitInProgress;
+    private bool _selectingCliTool;
     internal Func<string, CancellationToken, IReadOnlyList<DiscoveredCliTool>> DiscoverCliTools { get; set; } =
         (toolId, ct) => CliDiscovery.Discover(toolId, cancellationToken: ct);
 
@@ -38,8 +39,8 @@ public partial class ServicesSection
     private void OpenCliProfile(ProviderProfile profile)
     {
         if (_cliCommitInProgress || _saveInProgress) return;
-        OpenCliConnections_Click(this, new RoutedEventArgs());
-        CancelCliOperation();
+        ShowConnectionEditor(direct: false, adding: false);
+        _editingProfileId = profile.Id;
         var rows = (CliToolsListBox.ItemsSource as IEnumerable<CliToolRow>)?.ToList() ?? [];
         var toolId = profile.ResolvedExecutionKind == EngineExecutionKind.CodexAppServer ? CliDiscovery.CodexToolId : CliDiscovery.OmpToolId;
         var selected = rows.FirstOrDefault(r => r.ToolId == toolId &&
@@ -49,10 +50,17 @@ public partial class ServicesSection
             selected = new CliToolRow { ToolId = toolId, ToolName = toolId == CliDiscovery.CodexToolId ? "Codex CLI" : "oh-my-pi",
                 EntryPath = profile.CliConnection?.ExecutablePath ?? "", StateBadge = "已保存入口", StateDetail = "点击连接以检查当前状态" };
             rows.Add(selected);
-            CliToolsListBox.ItemsSource = rows;
         }
-        CliToolsListBox.SelectedItem = selected;
+        _selectingCliTool = true;
+        try
+        {
+            CliToolsListBox.ItemsSource = rows;
+            CliToolsListBox.SelectedItem = selected;
+        }
+        finally { _selectingCliTool = false; }
+        SetCliSourceIdentity(selected);
         RestoreCliProfile(profile);
+        ClearEditorDirty();
     }
 
     private void RestoreCliProfile(ProviderProfile profile)
@@ -68,30 +76,36 @@ public partial class ServicesSection
         UpdateCliButtons();
     }
 
-    private void OpenCliConnections_Click(object sender, RoutedEventArgs e)
+    private void ShowConnectionEditor(bool direct, bool adding)
     {
-        if (_cliCommitInProgress || _saveInProgress) return;
-        CancelCliOperation();
-        AddEngineHeaderButton.Visibility = Visibility.Collapsed;
-        ConnectLocalToolHeaderButton.Visibility = Visibility.Collapsed;
-        BackToListHeaderButton.Visibility = Visibility.Visible;
-        EditorEmpty.Visibility = Visibility.Collapsed;
-        EditorForm.Visibility = Visibility.Collapsed;
+        _catalogOperation?.Cancel();
+        ShowEditorForm(addMode: false);
+        _isAdding = adding;
+        PresetsPanel.Visibility = ConfigFormPanel.Visibility = EditorActionBar.Visibility = Visibility.Collapsed;
         CliConnectionsPanel.Visibility = Visibility.Visible;
-        if (CliToolsListBox.Items.Count == 0) DetectCliTools_Click(sender, e);
-        ReloadChatGptAccounts();
-        EditorOpenStateChanged?.Invoke();
+        CliToolConnectionPanel.Visibility = direct ? Visibility.Collapsed : Visibility.Visible;
+        ChatGptConnectionPanel.Visibility = direct ? Visibility.Visible : Visibility.Collapsed;
+        ChooseAnotherProviderButton.Visibility = adding ? Visibility.Visible : Visibility.Collapsed;
+        HideDraftGuard();
+        EditorScroll.ScrollToTop();
+        UpdateCliButtons();
+    }
+
+    private void SetCliSourceIdentity(CliToolRow row)
+    {
+        ConnectionSourceTitle.Text = row.ToolId == CliDiscovery.CodexToolId ? "Codex" : "OMP";
+        ConnectionSourceDetail.Text = "使用工具管理的账号与额度。连接后选择模型。";
+        ConnectionSourceDetail.ToolTip = "内容发送到工具配置的提供方。PopGlot 不导入工具的 OAuth token，不继承工程历史、rules 或 tools；请求可用性需显式测试确认。";
+        CliSelectedPathText.Text = row.EntryPath;
+        CliSelectedPathText.ToolTip = row.EntryPath;
     }
 
     private async void DetectCliTools_Click(object sender, RoutedEventArgs e)
     {
         if (_cliOperation is not null) return;
-        var selected = CliToolsListBox.SelectedItem as CliToolRow;
-        var saved = _cliProfileId is { } id ? ProfileManager.Load().Profiles.FirstOrDefault(p => p.Id == id) : null;
+        if (PresetsPanel.Visibility != Visibility.Visible) return;
         using var operation = new CancellationTokenSource();
         _cliOperation = _cliScanOperation = operation;
-        _cliReady = false; _cliTestedModel = null; _cliTestedAt = null;
-        OmpLoginProviderCombo.ItemsSource = null;
         CliDetectStatusText.Text = "正在检测本机工具入口…";
         UpdateCliButtons();
         try
@@ -116,12 +130,14 @@ public partial class ServicesSection
                 return found;
             }, operation.Token);
             if (!ReferenceEquals(_cliOperation, operation)) return;
-            _cliOperation = null;
-            CliToolsListBox.ItemsSource = rows;
-            CliToolsListBox.SelectedItem = rows.FirstOrDefault(r => r.ToolId == selected?.ToolId &&
-                string.Equals(r.EntryPath, selected.EntryPath, StringComparison.OrdinalIgnoreCase)) ?? rows.FirstOrDefault();
-            if (saved is not null) RestoreCliProfile(saved);
-            CliDetectStatusText.Text = rows.Count > 0 ? $"{rows.Count} 个工具入口；账号和可用性需点击连接检查。" : "未发现工具。安装 Codex CLI 或 oh-my-pi 后重新检测。";
+            _selectingCliTool = true;
+            try
+            {
+                CliToolsListBox.ItemsSource = rows;
+                CliToolsListBox.SelectedItem = null;
+            }
+            finally { _selectingCliTool = false; }
+            CliDetectStatusText.Text = rows.Count > 0 ? $"发现 {rows.Count} 个入口。选择工具继续。" : "未发现工具。安装 Codex 或 OMP 后重新检测。";
         }
         catch (OperationCanceledException) { }
         catch (Exception) { if (ReferenceEquals(_cliOperation, operation)) CliDetectStatusText.Text = "检测失败。请检查工具安装位置后重试。"; }
@@ -135,16 +151,14 @@ public partial class ServicesSection
 
     private void CliToolsListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (CliConnectButton is null) return;
+        if (_selectingCliTool || CliConnectButton is null || CliToolsListBox.SelectedItem is not CliToolRow row) return;
         CancelCliOperation();
         ResetCliConnection();
-        var row = CliToolsListBox.SelectedItem as CliToolRow;
-        var saved = ProfileManager.Load().Profiles.FirstOrDefault(p => p.ExecutionFacts.IsCliExecution &&
-            p.ResolvedExecutionKind == (row?.ToolId == CliDiscovery.CodexToolId ? EngineExecutionKind.CodexAppServer : EngineExecutionKind.OmpRpc) &&
-            string.Equals(p.CliConnection?.ExecutablePath, row?.EntryPath, StringComparison.OrdinalIgnoreCase));
-        if (saved is not null) RestoreCliProfile(saved);
-        else CliConnectionStatus.Text = "点击连接检查账号，再选择模型。";
-        UpdateCliButtons();
+        _editingProfileId = null;
+        ShowConnectionEditor(direct: false, adding: true);
+        SetCliSourceIdentity(row);
+        CliConnectionStatus.Text = "尚未检查账号。点击「连接 / 刷新账号」继续。";
+        ClearEditorDirty();
     }
 
     private async void CliConnect_Click(object sender, RoutedEventArgs e)
@@ -155,8 +169,7 @@ public partial class ServicesSection
         var selectedModel = CliModelCombo.SelectedItem as CliModel;
         var operation = new CancellationTokenSource(TimeSpan.FromSeconds(40));
         _cliOperation = operation;
-        _cliReady = false; _cliConnection = null; _cliTestedModel = null; _cliTestedAt = null; CliModelCombo.ItemsSource = null;
-        OmpLoginProviderCombo.ItemsSource = null;
+        _cliTestedModel = null; _cliTestedAt = null;
         var kind = row.ToolId == CliDiscovery.CodexToolId ? EngineExecutionKind.CodexAppServer : EngineExecutionKind.OmpRpc;
         _cliKind = kind;
         var connection = new CliConnectionSettings { Enabled = true, ExecutablePath = row.EntryPath };
@@ -204,6 +217,7 @@ public partial class ServicesSection
         if (_cliConnection is { } connection && CliModelCombo.SelectedItem is CliModel model)
         { connection.ModelId = model.Id; connection.UpstreamProviderId = model.Provider; }
         UpdateCliButtons();
+        MarkEditorDirty();
     }
 
     private ProviderProfile CaptureCliProfile()
@@ -247,9 +261,12 @@ public partial class ServicesSection
         { if (ReferenceEquals(_cliOperation, operation)) { _cliOperation = null; UpdateCliButtons(); } operation.Dispose(); }
     }
 
-    private async void CliSave_Click(object sender, RoutedEventArgs e)
+    private async void CliSave_Click(object sender, RoutedEventArgs e) =>
+        await SaveCliConnectionAsync(ReferenceEquals(sender, CliSaveUseButton));
+
+    private async Task<bool> SaveCliConnectionAsync(bool use)
     {
-        if (_cliOperation is not null) return;
+        if (_cliOperation is not null) return false;
         using var operation = new CancellationTokenSource();
         _cliCommitInProgress = true;
         _cliOperation = operation; UpdateCliButtons();
@@ -261,22 +278,25 @@ public partial class ServicesSection
                 profile.LastTestOutcome = "ok"; profile.LastTestedAtUtc = _cliTestedAt;
                 profile.LastTestFingerprint = ProfileVerification.EvidenceFingerprint(profile, false);
             }
-            var use = ReferenceEquals(sender, CliSaveUseButton);
             var editingId = _cliProfileId;
             CliSaveButton.IsEnabled = CliSaveUseButton.IsEnabled = false;
             await Task.Run(() => ProfileManager.SaveCliProfile(profile, editingId, use));
             RefreshProfilesList();
             ProfileChanged?.Invoke();
-            if (!ReferenceEquals(_cliOperation, operation)) return;
+            if (!ReferenceEquals(_cliOperation, operation)) return false;
             _cliProfileId = profile.Id;
             EditorEmpty.Visibility = Visibility.Collapsed;
             CliConnectionStatus.Text = use ? "已保存并切换为文字引擎。现在可以翻译。" : "连接已保存。可在引擎列表中切换使用。";
+            _editingProfileId = profile.Id;
+            ClearEditorDirty();
+            return true;
         }
         catch (Exception ex)
         {
             if (ex is ProfileActivationException activation)
             { _cliProfileId = activation.ProfileId; RefreshProfilesList(); EditorEmpty.Visibility = Visibility.Collapsed; ProfileChanged?.Invoke(); }
             if (ReferenceEquals(_cliOperation, operation)) CliConnectionStatus.Text = CliFailureText(ex);
+            return false;
         }
         finally { _cliCommitInProgress = false; if (ReferenceEquals(_cliOperation, operation)) _cliOperation = null; UpdateCliButtons(); }
     }
@@ -298,6 +318,7 @@ public partial class ServicesSection
             RefreshProfilesList(); EditorEmpty.Visibility = Visibility.Collapsed; ProfileChanged?.Invoke();
             if (!ReferenceEquals(_cliOperation, operation)) return;
             CliConnectionStatus.Text = "已断开 PopGlot 的连接。工具自己的登录保留。";
+            ClearEditorDirty();
         }
         catch (Exception ex) { if (ReferenceEquals(_cliOperation, operation)) CliConnectionStatus.Text = CliFailureText(ex); }
         finally { _cliCommitInProgress = false; if (ReferenceEquals(_cliOperation, operation)) { _cliOperation = null; UpdateCliButtons(); } }
@@ -317,6 +338,7 @@ public partial class ServicesSection
         if (operation is not null && ReferenceEquals(_cliScanOperation, operation))
         { _cliScanOperation = null; CliDetectStatusText.Text = "检测已取消，可重新检测。"; }
         operation?.Cancel(); _ompCallback?.TrySetCanceled(); HideOmpCallback();
+        UpdateCliButtons();
     }
     private string ModelIdentity() => $"{_cliConnection?.ExecutablePath}|{_cliConnection?.ExpectedVersion}|{_cliConnection?.UpstreamProviderId}|{_cliConnection?.ModelId}";
     private void UpdateCliButtons()
@@ -325,10 +347,14 @@ public partial class ServicesSection
         var ready = _cliReady && _cliConnection is not null && CliModelCombo.SelectedItem is CliModel;
         CliConnectButton.IsEnabled = !busy && CliToolsListBox.SelectedItem is CliToolRow;
         DetectCliToolsButton.IsEnabled = CliToolsListBox.IsEnabled = CliModelCombo.IsEnabled = !busy;
+        CancelCliDetectButton.Visibility = ReferenceEquals(_cliScanOperation, _cliOperation) && busy ? Visibility.Visible : Visibility.Collapsed;
         CliTestButton.IsEnabled = CliSaveButton.IsEnabled = CliSaveUseButton.IsEnabled = ready && !busy;
         CliDisconnectButton.IsEnabled = !busy && (_cliConnection is not null || _cliProfileId is not null);
         CliCancelButton.Visibility = busy && !_cliCommitInProgress ? Visibility.Visible : Visibility.Collapsed;
         BackToListHeaderButton.IsEnabled = !_cliCommitInProgress && !_saveInProgress;
+        ChooseAnotherProviderButton.IsEnabled = !_cliCommitInProgress && !_saveInProgress;
+        DraftSaveButton.IsEnabled = !busy && !_saveInProgress;
+        DraftDiscardButton.IsEnabled = !_cliCommitInProgress && !_saveInProgress;
         UpdateOmpLoginButtons(busy);
         UpdateChatGptButtons();
     }

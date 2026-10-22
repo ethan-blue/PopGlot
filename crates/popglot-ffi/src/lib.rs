@@ -548,18 +548,27 @@ pub unsafe extern "C" fn popglot_translate_text_v3(
     })
 }
 
-/// Runs a summary or quick-explanation task through the active text provider.
+/// Streams a summary or quick-explanation task through the active text
+/// provider with a stack-scoped v1 delta callback. The final envelope is
+/// returned exactly once.
 ///
 /// # Safety
-/// All pointers must be valid NUL-terminated UTF-8 strings; language pointers may be null.
+/// All non-null string pointers must reference valid null-terminated UTF-8 for
+/// the duration of this call. If supplied, `callback` must be valid and must
+/// not retain the borrowed payload pointer or unwind across the FFI boundary.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn popglot_text_task_v1(
+pub unsafe extern "C" fn popglot_text_task_stream_v1(
     api_key: *const c_char,
     source: *const c_char,
     source_lang: *const c_char,
     target_lang: *const c_char,
     task: *const c_char,
     request_id: *const c_char,
+    preference: *const c_char,
+    template_id: *const c_char,
+    template_revision: u64,
+    callback: Option<PopglotStreamCallbackV1>,
+    user_data: *mut c_void,
 ) -> *mut c_char {
     ffi_guard(|| {
         let api_key = unsafe { read_utf8(api_key) }?;
@@ -569,6 +578,8 @@ pub unsafe extern "C" fn popglot_text_task_v1(
         let task = popglot_core::provider::TextTask::parse(unsafe { read_utf8(task) }?)
             .map_err(|error| error.to_string())?;
         let custom_id = unsafe { read_optional_utf8(request_id) }?;
+        let preference = unsafe { read_optional_utf8(preference) }?;
+        let template_id = unsafe { read_optional_utf8(template_id) }?;
         let (settings, client) = {
             let core = core_read()?;
             (core.settings().clone(), core.provider_client().clone())
@@ -577,7 +588,7 @@ pub unsafe extern "C" fn popglot_text_task_v1(
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
         let response = runtime
-            .block_on(AppCore::execute_text_task_snapshot(
+            .block_on(AppCore::execute_text_task_stream_snapshot(
                 &settings,
                 &client,
                 api_key,
@@ -585,19 +596,25 @@ pub unsafe extern "C" fn popglot_text_task_v1(
                 &languages,
                 &ticket.id,
                 task,
+                preference,
+                template_id,
+                preference.map(|_| template_revision),
                 &ticket.token,
+                |delta| emit_text_delta(callback, user_data, delta, &ticket.token),
             ))
             .map_err(|error| error.to_string());
         Ok(response.map_or_else(failure, success))
     })
 }
 
-/// Runs a text task through a complete, non-persisted provider snapshot.
+/// Streams a text task through a complete, non-persisted provider snapshot.
 ///
 /// # Safety
-/// All pointers must be valid NUL-terminated UTF-8 strings; language pointers may be null.
+/// All non-null string pointers must reference valid null-terminated UTF-8 for
+/// the duration of this call. If supplied, `callback` must be valid and must
+/// not retain the borrowed payload pointer or unwind across the FFI boundary.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn popglot_text_task_draft_v1(
+pub unsafe extern "C" fn popglot_text_task_draft_stream_v1(
     settings_json: *const c_char,
     api_key: *const c_char,
     source: *const c_char,
@@ -605,6 +622,11 @@ pub unsafe extern "C" fn popglot_text_task_draft_v1(
     target_lang: *const c_char,
     task: *const c_char,
     request_id: *const c_char,
+    preference: *const c_char,
+    template_id: *const c_char,
+    template_revision: u64,
+    callback: Option<PopglotStreamCallbackV1>,
+    user_data: *mut c_void,
 ) -> *mut c_char {
     ffi_guard(|| {
         let settings_json = unsafe { read_utf8(settings_json) }?;
@@ -615,6 +637,8 @@ pub unsafe extern "C" fn popglot_text_task_draft_v1(
         let task = popglot_core::provider::TextTask::parse(unsafe { read_utf8(task) }?)
             .map_err(|error| error.to_string())?;
         let custom_id = unsafe { read_optional_utf8(request_id) }?;
+        let preference = unsafe { read_optional_utf8(preference) }?;
+        let template_id = unsafe { read_optional_utf8(template_id) }?;
         let settings = serde_json::from_str::<ProviderSettings>(settings_json)
             .map_err(|error| format!("文字任务设置无效：{error}"))?;
         let client = pooled_client_for(&settings)?;
@@ -622,7 +646,7 @@ pub unsafe extern "C" fn popglot_text_task_draft_v1(
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
         let response = runtime
-            .block_on(AppCore::execute_text_task_snapshot(
+            .block_on(AppCore::execute_text_task_stream_snapshot(
                 &settings,
                 &client,
                 api_key,
@@ -630,7 +654,11 @@ pub unsafe extern "C" fn popglot_text_task_draft_v1(
                 &languages,
                 &ticket.id,
                 task,
+                preference,
+                template_id,
+                preference.map(|_| template_revision),
                 &ticket.token,
+                |delta| emit_text_delta(callback, user_data, delta, &ticket.token),
             ))
             .map_err(|error| error.to_string());
         Ok(response.map_or_else(failure, success))

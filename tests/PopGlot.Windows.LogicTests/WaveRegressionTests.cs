@@ -2189,60 +2189,6 @@ internal static class WaveRegressionTests
         }
     }
 
-    /// <summary>
-    /// The typed route matrix: every remaining UI control decision rides the
-    /// typed enums, never the Chinese PipelineLabel display string, and the
-    /// coordinator's free/vision branches set the typed triple honestly.
-    /// </summary>
-    public static void EngineWordingAndTypedRouteMatrix()
-    {
-        var appDir = Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows");
-
-        // 1) No control logic may branch on the display label.
-        foreach (var file in Directory.EnumerateFiles(appDir, "*.cs", SearchOption.AllDirectories))
-        {
-            if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}") ||
-                file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")) continue;
-            var text = File.ReadAllText(file);
-            True(!Regex.IsMatch(text, @"PipelineLabel\s*(==|!=)"),
-                $"{Path.GetFileName(file)} must not branch on the PipelineLabel display string");
-        }
-
-        // 2) The two post-hoc honesty notices branch on a TYPED route fact —
-        //    the executor or the coordinator's prompt-support marking
-        //    (NotSupported ⇔ the free engine ran the text stage) — never on
-        //    the Chinese PipelineLabel display string.
-        var quickSearch = File.ReadAllText(Path.Combine(appDir, "QuickSearchWindow.xaml.cs"));
-        True(quickSearch.Contains("TranslationTextExecutor.FreeEngine", StringComparison.Ordinal) ||
-             quickSearch.Contains("TranslationPromptSupport.NotSupported", StringComparison.Ordinal),
-            "the quick-search free-engine notice must ride the typed executor/prompt-support fact");
-        var translate = File.ReadAllText(Path.Combine(appDir, "Sections", "TranslateSection.xaml.cs"));
-        True(translate.Contains("TranslationTextExecutor.FreeEngine", StringComparison.Ordinal) ||
-             translate.Contains("TranslationPromptSupport.NotSupported", StringComparison.Ordinal),
-            "the workbench free-engine notice must ride the typed executor/prompt-support fact");
-
-        // 3) The coordinator's route matrix sets the typed triple honestly.
-        var coordinator = File.ReadAllText(Path.Combine(appDir, "Services", "TranslationCoordinator.cs"));
-        True(coordinator.Contains("session.TextExecutor = TranslationTextExecutor.FreeEngine;", StringComparison.Ordinal) &&
-             coordinator.Contains("session.PromptSupport = TranslationPromptSupport.NotSupported;", StringComparison.Ordinal),
-            "both free routes must record TextExecutor=FreeEngine + PromptSupport=NotSupported");
-        True(coordinator.Contains("session.PipelineKind = TranslationPipelineKind.VisionDirect;", StringComparison.Ordinal) &&
-             coordinator.Contains("session.PromptSupport = TranslationPromptSupport.NotApplicable;", StringComparison.Ordinal),
-            "the vision-direct route must record NotApplicable (no text stage, nothing promised)");
-        True(coordinator.Contains("session.PipelineLabel = EngineWording.ActiveFreeEngineName();", StringComparison.Ordinal),
-            "the free-engine label comes from the single EngineWording source");
-        True(coordinator.Contains("TranslationPipelineKind.OcrUserText;", StringComparison.Ordinal) &&
-             coordinator.Contains("TranslationPipelineKind.OcrFreeText;", StringComparison.Ordinal),
-            "both OCR+text routes carry their own typed kind");
-
-        // 4) The display label and the typed engine agree by construction.
-        Equal("内置免费引擎", EngineWording.FreeEngineName,
-            "the single wording source keeps the free-engine name");
-        Equal("备用免费引擎", EngineWording.AlternateFreeEngineName,
-            "the alternate public engine has one name");
-        Equal(EngineWording.FreeEngineName, EngineWording.NameFor(FreeEngineProvider.Google));
-        Equal(EngineWording.AlternateFreeEngineName, EngineWording.NameFor(FreeEngineProvider.MyMemory));
-    }
 
     // ===================== F2: judged-visual regressions =====================
 

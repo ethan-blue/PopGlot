@@ -301,16 +301,17 @@ internal static class CliSubprocessTests
             return [];
         };
         // Discovery may inspect entries, but must neither block the dispatcher nor launch a tool.
-        section.ConnectLocalToolHeaderButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-        True(section.CliConnectionsPanel.Visibility == Visibility.Visible,
-            "the connection panel opens from the header entry");
+        section.AddEngineHeaderButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        True(section.PresetsPanel.Visibility == Visibility.Visible,
+            "adding begins in the unified source catalog");
+        section.DetectCliToolsButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         True(!section.CliTestButton.IsEnabled && !section.CliSaveUseButton.IsEnabled,
             "detection does not claim a connection or enable requests");
         True(enteredScan.Wait(TimeSpan.FromSeconds(5)) && scanThread != uiThread,
             "discovery runs on a background thread");
-        True(!section.DetectCliToolsButton.IsEnabled && section.CliCancelButton.Visibility == Visibility.Visible,
+        True(!section.DetectCliToolsButton.IsEnabled && section.CancelCliDetectButton.Visibility == Visibility.Visible,
             "discovery exposes a cancellable busy state");
-        section.CliCancelButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        section.CancelCliDetectButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         True(section.DetectCliToolsButton.IsEnabled && !section.CliTestButton.IsEnabled,
             "cancelling discovery releases UI without claiming a connection");
         releaseScan.Set();
@@ -318,8 +319,8 @@ internal static class CliSubprocessTests
         section.BackToListHeaderButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         True(section.CliConnectionsPanel.Visibility == Visibility.Collapsed,
             "back from the panel restores the engine list");
-        True(section.ConnectLocalToolHeaderButton.Visibility == Visibility.Visible,
-            "the connection entry is reachable again");
+        True(section.AddEngineHeaderButton.Visibility == Visibility.Visible,
+            "the unified add entry is reachable again");
     }
 
     private static long? ReadId(string line)

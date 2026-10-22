@@ -180,11 +180,11 @@
                             </Border>
                             <TextBlock x:Name="EngineSummary" Margin="6,0,4,0"
                                        Style="{StaticResource Metadata}"
-                                       VerticalAlignment="Center" MaxWidth="158"
+                                       VerticalAlignment="Center" MaxWidth="112"
                                        TextTrimming="CharacterEllipsis"
                                        ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                        Foreground="{DynamicResource TextSecondaryBrush}"
-                                       Text="{x:Static services:EngineWording.FreeEngineName}" />
+                                       Text="选择模型" />
                             <Path Width="8" Height="5" Stretch="Uniform" VerticalAlignment="Center"
                                   Fill="{DynamicResource TextTertiaryBrush}" Data="{StaticResource IconChevronDown}" />
                         </StackPanel>

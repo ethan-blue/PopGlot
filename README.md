@@ -1,7 +1,7 @@
 # PopGlot
 
 [![Windows](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D4)](https://github.com/ethan-blue/PopGlot/releases)
-[![Version](https://img.shields.io/badge/version-0.1.23-5B67B5)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.1.24-5B67B5)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-3D8B6E)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/ethan-blue/PopGlot/ci.yml?branch=main&label=CI)](https://github.com/ethan-blue/PopGlot/actions)
 
@@ -85,13 +85,9 @@ Run `PopGlot.exe`. It stays in the tray. Allow the free engine under Settings �
 
 ## 下载
 
-**0.1.23** 精简界面说明，修复本机工具与引擎配置脱节、设置覆盖、取消后的残留状态和启动数据加载。发布状态与附件以 [Releases](https://github.com/ethan-blue/PopGlot/releases) 为准。
+**0.1.24** 统一「添加引擎」来源入口（API、本机 Codex/OMP、ChatGPT 直连），极速查词可直接切换路由；「要点」改为真实流式显示，修复总结耗时、未完成片段误当成功和长文本重叠。发布状态与附件以 [Releases](https://github.com/ethan-blue/PopGlot/releases) 为准。
 
-想录制功能讲解并发布视频，见 [90 秒录屏脚本与隐私检查清单](docs/VIDEO_DEMO.md)。
-
-需要 Windows 10（19041 及以上）或 Windows 11，64 位。
-
-[下载 PopGlot 0.1.23](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.23/PopGlot-v0.1.23-win-x64.zip)
+[下载 PopGlot 0.1.24](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.24/PopGlot-v0.1.24-win-x64.zip)
 
 每一版的发布页都用同一个样子：标题是 `PopGlot 版本号`，页上直接写这一版改了什么，并附上 zip 和 `.sha256`。不用再点进另一份说明。
 
@@ -103,8 +99,8 @@ Run `PopGlot.exe`. It stays in the tray. Allow the free engine under Settings �
 文件名始终是 `PopGlot-v版本号-win-x64.zip`。校验：
 
 ```powershell
-(Get-FileHash -Path .\PopGlot-v0.1.23-win-x64.zip -Algorithm SHA256).Hash.ToLower()
-Get-Content .\PopGlot-v0.1.23-win-x64.zip.sha256
+(Get-FileHash -Path .\PopGlot-v0.1.24-win-x64.zip -Algorithm SHA256).Hash.ToLower()
+Get-Content .\PopGlot-v0.1.24-win-x64.zip.sha256
 ```
 
 全部发布页在 [Releases](https://github.com/ethan-blue/PopGlot/releases)。

@@ -1000,6 +1000,7 @@ public partial class App : Application
         {
             OpenSettings = () => ShowSettings(),
             OpenAddEngineFlow = () => ShowSettings(startAddEngineFlow: true),
+            RouteChanged = () => _activeQuickSearch?.RefreshRouteSelection(),
             NotifyTray = (title, message) => Notify(title, message, Forms.ToolTipIcon.Info),
             RequestExit = () => ExitApplication(),
         };
@@ -1030,10 +1031,15 @@ public partial class App : Application
             SetHotkeysSuspended = suspended => _hotkeys?.SetSuspended(suspended),
         };
         window.LocalDataCleared += () => _mainWindow?.ReloadHistory();
-        window.ProfileChanged += () => _mainWindow?.RefreshEngineStatus();
+        window.ProfileChanged += () =>
+        {
+            _mainWindow?.RefreshEngineStatus();
+            _activeQuickSearch?.RefreshRouteSelection();
+        };
         window.Closed += (_, _) =>
         {
             _mainWindow?.RefreshEngineStatus();
+            _activeQuickSearch?.RefreshRouteSelection();
             if (ReferenceEquals(_settingsWindow, window))
             {
                 _settingsWindow = null;
@@ -1466,7 +1472,10 @@ public partial class App : Application
             // (panel/overlay teardown, owner, first-show convergence); without
             // it QuickSearch falls back to a bare SettingsWindow.
             trace?.Mark(TracePoint.WindowConstructionStarted);
-            _activeQuickSearch = new QuickSearchWindow(_history.Value, _vocabulary.Value, () => ShowSettings());
+            _activeQuickSearch = new QuickSearchWindow(_history.Value, _vocabulary.Value, () => ShowSettings())
+            {
+                RouteChanged = () => _mainWindow?.RefreshEngineStatus(),
+            };
             trace?.Mark(TracePoint.WindowConstructionEnded);
             _activeQuickSearch.Closed += (_, _) => _activeQuickSearch = null;
             trace?.Mark(TracePoint.ShowRequested);

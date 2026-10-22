@@ -103,15 +103,28 @@ internal interface ITranslationExecutor
         FreeEngineAuthorization authorization,
         CancellationToken cancellationToken);
 
-    Task<TranslationResponse> RunTextTaskAsync(
+    /// <summary>
+    /// Streams a typed reading task with a frozen route and style anchor.
+    /// Implementations produce real visible body chunks plus one terminal
+    /// response; tests may inject a controlled stream at this boundary.
+    /// </summary>
+    TranslationStreamSession StreamTextTask(
         string? apiKey,
         string source,
         string sourceLang,
         string targetLang,
         TextTaskKind task,
+        string sessionId,
+        long epoch,
         CancellationToken cancellationToken,
-        ProviderSettings? routeSettings = null) =>
-        CoreBridge.RunTextTaskAsync(apiKey, source, sourceLang, targetLang, task, cancellationToken, routeSettings);
+        ProviderSettings? routeSettings = null,
+        PromptAnchorSnapshot? preferenceAnchor = null)
+    {
+        var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+        return CoreBridge.RunTextTaskStream(
+            apiKey, source, sourceLang, targetLang, task, sessionId, sessionId, epoch, buffer,
+            cancellationToken, routeSettings, preferenceAnchor);
+    }
 }
 
 internal sealed class DefaultTranslationExecutor : ITranslationExecutor
@@ -788,12 +801,17 @@ internal sealed class TranslationCoordinator
         TextTaskKind taskKind,
         long generation)
     {
+        var configVersion = ProfileManager.Revision;
         var settings = _executor.GetSettings();
         var routes = _executor.ResolveRoutes();
         var textRoute = routes.Text;
         var engineId = textRoute?.Profile.Id ?? (settings.TargetsLocalRuntime ? "local" : "none");
-        var model = textRoute?.Profile.TextModel ?? settings.TextModel;
-        var configVersion = ProfileManager.Revision;
+        var model = GetSummaryModel(textRoute?.Profile, settings);
+        var prompt = BuildPromptSessionSnapshot(sourceLang, targetLang);
+        if (configVersion != ProfileManager.Revision)
+        {
+            throw new OperationCanceledException("引擎已切换，请重新打开要点。");
+        }
         var identity = new SummaryRequestIdentity(
             source,
             sourceLang,
@@ -801,9 +819,21 @@ internal sealed class TranslationCoordinator
             taskKind,
             engineId,
             model,
-            configVersion);
-        return new SummaryRequestSnapshot(identity, generation);
+            configVersion,
+            prompt?.Id,
+            prompt?.Revision);
+        return new SummaryRequestSnapshot(identity, generation, prompt?.Anchor);
     }
+
+    private static string GetSummaryModel(ProviderProfile? profile, ProviderSettings settings) =>
+        profile?.ResolvedExecutionKind switch
+        {
+            AiConnections.EngineExecutionKind.CodexAppServer or AiConnections.EngineExecutionKind.OmpRpc =>
+                profile.CliConnection?.ModelId ?? string.Empty,
+            AiConnections.EngineExecutionKind.ChatGptDirect =>
+                profile.DirectConnection?.ModelId ?? string.Empty,
+            _ => profile?.TextModel ?? settings.TextModel,
+        };
 
     internal SummaryCapability EvaluateSummaryCapability()
     {
@@ -831,12 +861,16 @@ internal sealed class TranslationCoordinator
 
     public async Task<TranslationResponse> RunSummaryTaskAsync(
         SummaryRequestSnapshot snapshot,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<string>? onDelta = null)
     {
         if (!RuntimeGate.NewWorkAllowed)
         {
             throw new InvalidOperationException(RuntimeGate.RefusalZh);
         }
+        cancellationToken.ThrowIfCancellationRequested();
+        using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cancellationToken = requestCancellation.Token;
         var settings = _executor.GetSettings();
         var routes = _executor.ResolveRoutes();
         var textRoute = routes.Text is { } selected
@@ -845,7 +879,9 @@ internal sealed class TranslationCoordinator
         // The identity and cache key were captured before this method was
         // scheduled. If the user switched engines meanwhile, do not send the
         // old task through the new route or label/cache it under the old one.
-        if (snapshot.Identity.ConfigVersion != ProfileManager.Revision)
+        if (snapshot.Identity.ConfigVersion != ProfileManager.Revision ||
+            !string.Equals(snapshot.Identity.EngineProfileId, textRoute?.Profile.Id ?? (settings.TargetsLocalRuntime ? "local" : "none"), StringComparison.Ordinal) ||
+            !string.Equals(snapshot.Identity.ModelName, GetSummaryModel(textRoute?.Profile, settings), StringComparison.Ordinal))
         {
             throw new OperationCanceledException("引擎已切换，请重新打开要点。", cancellationToken);
         }
@@ -858,23 +894,95 @@ internal sealed class TranslationCoordinator
         }
         if (textRoute?.Profile.ExecutionFacts.IsManagedExecution == true)
         {
+            // One CLI job; the deltas it already produces are surfaced instead
+            // of being discarded until the terminal envelope.
             var stream = AiConnections.CliTranslationExecutor.Stream(textRoute.Profile, snapshot.Identity.Source,
-                snapshot.Identity.SourceLanguage, snapshot.Identity.TargetLanguage, null, cancellationToken,
+                snapshot.Identity.SourceLanguage, snapshot.Identity.TargetLanguage, snapshot.PreferenceAnchor, cancellationToken,
                 task: snapshot.Identity.TaskKind.ToString().ToLowerInvariant());
-            return await stream.Completion;
+            return await PumpSummaryDeltasAsync(stream, onDelta, requestCancellation, snapshot.Identity.ConfigVersion);
         }
-        var response = await _executor.RunTextTaskAsync(
+        var engineLabel = !string.IsNullOrWhiteSpace(textRoute?.Profile.Name)
+            ? textRoute.Profile.Name
+            : (isLocal ? EngineWording.LocalModelName : DescribeProvider(routeSettings?.ProviderType ?? settings.ProviderType));
+        // One request: terminal data comes from the same streaming session.
+        var sessionId = $"summary-{Guid.NewGuid():N}";
+        var streamedSession = _executor.StreamTextTask(
             apiKey,
             snapshot.Identity.Source,
             snapshot.Identity.SourceLanguage,
             snapshot.Identity.TargetLanguage,
             snapshot.Identity.TaskKind,
+            sessionId,
+            snapshot.Generation,
             cancellationToken,
-            routeSettings);
-        var engineLabel = !string.IsNullOrWhiteSpace(textRoute?.Profile.Name)
-            ? textRoute.Profile.Name
-            : (isLocal ? EngineWording.LocalModelName : DescribeProvider(routeSettings?.ProviderType ?? settings.ProviderType));
-        return response with { OverrideEngineLabel = engineLabel };
+            routeSettings,
+            snapshot.PreferenceAnchor);
+        var streamed = await PumpSummaryDeltasAsync(streamedSession, onDelta, requestCancellation, snapshot.Identity.ConfigVersion);
+        return streamed with { OverrideEngineLabel = engineLabel };
+    }
+
+    /// <summary>
+    /// Pumps one streaming summary session: every drained chunk is the real
+    /// model output accumulated so far. Cancellation stops the pump before
+    /// the next drain, so no delta is surfaced after the request was
+    /// cancelled; the terminal envelope still decides success/failure.
+    /// </summary>
+    private static async Task<TranslationResponse> PumpSummaryDeltasAsync(
+        TranslationStreamSession streamSession,
+        Action<string>? onDelta,
+        CancellationTokenSource requestCancellation,
+        int configVersion)
+    {
+        var buffer = streamSession.Buffer;
+        var completion = streamSession.Completion;
+        var cancellationToken = requestCancellation.Token;
+
+        try
+        {
+            while (!completion.IsCompleted)
+            {
+                if (configVersion != ProfileManager.Revision)
+                {
+                    requestCancellation.Cancel();
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                if (buffer.TryDrain(out var delta) && !string.IsNullOrEmpty(delta))
+                {
+                    onDelta?.Invoke(buffer.GetAccumulatedText());
+                }
+                var finished = await Task.WhenAny(completion, Task.Delay(40, cancellationToken));
+                if (finished == completion)
+                {
+                    break;
+                }
+            }
+
+            if (configVersion != ProfileManager.Revision)
+            {
+                requestCancellation.Cancel();
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (buffer.TryDrain(out var finalDelta) && !string.IsNullOrEmpty(finalDelta))
+            {
+                onDelta?.Invoke(buffer.GetAccumulatedText());
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            return await completion.WaitAsync(cancellationToken);
+        }
+        finally
+        {
+            // A failed UI callback must not leave its model request running.
+            // FFI owns its buffer handle until the native call has settled.
+            if (!completion.IsCompleted)
+            {
+                requestCancellation.Cancel();
+                _ = completion.ContinueWith(
+                    failed => { _ = failed.Exception; },
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+        }
     }
 
     public async Task<TranslationResponse> RunTextTaskAsync(

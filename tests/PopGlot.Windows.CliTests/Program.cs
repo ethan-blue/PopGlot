@@ -65,6 +65,7 @@ internal static partial class Program
             Check("immediate disconnect fences queued request", DisconnectQueued);
             Check("official OAuth/PKCE/callback/JWT/encrypted credentials", DirectTests.SignInAndValidation);
             Check("direct HTTP main route/model list/summary/quick switch", DirectTests.DirectRoutes);
+            Check("direct account and model snapshots cannot leak across registrations", DirectTests.AccountAndModelSnapshotIsolation);
             Check("direct late failure and EOF never become success", DirectTests.TerminalFailures);
             Check("direct offline and disconnect fence HTTP requests", DirectTests.OfflineAndDisconnect);
             Check("serialized refresh rotation and logout isolation", DirectTests.RefreshAndLogout);

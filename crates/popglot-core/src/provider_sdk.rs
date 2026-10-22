@@ -327,6 +327,44 @@ mod tests {
     }
 
     #[test]
+    fn summaries_size_short_outputs_without_reducing_long_summary_ceiling() {
+        for (source, expected) in [("short".to_owned(), 384), ("x".repeat(800), 700)] {
+            let request =
+                TranslationRequest::text(source, popglot_domain::LanguagePair::new("en", "zh-CN"))
+                    .with_task(crate::provider::TextTask::Summarize)
+                    .with_explanation(false);
+            assert_eq!(output_token_limit(&request), expected);
+            for (kind, pointer) in [
+                (ProviderType::OpenAiCompatible, "/max_tokens"),
+                (ProviderType::OpenAiResponses, "/max_output_tokens"),
+                (ProviderType::AnthropicMessages, "/max_tokens"),
+                (
+                    ProviderType::GeminiGenerateContent,
+                    "/generationConfig/maxOutputTokens",
+                ),
+            ] {
+                let settings = ProviderSettings {
+                    provider_type: kind,
+                    text_model: "opaque-gateway-model".to_owned(),
+                    text_endpoint: if kind == ProviderType::GeminiGenerateContent {
+                        "/v1beta/models/{model}:generateContent".to_owned()
+                    } else {
+                        "/custom".to_owned()
+                    },
+                    ..ProviderSettings::default()
+                };
+                let prepared = crate::provider::provider_for(kind)
+                    .prepare(&settings, &request)
+                    .expect("prepare");
+                assert_eq!(
+                    prepared.body.pointer(pointer).and_then(Value::as_u64),
+                    Some(u64::from(expected))
+                );
+            }
+        }
+    }
+
+    #[test]
     fn text_and_vision_requests_use_their_own_model_and_endpoint() {
         let settings = ProviderSettings {
             provider_type: ProviderType::OpenAiCompatible,

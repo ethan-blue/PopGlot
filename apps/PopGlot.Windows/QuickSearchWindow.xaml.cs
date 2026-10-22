@@ -25,6 +25,9 @@ public partial class QuickSearchWindow : Window
     private string? _sessionSourceLanguage;
     private string? _sessionTargetLanguage;
     private bool _richRenderFailed;
+    private System.Windows.Controls.ContextMenu? _routeMenu;
+    private bool _switchingRoute;
+    internal Action? RouteChanged { get; set; }
     // DPI transition fencing: OnDpiChanged only schedules ONE ApplicationIdle
     // reposition; until it ran, every generation bump has a pending settle and
     // the transition-driven SizeChanged/Height events must not re-position or
@@ -76,6 +79,7 @@ public partial class QuickSearchWindow : Window
     public new void Hide()
     {
         CancelRunningRequest();
+        if (_routeMenu is not null) _routeMenu.IsOpen = false;
         // 用户主动收起（Esc 阶梯/失焦）结束本次会话视图的生命周期：一次性
         // 通知（如划词预读取超时落地提示）与仅作解释的风格提示都不得跨
         // Hide 残留到下一次普通打开——准备期关闭后重显尤其不能带回过期的
@@ -92,6 +96,7 @@ public partial class QuickSearchWindow : Window
     {
         base.OnActivated(e);
         FocusSearchBox();
+        RefreshRouteSelection();
     }
 
     protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
@@ -165,8 +170,8 @@ public partial class QuickSearchWindow : Window
             CenterOnCurrentMonitor();
             FocusSearchBox();
             RefreshLangBadge();
+            RefreshRouteSelection();
             SyncUiWithState();
-            RefreshStyleSelector();
             UpdateEmptyStateVisuals();
             UpdateStatusDot();
         };
@@ -182,7 +187,7 @@ public partial class QuickSearchWindow : Window
                 // surface while this window was hidden — the badge must not
                 // go stale on a re-show.
                 RefreshLangBadge();
-                RefreshStyleSelector();
+                RefreshRouteSelection();
             }
             else
             {
@@ -401,7 +406,6 @@ public partial class QuickSearchWindow : Window
     internal TextBox StreamBox => ResultStreamBox;
     internal RichTextBox RichBox => ResultRichBox;
     internal TextBlock FooterStatusBlock => FooterStatus;
-    internal TextBlock FooterHintsBlock => FooterHints;
     internal TextBlock StreamIndicatorBlock => StreamIndicator;
     internal Button EnterKeycapButton => SearchEnterKeycap;
     internal TextBox SearchInputBox => SearchBox;
@@ -754,9 +758,10 @@ public partial class QuickSearchWindow : Window
 
         // 动态快捷键提示：只承诺当前阶段真正可用的操作（流式仅 Esc 取消、
         // 完成含复制/朗读/收藏、partial 只含复制）。
-        FooterHints.Text = _state.HintsText;
+        AutomationProperties.SetHelpText(SearchBox, _state.HintsText);
+        RouteSelectorButton.IsEnabled = !_switchingRoute && _state.Stage is not (QuickSearchUiStage.Streaming or QuickSearchUiStage.Finalizing);
 
-        if (_state.Stage == QuickSearchUiStage.Failed)
+        if (_state.Stage == QuickSearchUiStage.Failed || _state.PendingNotice is not null && _state.IsPendingNoticeError)
         {
             FooterStatus.SetResourceReference(TextBlock.ForegroundProperty, "DangerBrush");
         }
@@ -874,7 +879,102 @@ public partial class QuickSearchWindow : Window
             QuickSearchUiStage.Completed => "SuccessBrush",
             _ => "TextTertiaryBrush",
         };
+        if (_state.PendingNotice is not null && _state.IsPendingNoticeError) resourceKey = "DangerBrush";
         StatusDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, resourceKey);
+    }
+
+    internal void RefreshRouteSelection()
+    {
+        if (_isClosed || RouteSelectorButton is null) return;
+        try
+        {
+            var route = TextRouteMenu.ReadCurrent();
+            RouteSelectorLabel.Text = route.Label;
+            RouteSelectorButton.ToolTip = route.Detail + "\n下一次翻译生效，不自动重发当前结果。";
+        }
+        catch (Exception)
+        {
+            RouteSelectorLabel.Text = "配置不可用";
+            RouteSelectorButton.ToolTip = "无法读取引擎配置，请打开设置检查。";
+        }
+        RouteSelectorButton.IsEnabled = !_switchingRoute &&
+            _state.Stage is not (QuickSearchUiStage.Streaming or QuickSearchUiStage.Finalizing);
+        RefreshStyleSelector();
+    }
+
+    internal System.Windows.Controls.ContextMenu BuildTextRouteMenu() =>
+        TextRouteMenu.Create(id => _ = SwitchProfileRouteAsync(id), SwitchPublicRouteAsync, OpenSettings);
+
+    private void RouteSelector_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isClosed || !RouteSelectorButton.IsEnabled) return;
+        if (_routeMenu is { IsOpen: true })
+        {
+            _routeMenu.IsOpen = false;
+            return;
+        }
+        try
+        {
+            var menu = BuildTextRouteMenu();
+            _routeMenu = menu;
+            menu.Closed += (_, _) =>
+            {
+                if (ReferenceEquals(_routeMenu, menu)) _routeMenu = null;
+                _ = Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (!_isClosed && IsVisible && IsActive) SearchBox.Focus();
+                }));
+            };
+            TranslationStyleMenu.Show(RouteSelectorButton, menu);
+        }
+        catch (Exception)
+        {
+            _routeMenu = null;
+            _state.PostPendingNotice("无法读取路由，请检查设置。", error: true);
+            SyncUiWithState();
+        }
+    }
+
+    private Task SwitchProfileRouteAsync(string id) => ChangeTextRouteAsync(() =>
+    {
+        var ok = ProfileManager.TrySwitchActiveProfile(id, out var error);
+        return (ok, error);
+    });
+
+    private Task SwitchPublicRouteAsync(FreeEngineProvider provider) => ChangeTextRouteAsync(() =>
+    {
+        var ok = ProfileManager.TrySwitchToFreeEngine(provider, out var error);
+        return (ok, error);
+    });
+
+    private async Task ChangeTextRouteAsync(Func<(bool Ok, string Error)> change)
+    {
+        if (_isClosed || _switchingRoute ||
+            _state.Stage is QuickSearchUiStage.Streaming or QuickSearchUiStage.Finalizing) return;
+        _switchingRoute = true;
+        RouteSelectorButton.IsEnabled = false;
+        FooterStatus.Text = "切换中…";
+        try
+        {
+            var result = await Task.Run(change);
+            if (_isClosed) return;
+            _state.PostPendingNotice(result.Ok ? "下次生效" : result.Error, error: !result.Ok);
+            SyncUiWithState();
+        }
+        catch (Exception exception)
+        {
+            if (!_isClosed)
+            {
+                _state.PostPendingNotice($"切换失败：{exception.Message}", error: true);
+                SyncUiWithState();
+            }
+        }
+        finally
+        {
+            _switchingRoute = false;
+            RefreshRouteSelection();
+            RouteChanged?.Invoke();
+        }
     }
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e) => OpenSettings();
@@ -904,13 +1004,22 @@ public partial class QuickSearchWindow : Window
             var settings = CoreBridge.GetSettings();
             var source = _state.IsResultVisible ? _sessionSourceLanguage ?? settings.SourceLanguage : settings.SourceLanguage;
             var target = _state.IsResultVisible ? _sessionTargetLanguage ?? settings.TargetLanguage : settings.TargetLanguage;
-            LangBadge.Text = $"{LanguageCatalog.DisplayName(source)} → {LanguageCatalog.DisplayName(target)}";
+            LangBadge.Text = $"{ShortLanguage(source)} → {ShortLanguage(target)}";
+            LangBadge.ToolTip = $"{LanguageCatalog.DisplayName(source)} → {LanguageCatalog.DisplayName(target)}";
         }
         catch (Exception)
         {
             // Headless/offline contexts keep the last badge.
         }
     }
+
+    private static string ShortLanguage(string language) => LanguageCatalog.Normalize(language) switch
+    {
+        "auto" => "自动",
+        "zh-CN" => "简中",
+        "zh-TW" => "繁中",
+        var tag => LanguageCatalog.DisplayName(tag),
+    };
 
     // ================= Global translation-style selector =================
 
@@ -944,7 +1053,7 @@ public partial class QuickSearchWindow : Window
         RefreshStyleSelector();
         if (TranslationStyleMenu.ProbeNextTextRoute() == TranslationStyleSupport.FreeEngine)
         {
-            FooterStatus.Text = $"内置免费引擎{TranslationStyleMenu.FreeEngineToolTip}。";
+            FooterStatus.Text = TranslationStyleMenu.FreeEngineToolTip;
             return;
         }
         var menu = TranslationStyleMenu.Build(
@@ -1254,6 +1363,11 @@ public partial class QuickSearchWindow : Window
                 return;
             }
             e.Handled = true;
+            if (_routeMenu is { IsOpen: true })
+            {
+                _routeMenu.IsOpen = false;
+                return;
+            }
             // C05/A06 Esc ladder: ANY active phase cancels first (the live
             // _cts is the truth, not a UI stage snapshot), keeping the
             // partial; an idle/final window hides with its session.
@@ -1314,6 +1428,7 @@ public partial class QuickSearchWindow : Window
         {
             return;
         }
+        if (_routeMenu is { IsOpen: true }) return;
         if (ForegroundBelongsToThisProcess())
         {
             return;

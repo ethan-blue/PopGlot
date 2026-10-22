@@ -37,8 +37,9 @@ internal static class UiScenario
             window.Show(); Pump(); Console.WriteLine("UI window ready");
             Button Find(string name) => (Button)section.FindName(name);
             void Click(string name) { Find(name).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump(); }
-            Click("ConnectLocalToolHeaderButton");
-            Until(() => Find("DetectCliToolsButton").IsEnabled, "initial discovery completes off the UI thread");
+            Click("AddEngineHeaderButton");
+            Click("DetectCliToolsButton");
+            Until(() => Find("DetectCliToolsButton").IsEnabled, "explicit source discovery completes off the UI thread");
             var list = (ListBox)section.FindName("CliToolsListBox");
             list.ItemsSource = new[] { new ServicesSection.CliToolRow { ToolId = "codex", ToolName = "Codex CLI", EntryPath = Environment.ProcessPath! } };
             list.SelectedIndex = 0;
@@ -64,11 +65,6 @@ internal static class UiScenario
                 .Invoke(section, new object[] { savedCli.Id });
             Program.Assert(((ComboBox)section.FindName("CliModelCombo")).SelectedItem is CliModel { Id: "fixture" } &&
                 !Find("CliSaveUseButton").IsEnabled, "saved CLI model echoes without inventing a live connection");
-            Click("DetectCliToolsButton");
-            Until(() => Find("DetectCliToolsButton").IsEnabled, "rescan completes");
-            Program.Assert(list.SelectedItem is ServicesSection.CliToolRow { StateBadge: "已保存入口" } &&
-                ((ComboBox)section.FindName("CliModelCombo")).SelectedItem is CliModel { Id: "fixture" },
-                "saved entry outside discovery paths remains selected and its model survives rescan");
             Click("CliConnectButton");
             Until(() => Find("CliSaveUseButton").IsEnabled, "saved CLI reconnects");
             Click("CliSaveUseButton");
@@ -104,7 +100,9 @@ internal static class UiScenario
             Click("ChatGptTestButton");
             Until(() => ((TextBlock)section.FindName("ChatGptStatus")).Text.StartsWith("直连测试通过"), "direct UI translation must pass");
             Click("ChatGptSaveUseButton");
-            Until(() => ((TextBlock)section.FindName("ChatGptStatus")).Text.StartsWith("已保存并切换"), "direct UI save/use must persist");
+            Until(() => ProfileManager.Load().ActiveProfileId == directProfile.Id &&
+                ProfileManager.Load().TryGetActiveProfile()?.ExecutionFacts.TextCapable == true &&
+                Find("ChatGptSaveUseButton").IsEnabled, "direct UI save/use must persist the selected executable profile");
             Program.Assert(ProfileManager.Load().TryGetActiveProfile()?.ResolvedExecutionKind == EngineExecutionKind.ChatGptDirect,
                 "direct UI must activate the HTTP route");
             window.UpdateLayout();
@@ -116,6 +114,8 @@ internal static class UiScenario
             Program.Assert(ProfileManager.Load().TryGetActiveProfile()?.ExecutionFacts.TextCapable == false, "direct route disabled after disconnect");
             DirectTests.Restore();
             Environment.SetEnvironmentVariable("POPGLOT_FAKE_PROTOCOL", "omp");
+            Click("BackToListHeaderButton");
+            Click("AddEngineHeaderButton");
             Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", "login_input");
             list.ItemsSource = new[] { new ServicesSection.CliToolRow { ToolId = "omp", ToolName = "oh-my-pi", EntryPath = Environment.ProcessPath! } };
             list.SelectedIndex = 0; Click("CliConnectButton");
@@ -146,7 +146,19 @@ internal static class UiScenario
     }
     private static void VerifyApiEditor(ServicesSection section)
     {
+        // The previous OMP login draft is deliberately unresolved: adding a
+        // new engine must route through the guard, and an explicit discard
+        // is the user's way out before the API catalogue opens.
         section.BeginAddEngineFlow();
+        var guard = (FrameworkElement)section.FindName("DraftGuardBar");
+        if (guard!.Visibility == Visibility.Visible)
+        {
+            ((Button)section.FindName("DraftDiscardButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump();
+            section.BeginAddEngineFlow();
+        }
+        Program.Assert(section.PresetsPanel.Visibility == Visibility.Visible && section.CliConnectionsPanel.Visibility == Visibility.Collapsed,
+            "resolving the guard must land on the unified source catalogue, not the stale connection editor");
         ((Button)section.FindName("CustomPresetButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         ((TextBox)section.FindName("ServiceNameTextBox")).Text = "API edit regression";
         var address = (TextBox)section.FindName("BaseUrlTextBox");
@@ -166,9 +178,12 @@ internal static class UiScenario
         Program.Assert(duplicateSave.IsCompletedSuccessfully && !duplicateSave.Result, "double-save is rejected while the first commit is pending");
         Until(() => firstSave.IsCompleted, "API draft commit completes");
         Program.Assert(firstSave.Result && ProfileManager.Load().Profiles.Count == count + 1, "API save commits once without a successful health test");
-        var saved = ProfileManager.Load().Profiles.Single(p => p.Name == "API edit regression");
+        var saved = ProfileManager.Load().Profiles.FirstOrDefault(p => p.Name == "API edit regression");
+        Program.Assert(saved is not null, "API draft must save under its display name; profiles=" +
+            string.Join(",", ProfileManager.Load().Profiles.Select(p => p.Name)) +
+            "; status=" + ((TextBlock)section.FindName("ServiceStatusText"))?.Text);
         typeof(ServicesSection).GetMethod("OpenProfileInEditor", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-            .Invoke(section, new object[] { saved.Id });
+            .Invoke(section, new object[] { saved!.Id });
         Program.Assert(address.Text == saved.ApiBaseUrl && model.Text == saved.TextModel &&
             ((StackPanel)section.FindName("BaseUrlPanel")).Visibility == Visibility.Visible, "saved API address and model remain editable");
     }

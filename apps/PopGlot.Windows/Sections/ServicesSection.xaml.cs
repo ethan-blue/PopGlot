@@ -95,7 +95,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     internal bool IsEditorDirty => _editorDirty;
 
     /// <summary>True while the service editor form is visible.</summary>
-    internal bool IsEditorOpen => EditorForm?.Visibility == Visibility.Visible || CliConnectionsPanel?.Visibility == Visibility.Visible;
+    internal bool IsEditorOpen => EditorForm?.Visibility == Visibility.Visible;
 
     public ServicesSection()
     {
@@ -585,6 +585,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     /// </summary>
     private string CaptureEditorState()
     {
+        if (CliConnectionsPanel?.Visibility == Visibility.Visible)
+            return ChatGptConnectionPanel.Visibility == Visibility.Visible
+                ? $"direct|{DirectIdentity()}"
+                : $"cli|{(CliToolsListBox.SelectedItem as CliToolRow)?.ToolId}|{(CliToolsListBox.SelectedItem as CliToolRow)?.EntryPath}|{(CliModelCombo.SelectedItem as CliModel)?.Provider}|{(CliModelCombo.SelectedItem as CliModel)?.Id}";
         var providerTag = (ProviderTypeComboBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? string.Empty;
         return ServiceEditorSnapshot.CreateNormalized(
             ServiceNameTextBox.Text,
@@ -660,6 +664,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     /// </summary>
     internal void BeginDraftGuard(string message, Action? proceed = null)
     {
+        if (_cliCommitInProgress || _saveInProgress) return;
         if (!_editorDirty)
         {
             proceed?.Invoke();
@@ -723,7 +728,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     internal void ReloadEditorFromSaved()
     {
         var config = ProfileManager.Load();
-        var profile = SelectedProfile() ?? config.TryGetActiveProfile();
+        var profile = config.Profiles.FirstOrDefault(p => p.Id == _editingProfileId)
+            ?? SelectedProfile() ?? config.TryGetActiveProfile();
         if (profile is null)
         {
             ShowOverview();
@@ -1222,9 +1228,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private void ShowEditorForm(bool addMode)
     {
+        _catalogOperation?.Cancel();
         CancelCliOperation();
         CliConnectionsPanel.Visibility = Visibility.Collapsed;
-        ConnectLocalToolHeaderButton.Visibility = Visibility.Collapsed;
         if (AddEngineHeaderButton is not null)
         {
             AddEngineHeaderButton.Visibility = Visibility.Collapsed;
@@ -1250,6 +1256,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     // overview (SettingsWindow.xaml.cs "ProviderSection.ShowOverview()").
     internal void ShowOverview()
     {
+        if (_cliCommitInProgress || _saveInProgress) return;
+        _catalogOperation?.Cancel();
         if (AddEngineHeaderButton is not null)
         {
             AddEngineHeaderButton.Visibility = Visibility.Visible;
@@ -1263,7 +1271,6 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             CancelCliOperation();
             CliConnectionsPanel.Visibility = Visibility.Collapsed;
-            ConnectLocalToolHeaderButton.Visibility = Visibility.Visible;
         }
         _isAdding = false;
         ClearEditorDirty();
@@ -1367,6 +1374,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             return;
         }
 
+        CancelCliOperation();
         var isCustom = preset == "custom";
         // Presets provide protocol and official endpoints only. Models must
         // be fetched from the provider's catalog or typed by the user — a
@@ -1486,16 +1494,22 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
     }
 
-    private void ChooseAnotherProvider_Click(object sender, RoutedEventArgs e)
+    private void ChooseAnotherProvider_Click(object sender, RoutedEventArgs e) =>
+        BeginDraftGuard("切换来源前请先处理当前修改。", ShowSourcePicker);
+
+    private void ShowSourcePicker()
     {
-        // This is still the same unsaved add draft, so returning to the
-        // catalogue is reversible and does not need a confirmation surface.
-        PresetsPanel.Visibility = Visibility.Visible;
-        ConfigFormPanel.Visibility = Visibility.Collapsed;
-        EditorActionBar.Visibility = Visibility.Collapsed;
-        ChooseAnotherProviderButton.Visibility = Visibility.Collapsed;
+        CancelCliOperation();
+        _catalogOperation?.Cancel();
+        ShowEditorForm(addMode: true);
+        _editingProfileId = null;
+        LoadProfileIntoForm(NewProfileDraft());
+        CustomProtocolGroup.Visibility = Visibility.Collapsed;
+        _selectingCliTool = true;
+        try { CliToolsListBox.SelectedItem = null; }
+        finally { _selectingCliTool = false; }
         ClearEditorDirty();
-        StatusChanged?.Invoke("选择一个服务商继续。", StatusTone.Info);
+        EditorScroll.ScrollToTop();
     }
 
     private void BackToServices_Click(object sender, RoutedEventArgs e) =>
@@ -2494,15 +2508,14 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             _suppressListEvents = false;
         }
-        LoadProfileIntoForm(NewProfileDraft());
         CustomProtocolGroup.Visibility = Visibility.Collapsed;
         AdvancedGroup.Visibility = Visibility.Visible;
         ApplyEditorLayout();
         SetTestResult(StatusTone.Info, string.Empty, null);
-        ShowEditorForm(addMode: true);
+        ShowSourcePicker();
         RefreshApiKeyState();
         ClearEditorDirty();
-        StatusChanged?.Invoke("先选择服务商；下一步只填写连接所需内容。", StatusTone.Info);
+        StatusChanged?.Invoke("选择来源，再连接账号和模型。", StatusTone.Info);
     }
 
     private void ProfilesListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -2692,10 +2705,14 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     /// </summary>
     internal async Task<bool> TrySaveServiceAsync()
     {
+        if (CliConnectionsPanel.Visibility == Visibility.Visible)
+            return ChatGptConnectionPanel.Visibility == Visibility.Visible
+                ? await SaveDirectConnectionAsync(use: false)
+                : await SaveCliConnectionAsync(use: false);
         if (_saveInProgress) return false;
         _saveInProgress = true;
         EditorForm.IsEnabled = false;
-        BackToListHeaderButton.IsEnabled = ConnectLocalToolHeaderButton.IsEnabled = false;
+        BackToListHeaderButton.IsEnabled = ChooseAnotherProviderButton.IsEnabled = false;
         var originalEditingId = _editingProfileId;
         try
         {
@@ -2872,7 +2889,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             _saveInProgress = false;
             EditorForm.IsEnabled = true;
-            BackToListHeaderButton.IsEnabled = ConnectLocalToolHeaderButton.IsEnabled = true;
+            BackToListHeaderButton.IsEnabled = ChooseAnotherProviderButton.IsEnabled = true;
         }
     }
 

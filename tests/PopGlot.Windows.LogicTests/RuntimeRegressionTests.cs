@@ -108,9 +108,16 @@ internal static partial class Program
         True(!started && succeeded && !lifecycle.IsRunning, "cache must finish without starting new work");
 
         CancellationTokenSource? owned = null;
-        executor.OnRunTextTask = (_, _, _, _, _, _, _) => Task.FromResult(new TranslationResponse(
-            new TranslationResult("summary", "", "", [], []),
-            new ProviderDiagnostics("s", ProviderType.OpenAiCompatible, "https://example.test", 1, 200, 0)));
+        executor.TextRoute!.Profile.TextModel = "summary-model";
+        executor.OnStreamTextTask = (_, _, _, _, _, sessionId, epoch, _, _, _) =>
+        {
+            var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+            buffer.TryAppend("summary");
+            buffer.Complete();
+            return new TranslationStreamSession(buffer, Task.FromResult(new TranslationResponse(
+                new TranslationResult("summary", "", "", [], []),
+                new ProviderDiagnostics("s", ProviderType.OpenAiCompatible, "https://example.test", 1, 200, 0))));
+        };
         await lifecycle.ExecuteSummaryAsync(coordinator, reading, "another", "en", "zh",
             () => true, () => "another", () => "zh",
             () => owned = (CancellationTokenSource?)typeof(SummaryLifecycleCoordinator)

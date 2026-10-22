@@ -79,6 +79,7 @@ public partial class MainWindow : Window
 
     /// <summary>Entry point into SettingsWindow, wired by App.</summary>
     internal Action? OpenSettings { get; set; }
+    internal Action? RouteChanged { get; set; }
 
     // ================= Stable Normal size across DPI changes =================
 
@@ -284,25 +285,16 @@ public partial class MainWindow : Window
     {
         try
         {
-            // Execute credential (CredRead) and store reads off the UI thread (C11 zero-disk activation).
-            var statusData = await Task.Run(() =>
-            {
-                var settings = CoreBridge.GetSettings();
-                var activeProfile = ProfileManager.Load().TryGetActiveProfile();
-                var hasKey = activeProfile is not null &&
-                    CredentialStore.HasApiKey(ProfileManager.ResolveCredentialTargetFor(activeProfile));
-                var consent = ShellSettingsStore.Load().FreeEngineConsent;
-                var hasUserEngine = ProfileManager.HasConfiguredUserEngine();
-                return (settings, activeProfile, hasKey, consent, hasUserEngine);
-            });
-
-            var (settings, activeProfile, hasKey, consent, hasUserEngine) = statusData;
-            var (_, tone) = DescribeEngine(settings, hasKey, consent);
-            EngineSummary.Text = UsesFreeEngine(settings, hasKey, consent)
-                ? EngineWording.ActiveFreeEngineName()
-                : activeProfile is not null
-                    ? activeProfile.Name
-                    : DescribeEngine(settings, hasKey, consent).Summary;
+            // Credential and cached store reads stay off the activation path.
+            // A simultaneous route switch owns its own repaint.
+            var revision = ProfileManager.Revision;
+            var route = await Task.Run(TextRouteMenu.ReadCurrent);
+            if (revision != ProfileManager.Revision) return;
+            var tone = route.Tone;
+            EngineSummary.Text = route.Label;
+            EngineSummary.ToolTip = route.Detail;
+            EngineHealthButton.ToolTip = route.Detail;
+            EngineDot.Tag = null;
             EngineDot.SetResourceReference(Border.BackgroundProperty, tone switch
             {
                 StatusTone.Error => "DangerBrush",
@@ -493,19 +485,12 @@ public partial class MainWindow : Window
     {
         try
         {
-            var settings = CoreBridge.GetSettings();
-            // 以实际生效的引擎配置为准（快速切换器可选「内置免费引擎」，
-            // 此时即使凭据库里有残留 key 也不算配置了模型服务）。
-            var activeProfile = ProfileManager.Load().TryGetActiveProfile();
-            var hasKey = activeProfile is not null &&
-                CredentialStore.HasApiKey(ProfileManager.ResolveCredentialTargetFor(activeProfile));
-            var consent = ShellSettingsStore.Load().FreeEngineConsent;
-            var (summary, tone) = DescribeEngine(settings, hasKey, consent);
-            EngineSummary.Text = UsesFreeEngine(settings, hasKey, consent)
-                ? EngineWording.ActiveFreeEngineName()
-                : activeProfile is not null
-                    ? activeProfile.Name
-                    : summary;
+            var route = TextRouteMenu.ReadCurrent();
+            var tone = route.Tone;
+            EngineSummary.Text = route.Label;
+            EngineSummary.ToolTip = route.Detail;
+            EngineHealthButton.ToolTip = route.Detail;
+            EngineDot.Tag = null;
             EngineDot.SetResourceReference(Border.BackgroundProperty, tone switch
             {
                 StatusTone.Error => "DangerBrush",
@@ -528,12 +513,6 @@ public partial class MainWindow : Window
         TranslateSection.RefreshAfterSettingsChanged();
     }
 
-    private static bool UsesFreeEngine(ProviderSettings settings, bool hasKey, FreeEngineConsent consent) =>
-        !settings.SafeDevMode &&
-        settings.NetworkEnabled &&
-        !hasKey &&
-        !settings.TargetsLocalRuntime &&
-        consent != FreeEngineConsent.Denied;
 
     /// <summary>
     /// Probes the free engine and paints the result into the footer. Only a
@@ -546,13 +525,14 @@ public partial class MainWindow : Window
         try
         {
             var settings = CoreBridge.GetSettings();
+            var paintsFooter = IsActiveRouteFreeEngine();
+            var revision = ProfileManager.Revision;
             if (!OutboundPolicy.AllowsFreeEngine(settings, out var gateDenial, out var authorization))
             {
-                PaintFreeEngineNotProbed(gateDenial);
+                if (paintsFooter) PaintFreeEngineNotProbed(gateDenial);
                 return;
             }
 
-            var paintsFooter = IsActiveRouteFreeEngine();
             if (force && paintsFooter)
             {
                 EngineSummary.Text = EngineWording.ActiveFreeEngineName();
@@ -564,7 +544,7 @@ public partial class MainWindow : Window
             {
                 return; // window may be gone; RefreshEngineStatus will repaint next time
             }
-            if (!paintsFooter)
+            if (!paintsFooter || revision != ProfileManager.Revision || !IsActiveRouteFreeEngine())
             {
                 return;
             }
@@ -608,12 +588,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            var settings = CoreBridge.GetSettings();
-            var activeProfile = ProfileManager.Load().TryGetActiveProfile();
-            var hasKey = activeProfile is not null &&
-                CredentialStore.HasApiKey(ProfileManager.ResolveCredentialTargetFor(activeProfile));
-            var consent = ShellSettingsStore.Load().FreeEngineConsent;
-            return UsesFreeEngine(settings, hasKey, consent);
+            return TextRouteMenu.ReadCurrent().IsFree;
         }
         catch (Exception)
         {
@@ -675,175 +650,40 @@ public partial class MainWindow : Window
     internal ContextMenu BuildEngineSwitchMenu()
     {
         var config = ProfileManager.Load();
-        var menu = new ContextMenu();
-        // Keep the popup aligned with the compact footer control even when a
-        // provider exposes a very long model id. Long labels are ellipsized;
-        // their complete value stays available from the item tooltip/name.
-        menu.Width = 208;
-        menu.MaxWidth = 208;
-        menu.Background = Brushes.Transparent;
-        menu.BorderBrush = Brushes.Transparent;
-        menu.BorderThickness = new Thickness(0);
-        menu.Padding = new Thickness(0);
-        var activeId = config.TryGetActiveProfile()?.Id;
-        var currentVisionId = config.VisionProfileId;
-
-        menu.Items.Add(MakeMenuHeader("文字"));
-        var textProfiles = config.Profiles.Where(p => p.SupportsText).ToList();
-        if (textProfiles.Count == 0)
-        {
-            menu.Items.Add(MakeDisabledItem("尚未配置引擎"));
-        }
-        foreach (var profile in textProfiles)
-        {
-            var id = profile.Id;
-            var isActive = profile.Id == activeId;
-            var label = profile.Name;
-            var detail = string.IsNullOrWhiteSpace(profile.TextModel)
-                ? profile.Name
-                : $"{profile.Name} · {profile.TextModel}";
-            var item = new MenuItem
-            {
-                Header = MakeCompactMenuLabel(label),
-                ToolTip = detail,
-                FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
-                Icon = isActive ? MakeActiveCheck() : null,
-            };
-            System.Windows.Automation.AutomationProperties.SetName(item, detail);
-            item.Click += (_, _) => SwitchTextEngine(id);
-            menu.Items.Add(item);
-        }
-
-        // 两条公共文字线路，用户显式选一条。失败不会悄悄改发到另一条。
-        // 探测结果按线路分开记；没探测过就显示「未检测」。
-        var selectedFree = ShellSettingsStore.Load().FreeEngineProvider;
-        menu.Items.Add(MakeMenuHeader("免费"));
-        foreach (var provider in new[] { FreeEngineProvider.Google, FreeEngineProvider.MyMemory })
-        {
-            var chosen = provider;
-            var freeActive = config.PreferFreeEngine && selectedFree == chosen;
-            var freeState = FreeHealthLabel(chosen);
-            var item = new MenuItem
-            {
-                Header = MakeCompactMenuLabel($"{FreeProviderShortName(chosen)} · {ShortHealthLabel(freeState)}"),
-                FontWeight = freeActive ? FontWeights.SemiBold : FontWeights.Normal,
-                Icon = freeActive ? MakeActiveCheck() : null,
-                ToolTip = chosen == FreeEngineProvider.MyMemory
-                    ? "Google 线路不可用时改用这一条。文本发往 api.mymemory.translated.net，不发截图。"
-                    : "文本发往 translate.googleapis.com / clients5.google.com，不发截图。",
-            };
-            System.Windows.Automation.AutomationProperties.SetName(
-                item, $"{EngineWording.NameFor(chosen)} · {freeState} · 仅文字");
-            item.Click += async (_, _) => await SwitchToFreeEngineAsync(chosen);
-            menu.Items.Add(item);
-        }
-
+        var menu = new ContextMenu { Width = 264, MaxWidth = 264, MaxHeight = 420 };
+        TextRouteMenu.AddTextChoices(menu, SwitchTextEngine, SwitchToFreeEngineAsync);
         menu.Items.Add(new Separator());
-        menu.Items.Add(MakeMenuHeader("图片"));
-        var followActive = string.IsNullOrEmpty(currentVisionId);
+        menu.Items.Add(TextRouteMenu.Header("图片"));
+        var follow = string.IsNullOrEmpty(config.VisionProfileId);
         var visionFollow = new MenuItem
         {
             Header = "跟随文字",
-            FontWeight = followActive ? FontWeights.SemiBold : FontWeights.Normal,
-            Icon = followActive ? MakeActiveCheck() : null,
+            FontWeight = follow ? FontWeights.SemiBold : FontWeights.Normal,
+            Icon = follow ? TextRouteMenu.ActiveCheck() : null,
         };
         visionFollow.Click += (_, _) => SwitchVisionEngine(null);
         menu.Items.Add(visionFollow);
-        foreach (var profile in config.Profiles.Where(p =>
-                     p.SupportsVision && !string.IsNullOrWhiteSpace(p.VisionModel)))
+        foreach (var profile in config.Profiles.Where(profile =>
+            profile.SupportsVision && !string.IsNullOrWhiteSpace(profile.VisionModel)))
         {
             var id = profile.Id;
-            var isActive = profile.Id == currentVisionId;
-            var label = profile.Name;
-            var detail = string.IsNullOrWhiteSpace(profile.VisionModel)
-                ? profile.Name
-                : $"{profile.Name} · {profile.VisionModel}";
-            var item = new MenuItem
-            {
-                Header = MakeCompactMenuLabel(label),
-                ToolTip = detail,
-                FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
-                Icon = isActive ? MakeActiveCheck() : null,
-            };
-            System.Windows.Automation.AutomationProperties.SetName(item, detail);
+            var item = TextRouteMenu.ProfileItem(profile, profile.VisionModel, id == config.VisionProfileId);
+            item.Tag = id;
             item.Click += (_, _) => SwitchVisionEngine(id);
             menu.Items.Add(item);
         }
-
         menu.Items.Add(new Separator());
-        var manage = new MenuItem { Header = "管理" };
+        var manage = new MenuItem { Header = "管理引擎" };
         System.Windows.Automation.AutomationProperties.SetName(manage, "管理引擎");
         manage.Click += (_, _) => OpenSettings?.Invoke();
         menu.Items.Add(manage);
-        var reprobe = new MenuItem { Header = "检测", ToolTip = $"重新检测{EngineWording.ActiveFreeEngineName()}" };
+        var reprobe = new MenuItem { Header = "检测公共翻译" };
         System.Windows.Automation.AutomationProperties.SetName(reprobe, "重新检测免费引擎");
         reprobe.Click += async (_, _) => await UpdateFreeEngineHealthAsync(force: true);
         menu.Items.Add(reprobe);
-
         return menu;
     }
 
-    private static FrameworkElement MakeActiveCheck()
-    {
-        var geom = Application.Current?.TryFindResource("IconCheck") as Geometry
-            ?? Geometry.Parse("M 9.5,17.5 L 4,12 L 5.25,10.75 L 9.5,15 L 18.75,5.75 L 20,7 Z");
-        var path = new System.Windows.Shapes.Path
-        {
-            Data = geom,
-            Width = 12,
-            Height = 12,
-            Stretch = Stretch.Uniform,
-            VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Center,
-        };
-        path.SetResourceReference(System.Windows.Shapes.Path.FillProperty, "AccentBrush");
-        return path;
-    }
-
-    private static TextBlock MakeCompactMenuLabel(string text) => new()
-    {
-        Text = text,
-        Width = 124,
-        TextTrimming = TextTrimming.CharacterEllipsis,
-        VerticalAlignment = VerticalAlignment.Center,
-        ToolTip = text,
-    };
-
-    private static string FreeProviderShortName(FreeEngineProvider provider) => provider switch
-    {
-        FreeEngineProvider.MyMemory => "MyMemory",
-        _ => "Google",
-    };
-
-    private static string ShortHealthLabel(string label) => label switch
-    {
-        "未检测" => "未测",
-        "检测中" => "检测中",
-        "可用" => "可用",
-        "不可用" => "不可用",
-        _ => label,
-    };
-
-    private static System.Windows.Controls.MenuItem MakeMenuHeader(string text)
-    {
-        var item = new System.Windows.Controls.MenuItem
-        {
-            Header = text,
-            IsEnabled = true,
-            Focusable = false,
-            IsHitTestVisible = false,
-            FontWeight = FontWeights.SemiBold,
-            FontSize = 11.5,
-        };
-        item.SetResourceReference(System.Windows.Controls.Control.ForegroundProperty, "TextTertiaryBrush");
-        return item;
-    }
-
-    private static System.Windows.Controls.MenuItem MakeDisabledItem(string text) => new()
-    {
-        Header = text,
-        IsEnabled = false,
-    };
 
     private async void SwitchTextEngine(string profileId)
     {
@@ -851,16 +691,14 @@ public partial class MainWindow : Window
         _isSwitchingEngine = true;
         try
         {
-            SetStatus("正在切换文字引擎…", StatusTone.Info);
+            SetStatus("正在切换…", StatusTone.Info);
             // 持久化走后台：写盘（含杀软扫描）在 UI 线程上会造成窗口卡死。
             var (ok, error) = await Task.Run(() =>
             {
                 var success = ProfileManager.TrySwitchActiveProfile(profileId, out var message);
                 return (success, message);
             });
-            SetStatus(ok ? "已切换文字引擎，下次请求生效。" : error,
-                ok ? StatusTone.Success : StatusTone.Error);
-            RefreshEngineStatus();
+            SetStatus(ok ? "已切换" : error, ok ? StatusTone.Success : StatusTone.Error);
         }
         catch (Exception exception)
         {
@@ -871,6 +709,8 @@ public partial class MainWindow : Window
         finally
         {
             _isSwitchingEngine = false;
+            RefreshEngineStatus();
+            RouteChanged?.Invoke();
         }
     }
 
@@ -880,18 +720,13 @@ public partial class MainWindow : Window
         _isSwitchingEngine = true;
         try
         {
-            SetStatus("正在切换图片引擎…", StatusTone.Info);
+            SetStatus("正在切换…", StatusTone.Info);
             var (ok, error) = await Task.Run(() =>
             {
                 var success = ProfileManager.TrySwitchVisionProfile(profileId, out var message);
                 return (success, message);
             });
-            SetStatus(
-                ok
-                    ? (profileId is null ? "图片引擎已改为跟随文字引擎，下次图片请求生效。" : "已切换图片引擎，下次图片请求生效。")
-                    : error,
-                ok ? StatusTone.Success : StatusTone.Error);
-            RefreshEngineStatus();
+            SetStatus(ok ? "已切换图片引擎" : error, ok ? StatusTone.Success : StatusTone.Error);
         }
         catch (Exception exception)
         {
@@ -900,37 +735,24 @@ public partial class MainWindow : Window
         finally
         {
             _isSwitchingEngine = false;
+            RefreshEngineStatus();
         }
     }
 
-    private static string FreeHealthLabel(FreeEngineProvider provider)
-    {
-        if (!FreeTranslateService.HasHealthResultFor(provider))
-        {
-            return "未检测";
-        }
-
-        var health = FreeTranslateService.LastHealthFor(provider);
-        return health.Ok ? $"可用 · {health.LatencyMs} ms" : "当前不可用";
-    }
 
     private async Task SwitchToFreeEngineAsync(FreeEngineProvider provider)
     {
         if (_isSwitchingEngine) return;
         _isSwitchingEngine = true;
-        var name = EngineWording.NameFor(provider);
         try
         {
-            SetStatus($"正在切换到{name}…", StatusTone.Info);
+            SetStatus("正在切换…", StatusTone.Info);
             var (ok, error) = await Task.Run(() =>
             {
                 var success = ProfileManager.TrySwitchToFreeEngine(provider, out var message);
                 return (success, message);
             });
-            SetStatus(
-                ok ? $"已切换到{name}，下次文字翻译生效。" : error,
-                ok ? StatusTone.Success : StatusTone.Error);
-            RefreshEngineStatus();
+            SetStatus(ok ? "已切换" : error, ok ? StatusTone.Success : StatusTone.Error);
         }
         catch (Exception exception)
         {
@@ -940,30 +762,11 @@ public partial class MainWindow : Window
         finally
         {
             _isSwitchingEngine = false;
+            RefreshEngineStatus();
+            RouteChanged?.Invoke();
         }
     }
 
-    private static (string Summary, StatusTone Tone) DescribeEngine(
-        ProviderSettings settings, bool hasKey, FreeEngineConsent consent)
-    {
-        if (settings.SafeDevMode)
-        {
-            return (EngineWording.SafeOfflineModeName, StatusTone.Warning);
-        }
-        if (!settings.NetworkEnabled)
-        {
-            return ("网络翻译已关闭", StatusTone.Warning);
-        }
-        if (!hasKey && !settings.TargetsLocalRuntime)
-        {
-            return consent == FreeEngineConsent.Denied
-                ? ($"{EngineWording.FreeEngineName}已关闭，且未配置翻译引擎", StatusTone.Warning)
-                : (EngineWording.ActiveFreeEngineName(), StatusTone.Info);
-        }
-        return (string.IsNullOrWhiteSpace(settings.TextModel)
-            ? "未填写文本模型"
-            : settings.TextModel, StatusTone.Success);
-    }
 
 
     // ================= Cross-section event handlers =================
@@ -1344,23 +1147,22 @@ internal static class TranslationStyleMenu
     /// </summary>
     internal const string SupportedToolTip = "文字翻译风格（下一次文字翻译生效）";
 
-    /// <summary>The exact wording required when the free engine cannot personalize.</summary>
-    internal const string FreeEngineToolTip = "此引擎不支持文字翻译风格个性化";
+    /// <summary>Public translators cannot apply custom model instructions.</summary>
+    internal const string FreeEngineToolTip = "公共翻译不支持风格";
 
-    internal const string UnknownToolTip =
-        "暂时无法确认当前引擎是否支持文字翻译风格；若由内置免费引擎完成，所选风格不会应用";
+    internal const string UnknownToolTip = "无法确认风格支持，请检查当前模型";
 
     /// <summary>
     /// 0.1.6 文案减法：免费引擎的事前/事后提示统一为这一行诚实短状态，
     /// 三个表面（工作台/浮窗/极速查词）共用，不再各写一句长解释。
     /// </summary>
-    internal const string FreeEngineStyleNotAppliedStatus = "内置免费引擎不支持所选风格，本次未应用";
+    internal const string FreeEngineStyleNotAppliedStatus = "公共翻译 · 未应用风格";
 
     /// <summary>
     /// 0.1.6 文案减法：视觉直译的事前/事后提示统一为这一行诚实短状态，
     /// 三个表面共用；只陈述事实，不附带长解释。
     /// </summary>
-    internal const string VisionDirectStyleNotAppliedStatus = "截图由视觉模型直译，所选风格未应用";
+    internal const string VisionDirectStyleNotAppliedStatus = "图片直译 · 未应用文字风格";
 
     /// <summary>
     /// Compact label for the selector and menu items: short names for the

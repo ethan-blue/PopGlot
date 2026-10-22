@@ -89,6 +89,9 @@
             <Setter Property="FontSize" Value="13" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
+        <DataTemplate x:Key="ConnectionChoiceTemplate">
+            <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" MaxWidth="480" ToolTip="{Binding DisplayName}"/>
+        </DataTemplate>
         <Style x:Key="ModelChipButton" TargetType="Button">
             <Setter Property="Background" Value="{DynamicResource SurfaceRaisedBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
@@ -140,118 +143,21 @@
         </Grid.RowDefinitions>
 
         <Grid Grid.Row="0">
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
             <StackPanel>
                 <TextBlock x:Name="ProviderPageTitle" Text="翻译引擎" Style="{StaticResource PageTitle}" Margin="0,0,0,10" />
             </StackPanel>
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
-                <Button x:Name="ChooseAnotherProviderButton" Content="更换服务商" Visibility="Collapsed"
+            <WrapPanel Grid.Row="1" HorizontalAlignment="Left" Margin="0,0,0,10">
+                <Button x:Name="ChooseAnotherProviderButton" Content="← 选择来源" Visibility="Collapsed"
                         Style="{StaticResource GhostButton}" Padding="10,5" Margin="0,0,8,0"
                         Click="ChooseAnotherProvider_Click" />
                 <Button x:Name="BackToListHeaderButton" Content="← 返回引擎列表" Visibility="Collapsed"
                         Style="{StaticResource GhostButton}" Padding="10,5" Click="BackToServices_Click" />
-                <Button x:Name="ConnectLocalToolHeaderButton" Content="连接本机工具"
-                        Style="{StaticResource GhostButton}" Padding="10,5" Margin="0,0,8,0"
-                        AutomationProperties.Name="连接本机工具"
-                        Click="OpenCliConnections_Click" />
                 <Button x:Name="AddEngineHeaderButton" Content="添加引擎"
                         Style="{StaticResource PrimaryButton}" Padding="16,8" Click="AddProfile_Click" />
-            </StackPanel>
+            </WrapPanel>
         </Grid>
 
-        <Grid x:Name="CliConnectionsPanel" Grid.Row="1" Visibility="Collapsed">
-            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,8,16">
-                <StackPanel>
-
-                    <TextBlock Text="连接本机工具" Style="{StaticResource SectionTitle}"/>
-                    <TextBlock FontSize="12" TextWrapping="Wrap" Margin="0,4,0,12" Foreground="{DynamicResource TextSecondaryBrush}"
-                               Text="选择工具 → 连接账号 → 选择模型 → 保存。内容将发送到工具配置的提供方并使用其额度。"/>
-                    <WrapPanel Margin="0,0,0,10">
-                        <Button x:Name="DetectCliToolsButton" Content="重新检测" Style="{StaticResource GhostButton}" Click="DetectCliTools_Click"/>
-                        <TextBlock x:Name="CliDetectStatusText" VerticalAlignment="Center" Margin="10,0,0,0" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
-                    </WrapPanel>
-                    <ListBox x:Name="CliToolsListBox" MaxHeight="200" Background="Transparent" BorderThickness="0"
-                             ItemContainerStyle="{StaticResource CliToolItem}" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             SelectionChanged="CliToolsListBox_SelectionChanged" AutomationProperties.Name="选择本机工具">
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <StackPanel Margin="10,7">
-                                    <TextBlock Text="{Binding ToolName}" FontWeight="SemiBold"/>
-                                    <TextBlock Text="{Binding StateBadge}" FontSize="11" Margin="0,3,0,0" Foreground="{DynamicResource TextSecondaryBrush}" ToolTip="{Binding StateDetail}"/>
-                                    <TextBlock Text="{Binding EntryPath}" TextTrimming="CharacterEllipsis" FontSize="11" Margin="0,3,0,0"
-                                               Foreground="{DynamicResource TextSecondaryBrush}" ToolTip="{Binding EntryPath}" AutomationProperties.HelpText="{Binding EntryPath}"/>
-                                </StackPanel>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
-                    <WrapPanel Margin="0,12,0,12">
-                        <Button x:Name="CliConnectButton" Content="连接 / 刷新账号" Style="{StaticResource GhostButton}" Click="CliConnect_Click" IsEnabled="False"/>
-                        <Button x:Name="CliDisconnectButton" Content="断开连接" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Click="CliDisconnect_Click" IsEnabled="False"/>
-                        <Button x:Name="CliCancelButton" Content="取消操作" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Click="CliCancel_Click" Visibility="Collapsed"/>
-                    </WrapPanel>
-                    <StackPanel x:Name="OmpLoginPanel" Visibility="Collapsed" Margin="0,0,0,12">
-                        <TextBlock Text="OMP 管理的账号" Style="{StaticResource FieldLabel}"/>
-                        <TextBlock Text="登录由 OMP 管理，无需复制密钥。" TextWrapping="Wrap" FontSize="12" Margin="0,0,0,8" Foreground="{DynamicResource TextSecondaryBrush}"/>
-                        <ComboBox x:Name="OmpLoginProviderCombo" DisplayMemberPath="DisplayName" Style="{StaticResource EditorComboField}" SelectionChanged="OmpLoginProvider_Changed" AutomationProperties.Name="OMP 登录提供方"/>
-                        <Button x:Name="OmpLoginButton" Content="通过 OMP 登录所选提供方" Style="{StaticResource GhostButton}" HorizontalAlignment="Left" Margin="0,8,0,0" Click="OmpLogin_Click"/>
-                        <TextBlock x:Name="OmpAuthorizationInstructions" TextWrapping="Wrap" Visibility="Collapsed" Margin="0,8,0,0" AutomationProperties.Name="OMP 浏览器授权说明"/>
-                        <StackPanel x:Name="OmpCallbackPanel" Visibility="Collapsed" Margin="0,10,0,0">
-                            <TextBlock Text="授权回调（仅在浏览器无法自动返回时需要）" Style="{StaticResource FieldLabel}"/>
-                            <TextBox x:Name="OmpCallbackInput" AutomationProperties.Name="粘贴 OMP 授权回调"/>
-                            <Button x:Name="OmpSubmitCallbackButton" Content="提交回调" Style="{StaticResource GhostButton}" HorizontalAlignment="Left" Margin="0,8,0,0" Click="OmpSubmitCallback_Click"/>
-                        </StackPanel>
-                    </StackPanel>
-                    <TextBlock Text="文字模型" Style="{StaticResource FieldLabel}"/>
-                    <ComboBox x:Name="CliModelCombo" DisplayMemberPath="DisplayName" Style="{StaticResource EditorComboField}"
-                              SelectionChanged="CliModel_SelectionChanged" AutomationProperties.Name="本机工具文字模型"/>
-                    <StackPanel x:Name="OmpImportPanel" Visibility="Collapsed" Margin="0,10,0,0">
-                        <Expander Header="将所选模型改为 API 直连">
-                            <StackPanel Margin="0,8,0,0">
-                        <CheckBox x:Name="OmpImportConsent" FontSize="12" Margin="0,0,0,8" HorizontalContentAlignment="Stretch"
-                                  Checked="OmpImportConsent_Changed" Unchecked="OmpImportConsent_Changed">
-                            <TextBlock Text="允许将所选提供方的普通 API Key 保存到 Windows 凭据库，用于 PopGlot API 直连。" TextWrapping="Wrap"/>
-                        </CheckBox>
-                        <Button x:Name="OmpImportButton" Content="导入所选 OMP 模型的 API 直连" Style="{StaticResource GhostButton}" HorizontalAlignment="Left" Margin="0,0,0,10" Click="OmpImport_Click" IsEnabled="False"/>
-                            </StackPanel>
-                        </Expander>
-                    </StackPanel>
-                    <TextBlock x:Name="CliConnectionStatus" Text="连接后可选择模型并测试翻译。" Margin="0,10,0,10" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
-                    <TextBlock Text="测试只发送 Hello world，并会使用所选模型的少量额度。" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,8"/>
-                    <WrapPanel>
-                        <Button x:Name="CliTestButton" Content="测试翻译" Style="{StaticResource GhostButton}" Click="CliTest_Click" IsEnabled="False"/>
-                        <Button x:Name="CliSaveButton" Content="保存连接" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Click="CliSave_Click" IsEnabled="False"/>
-                        <Button x:Name="CliSaveUseButton" Content="保存并使用" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}" Click="CliSave_Click" IsEnabled="False"/>
-                    </WrapPanel>
-                    <Border Background="{DynamicResource SurfaceMutedBrush}" CornerRadius="{DynamicResource CardRadius}" Padding="12" Margin="0,16,0,14">
-                        <Expander x:Name="ChatGptExpander" Header="ChatGPT 官方直连（无需 CLI）">
-                        <StackPanel>
-                            <TextBlock Text="ChatGPT 官方直连" Style="{StaticResource SectionTitle}"/>
-                            <TextBlock Text="通过官方浏览器授权，由 PopGlot 直接请求模型，无需启动 Codex。内容会使用所选 ChatGPT 计划的额度。"
-                                       TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,10"/>
-                            <WrapPanel>
-                                <Button x:Name="ChatGptLoginButton" Content="Continue with ChatGPT" Style="{StaticResource GhostButton}" Click="ChatGptLogin_Click" Margin="0,0,8,8"/>
-                                <Button x:Name="ChatGptAddAccountButton" Content="添加其他账号" Style="{StaticResource GhostButton}" Click="ChatGptLogin_Click" Margin="0,0,8,8"/>
-                                <Button x:Name="ChatGptRefreshButton" Content="刷新模型" Style="{StaticResource GhostButton}" Click="ChatGptRefresh_Click" Margin="0,0,8,8"/>
-                                <Button x:Name="ChatGptLogoutButton" Content="退出此账号" Style="{StaticResource GhostButton}" Click="ChatGptLogout_Click" Margin="0,0,8,8"/>
-                                <Button x:Name="ChatGptCancelButton" Content="取消操作" Style="{StaticResource GhostButton}" Click="CliCancel_Click" Margin="0,0,8,8" Visibility="Collapsed"/>
-                            </WrapPanel>
-                            <StackPanel x:Name="ChatGptAccountDetails" Visibility="Collapsed">
-                                <TextBlock Text="账号与工作区" FontSize="12" Margin="0,2,0,5"/>
-                                <ComboBox x:Name="ChatGptAccountCombo" SelectionChanged="ChatGptAccount_Changed" Margin="0,0,0,10" AutomationProperties.Name="选择 ChatGPT 账号与工作区"/>
-                                <TextBlock Text="文字模型" FontSize="12" Margin="0,0,0,5"/>
-                                <ComboBox x:Name="ChatGptModelCombo" SelectionChanged="ChatGptModel_Changed" Margin="0,0,0,10" AutomationProperties.Name="选择 ChatGPT 直连文字模型"/>
-                                <WrapPanel>
-                                    <Button x:Name="ChatGptTestButton" Content="测试翻译" Style="{StaticResource GhostButton}" Click="ChatGptTest_Click" Margin="0,0,8,8"/>
-                                    <Button x:Name="ChatGptSaveUseButton" Content="保存并使用直连" Style="{StaticResource PrimaryButton}" Click="ChatGptSaveUse_Click" Margin="0,0,8,8"/>
-                                    <Button x:Name="ChatGptDisconnectButton" Content="断开此引擎" Style="{StaticResource GhostButton}" Click="ChatGptDisconnect_Click" Margin="0,0,8,8"/>
-                                </WrapPanel>
-                            </StackPanel>
-                            <TextBlock x:Name="ChatGptStatus" Text="登录由官方页面完成。测试会发送 Hello world 并使用少量额度。" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
-                        </StackPanel>
-                        </Expander>
-                    </Border>
-                </StackPanel>
-            </ScrollViewer>
-        </Grid>
 
         <!-- 路由唯一入口是主窗口底部的快速切换器；设置页不再提供默认路由控件。 -->
         <Grid x:Name="DetailGrid" Grid.Row="1" SizeChanged="DetailGrid_SizeChanged">
@@ -265,14 +171,8 @@
                     <Grid Grid.Row="1">
                         <StackPanel x:Name="ProfilesEmptyText" Visibility="Collapsed" Panel.ZIndex="1"
                                     HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,8,0,0">
-                            <TextBlock Text="尚未添加翻译引擎，点击右上角「添加引擎」开始。" FontSize="13"
-                                       Foreground="{DynamicResource TextSecondaryBrush}" />
-                            <!-- 页眉「添加引擎」是唯一主按钮。这个按钮留在树上供旧调用点找到，不占空态。 -->
-                            <Button x:Name="AddFirstEngineButton" Content="添加第一个引擎"
-                                    Visibility="Collapsed" IsHitTestVisible="False"
-                                    Style="{StaticResource PrimaryButton}" Padding="16,7"
-                                    AutomationProperties.Name="添加第一个引擎"
-                                    Click="AddProfile_Click" />
+                            <TextBlock Text="尚未添加引擎。点击右上角「添加引擎」开始。" FontSize="13"
+                                       TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" />
                         </StackPanel>
                         <ListBox x:Name="ProfilesListBox" ItemContainerStyle="{StaticResource ServiceListItem}"
                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
@@ -345,10 +245,41 @@
 
                     <!-- 底部留白：滚动到底时最后一个字段仍完整悬于固定操作栏
                          上方，不再贴着保存/取消按钮的下边缘。 -->
-                    <ScrollViewer x:Name="EditorScroll" Grid.Row="0" VerticalScrollBarVisibility="Auto" Padding="0,0,8,16">
+                    <ScrollViewer x:Name="EditorScroll" Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,8,16">
                         <StackPanel>
                             <StackPanel x:Name="PresetsPanel" Visibility="Collapsed">
-                                <TextBlock Text="选择服务商" Style="{StaticResource PageTitle}" Margin="0,0,0,16" />
+                                <TextBlock Text="选择来源" Style="{StaticResource SectionTitle}" Margin="0,0,0,12" />
+                                <Button x:Name="ChatGptSourceButton" Style="{StaticResource ProviderPresetButton}" Click="ChatGptSource_Click"
+                                        ToolTip="官方浏览器授权；内容直接发送到 OpenAI，并使用所选 ChatGPT 计划的额度。无需 CLI 或 API Key。">
+                                    <StackPanel><TextBlock Text="ChatGPT" FontWeight="SemiBold"/><TextBlock Text="官方账号直连 · 无需 CLI" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,3,0,0"/></StackPanel>
+                                </Button>
+                                <Border Style="{StaticResource EditorSectionCard}" BorderThickness="1" Margin="0,0,0,12">
+                                    <StackPanel>
+                                        <WrapPanel Margin="0,0,0,8">
+                                            <TextBlock Text="本机工具" Style="{StaticResource EditorSectionTitle}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                            <Button x:Name="DetectCliToolsButton" Content="检测 Codex / OMP" Style="{StaticResource GhostButton}" Click="DetectCliTools_Click"
+                                                    ToolTip="仅检测本机工具入口。选择后再连接，检查工具管理的账号和模型；不会导入 OAuth token。"/>
+                                            <Button x:Name="CancelCliDetectButton" Content="取消" Style="{StaticResource GhostButton}" Click="CliCancel_Click" Visibility="Collapsed" Margin="8,0,0,0"/>
+                                        </WrapPanel>
+                                        <TextBlock x:Name="CliDetectStatusText" Text="检测已安装的 Codex 和 OMP。" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,8"/>
+                                        <ListBox x:Name="CliToolsListBox" MaxHeight="220" Background="Transparent" BorderThickness="0"
+                                                 ItemContainerStyle="{StaticResource CliToolItem}" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                 SelectionChanged="CliToolsListBox_SelectionChanged" AutomationProperties.Name="选择本机工具">
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid Margin="10,7">
+                                                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                                        <TextBlock Text="{Binding ToolName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                                        <TextBlock Grid.Row="1" Text="{Binding StateBadge}" TextWrapping="Wrap" FontSize="11" Margin="0,3,0,0" Foreground="{DynamicResource TextSecondaryBrush}" ToolTip="{Binding StateDetail}"/>
+                                                        <TextBlock Grid.Row="2" Text="{Binding EntryPath}" TextTrimming="CharacterEllipsis" FontSize="11" Margin="0,3,0,0"
+                                                                   Foreground="{DynamicResource TextSecondaryBrush}" ToolTip="{Binding EntryPath}" AutomationProperties.HelpText="{Binding EntryPath}"/>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
+                                        <TextBlock Text="Antigravity 可通过 OMP 的动态登录列表连接。" Style="{StaticResource Caption}" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Border>
 
                                 <!-- Prominent Custom / Relay preset card -->
                                 <Button x:Name="CustomPresetButton" Style="{StaticResource ProviderPresetButton}" Tag="custom" Click="Preset_Click"
@@ -407,22 +338,107 @@
                                     </StackPanel>
                                 </Grid>
                             </StackPanel>
+                            <StackPanel x:Name="CliConnectionsPanel" Visibility="Collapsed" MaxWidth="820" HorizontalAlignment="Stretch">
+                                <TextBlock x:Name="ConnectionSourceTitle" Style="{StaticResource PageTitle}" TextTrimming="CharacterEllipsis" Margin="2,0,2,4"/>
+                                <TextBlock x:Name="ConnectionSourceDetail" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="2,0,2,10"/>
+                                <StackPanel x:Name="CliToolConnectionPanel" Visibility="Collapsed">
+                                    <Border Style="{StaticResource EditorSectionCard}" BorderThickness="1">
+                                        <StackPanel>
+                                            <TextBlock Text="连接账号" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,8"/>
+                                            <TextBlock x:Name="CliSelectedPathText" TextTrimming="CharacterEllipsis" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,8"/>
+                                            <WrapPanel>
+                                                <Button x:Name="CliConnectButton" Content="连接 / 刷新账号" Style="{StaticResource GhostButton}" Click="CliConnect_Click" IsEnabled="False" Margin="0,0,8,8"/>
+                                                <Button x:Name="CliDisconnectButton" Content="断开引擎" Style="{StaticResource GhostButton}" Click="CliDisconnect_Click" IsEnabled="False" Margin="0,0,8,8"/>
+                                                <Button x:Name="CliCancelButton" Content="取消操作" Style="{StaticResource GhostButton}" Click="CliCancel_Click" Visibility="Collapsed" Margin="0,0,8,8"/>
+                                            </WrapPanel>
+                                            <StackPanel x:Name="OmpLoginPanel" Visibility="Collapsed">
+                                                <TextBlock Text="OMP 登录提供方" Style="{StaticResource FieldLabel}"/>
+                                                <ComboBox x:Name="OmpLoginProviderCombo" ItemTemplate="{StaticResource ConnectionChoiceTemplate}" HorizontalContentAlignment="Stretch" Style="{StaticResource EditorComboField}" SelectionChanged="OmpLoginProvider_Changed" AutomationProperties.Name="OMP 登录提供方"/>
+                                                <Button x:Name="OmpLoginButton" Content="通过 OMP 登录" Style="{StaticResource GhostButton}" HorizontalAlignment="Left" Margin="0,8,0,0" Click="OmpLogin_Click"/>
+                                                <TextBlock x:Name="OmpAuthorizationInstructions" TextWrapping="Wrap" Visibility="Collapsed" Margin="0,8,0,0" AutomationProperties.Name="OMP 浏览器授权说明"/>
+                                                <StackPanel x:Name="OmpCallbackPanel" Visibility="Collapsed" Margin="0,10,0,0">
+                                                    <TextBlock Text="授权回调" Style="{StaticResource FieldLabel}" ToolTip="仅在浏览器无法自动返回时，粘贴回调地址或授权码。不要输入账号密码。"/>
+                                                    <TextBox x:Name="OmpCallbackInput" AutomationProperties.Name="粘贴 OMP 授权回调"/>
+                                                    <Button x:Name="OmpSubmitCallbackButton" Content="提交回调" Style="{StaticResource GhostButton}" HorizontalAlignment="Left" Margin="0,8,0,0" Click="OmpSubmitCallback_Click"/>
+                                                </StackPanel>
+                                            </StackPanel>
+                                            <TextBlock x:Name="CliConnectionStatus" Text="连接后选择模型。" Margin="0,10,0,0" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource EditorSectionCard}" BorderThickness="1">
+                                        <StackPanel>
+                                            <TextBlock Text="文字模型" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,8"/>
+                                            <ComboBox x:Name="CliModelCombo" ItemTemplate="{StaticResource ConnectionChoiceTemplate}" HorizontalContentAlignment="Stretch" Style="{StaticResource EditorComboField}"
+                                                      SelectionChanged="CliModel_SelectionChanged" AutomationProperties.Name="本机工具文字模型"/>
+                                            <StackPanel x:Name="OmpImportPanel" Visibility="Collapsed" Margin="0,10,0,0">
+                                                <Expander Header="改为 API Key 直连">
+                                                    <StackPanel Margin="0,8,0,0">
+                                                        <CheckBox x:Name="OmpImportConsent" FontSize="12" Margin="0,0,0,8" HorizontalContentAlignment="Stretch" Checked="OmpImportConsent_Changed" Unchecked="OmpImportConsent_Changed">
+                                                            <TextBlock Text="允许将普通 API Key 保存到 Windows 凭据库。" TextWrapping="Wrap" ToolTip="仅支持普通 API Key；OAuth 登录（含 Antigravity）不会作为 API Key 导入。"/>
+                                                        </CheckBox>
+                                                        <Button x:Name="OmpImportButton" Content="导入并使用" Style="{StaticResource GhostButton}" HorizontalAlignment="Left" Click="OmpImport_Click" IsEnabled="False"/>
+                                                    </StackPanel>
+                                                </Expander>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+                                    <WrapPanel Margin="12,6,0,0">
+                                        <Button x:Name="CliTestButton" Content="测试翻译" Style="{StaticResource GhostButton}" Click="CliTest_Click" IsEnabled="False" Margin="0,0,8,8" ToolTip="发送 Hello world，会使用所选模型的少量额度。"/>
+                                        <Button x:Name="CliSaveButton" Content="保存" Style="{StaticResource GhostButton}" Click="CliSave_Click" IsEnabled="False" Margin="0,0,8,8"/>
+                                        <Button x:Name="CliSaveUseButton" Content="保存并使用" Style="{StaticResource PrimaryButton}" Click="CliSave_Click" IsEnabled="False" Margin="0,0,8,8"/>
+                                    </WrapPanel>
+                                </StackPanel>
+                                <StackPanel x:Name="ChatGptConnectionPanel" Visibility="Collapsed">
+                                    <Border Style="{StaticResource EditorSectionCard}" BorderThickness="1">
+                                        <StackPanel>
+                                            <TextBlock Text="连接账号" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,8"/>
+                                            <WrapPanel>
+                                                <Button x:Name="ChatGptLoginButton" Content="Continue with ChatGPT" Style="{StaticResource GhostButton}" Click="ChatGptLogin_Click" Margin="0,0,8,8"/>
+                                                <Button x:Name="ChatGptAddAccountButton" Content="添加账号" Style="{StaticResource GhostButton}" Click="ChatGptLogin_Click" Margin="0,0,8,8"/>
+                                                <Button x:Name="ChatGptLogoutButton" Content="退出账号" Style="{StaticResource GhostButton}" Click="ChatGptLogout_Click" Margin="0,0,8,8"/>
+                                                <Button x:Name="ChatGptCancelButton" Content="取消操作" Style="{StaticResource GhostButton}" Click="CliCancel_Click" Margin="0,0,8,8" Visibility="Collapsed"/>
+                                            </WrapPanel>
+                                            <TextBlock x:Name="ChatGptStatus" Text="在官方浏览器页面登录。" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <StackPanel x:Name="ChatGptAccountDetails" Visibility="Collapsed">
+                                        <Border Style="{StaticResource EditorSectionCard}" BorderThickness="1">
+                                            <StackPanel>
+                                                <TextBlock Text="账号与模型" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,8"/>
+                                                <ComboBox x:Name="ChatGptAccountCombo" ItemTemplate="{StaticResource ConnectionChoiceTemplate}" HorizontalContentAlignment="Stretch" Style="{StaticResource EditorComboField}" SelectionChanged="ChatGptAccount_Changed" Margin="0,0,0,10" AutomationProperties.Name="选择 ChatGPT 账号与工作区"/>
+                                                <WrapPanel Margin="0,0,0,8">
+                                                    <TextBlock Text="文字模型" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                                    <Button x:Name="ChatGptRefreshButton" Content="刷新模型" Style="{StaticResource GhostButton}" Click="ChatGptRefresh_Click"/>
+                                                </WrapPanel>
+                                                <ComboBox x:Name="ChatGptModelCombo" ItemTemplate="{StaticResource ConnectionChoiceTemplate}" HorizontalContentAlignment="Stretch" Style="{StaticResource EditorComboField}" SelectionChanged="ChatGptModel_Changed" AutomationProperties.Name="选择 ChatGPT 直连文字模型"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <WrapPanel Margin="12,6,0,0">
+                                            <Button x:Name="ChatGptTestButton" Content="测试翻译" Style="{StaticResource GhostButton}" Click="ChatGptTest_Click" Margin="0,0,8,8" ToolTip="发送 Hello world，会使用所选 ChatGPT 计划的少量额度。"/>
+                                            <Button x:Name="ChatGptSaveButton" Content="保存" Style="{StaticResource GhostButton}" Click="ChatGptSaveUse_Click" Margin="0,0,8,8"/>
+                                            <Button x:Name="ChatGptSaveUseButton" Content="保存并使用" Style="{StaticResource PrimaryButton}" Click="ChatGptSaveUse_Click" Margin="0,0,8,8"/>
+                                            <Button x:Name="ChatGptDisconnectButton" Content="断开引擎" Style="{StaticResource GhostButton}" Click="ChatGptDisconnect_Click" Margin="0,0,8,8"/>
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </StackPanel>
+                            </StackPanel>
 
                             <!-- 宽度上限 900：设置窗 960 下表单不再明显窄于
                                  可用区，两侧大空白消失；超宽屏仍居中限宽。 -->
                             <StackPanel x:Name="ConfigFormPanel" MaxWidth="820" HorizontalAlignment="Stretch">
                                 <Grid x:Name="EditorHeaderGrid" Margin="2,0,2,8">
-                                    <StackPanel Orientation="Horizontal">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="44"/><ColumnDefinition Width="13"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                         <Border Width="44" Height="44" CornerRadius="12" Background="{DynamicResource AccentSoftBrush}"
                                                 BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1">
                                             <TextBlock x:Name="EditorProviderBadge" Text="S" FontSize="14.5" FontWeight="Bold"
                                                        Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                         </Border>
-                                        <StackPanel Margin="13,0,0,0" VerticalAlignment="Center">
-                                            <TextBlock x:Name="EditorProviderTitle" Text="连接引擎" Style="{StaticResource PageTitle}" />
-                                            <TextBlock x:Name="EditorProviderMeta" Style="{StaticResource Caption}" Margin="0,3,0,0" />
+                                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                            <TextBlock x:Name="EditorProviderTitle" Text="连接引擎" Style="{StaticResource PageTitle}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                                            <TextBlock x:Name="EditorProviderMeta" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,3,0,0" />
                                         </StackPanel>
-                                    </StackPanel>
+                                    </Grid>
                                 </Grid>
 
                                 <Border x:Name="ConnectionCard" Style="{StaticResource EditorSectionCard}">
@@ -621,18 +637,17 @@
                         <StackPanel>
                             <TextBlock x:Name="DraftGuardText" FontWeight="SemiBold" TextWrapping="Wrap"
                                        Foreground="{DynamicResource WarningBrush}" FontSize="12"/>
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                            <WrapPanel HorizontalAlignment="Right" Margin="0,8,0,0">
                                 <Button x:Name="DraftCancelButton" Content="取消" Style="{StaticResource GhostButton}" Click="DraftCancel_Click"/>
                                 <Button x:Name="DraftDiscardButton" Content="放弃修改" Style="{StaticResource GhostButton}" Margin="8,0,0,0" Click="DraftDiscard_Click"/>
                                 <Button x:Name="DraftSaveButton" Content="保存并继续" Style="{StaticResource PrimaryButton}" Margin="8,0,0,0" Click="DraftSave_Click"/>
-                            </StackPanel>
+                            </WrapPanel>
                         </StackPanel>
                     </Border>
 
                     <Border x:Name="EditorActionBar" Grid.Row="2" Margin="0,10,0,0" Padding="0,10,0,0" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0">
-                        <Grid>
-                            <Button x:Name="DeleteServiceButton" Content="删除引擎" HorizontalAlignment="Left" Style="{StaticResource DangerButton}" Padding="12,6" Click="DeleteProfile_Click"/>
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <WrapPanel HorizontalAlignment="Right">
+                            <Button x:Name="DeleteServiceButton" Content="删除引擎" Margin="0,0,8,6" Style="{StaticResource DangerButton}" Padding="12,6" Click="DeleteProfile_Click"/>
                                 <Border x:Name="EditorDirtyBadge" Visibility="Collapsed" Style="{StaticResource StatusPill}"
                                         Background="{DynamicResource WarningSoftBrush}" BorderBrush="{DynamicResource WarningBrush}"
                                         Padding="8,3" Margin="0,0,8,0" VerticalAlignment="Center">
@@ -640,8 +655,7 @@
                                 </Border>
                                 <Button x:Name="CancelEditButton" Content="取消" Style="{StaticResource GhostButton}" Padding="12,6" Click="CancelEdit_Click"/>
                                 <Button x:Name="SaveServiceButton" Content="保存" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}" Padding="16,6" Click="SaveService_Click"/>
-                            </StackPanel>
-                        </Grid>
+                        </WrapPanel>
                     </Border>
                 </Grid>
             </Border>

@@ -22,14 +22,17 @@ internal sealed record SummaryRequestIdentity(
     TextTaskKind TaskKind,
     string? EngineProfileId,
     string? ModelName,
-    int ConfigVersion);
+    int ConfigVersion,
+    string? PromptTemplateId = null,
+    ulong? PromptTemplateRevision = null);
 
 /// <summary>
 /// Snapshot tying a request identity to a specific UI generation.
 /// </summary>
 internal sealed record SummaryRequestSnapshot(
     SummaryRequestIdentity Identity,
-    long Generation);
+    long Generation,
+    PromptAnchorSnapshot? PreferenceAnchor = null);
 
 /// <summary>
 /// Status lines for the summary reading. A summary is its own request:
@@ -37,25 +40,18 @@ internal sealed record SummaryRequestSnapshot(
 /// </summary>
 internal static class ReadingRequestCopy
 {
-    public const string NeedSource = "请先输入原文，再看要点。";
+    public const string NeedSource = "请先输入原文";
 
-    public const string SummaryWhileTranslating = "正在整理要点，翻译继续";
+    public const string Preparing = "整理中…";
 
-    public const string SummaryKeepsTranslation = "正在整理要点，译文保留";
-
-    public const string SummaryKeptTranslation = "正在整理要点，译文已保留";
-
-    public const string SummaryReadyHint = "要点 · 切回「译文」可看翻译";
+    public const string SummaryReadyHint = "要点";
 
     public const string SummaryCancelled = "已取消要点";
 
-    public static string WhileRequesting(bool translationRunning) =>
-        translationRunning ? SummaryWhileTranslating : SummaryKeepsTranslation;
-
-    public const string Cached = "要点 · 已缓存 · 可切回译文";
+    public const string Cached = "已缓存";
 
     public static string Finished(ulong elapsedMs) =>
-        $"要点 · {TranslationElapsedText.ForMilliseconds(elapsedMs)} · 可切回译文";
+        $"已完成 · {TranslationElapsedText.ForMilliseconds(elapsedMs)}";
 }
 
 /// <summary>

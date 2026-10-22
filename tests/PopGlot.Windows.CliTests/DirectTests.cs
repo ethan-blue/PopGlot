@@ -20,6 +20,7 @@ internal static class DirectTests
     private static string? _scenario;
     private static HttpClient? _client;
     private static TaskCompletionSource? _requestEntered;
+    private static (string Token, string Model)? _expectedContext;
     private static string Jwt(string nonce, string audience = "oaiapp_fixture", string subject = "subject-fixture")
     {
         var header = ChatGptOAuth.Base64Url(JsonSerializer.SerializeToUtf8Bytes(new { alg = "RS256", kid = "fixture" }));
@@ -51,10 +52,16 @@ internal static class DirectTests
             }
             if (uri.AbsolutePath.EndsWith("oauth/revoke")) return new(HttpStatusCode.OK) { Content = new StringContent("") };
             Program.Assert(request.Headers.Authorization?.Scheme == "Bearer", "direct model calls require the selected account token");
+            if (_expectedContext is { } context)
+                Program.Assert(request.Headers.Authorization?.Parameter == context.Token,
+                    "a request must use only its captured account, never another saved registration");
             if (uri.AbsolutePath == "/v1/models") return Json(new { models = new[] { new { slug = "fixture", display_name = "Fixture direct", visibility = "list" } } });
             Program.Assert(uri.AbsolutePath == "/v1/responses", "use public Responses API");
             if (_scenario == "hold") { _requestEntered!.TrySetResult(); await Task.Delay(Timeout.Infinite, ct); }
             var text = await request.Content!.ReadAsStringAsync(ct); using var doc = JsonDocument.Parse(text); var root = doc.RootElement;
+            if (_expectedContext is { } inference)
+                Program.Assert(root.GetProperty("model").GetString() == inference.Model,
+                    "an in-flight request must keep its captured model when the editable profile changes");
             Program.Assert(root.GetProperty("store").GetBoolean() == false && root.GetProperty("stream").GetBoolean(), "direct plan requires no storage and streaming");
             Program.Assert(!root.TryGetProperty("max_output_tokens", out _) && !root.TryGetProperty("temperature", out _), "omit unsupported plan parameters");
             Program.Assert(root.GetProperty("input").ValueKind == JsonValueKind.Array, "plan input is an explicit array");
@@ -130,6 +137,32 @@ internal static class DirectTests
         Program.Assert(summary.DirectDiagnostics is not null && summary.CliDiagnostics is null && summary.Diagnostics?.StatusCode == 200, "summary carries real HTTP diagnostics");
         Program.Assert(ProfileManager.TrySwitchActiveProfile(profile.Id, out _), "quick switch supports saved direct login");
     }
+    public static async Task AccountAndModelSnapshotIsolation()
+    {
+        var profile = Profile();
+        var alternate = ChatGptAccountStore.SaveValidated("oaiapp_fixture", "alternate-subject", "Alternate fixture",
+            new("alternate-access", "alternate-refresh", Jwt("fixture", subject: "alternate-subject"),
+                "resource.invoke chatgpt.tokens.use.direct", DateTimeOffset.UtcNow.AddHours(1), DateTimeOffset.UtcNow,
+                Guid.NewGuid().ToString("N")), null);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            _expectedContext = ("fixture-access", "fixture");
+            var first = CliTranslationExecutor.Stream(profile, "Hello world", "en", "zh-CN", null, deadline.Token);
+            profile.DirectConnection!.AccountId = alternate.Id;
+            profile.DirectConnection.ModelId = "alternate-model";
+            profile.TextModel = "stale-display-model";
+            var original = await first.Completion;
+            Program.Assert(!original.Result.IsPartial && original.DirectDiagnostics?.ModelId == "fixture",
+                "the first response must retain the original account/model snapshot");
+            _expectedContext = ("alternate-access", "alternate-model");
+            var next = await CliTranslationExecutor.Stream(profile, "Hello world", "en", "zh-CN", null, deadline.Token).Completion;
+            Program.Assert(!next.Result.IsPartial && next.DirectDiagnostics?.ModelId == "alternate-model",
+                "a subsequent request must use the newly selected account and canonical model");
+        }
+        finally { _expectedContext = null; }
+    }
+
     public static async Task TerminalFailures()
     {
         var profile = Profile();
