@@ -1490,7 +1490,6 @@ internal static class WaveRegressionTests
     {
         for (var attempt = 0; attempt < 1000 && !condition(); attempt++)
         {
-            try { System.Windows.Input.Mouse.Synchronize(); } catch { }
             PumpOnce();
             Thread.Sleep(10);
         }
@@ -1753,7 +1752,6 @@ internal static class WaveRegressionTests
                 target.Height = 120;
                 host.Content = target;
                 host.Show();
-                host.Activate();
                 host.UpdateLayout();
 
                 // Real input, the strongest form available to the harness:
@@ -1769,23 +1767,15 @@ internal static class WaveRegressionTests
                     $"{name}: GetWindowRect must succeed");
                 var centerX = (rect.Left + rect.Right) / 2;
                 var centerY = (rect.Top + rect.Bottom) / 2;
-                var hitHwnd = WindowFromPoint(new NativePoint { X = centerX, Y = centerY });
-                GetWindowThreadProcessId(hitHwnd, out var hitPid);
-                if (hitPid != (uint)Environment.ProcessId)
-                {
-                    // The desktop session is locked (LockScreenBackstopFrame) or obscured;
-                    // physical input routing cannot reach user-session windows.
-                    return;
-                }
                 // A new HWND can occupy the previous target's position. Move
                 // away first so the OS delivers motion even when the physical
                 // cursor was already at the final center point.
                 True(SendMouseMove(centerX - 8, centerY - 8), $"{name}: the preparatory real cursor move must be injected");
                 True(SendMouseMove(centerX, centerY), $"{name}: the real cursor move must be injected");
-                System.Windows.Input.Mouse.Synchronize();
                 PumpUntilCondition(() => target.IsMouseOver,
                     $"{name}: the real mouse move must land on the target through the OS input pipeline " +
                     "(if the real cursor was moved away mid-test, rerun on an idle desktop)");
+
                 var surface = (Border)target.Template.FindName("Surface", target)!;
                 if (expectQuiet)
                 {
@@ -1851,12 +1841,6 @@ internal static class WaveRegressionTests
     private static extern bool SetCursorPos(int x, int y);
 
     // INPUT layout comes from the app's ABI-verified NativeInput (the suite
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern IntPtr WindowFromPoint(NativePoint point);
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
-
     // separately asserts its size); DllImport keeps the same binary shape.
     [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint inputCount, PopGlot.Windows.WindowsSelectionClipboardAdapter.NativeInput[] inputs, int size);
