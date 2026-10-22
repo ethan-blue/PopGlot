@@ -63,6 +63,12 @@ public partial class ServicesSection
                 try { ChatGptAccountCombo.SelectedItem = selected; }
                 finally { _loadingAccounts = false; }
                 SelectDirectAccount();
+                // The guard may have resolved via discard (back to picker)
+                // or save; either way this continuation lands on a fresh
+                // direct editor for the requested account. Take that as the
+                // clean baseline instead of comparing against whatever the
+                // discard reloaded.
+                ClearEditorDirty();
             });
             return;
         }

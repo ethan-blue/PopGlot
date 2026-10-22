@@ -450,6 +450,7 @@ public partial class App : Application
         DispatcherUnhandledException += (_, args) =>
         {
             var eventId = DiagnosticsLog.Log(args.Exception);
+            GitHubIssueReporter.TryUploadCrashReportOnce(args.Exception, eventId);
             try
             {
                 CoreBridge.CancelActiveRequest();

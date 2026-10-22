@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Media;
 using PopGlot.Windows.Services;
 
@@ -47,7 +48,14 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
 
     internal bool IsLoading { get => _loading; set => _loading = value; }
 
-    internal void SetShellSettings(ShellSettings settings) => _shellSettings = settings;
+    internal void SetShellSettings(ShellSettings settings)
+    {
+        _shellSettings = settings;
+        // 0.1.25：设置窗口每次同步设置快照时刷新 GitHub 上报卡（同意开关
+        // 与凭据掩码），与 RefreshCloudSpeechState/RefreshFreeEngineState
+        // 同一初始化路径。
+        RefreshIssueUploadState();
+    }
 
     // ================= OCR =================
 
@@ -289,5 +297,232 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         }
         RefreshDraftRoutePreview();
         ProviderDirty?.Invoke();
+    }
+
+    // ================= GitHub 问题上报（自我迭代） =================
+
+    private bool _issueUploadHasStoredPat;
+    private bool _issueUploadTestBusy;
+
+    /// <summary>
+    /// Loads the consent checkbox from the persisted settings and paints the
+    /// credential mask state. The consent is an independent ShellSettings
+    /// bool persisted immediately on toggle — the same save flow the cloud
+    /// speech consent on this page uses (ShellSettingsStore.Update +
+    /// SidebarChanged), never a draft the page save bar could drop.
+    /// </summary>
+    internal void RefreshIssueUploadState()
+    {
+        if (IssueUploadConsentToggle is null || IssueUploadPatBox is null)
+        {
+            return;
+        }
+        _loading = true;
+        try
+        {
+            IssueUploadConsentToggle.IsChecked = _shellSettings.IssueUploadConsent;
+        }
+        finally
+        {
+            _loading = false;
+        }
+        try
+        {
+            _issueUploadHasStoredPat = CredentialStore.HasApiKey(GitHubIssueReporter.CredentialTarget);
+        }
+        catch (Exception)
+        {
+            // An unreadable vault must not brick the page; treat as absent.
+            _issueUploadHasStoredPat = false;
+        }
+        Ui.SetIsCredentialMask(IssueUploadPatBox, _issueUploadHasStoredPat && IssueUploadPatBox.Password.Length == 0);
+        Ui.SetPlaceholder(IssueUploadPatBox,
+            _issueUploadHasStoredPat ? "••••••••••••  已保存，留空保留" : "粘贴 GitHub PAT（留空保留）");
+        UpdateIssueUploadGating();
+    }
+
+    /// <summary>
+    /// 「发送测试诊断」仅在同意为开且令牌可用（已保存或刚粘贴）时可用；
+    /// 禁用时仍显示提示（ToolTipService.ShowOnDisabled），说明缺什么。
+    /// </summary>
+    private void UpdateIssueUploadGating()
+    {
+        if (IssueUploadTestButton is null)
+        {
+            return;
+        }
+        var consent = IssueUploadConsentToggle.IsChecked == true;
+        var hasPat = _issueUploadHasStoredPat || IssueUploadPatBox.Password.Length > 0;
+        IssueUploadTestButton.IsEnabled = consent && hasPat && !_issueUploadTestBusy;
+    }
+
+    private void IssueUploadConsent_Changed(object sender, RoutedEventArgs e)
+    {
+        UpdateIssueUploadGating();
+        if (_loading)
+        {
+            return;
+        }
+
+        var enabled = IssueUploadConsentToggle.IsChecked == true;
+        try
+        {
+            // 同意变化就是本卡的保存时刻：一并落盘刚粘贴的令牌（留空则保留）。
+            CommitIssueUploadCredential();
+            _shellSettings = ShellSettingsStore.Update(current => current with { IssueUploadConsent = enabled });
+            SidebarChanged?.Invoke();
+            StatusChanged?.Invoke(
+                enabled
+                    ? "已同意在程序崩溃时上传脱敏诊断到 GitHub Issues；可随时取消勾选撤销。"
+                    : "已撤销同意：不再向 GitHub 上传任何诊断。",
+                StatusTone.Info);
+        }
+        catch (Exception exception)
+        {
+            // Never leave the checkbox claiming a state that was not persisted.
+            _loading = true;
+            try
+            {
+                IssueUploadConsentToggle.IsChecked = !enabled;
+            }
+            finally
+            {
+                _loading = false;
+            }
+            StatusChanged?.Invoke($"保存 GitHub 上报选择失败：{exception.Message}", StatusTone.Error);
+        }
+    }
+
+    private void IssueUploadPat_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        Ui.SetIsCredentialMask(IssueUploadPatBox, _issueUploadHasStoredPat && IssueUploadPatBox.Password.Length == 0);
+        UpdateIssueUploadGating();
+    }
+
+    /// <summary>
+    /// Writes a newly pasted PAT into the Windows credential vault and clears
+    /// the field (no fake mask ever re-enters the control). An empty field
+    /// deliberately keeps the stored token — 留空保留. Throws on vault failure
+    /// so callers report honestly.
+    /// </summary>
+    internal bool CommitIssueUploadCredential()
+    {
+        if (IssueUploadPatBox is null)
+        {
+            return false;
+        }
+        var typed = IssueUploadPatBox.Password.Trim();
+        if (typed.Length == 0)
+        {
+            return false;
+        }
+        CredentialStore.SaveApiKey(typed, GitHubIssueReporter.CredentialTarget);
+        IssueUploadPatBox.Clear();
+        _issueUploadHasStoredPat = true;
+        Ui.SetIsCredentialMask(IssueUploadPatBox, true);
+        Ui.SetPlaceholder(IssueUploadPatBox, "••••••••••••  已保存，留空保留");
+        UpdateIssueUploadGating();
+        return true;
+    }
+
+    private void IssueUploadPatClear_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            CredentialStore.DeleteApiKey(GitHubIssueReporter.CredentialTarget);
+            IssueUploadPatBox.Clear();
+            _issueUploadHasStoredPat = false;
+            Ui.SetIsCredentialMask(IssueUploadPatBox, false);
+            Ui.SetPlaceholder(IssueUploadPatBox, "粘贴 GitHub PAT（留空保留）");
+            UpdateIssueUploadGating();
+            IssueUploadStatusText.Text = string.Empty;
+            StatusChanged?.Invoke("已从 Windows 凭据管理器清除 GitHub 访问令牌。", StatusTone.Info);
+        }
+        catch (Exception exception)
+        {
+            StatusChanged?.Invoke($"清除令牌失败：{exception.Message}", StatusTone.Error);
+        }
+    }
+
+    private async void IssueUploadTest_Click(object sender, RoutedEventArgs e)
+    {
+        if (_issueUploadTestBusy)
+        {
+            return;
+        }
+        _issueUploadTestBusy = true;
+        UpdateIssueUploadGating();
+        IssueUploadStatusText.Text = "正在发送测试诊断…";
+        try
+        {
+            // 测试前先把刚粘贴的令牌落盘（留空保留），上传始终读凭据库。
+            CommitIssueUploadCredential();
+            var title = $"[test] GitHub 上报连通性 {GitHubIssueReporter.AssemblyVersionString}";
+            var (ok, issueUrl, error) = await GitHubIssueReporter.UploadAsync(
+                title, GitHubIssueReporter.BuildConnectivityReport());
+            if (ok && !string.IsNullOrEmpty(issueUrl))
+            {
+                RenderIssueUploadStatusLink(issueUrl);
+            }
+            else
+            {
+                IssueUploadStatusText.Inlines.Clear();
+                IssueUploadStatusText.Inlines.Add(
+                    $"测试失败：{error ?? "GitHub 未返回 Issue 地址。"}");
+            }
+        }
+        catch (Exception exception)
+        {
+            IssueUploadStatusText.Inlines.Clear();
+            IssueUploadStatusText.Inlines.Add($"测试失败：{GitHubIssueReporter.SafeError(exception)}");
+        }
+        finally
+        {
+            _issueUploadTestBusy = false;
+            UpdateIssueUploadGating();
+        }
+    }
+
+    /// <summary>
+    /// Renders "已创建测试 Issue：<link>"；链接沿用帮助/Markdown 渲染的同款
+    /// 安全打开方式：仅 http/https 且 UseShellExecute，异常一律吞掉。
+    /// </summary>
+    private void RenderIssueUploadStatusLink(string issueUrl)
+    {
+        IssueUploadStatusText.Inlines.Clear();
+        if (Uri.TryCreate(issueUrl, UriKind.Absolute, out var uri) &&
+            (uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+             uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+        {
+            var link = new Hyperlink(new Run(uri.AbsoluteUri))
+            {
+                NavigateUri = uri,
+                ToolTip = uri.AbsoluteUri,
+                Cursor = Cursors.Hand,
+            };
+            link.SetResourceReference(Hyperlink.ForegroundProperty, "AccentBrush");
+            link.RequestNavigate += (_, args) =>
+            {
+                try
+                {
+                    if (args.Uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+                        args.Uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                    {
+                        System.Diagnostics.Process.Start(
+                            new System.Diagnostics.ProcessStartInfo(args.Uri.AbsoluteUri) { UseShellExecute = true });
+                    }
+                }
+                catch
+                {
+                }
+                args.Handled = true;
+            };
+            IssueUploadStatusText.Inlines.Add("已创建测试 Issue：");
+            IssueUploadStatusText.Inlines.Add(link);
+        }
+        else
+        {
+            IssueUploadStatusText.Inlines.Add($"已创建测试 Issue：{issueUrl}");
+        }
     }
 }

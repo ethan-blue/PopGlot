@@ -250,6 +250,10 @@ internal static partial class Program
         await RunStaAsync("product summary route change retires the busy view", ProductSummaryRouteChangeRetiresBusyState);
         await RunStaAsync("product summary streams and reuses its visible task", ProductSummaryStreamsAndReusesVisibleTask);
         RunSta("product quick route selection preserves reading and image route", ProductQuickRouteSwitchPreservesReadingAndVision);
+        RunSta("product quick menu closes on foreign deactivation", ProductQuickMenuClosesOnForeignDeactivation);
+        RunSta("product route snapshot is cached per revision", ProductRouteSnapshotIsCachedPerRevision);
+        RunSta("product panel translation toggle keeps unrelated provenance", ProductPanelTranslationToggleKeepsUnrelatedProvenance);
+        RunSta("product direct add discard returns to source picker", ProductDirectAddDiscardReturnsToSourcePicker);
         await RunStaAsync("markdown links render once without regex capture debris", RuntimeMarkdownLinksRenderOnce);
         Run("summary route capability respects offline policy", RuntimeSummaryOfflineCapability);
         await RunAsync("coordinator streaming delta arrives before completion", CoordinatorDeltaArrivesBeforeCompletionAsync);

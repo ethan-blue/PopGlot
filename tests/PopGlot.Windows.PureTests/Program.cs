@@ -119,6 +119,7 @@ internal static partial class Program
         Run("first-show centres inside the cursor monitor, never unconditional primary", FirstShowCentresOnCursorMonitor);
         Run("first-show keeps a declared position on a secondary monitor", FirstShowKeepsDeclaredPositionOnSecondary);
         Run("first-show target anchor prefers the owner center over the cursor", FirstShowAnchorPrefersOwnerCenter);
+        await RunAsync("github issue reporter upload, redaction and consent", RunGitHubIssueReporterTests);
 
         Console.WriteLine($"\nPopGlot pure tests: {_passed} passed, {_failed} failed, " +
                           $"{Interlocked.Read(ref refusedSends)} send attempts refused.");

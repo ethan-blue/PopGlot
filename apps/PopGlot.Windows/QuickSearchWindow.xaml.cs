@@ -169,8 +169,6 @@ public partial class QuickSearchWindow : Window
         {
             CenterOnCurrentMonitor();
             FocusSearchBox();
-            RefreshLangBadge();
-            RefreshRouteSelection();
             SyncUiWithState();
             UpdateEmptyStateVisuals();
             UpdateStatusDot();
@@ -949,8 +947,13 @@ public partial class QuickSearchWindow : Window
 
     private async Task ChangeTextRouteAsync(Func<(bool Ok, string Error)> change)
     {
-        if (_isClosed || _switchingRoute ||
-            _state.Stage is QuickSearchUiStage.Streaming or QuickSearchUiStage.Finalizing) return;
+        if (_isClosed || _switchingRoute) return;
+        if (_state.Stage is QuickSearchUiStage.Streaming or QuickSearchUiStage.Finalizing)
+        {
+            _state.PostPendingNotice("翻译进行中，稍后切换");
+            SyncUiWithState();
+            return;
+        }
         _switchingRoute = true;
         RouteSelectorButton.IsEnabled = false;
         FooterStatus.Text = "切换中…";
@@ -1428,7 +1431,13 @@ public partial class QuickSearchWindow : Window
         {
             return;
         }
-        if (_routeMenu is { IsOpen: true }) return;
+        // Foreign activation first closes the capture-owned menu, then the
+        // same empty-window decision runs — an open route menu must never
+        // leave a topmost frameless window floating over other apps.
+        if (_routeMenu is { IsOpen: true })
+        {
+            _routeMenu.IsOpen = false;
+        }
         if (ForegroundBelongsToThisProcess())
         {
             return;

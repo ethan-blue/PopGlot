@@ -546,6 +546,12 @@ public partial class MainWindow : Window
             }
             if (!paintsFooter || revision != ProfileManager.Revision || !IsActiveRouteFreeEngine())
             {
+                if (EngineDot.Tag as string == "Testing")
+                {
+                    // A transient vault failure in the recheck must not
+                    // strand the testing paint; repaint the cached snapshot.
+                    RefreshEngineStatus();
+                }
                 return;
             }
             EngineDot.Tag = null;
@@ -1198,18 +1204,34 @@ internal static class TranslationStyleMenu
     /// enabled instead of being mistaken for the free engine. Zero network;
     /// Unknown means local state could not be read this instant.
     /// </summary>
+    private static int _styleProbeRevision = -1;
+    private static TranslationStyleSupport _styleProbeCache;
+
     internal static TranslationStyleSupport ProbeNextTextRoute()
+    {
+        // Same revision-keyed caching as the footer route snapshot: this
+        // probe runs on every popup/activation repaint and must not hit the
+        // credential vault in the steady state.
+        var revision = ProfileManager.Revision;
+        if (revision == _styleProbeRevision)
+        {
+            return _styleProbeCache;
+        }
+        var support = ProbeNextTextRouteUncached();
+        _styleProbeRevision = revision;
+        _styleProbeCache = support;
+        return support;
+    }
+
+    private static TranslationStyleSupport ProbeNextTextRouteUncached()
     {
         try
         {
-            // 与 coordinator 真实请求完全相同的解析链：ProfileManager.ResolveRoutes
-            // → 按 route 的凭据目标读 key → 共享谓词判定（P05 起消费档案上的
-            // 类型化执行维度，不从标签/IsLocal 推断）。
             var settings = CoreBridge.GetSettings();
             var (textRoute, _) = ProfileManager.ResolveRoutes();
             var textApiKey = textRoute is null || textRoute.Profile.ExecutionFacts.IsManagedExecution
                 ? null
-                : CredentialStore.LoadApiKey(textRoute.CredentialTarget);
+                : CredentialStore.HasApiKey(textRoute.CredentialTarget) ? Services.TextRouteMenu.KeyPresent : null;
             var textRuntimeSettings = textRoute?.Profile.ToProviderSettings(settings);
             return TranslationCoordinator
                 .ResolveTextRouteCapability(textRuntimeSettings, textApiKey, settings, textRoute?.Profile)

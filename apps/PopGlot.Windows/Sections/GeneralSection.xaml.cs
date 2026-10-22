@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Reflection;
 
 namespace PopGlot.Windows.Sections;
 
@@ -11,6 +12,20 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
     public GeneralSection()
     {
         InitializeComponent();
+        ShowAppVersion();
+    }
+
+    /// <summary>
+    /// 0.1.25：唯一的版本展示面。正文是三段式程序集版本；悬停提示是完整
+    /// InformationalVersion（构建带有 +commit 哈希时一并显示）。
+    /// </summary>
+    private void ShowAppVersion()
+    {
+        var version = typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+        AppVersionText.Text = version;
+        AppVersionText.ToolTip = typeof(App).Assembly
+            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? version;
     }
 
     // ================= Public accessors for MainWindow =================

@@ -10,6 +10,70 @@ namespace PopGlot.Windows.Services;
 
 internal static class TextRouteMenu
 {
+    // Presence-only sentinel: ResolveTextRouteCapability null-checks this
+    // value, so a non-null marker proves a key exists without materializing
+    // the secret on UI-thread repaint paths.
+    internal const string KeyPresent = "present";
+
+    private static readonly object CacheGate = new();
+    private static int _cacheRevision = -1;
+    private static ShellSettings? _cacheShell;
+    private static (string Label, string Detail, ProviderProfile? Profile, bool IsFree, StatusTone Tone) _cache;
+
+    /// <summary>
+    /// Repaint-hot route snapshot. Keyed on the monotonic profile revision
+    /// plus the cached shell-settings instance (its identity only changes
+    /// when the file content changes), so alt-tab popups and menu builds do
+    /// zero CredReads and zero extra disk reads in the steady state.
+    /// </summary>
+    internal static (string Label, string Detail, ProviderProfile? Profile, bool IsFree, StatusTone Tone) ReadCurrent()
+    {
+        var shell = ShellSettingsStore.Load();
+        lock (CacheGate)
+        {
+            if (_cacheRevision == ProfileManager.Revision && ReferenceEquals(shell, _cacheShell))
+            {
+                return _cache;
+            }
+        }
+        var snapshot = ReadCurrentUncached(shell);
+        lock (CacheGate)
+        {
+            _cacheRevision = ProfileManager.Revision;
+            _cacheShell = shell;
+            _cache = snapshot;
+        }
+        return snapshot;
+    }
+
+    private static (string Label, string Detail, ProviderProfile? Profile, bool IsFree, StatusTone Tone) ReadCurrentUncached(ShellSettings shell)
+    {
+        var config = ProfileManager.Load();
+        var settings = CoreBridge.GetSettings();
+        var profile = config.TryGetActiveProfile();
+        if (profile is not null)
+        {
+            var key = profile.ExecutionFacts.IsManagedExecution ? null :
+                CredentialStore.HasApiKey(ProfileManager.ResolveCredentialTargetFor(profile)) ? KeyPresent : null;
+            var capability = TranslationCoordinator.ResolveTextRouteCapability(
+                profile.ToProviderSettings(settings), key, settings, profile);
+            if (capability.HasConfiguredProvider)
+            {
+                var permitted = capability.IsLocal || settings.NetworkEnabled && !settings.SafeDevMode;
+                var ready = permitted && ProfileManager.IsTextEngineExecutable(profile);
+                return (ShortName(profile), Detail(profile, ModelName(profile)), profile, false,
+                    ready ? StatusTone.Info : StatusTone.Warning);
+            }
+        }
+        else if (!config.PreferFreeEngine && settings.TargetsLocalRuntime)
+            return ("本机模型", settings.TextModel, null, false,
+                settings.TextIsConfigured ? StatusTone.Info : StatusTone.Warning);
+        var allowed = shell.FreeEngineConsent == FreeEngineConsent.Allowed && settings.NetworkEnabled && !settings.SafeDevMode;
+        var selected = config.PreferFreeEngine || allowed;
+        return (selected ? FreeName(shell.FreeEngineProvider) : "选择模型",
+            selected ? FreeDetail(shell.FreeEngineProvider) : "选择文字模型；不会自动提交请求。",
+            null, selected, allowed ? StatusTone.Info : StatusTone.Warning);
+    }
     internal static string ShortName(ProviderProfile profile) => profile.ResolvedExecutionKind switch
     {
         EngineExecutionKind.CodexAppServer => "Codex",
@@ -32,35 +96,6 @@ internal static class TextRouteMenu
         _ => profile.TextModel,
     };
 
-    internal static (string Label, string Detail, ProviderProfile? Profile, bool IsFree, StatusTone Tone) ReadCurrent()
-    {
-        var config = ProfileManager.Load();
-        var settings = CoreBridge.GetSettings();
-        var shell = ShellSettingsStore.Load();
-        var profile = config.TryGetActiveProfile();
-        if (profile is not null)
-        {
-            var key = profile.ExecutionFacts.IsManagedExecution ? null :
-                CredentialStore.LoadApiKey(ProfileManager.ResolveCredentialTargetFor(profile));
-            var capability = TranslationCoordinator.ResolveTextRouteCapability(
-                profile.ToProviderSettings(settings), key, settings, profile);
-            if (capability.HasConfiguredProvider)
-            {
-                var permitted = capability.IsLocal || settings.NetworkEnabled && !settings.SafeDevMode;
-                var ready = permitted && ProfileManager.IsTextEngineExecutable(profile);
-                return (ShortName(profile), Detail(profile, ModelName(profile)), profile, false,
-                    ready ? StatusTone.Info : StatusTone.Warning);
-            }
-        }
-        else if (!config.PreferFreeEngine && settings.TargetsLocalRuntime)
-            return ("本机模型", settings.TextModel, null, false,
-                settings.TextIsConfigured ? StatusTone.Info : StatusTone.Warning);
-        var allowed = shell.FreeEngineConsent == FreeEngineConsent.Allowed && settings.NetworkEnabled && !settings.SafeDevMode;
-        var selected = config.PreferFreeEngine || allowed;
-        return (selected ? FreeName(shell.FreeEngineProvider) : "选择模型",
-            selected ? FreeDetail(shell.FreeEngineProvider) : "选择文字模型；不会自动提交请求。",
-            null, selected, allowed ? StatusTone.Info : StatusTone.Warning);
-    }
 
     internal static ContextMenu Create(Action<string> selectProfile, Func<FreeEngineProvider, Task> selectFree, Action manage)
     {

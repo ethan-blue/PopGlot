@@ -727,6 +727,15 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     /// <summary>Discards editor drafts by reloading the selected profile.</summary>
     internal void ReloadEditorFromSaved()
     {
+        // A discarded ADD-MODE connection draft (CLI or ChatGPT direct) has
+        // no saved profile to reload: falling back to a list/active profile
+        // would flash an unrelated engine's form and leave the editor dirty
+        // against that baseline. Return to the unified source picker.
+        if (CliConnectionsPanel.Visibility == Visibility.Visible && _editingProfileId is null)
+        {
+            ShowSourcePicker();
+            return;
+        }
         var config = ProfileManager.Load();
         var profile = config.Profiles.FirstOrDefault(p => p.Id == _editingProfileId)
             ?? SelectedProfile() ?? config.TryGetActiveProfile();

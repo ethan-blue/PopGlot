@@ -103,6 +103,53 @@
                           Checked="CloudSpeech_ToggleChanged" Unchecked="CloudSpeech_ToggleChanged" />
         </Grid>
 
+        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
+
+        <!-- 0.1.25 自我迭代：GitHub 问题上报。默认关闭的 opt-in 诊断上传，
+             令牌只存 Windows 凭据管理器，正文仅脱敏诊断与版本信息。 -->
+        <TextBlock Text="GitHub 问题上报" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
+        <Border Style="{StaticResource InlineCard}" Margin="0,0,0,14" Padding="14,12">
+            <StackPanel>
+                <CheckBox x:Name="IssueUploadConsentToggle"
+                          AutomationProperties.Name="允许崩溃时上传脱敏诊断到 GitHub"
+                          Checked="IssueUploadConsent_Changed"
+                          Unchecked="IssueUploadConsent_Changed">
+                    <TextBlock Text="程序遇到严重问题时，上传脱敏诊断到 GitHub Issues" TextWrapping="Wrap" />
+                </CheckBox>
+                <TextBlock Style="{StaticResource Caption}" Margin="20,4,0,0" TextWrapping="Wrap" LineHeight="17"
+                           Text="默认关闭。仅上传版本、系统信息与已脱敏的崩溃类型和堆栈；绝不包含翻译文本、截图、带查询串的地址或凭据。随时取消勾选即可撤销。" />
+                <Grid Margin="0,10,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <PasswordBox x:Name="IssueUploadPatBox"
+                                 Style="{StaticResource FormPasswordBox}"
+                                 local:Ui.Placeholder="留空保留"
+                                 AutomationProperties.Name="GitHub 访问令牌"
+                                 PasswordChanged="IssueUploadPat_PasswordChanged" />
+                    <Button x:Name="IssueUploadPatClearButton" Grid.Column="1"
+                            Content="清除令牌" Margin="8,0,0,0" Padding="10,5"
+                            Style="{StaticResource GhostButton}" VerticalAlignment="Center"
+                            AutomationProperties.Name="清除已保存的 GitHub 令牌"
+                            Click="IssueUploadPatClear_Click" />
+                    <Button x:Name="IssueUploadTestButton" Grid.Column="2"
+                            Content="发送测试诊断" Margin="8,0,0,0" Padding="10,5"
+                            Style="{StaticResource GhostButton}" VerticalAlignment="Center"
+                            AutomationProperties.Name="发送测试诊断到 GitHub"
+                            ToolTipService.ShowOnDisabled="True"
+                            ToolTip="需要先勾选上传同意，并保存 GitHub 访问令牌（需 Issues 写权限）。"
+                            Click="IssueUploadTest_Click" />
+                </Grid>
+                <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap"
+                           Text="令牌仅由你粘贴，保存在本机 Windows 凭据管理器（PopGlot/telemetry/github），不写入配置文件或日志；留空保留已保存的令牌。" />
+                <TextBlock x:Name="IssueUploadStatusText" Margin="0,8,0,0" TextWrapping="Wrap"
+                           FontSize="12" LineHeight="17"
+                           Foreground="{DynamicResource TextSecondaryBrush}" />
+            </StackPanel>
+        </Border>
+
         <!-- Route status card -->
         <Border x:Name="RouteCard" Visibility="Collapsed" Style="{StaticResource InlineCard}" Margin="0,6,0,14" Padding="12,10">
             <StackPanel>

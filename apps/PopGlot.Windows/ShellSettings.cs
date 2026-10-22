@@ -241,7 +241,10 @@ internal sealed record ShellSettings(
     HotkeyBinding? QuickSearchHotkey = null,
     // Which public text service the free engine may contact. Missing on
     // older files means Google, the only choice those builds had.
-    FreeEngineProvider FreeEngineProvider = FreeEngineProvider.Google)
+    FreeEngineProvider FreeEngineProvider = FreeEngineProvider.Google,
+    // 0.1.25 自我迭代：GitHub Issue 诊断上报授权。默认关闭；旧配置文件缺少
+    // 该字段时同样读作 false，升级绝不隐式授予上传许可。
+    bool IssueUploadConsent = false)
 {
     public HotkeyBinding QuickSearchHotkey { get; init; } =
         QuickSearchHotkey ?? HotkeyBinding.QuickSearchDefault;
@@ -497,7 +500,9 @@ internal static class ShellSettingsStore
                 persisted.FreeEngineProvider is not null &&
                 Enum.TryParse<FreeEngineProvider>(persisted.FreeEngineProvider, ignoreCase: true, out var freeProvider)
                     ? freeProvider
-                    : FreeEngineProvider.Google);
+                    : FreeEngineProvider.Google,
+                // 0.1.25：旧文件没有该字段 → false，默认关闭诊断上传。
+                persisted.IssueUploadConsent ?? false);
 
             lock (CacheLock)
             {
@@ -611,7 +616,8 @@ internal static class ShellSettingsStore
             settings.CloseMainWindowToTray,
             settings.HasCompletedOnboarding,
             settings.QuickSearchHotkey.Serialize(),
-            settings.FreeEngineProvider.ToString());
+            settings.FreeEngineProvider.ToString(),
+            settings.IssueUploadConsent);
 
         // Write through a temporary file so a crash mid-write cannot leave the
         // user without settings on the next launch: exclusive-access write,
@@ -659,5 +665,6 @@ internal static class ShellSettingsStore
         bool? CloseMainWindowToTray = null,
         bool? HasCompletedOnboarding = null,
         string? QuickSearchHotkey = null,
-        string? FreeEngineProvider = null);
+        string? FreeEngineProvider = null,
+        bool? IssueUploadConsent = null);
 }

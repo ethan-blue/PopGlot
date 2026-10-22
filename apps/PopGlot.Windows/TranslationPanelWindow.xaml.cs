@@ -453,6 +453,7 @@ public partial class TranslationPanelWindow : Window
     internal void ShowStoredTranslation()
     {
         SetSummaryStatusDetail(null);
+        var wasHoldingSummary = _holdingSummary;
         _holdingSummary = false;
         _reading.ShowTranslation();
         ShowTranslationChoice.IsChecked = true;
@@ -464,10 +465,17 @@ public partial class TranslationPanelWindow : Window
         TranslationTextBox.SetValue(Ui.PlaceholderProperty, "译文将显示在这里…");
         SetResultActionsEnabled(_gate.CanPerformResultActions);
         ResultCopyBtn.IsEnabled = _gate.CanCopy;
-        EngineBadge.ToolTip = null;
-        RouteText.ToolTip = null;
-        EngineBadge.Text = _translationBadge;
-        SetRouteText(_translationRoute);
+        // The badge/route stash only exists on paths that entered a summary
+        // view. A fresh, failed or restored panel never wrote it, so an
+        // explicit toggle back to 译文 keeps the current provenance instead
+        // of repainting it from empty strings.
+        if (wasHoldingSummary)
+        {
+            EngineBadge.ToolTip = null;
+            RouteText.ToolTip = null;
+            EngineBadge.Text = _translationBadge;
+            SetRouteText(_translationRoute);
+        }
         if (_gate.Stage is TranslationPanelStage.Preparing or TranslationPanelStage.Streaming or TranslationPanelStage.Finalizing)
         {
             TranslationRichBox.Visibility = Visibility.Collapsed;
@@ -507,7 +515,8 @@ public partial class TranslationPanelWindow : Window
             TranslationPanelStage.CancelledWithoutPartial => "翻译已取消",
             TranslationPanelStage.FailedWithPartial => "内容不完整 · " + _gate.ErrorMessage,
             TranslationPanelStage.FailedWithoutPartial => _gate.ErrorMessage ?? "翻译失败",
-            _ => string.IsNullOrWhiteSpace(_translation) ? "还没有译文" : _translationStatus,
+            _ => wasHoldingSummary && !string.IsNullOrWhiteSpace(_translation) ? _translationStatus
+                : string.IsNullOrWhiteSpace(_translation) ? "还没有译文" : _translationStatus,
         };
         SetResultTone(
             failed: _gate.Stage is TranslationPanelStage.FailedWithPartial or TranslationPanelStage.FailedWithoutPartial,
