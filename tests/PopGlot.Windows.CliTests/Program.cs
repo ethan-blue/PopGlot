@@ -16,6 +16,13 @@ internal static partial class Program
     public static int Main(string[] args)
     {
         Console.OutputEncoding = Encoding.UTF8;
+        if (args.Length == 2 && args[0] == "--probe-app-construction")
+        {
+            StoragePaths.RootOverride = args[1];
+            CredentialStore.OverrideVault = new MemoryCredentialVault();
+            _ = new App { ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown };
+            return Directory.EnumerateFiles(args[1], "history.json.corrupt-*").Any() ? 1 : 0;
+        }
         if (args.Contains("--version"))
         {
             var version = Environment.GetEnvironmentVariable("POPGLOT_FAKE_VERSION");
@@ -36,10 +43,12 @@ internal static partial class Program
         CoreBridge.SaveSettings(settings with { NetworkEnabled = true, SafeDevMode = false });
         try
         {
+            Check("application construction leaves stores untouched before startup isolation", AppConstructionDoesNotReadStores);
             Check("Codex protocol + FFI stream", () => StreamFake(EngineExecutionKind.CodexAppServer));
             Check("OMP protocol + FFI stream", () => StreamFake(EngineExecutionKind.OmpRpc));
             Check("OMP prompt terminal is correlated and cannot succeed at agent_end", OmpPromptTerminals);
             Check("settings field updates merge inside the queue and notify saved language", SettingsFieldUpdates);
+            Check("profile editor commits preserve newer engines and route choices", ProfileCommitIsolation);
             Check("OMP compatibility follows protocol, not exact version or saved pin", OmpVersionCompatibility);
             Check("OMP login browser/callback/final confirmation", OmpLoginSuccess);
             Check("OMP login failure/cancel/unsafe URL isolation", OmpLoginFailures);

@@ -178,20 +178,25 @@
                              MinHeight="36" MaxHeight="86" VerticalScrollBarVisibility="Auto"
                              local:Ui.Placeholder="输入文本，Enter 翻译，Shift+Enter 换行"
                              AutomationProperties.Name="翻译原文输入框"
+                             TextChanged="SourceInputBox_TextChanged"
                              KeyDown="SourceInputBox_KeyDown" />
 
                     <!-- Source action & meta bar: clean and quiet -->
                     <Grid Grid.Row="1" Margin="0,6,0,0">
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock x:Name="SourceLabel" Text="原文" Style="{StaticResource Metadata}"
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock x:Name="SourceLabel" Text="原文" Style="{StaticResource Metadata}" TextTrimming="CharacterEllipsis"
                                        FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}"
                                        VerticalAlignment="Center" />
                             <TextBlock x:Name="SourceKindLabel" Style="{StaticResource Metadata}"
-                                       Margin="4,0,0,0" VerticalAlignment="Center"
+                                       Margin="0,2,4,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
                                        Foreground="{DynamicResource TextTertiaryBrush}" />
                         </StackPanel>
 
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                             <!-- Global TEXT-translation style selector: compact icon+label+chevron so the
                                  header (and the window itself) is never squeezed. -->
                             <Button x:Name="StyleSelectorButton" Style="{StaticResource IconButton}"
@@ -271,7 +276,18 @@
 
                     <!-- Engine header & result actions (Row 0) -->
                     <Grid Grid.Row="0" Margin="0,0,0,6">
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid VerticalAlignment="Center" Margin="0,0,6,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Orientation="Horizontal">
                             <RadioButton x:Name="ShowTranslationChoice" Content="译文" GroupName="PanelReading"
                                          Style="{StaticResource SegmentChoice}" IsChecked="True"
                                          AutomationProperties.Name="显示译文"
@@ -282,25 +298,26 @@
                                          AutomationProperties.Name="显示要点"
                                          ToolTip="整理原文要点，会额外使用一次模型额度。"
                                          Click="ShowSummary_Click" />
-                            <TextBlock x:Name="EngineBadge" Style="{StaticResource Metadata}"
+                            </StackPanel>
+                            <TextBlock x:Name="EngineBadge" Grid.Column="1" Style="{StaticResource Metadata}"
                                        FontWeight="SemiBold" FontSize="12" Margin="4,0,0,0"
                                        Foreground="{DynamicResource AccentBrush}" Text=""
-                                       VerticalAlignment="Center" />
+                                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
 
-                            <Border x:Name="StreamIndicator" Visibility="Collapsed"
+                            <Border x:Name="StreamIndicator" Grid.Column="2" Visibility="Collapsed"
                                     Margin="8,0,0,0" Padding="6,2" CornerRadius="6"
                                     Background="{DynamicResource AccentSoftBrush}">
                                 <TextBlock Text="正在生成…" Style="{StaticResource Metadata}"
                                            Foreground="{DynamicResource AccentBrush}"
                                            VerticalAlignment="Center" />
                             </Border>
-                            <TextBlock x:Name="PhoneticText" Style="{StaticResource MonoText}" FontSize="11" Margin="8,0,0,0"
+                            <TextBlock x:Name="PhoneticText" Grid.Column="3" Style="{StaticResource MonoText}" FontSize="11" Margin="8,0,0,0"
                                        Foreground="{DynamicResource AccentBrush}"
                                        VerticalAlignment="Center" Visibility="Collapsed"
                                        TextTrimming="CharacterEllipsis" MaxWidth="220" />
-                        </StackPanel>
+                        </Grid>
 
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                             <Button x:Name="ResultSpeakBtn" AutomationProperties.Name="朗读译文"
                                     Style="{StaticResource IconButton}" Width="32" Height="32" Margin="0,0,2,0"
                                     ToolTip="朗读译文" Click="ResultSpeak_Click">
@@ -435,15 +452,20 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Grid VerticalAlignment="Center">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
                         <Border x:Name="StatusDot" Width="6" Height="6" CornerRadius="3"
                                 Background="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center" />
-                        <TextBlock x:Name="StatusText" Style="{StaticResource Metadata}" VerticalAlignment="Center"
+                        <TextBlock x:Name="StatusText" Grid.Column="1" Style="{StaticResource Metadata}" VerticalAlignment="Center"
                                    Margin="6,0,0,0"
                                    TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                    AutomationProperties.LiveSetting="Polite"
                                    AutomationProperties.Name="翻译状态" />
-                    </StackPanel>
+                    </Grid>
                     <TextBlock x:Name="RouteText" Grid.Column="1" Style="{StaticResource Metadata}" VerticalAlignment="Center"
                                Margin="12,0,0,0" MaxWidth="280" TextTrimming="CharacterEllipsis"
                                ToolTip="{Binding RelativeSource={RelativeSource Self}, Path=Text}" />

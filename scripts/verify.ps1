@@ -34,3 +34,5 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $dotnet run --project (Join-Path $PSScriptRoot '..\tests\PopGlot.Windows.LogicTests\PopGlot.Windows.LogicTests.csproj') --configuration Debug
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $dotnet run --project (Join-Path $PSScriptRoot '..\tests\PopGlot.Windows.CliTests\PopGlot.Windows.CliTests.csproj') --configuration Debug -- --ui
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

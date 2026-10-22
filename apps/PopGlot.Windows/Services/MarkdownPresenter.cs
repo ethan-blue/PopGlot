@@ -45,9 +45,6 @@ internal static partial class MarkdownPresenter
     [GeneratedRegex(MarkdownLinkPattern)]
     private static partial Regex MarkdownLinkRegex();
 
-    [GeneratedRegex("^" + MarkdownLinkPattern + "$")]
-    private static partial Regex ExactMarkdownLinkRegex();
-
     [GeneratedRegex("(" + MarkdownLinkPattern + @"|`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|⟦PG_\d{4}⟧)")]
     private static partial Regex FormattedSpanSplitRegex();
 
@@ -621,14 +618,18 @@ internal static partial class MarkdownPresenter
     {
         var monoFont = (FontFamily)(resources["MonoFontFamily"] ?? new FontFamily("Cascadia Mono, Consolas"));
 
-        // Structure first: split on links / code spans / bold / protected tokens, then
-        // apply Pangu spacing per natural-language segment only.
-        var parts = FormattedSpanSplitRegex().Split(text);
-
+        // Enumerate whole matches rather than Regex.Split: Split also emits
+        // the link pattern's named captures, duplicating labels and URLs.
         var pieces = new List<FormattedPiece>();
-        foreach (var part in parts)
+        var position = 0;
+        foreach (Match span in FormattedSpanSplitRegex().Matches(text))
         {
-            if (string.IsNullOrEmpty(part)) continue;
+            if (span.Index > position)
+            {
+                pieces.Add(new FormattedPiece(PieceKind.Natural, text[position..span.Index]));
+            }
+            var part = span.Value;
+            position = span.Index + span.Length;
             if (part.StartsWith('`') && part.EndsWith('`') && part.Length >= 2)
             {
                 pieces.Add(new FormattedPiece(PieceKind.Code, part[1..^1]));
@@ -644,10 +645,9 @@ internal static partial class MarkdownPresenter
             }
             else if (part.StartsWith('[') && part.EndsWith(')'))
             {
-                var match = ExactMarkdownLinkRegex().Match(part);
-                if (match.Success)
+                if (span.Groups["text"].Success)
                 {
-                    pieces.Add(new FormattedPiece(PieceKind.Link, match.Groups["text"].Value, match.Groups["url"].Value));
+                    pieces.Add(new FormattedPiece(PieceKind.Link, span.Groups["text"].Value, span.Groups["url"].Value));
                 }
                 else
                 {
@@ -658,6 +658,10 @@ internal static partial class MarkdownPresenter
             {
                 pieces.Add(new FormattedPiece(PieceKind.Natural, part));
             }
+        }
+        if (position < text.Length)
+        {
+            pieces.Add(new FormattedPiece(PieceKind.Natural, text[position..]));
         }
 
         for (var index = 0; index < pieces.Count; index++)

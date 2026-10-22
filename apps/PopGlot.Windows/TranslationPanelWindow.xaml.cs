@@ -71,6 +71,7 @@ public partial class TranslationPanelWindow : Window
     private Func<CancellationToken, long, Task>? _retry;
     private byte[]? _screenshot;
     private string _translation = string.Empty;
+    private string? _translationSource;
     private readonly ReadingModeState _reading = new();
     private string _translationNote = string.Empty;
     private string _sourceKind = "划词";
@@ -405,7 +406,7 @@ public partial class TranslationPanelWindow : Window
         }
         catch (Exception exception)
         {
-            if (!_closing)
+            if (!_closing && epoch == _gate.CurrentEpoch)
             {
                 _gate.OnFailed(exception.Message, _translation);
                 if (_gate.HasPartialText)
@@ -434,6 +435,7 @@ public partial class TranslationPanelWindow : Window
         SourceLangCombo.IsEnabled = enabled;
         TargetLangCombo.IsEnabled = enabled;
         SwapLangButton.IsEnabled = enabled;
+        SourceInputBox.IsReadOnly = !enabled;
     }
 
     private void ShowTranslation_Click(object sender, RoutedEventArgs e) => ShowStoredTranslation();
@@ -837,6 +839,7 @@ public partial class TranslationPanelWindow : Window
 
     private async Task HandleSessionResultAsync(string source, TranslationSession session, long epoch, string pipelineNote)
     {
+        _translationSource = source;
         // C10 结构化时间点：划词读取耗时随会话记录；绘制滞后从本方法
         // （协调器返回、UI 接管）起算，到终态渲染完成为止。
         session.Timing = session.Timing with
@@ -1574,6 +1577,7 @@ public partial class TranslationPanelWindow : Window
         {
             return;
         }
+        CancelOperation();
         SourceInputBox.Text = merged;
         StatusText.Text = "已合并断行，Enter 重译";
         SourceInputBox.CaretIndex = merged.Length;
@@ -1810,6 +1814,21 @@ public partial class TranslationPanelWindow : Window
             return styleNotice;
         }
         return null;
+    }
+
+    private void SourceInputBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        if (_operation is not null || (string.IsNullOrEmpty(_translation) && !_holdingSummary)) return;
+        // Result delivery and session restore may synchronize the source box
+        // after setting the result. That is not an edit to a different source.
+        if (string.Equals(SourceInputBox.Text.Trim(), _translationSource?.Trim(), StringComparison.Ordinal)) return;
+        ClearResultForLanguageChange();
+        _gate.ResetToIdle();
+        _screenshot = null;
+        _sourceKind = "输入";
+        SourceKindLabel.Text = "· 输入";
+        RenderIdle();
+        StatusText.Text = "原文已修改，按 Enter 翻译";
     }
 
     private async void SourceInputBox_KeyDown(object sender, KeyEventArgs e)
@@ -2098,7 +2117,7 @@ public partial class TranslationPanelWindow : Window
         // Ctrl+Shift+C: copy translation directly
         if (e.Key == Key.C && (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == (ModifierKeys.Control | ModifierKeys.Shift))
         {
-            if (_gate.CanPerformResultActions && !string.IsNullOrWhiteSpace(_translation))
+            if (ResultCopyBtn.IsEnabled && !string.IsNullOrWhiteSpace(_holdingSummary ? _reading.SummaryText : _translation))
             {
                 e.Handled = true;
                 ResultCopy_Click(this, new RoutedEventArgs());
@@ -2315,6 +2334,7 @@ public partial class TranslationPanelWindow : Window
         try
         {
             operation.Cancel();
+            SetLanguageDirectionEnabled(true);
         }
         catch (ObjectDisposedException)
         {
@@ -2418,6 +2438,7 @@ public partial class TranslationPanelWindow : Window
 
         SourceInputBox.Text = session.SourceText;
         _translation = session.ResultText ?? string.Empty;
+        _translationSource = session.SourceText;
 
         _languageChangeSuspended = true;
         try

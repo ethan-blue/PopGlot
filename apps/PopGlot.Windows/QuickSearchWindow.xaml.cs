@@ -20,9 +20,11 @@ public partial class QuickSearchWindow : Window
     {
         Interval = TimeSpan.FromMilliseconds(150),
     };
-    private long _searchVersion;
     private CancellationTokenSource? _cts;
     private bool _isClosed;
+    private string? _sessionSourceLanguage;
+    private string? _sessionTargetLanguage;
+    private bool _richRenderFailed;
     // DPI transition fencing: OnDpiChanged only schedules ONE ApplicationIdle
     // reposition; until it ran, every generation bump has a pending settle and
     // the transition-driven SizeChanged/Height events must not re-position or
@@ -124,6 +126,8 @@ public partial class QuickSearchWindow : Window
         _openSettings = openSettings;
         _coordinator = new TranslationCoordinator(_history, _vocabulary);
         InitializeComponent();
+        _debounceTimer.Tick += DebounceTimer_Tick;
+        CoreBridge.LanguagePairChanged += OnLanguagePairChanged;
         // E3: the sampler must register BEFORE the Ui composition tracker —
         // it reads IsComposing, which the tracker resets on Escape during
         // the same tunnelling pass.
@@ -419,7 +423,7 @@ public partial class QuickSearchWindow : Window
         UpdateEmptyStateVisuals();
 
         var text = SearchBox.Text;
-        var version = Interlocked.Increment(ref _searchVersion);
+        _pendingStyleNotice = null;
         _debounceTimer.Stop();
 
         // If input is cleared, update state immediately without debounce lag
@@ -434,30 +438,22 @@ public partial class QuickSearchWindow : Window
             return;
         }
 
-        // PERF-LIST-03: 150ms DispatcherTimer debounce to avoid per-keystroke churn.
-        // Stale query results are discarded via version check.
+        // One timer handler serves every edit. Stopping a timer must not leave
+        // an unbounded set of obsolete per-keystroke closures subscribed.
         CancelRunningRequest();
-
-        EventHandler? handler = null;
-        handler = (s, ev) =>
-        {
-            _debounceTimer.Stop();
-            _debounceTimer.Tick -= handler;
-
-            if (_isClosed || Volatile.Read(ref _searchVersion) != version)
-            {
-                return;
-            }
-
-            if (text.Trim() != _state.CurrentQuery)
-            {
-                _state.OnQueryTextChanged(text);
-                SyncUiWithState();
-            }
-        };
-
-        _debounceTimer.Tick += handler;
         _debounceTimer.Start();
+    }
+
+    private void DebounceTimer_Tick(object? sender, EventArgs e)
+    {
+        _debounceTimer.Stop();
+        if (_isClosed) return;
+        var text = SearchBox.Text;
+        if (text.Trim() != _state.CurrentQuery)
+        {
+            _state.OnQueryTextChanged(text);
+            SyncUiWithState();
+        }
     }
 
     /// <summary>
@@ -565,7 +561,7 @@ public partial class QuickSearchWindow : Window
 
         var progress = new Progress<TranslationStreamUpdate>(update =>
         {
-            if (_isClosed) return;
+            if (_isClosed || token.IsCancellationRequested || !ReferenceEquals(_cts, cts)) return;
             if (update.Kind == TranslationStreamUpdateKind.Delta &&
                 !string.IsNullOrEmpty(update.Delta) &&
                 queryTrace is not null)
@@ -585,6 +581,9 @@ public partial class QuickSearchWindow : Window
             var settings = CoreBridge.GetSettings();
             var sourceLang = settings.SourceLanguage ?? LanguageCatalog.Auto;
             var targetLang = settings.TargetLanguage ?? "zh-CN";
+            _sessionSourceLanguage = sourceLang;
+            _sessionTargetLanguage = targetLang;
+            RefreshLangBadge();
 
             var session = await _coordinator.TranslateTextAsync(
                 text,
@@ -597,7 +596,7 @@ public partial class QuickSearchWindow : Window
                     if (_isClosed) return;
                     Dispatcher.InvokeAsync(() =>
                     {
-                        if (_isClosed) return;
+                        if (_isClosed || token.IsCancellationRequested || !ReferenceEquals(_cts, cts)) return;
                         if (_state.OnStageChanged(stage, epoch, SearchBox.Text.Trim()))
                         {
                             SyncUiWithState();
@@ -608,10 +607,16 @@ public partial class QuickSearchWindow : Window
                 epoch: epoch,
                 trace: queryTrace);
 
-            if (_isClosed || token.IsCancellationRequested) return;
+            if (_isClosed) return;
+            if (token.IsCancellationRequested)
+            {
+                if (_state.OnCancelled(epoch, SearchBox.Text.Trim())) SyncUiWithState();
+                return;
+            }
 
             if (_state.OnSessionCompleted(session, epoch, SearchBox.Text.Trim()))
             {
+                _richRenderFailed = false;
                 if (_state.IsRichBoxVisible && !string.IsNullOrWhiteSpace(_state.FinalRenderedText))
                 {
                     try
@@ -624,8 +629,7 @@ public partial class QuickSearchWindow : Window
                     }
                     catch
                     {
-                        ResultRichBox.Visibility = Visibility.Collapsed;
-                        ResultStreamBox.Visibility = Visibility.Visible;
+                        _richRenderFailed = true;
                     }
                 }
                 SyncUiWithState();
@@ -658,6 +662,11 @@ public partial class QuickSearchWindow : Window
             {
                 SyncUiWithState();
             }
+        }
+        finally
+        {
+            if (ReferenceEquals(_cts, cts)) _cts = null;
+            cts.Dispose();
         }
     }
 
@@ -697,7 +706,13 @@ public partial class QuickSearchWindow : Window
             }
         }
 
-        ResultRichBox.Visibility = _state.IsRichBoxVisible ? Visibility.Visible : Visibility.Collapsed;
+        var usePlainFinal = _state.IsRichBoxVisible && _richRenderFailed;
+        ResultRichBox.Visibility = _state.IsRichBoxVisible && !usePlainFinal ? Visibility.Visible : Visibility.Collapsed;
+        if (usePlainFinal)
+        {
+            ResultStreamBox.Text = _state.FinalRenderedText;
+            ResultStreamBox.Visibility = Visibility.Visible;
+        }
         StreamIndicator.Visibility = _state.IsStreamIndicatorVisible ? Visibility.Visible : Visibility.Collapsed;
         IncompleteBadge.Visibility = _state.IsIncompleteBadgeVisible ? Visibility.Visible : Visibility.Collapsed;
         SearchProgress.Visibility = _state.IsProgressVisible ? Visibility.Visible : Visibility.Collapsed;
@@ -841,7 +856,8 @@ public partial class QuickSearchWindow : Window
         if (SearchEnterKeycap is not null)
         {
             SearchEnterKeycap.Opacity = hasText ? 1.0 : 0.45;
-            System.Windows.Automation.AutomationProperties.SetName(SearchEnterKeycap, hasText ? "按 Enter 立即翻译" : "按 Enter 立即翻译（输入框为空）");
+            SearchEnterKeycap.IsEnabled = hasText;
+            System.Windows.Automation.AutomationProperties.SetName(SearchEnterKeycap, hasText ? "立即翻译" : "立即翻译（请先输入文本）");
         }
         // 0.1.6 空态减法：动态提示条已移除（与页脚动态提示重复），此处不再
         // 有 EmptyStatePrompt 需要刷新。
@@ -871,15 +887,24 @@ public partial class QuickSearchWindow : Window
     /// own, so the badge must always mirror what the next request will use.
     /// Degrades quietly when local state is unreadable.
     /// </summary>
+    private void OnLanguagePairChanged(object? sender, EventArgs e)
+    {
+        if (_isClosed || Dispatcher.HasShutdownStarted) return;
+        _ = Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!_isClosed) RefreshLangBadge();
+        }));
+    }
+
     private void RefreshLangBadge()
     {
         if (_isClosed) return;
         try
         {
             var settings = CoreBridge.GetSettings();
-            LangBadge.Text =
-                $"{LanguageCatalog.DisplayName(settings.SourceLanguage)} → " +
-                $"{LanguageCatalog.DisplayName(settings.TargetLanguage)}";
+            var source = _state.IsResultVisible ? _sessionSourceLanguage ?? settings.SourceLanguage : settings.SourceLanguage;
+            var target = _state.IsResultVisible ? _sessionTargetLanguage ?? settings.TargetLanguage : settings.TargetLanguage;
+            LangBadge.Text = $"{LanguageCatalog.DisplayName(source)} → {LanguageCatalog.DisplayName(target)}";
         }
         catch (Exception)
         {
@@ -1022,7 +1047,7 @@ public partial class QuickSearchWindow : Window
 
             {
 
-                TtsService.Speak(clean, CoreBridge.GetSettings().TargetLanguage);
+                TtsService.Speak(clean, _sessionTargetLanguage ?? CoreBridge.GetSettings().TargetLanguage);
 
             }
 
@@ -1114,9 +1139,9 @@ public partial class QuickSearchWindow : Window
 
             _state.Explanation ?? "",
 
-            languageSettings.SourceLanguage ?? LanguageCatalog.Auto,
+            _sessionSourceLanguage ?? languageSettings.SourceLanguage ?? LanguageCatalog.Auto,
 
-            languageSettings.TargetLanguage ?? "zh-CN");
+            _sessionTargetLanguage ?? languageSettings.TargetLanguage ?? "zh-CN");
 
 
 
@@ -1161,8 +1186,8 @@ public partial class QuickSearchWindow : Window
         var starred = !string.IsNullOrWhiteSpace(word) &&
             _vocabulary.IsStarred(
                 word,
-                settings.SourceLanguage ?? LanguageCatalog.Auto,
-                settings.TargetLanguage ?? "zh-CN");
+                _sessionSourceLanguage ?? settings.SourceLanguage ?? LanguageCatalog.Auto,
+                _sessionTargetLanguage ?? settings.TargetLanguage ?? "zh-CN");
         StarIcon.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, starred ? "AccentBrush" : "TextSecondaryBrush");
         if (starred)
         {
@@ -1382,8 +1407,8 @@ public partial class QuickSearchWindow : Window
         try
         {
             var settings = CoreBridge.GetSettings();
-            sourceLang = settings.SourceLanguage ?? LanguageCatalog.Auto;
-            targetLang = settings.TargetLanguage ?? "zh-CN";
+            sourceLang = _sessionSourceLanguage ?? settings.SourceLanguage ?? LanguageCatalog.Auto;
+            targetLang = _sessionTargetLanguage ?? settings.TargetLanguage ?? "zh-CN";
         }
         catch
         {
@@ -1420,6 +1445,8 @@ public partial class QuickSearchWindow : Window
         StoreSessionSnapshot();
         _isClosed = true;
         _debounceTimer.Stop();
+        _debounceTimer.Tick -= DebounceTimer_Tick;
+        CoreBridge.LanguagePairChanged -= OnLanguagePairChanged;
         ThemeService.ThemeChanged -= _themeChangedHandler;
         TtsService.SpeakingStateChanged -= OnTtsSpeakingStateChanged;
         _state.OnClose();

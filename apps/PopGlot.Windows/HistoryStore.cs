@@ -270,10 +270,15 @@ internal sealed partial class HistoryStore : IHistoryRepository
                 File.ReadAllText(_path), JsonOptions) ?? [];
             var cutoff = DateTimeOffset.UtcNow - MaxAge;
             return entries
-                .Where(entry => entry is not null)
+                .Where(entry => entry is not null && CanPersist(entry))
                 .Where(entry => entry.CreatedAt >= cutoff)
                 .OrderByDescending(entry => entry.CreatedAt)
                 .Take(MaxEntries)
+                .Select(entry => entry with
+                {
+                    Explanation = entry.Explanation ?? string.Empty,
+                    ProtectedTerms = entry.ProtectedTerms ?? [],
+                })
                 .ToArray();
         }
         catch (Exception exception) when (
@@ -660,12 +665,29 @@ internal sealed partial class HistoryStore : IHistoryRepository
     internal static bool CanPersist(TranslationHistoryEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        if (entry.Source.Length > MaxSourceCharacters ||
+        if (entry.Source is null || entry.Translation is null ||
+            entry.Source.Length > MaxSourceCharacters ||
             entry.Translation.Length > MaxTranslationCharacters)
         {
             return false;
         }
-        return !SensitiveContentRegex().IsMatch($"{entry.Source}\n{entry.Translation}");
+        var sensitive = SensitiveContentRegex();
+        if (sensitive.IsMatch(entry.Source) || sensitive.IsMatch(entry.Translation) ||
+            (entry.Explanation is not null && sensitive.IsMatch(entry.Explanation)))
+        {
+            return false;
+        }
+        if (entry.ProtectedTerms is not null)
+        {
+            foreach (var term in entry.ProtectedTerms)
+            {
+                if (term is null || sensitive.IsMatch(term))
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     [GeneratedRegex(

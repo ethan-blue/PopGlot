@@ -90,7 +90,8 @@ internal static class OutboundPolicy
 
     /// <summary>Test seam: where consent is persisted. Production uses the real store.</summary>
     internal static Func<ShellSettings> SettingsLoader { get; set; } = () => ShellSettingsStore.Load();
-    internal static Action<ShellSettings> SettingsSaver { get; set; } = settings => ShellSettingsStore.Save(settings);
+    internal static Action<ShellSettings> SettingsSaver { get; set; } = settings =>
+        ShellSettingsStore.Update(current => current with { FreeEngineConsent = settings.FreeEngineConsent });
 
     /// <summary>
     /// Live view of the core settings for send-boundary re-checks. Production
@@ -225,7 +226,7 @@ internal static class OutboundPolicy
             SettingsSaver(settings with { FreeEngineConsent = consent });
         }
         catch (Exception exception) when (
-            exception is InvalidOperationException or IOException or UnauthorizedAccessException)
+            exception is InvalidOperationException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
         {
             // Persisting the choice must not mask the translation result; the
             // next run simply asks again.

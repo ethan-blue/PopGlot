@@ -74,6 +74,9 @@ internal sealed class QuickSearchState
     public bool AcceptUpdate(long epoch, string queryText)
     {
         if (IsClosed) return false;
+        // Epoch fencing alone cannot reject callbacks already queued by the
+        // same request. A terminal result is immutable until the next search.
+        if (Stage is not (QuickSearchUiStage.Streaming or QuickSearchUiStage.Finalizing)) return false;
         if (epoch != CurrentEpoch) return false;
         if (!string.Equals(CurrentQuery.Trim(), queryText.Trim(), StringComparison.Ordinal)) return false;
         return true;

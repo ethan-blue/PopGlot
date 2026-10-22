@@ -437,14 +437,18 @@ internal sealed class TranslationCoordinator
         FreeEngineAuthorization authorization,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!settings.ProtectCodeTokens)
         {
-            return await _executor.TranslateFreeAsync(source, sourceLang, targetLang, authorization, cancellationToken);
+            var unprotectedResponse = await _executor.TranslateFreeAsync(source, sourceLang, targetLang, authorization, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return unprotectedResponse;
         }
 
         var protectedText = CoreBridge.ProtectTokens(source);
         var response = await _executor.TranslateFreeAsync(
             protectedText.SanitizedText, sourceLang, targetLang, authorization, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (protectedText.Tokens.Count == 0)
         {
             return response;
@@ -513,6 +517,7 @@ internal sealed class TranslationCoordinator
 
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var trimmed = source?.Trim() ?? string.Empty;
             if (string.IsNullOrEmpty(trimmed))
             {
@@ -834,7 +839,9 @@ internal sealed class TranslationCoordinator
         }
         var settings = _executor.GetSettings();
         var routes = _executor.ResolveRoutes();
-        var textRoute = routes.Text;
+        var textRoute = routes.Text is { } selected
+            ? new ProviderRoute(selected.Profile.Clone(), selected.CredentialTarget)
+            : null;
         // The identity and cache key were captured before this method was
         // scheduled. If the user switched engines meanwhile, do not send the
         // old task through the new route or label/cache it under the old one.
@@ -843,7 +850,7 @@ internal sealed class TranslationCoordinator
             throw new OperationCanceledException("引擎已切换，请重新打开要点。", cancellationToken);
         }
         var apiKey = textRoute is null || textRoute.Profile.ExecutionFacts.IsManagedExecution ? null : _executor.LoadApiKey(textRoute.CredentialTarget);
-        var routeSettings = textRoute?.Profile.ToProviderSettings(settings);
+        var routeSettings = textRoute?.Profile.ToProviderSettings(settings) ?? settings;
         var isLocal = routeSettings?.TargetsLocalRuntime ?? settings.TargetsLocalRuntime;
         if (textRoute is null && !isLocal)
         {
@@ -919,6 +926,7 @@ internal sealed class TranslationCoordinator
 
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (imageBytes is null || imageBytes.Length == 0)
             {
                 session.Stage = TranslationSessionStage.Failed;
@@ -1628,6 +1636,7 @@ internal sealed class TranslationCoordinator
         CancellationToken cancellationToken,
         ProviderProfile? engineProfile)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (engineProfile?.ExecutionFacts.IsManagedExecution == true)
             return AiConnections.CliTranslationExecutor.Stream(engineProfile, segment, sourceLang, targetLang, preferenceAnchor, cancellationToken, maxResponseBytes);
         if (textRuntimeSettings is not null &&
@@ -1708,6 +1717,7 @@ internal sealed class TranslationCoordinator
 
         while (!completion.IsCompleted)
         {
+            if (cancellationToken.IsCancellationRequested) break;
             if (buffer.TryDrain(out var delta) && !string.IsNullOrEmpty(delta))
             {
                 if (session.Stage != TranslationSessionStage.Streaming)
@@ -1746,15 +1756,19 @@ internal sealed class TranslationCoordinator
             {
                 break;
             }
-            if (delayTask.IsCanceled)
+            if (cancellationToken.IsCancellationRequested) break;
+        }
+        // Allow one bounded abort tick to retain an already-arriving final,
+        // but never emit late deltas or wait indefinitely for ignored aborts.
+        if (cancellationToken.IsCancellationRequested)
+        {
+            session.TranslatedText = textPrefix + buffer.GetAccumulatedText();
+            if (!completion.IsCompleted) await Task.WhenAny(completion, Task.Delay(40));
+            if (completion.IsCompletedSuccessfully)
             {
-                // A cancelled delay completes instantly, so looping on it
-                // would hot-spin a thread-pool thread until the native abort
-                // lands. Wait one plain tick for the abort, then stop pumping;
-                // post-cancel deltas are discarded by epoch fencing anyway.
-                await Task.WhenAny(completion, Task.Delay(40));
-                break;
+                session.TranslatedText = textPrefix + completion.Result.Result.TranslatedText;
             }
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         if (buffer.TryDrain(out var finalDelta) && !string.IsNullOrEmpty(finalDelta))
@@ -1786,7 +1800,7 @@ internal sealed class TranslationCoordinator
                 IsPartial: true));
         }
 
-        return await completion;
+        return await completion.WaitAsync(cancellationToken);
     }
 
     private void ApplyFinalResponse(

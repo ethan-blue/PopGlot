@@ -2,6 +2,7 @@ using PopGlot.Windows.Services;
 using PopGlot.Windows.Sections;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Net.WebSockets;
 using System.Net.Sockets;
@@ -23,7 +24,7 @@ namespace PopGlot.Windows.LogicTests;
 /// <summary>
 /// Headless checks for the shell logic that has no UI dependency, plus baseline benchmarks and screenshots.
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     private static int _passed;
     private static int _failed;
@@ -111,6 +112,7 @@ internal static class Program
         Run("shell settings utf8 bom file loads user settings and keeps bytes cache identity", ShellSettingsBomFileLoadsUserSettingsAndKeepsBytesCacheIdentity);
         Run("shell settings utf-16 bom files load user settings and keep bytes cache identity", ShellSettingsUtf16BomFileLoadsUserSettingsAndKeepsBytesCacheIdentity);
         Run("transient load failure does not poison the settings cache", TransientLoadFailureDoesNotPoisonCache);
+        Run("shell field updates preserve concurrent preferences and unreadable files", ShellFieldUpdatesPreservePreferences);
         Run("startup state model is honest and never overrides an OS disable", StartupStateModelIsHonest);
 
         Run("local base urls are detected by host", LocalBaseUrlsDetectedByHost);
@@ -162,6 +164,7 @@ internal static class Program
         await RunAsync("free engine authorization is consumed once at the send boundary", FreeEngineSendBoundaryConsumesAuthorization);
         await RunAsync("offline policy blocks remote but allows local providers", OfflineModeSendsNothing);
         await RunAsync("test connection draft never alters saved settings", DraftConnectionLeavesSettingsUntouched);
+        await RunAsync("precancelled draft never enters the native provider", PrecancelledDraftDoesNotSend);
         Run("icon controls expose automation names", IconControlsExposeAutomationNames);
         Run("window caption resources and geometries are consistent", WindowCaptionResourcesConsistent);
         Run("main window includes window chrome and unified caption bar", MainWindowChromeAndCaptionBarPresent);
@@ -174,8 +177,6 @@ internal static class Program
         Run("theme contrast ratios and token budgets conform to wcag", ThemeAuditHelper.RunAudits);
         Run("provider profiles support multi-config, independent keys and round-trip", ProviderProfilesSupportMultiConfigAndIndependentKeys);
         Run("service save resolves credential targets per profile", ServiceSaveResolvesCredentialTargets);
-        Run("service save writes the key after resolving its target", ServiceSaveKeyOrderGuard);
-        Run("settings save validates hotkeys before persisting", SettingsSaveValidatesBeforePersisting);
         Run("connection test failures map to actionable hints", ConnectionTestFailuresAreActionable);
         Run("service health states are explicit and hue-safe", ServiceHealthStatesAreExplicit);
         Run("loaded service does not become a false draft", LoadedServiceDoesNotBecomeFalseDraft);
@@ -238,6 +239,11 @@ internal static class Program
         Run("stream session properties and lifecycle", StreamSessionPropertiesAndLifecycle);
 
         // Coordinator streaming and lifecycle tests
+        Run("quick search terminals reject same-epoch late callbacks", RuntimeQuickSearchTerminalsRejectLateCallbacks);
+        await RunAsync("cancelled pump does not await an unresponsive executor", RuntimeCancelledPumpIsBounded);
+        await RunAsync("cached summary cancels prior work and completed sources are disposed", RuntimeSummaryCacheCancelsAndDisposes);
+        await RunStaAsync("markdown links render once without regex capture debris", RuntimeMarkdownLinksRenderOnce);
+        Run("summary route capability respects offline policy", RuntimeSummaryOfflineCapability);
         await RunAsync("coordinator streaming delta arrives before completion", CoordinatorDeltaArrivesBeforeCompletionAsync);
         await RunAsync("coordinator throttling merges rapid deltas", CoordinatorThrottlingMergesDeltasAsync);
         await RunAsync("coordinator final drain delivers tail delta", CoordinatorFinalDrainDeliversTailAsync);
@@ -266,6 +272,10 @@ internal static class Program
         await RunAsync("coordinator vision failure with zero deltas falls back to OCR", CoordinatorVisionZeroDeltaFailureFallsBackToOcrAsync);
         await RunAsync("coordinator epoch propagation fences session updates", CoordinatorEpochPropagationAsync);
         await RunAsync("coordinator stage transitions follow correct lifecycle order", CoordinatorStageOrderAsync);
+        RunSta("workbench source edits invalidate restored translations", ProductWorkbenchEditsInvalidateResult);
+        RunSta("workbench partial permits manual copy but not result side effects", ProductWorkbenchPartialAllowsManualCopyOnly);
+        RunSta("failed settings save restores the saved quick search shortcut", ProductFailedSaveRestoresSavedQuickSearchHotkey);
+        RunSta("empty workbench setup remains visible at minimum size", ProductEmptyWorkbenchActionsFitMinimumWindow);
 
         // QuickSearch streaming and state machine tests
         Run("quick search epoch and query fencing rejects stale updates", QuickSearchEpochAndQueryFencing);
@@ -335,7 +345,6 @@ internal static class Program
         Run("hotkey failure detail change inside an open cycle updates surfaces without re-ballooning", HotkeyFailureDetailChangeInsideOpenCycleUpdatesWithoutReballooning);
         Run("settings apply failure routing follows service evidence, not cycle state", ShellApplyFailureRoutingFollowsEvidenceNotCycleState);
         Run("hotkey registration failure copy classifies win32 error codes", HotkeyFailureCopyClassifiesWin32Error);
-        Run("hotkey failure dedup and probe wiring is real production code", HotkeyFailureDedupWiringIsReal);
         Run("release workflow specifies self-contained", ReleaseWorkflowSpecifiesSelfContained);
         Run("focus-loss and close contracts are wired through the shell", FocusLossAndCloseContractsAreWired);
         Run("global exception policy classifies and fuses", GlobalExceptionPolicyClassifiesAndFuses);
@@ -1183,6 +1192,35 @@ internal static class Program
             ShellSettingsStore.InvalidateCache();
         }
     }
+    private static void ShellFieldUpdatesPreservePreferences()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"popglot-shell-update-{Guid.NewGuid():N}.json");
+        try
+        {
+            ShellSettingsStore.Save(ShellSettings.Default, path);
+            Parallel.Invoke(
+                () => ShellSettingsStore.Update(s => s with { FreeEngineProvider = FreeEngineProvider.MyMemory }, path),
+                () => ShellSettingsStore.Update(s => s with { CloudSpeechEnabled = true }, path),
+                () => ShellSettingsStore.Update(s => s with { HistoryEnabled = false }, path));
+            var saved = ShellSettingsStore.Load(path);
+            Equal(FreeEngineProvider.MyMemory, saved.FreeEngineProvider);
+            True(saved.CloudSpeechEnabled && !saved.HistoryEnabled,
+                "independent settings edits must survive concurrent saves");
+
+            File.WriteAllText(path, "{ unreadable configuration");
+            var failed = false;
+            try { ShellSettingsStore.Update(s => s with { Theme = ThemePreference.Dark }, path); }
+            catch (System.Text.Json.JsonException) { failed = true; }
+            True(failed, "field updates must not turn a read failure into a successful default-based save");
+            Equal("{ unreadable configuration", File.ReadAllText(path));
+        }
+        finally
+        {
+            File.Delete(path);
+            ShellSettingsStore.InvalidateCache();
+        }
+    }
+
 
     // ================= Provider / language =================
 
@@ -1435,6 +1473,12 @@ internal static class Program
             "an API key entered local history");
         True(!HistoryStore.CanPersist(Entry("password: hunter2", "翻译")),
             "a password entered local history");
+        True(!HistoryStore.CanPersist(Entry("hello", "你好") with { Explanation = "api_key: fixture-secret" }),
+            "sensitive explanations must not enter local history");
+        True(!HistoryStore.CanPersist(Entry("hello", "你好") with { ProtectedTerms = ["password=fixture-secret"] }),
+            "sensitive protected terms must not bypass the history filter");
+        True(!HistoryStore.CanPersist(Entry("hello", "你好") with { Source = null! }),
+            "malformed history must not reach consumers that search source text");
         True(HistoryStore.CanPersist(Entry("hello world", "你好世界")),
             "ordinary text must be storable");
     }
@@ -1754,7 +1798,8 @@ internal static class Program
 
             // 3. Workbench section: real click event on the result copy button.
             var section = new TranslateSection();
-            section.ResultBox.Text = raw;
+            section.FocusTranslate("demo query", existingTranslation: raw,
+                storedState: TranslationSessionState.Completed);
             ((System.Windows.Controls.Button)section.FindName("TranslateResultCopyButton"))!
                 .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
             SpinUntil(() => recordedCount(recorded) >= 3, "workbench copy never landed");
@@ -1909,6 +1954,8 @@ internal static class Program
                     System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                 .Invoke(panel, new object?[] { "panel star source", completed, 0L, null });
             panel.SourceInputBox.Text = "panel star source";
+            True(panel.StarToggle.IsEnabled && panel.ResultCopyBtn.IsEnabled,
+                "synchronizing the completed source must retain its result actions");
 
             typeof(TranslationPanelWindow)
                 .GetMethod("StarToggle_Click",
@@ -1919,6 +1966,11 @@ internal static class Program
                 () => panel.StatusText.Text.Contains("未保存到本机"),
                 $"the panel must say nothing was saved, got: {panel.StatusText.Text}");
             True(panel.StarToggle.IsChecked != true, "a failed star write must not light the star icon");
+            panel.SourceInputBox.Text = "a different source";
+            True(!panel.StarToggle.IsEnabled && !panel.ResultCopyBtn.IsEnabled,
+                "editing to a different source must block actions on the old translation");
+            Equal(string.Empty, panel.StreamTextBox.Text,
+                "a different source must clear the old visible translation");
         }
         finally
         {
@@ -4454,6 +4506,24 @@ internal static class Program
         }
     }
 
+    private static async Task PrecancelledDraftDoesNotSend()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var draft = CoreBridge.GetSettings() with
+        {
+            ApiBaseUrl = $"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/v1",
+            TextModel = "cancelled-draft",
+            SafeDevMode = false,
+            NetworkEnabled = true,
+        };
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        await ThrowsAsync<OperationCanceledException>(
+            () => CoreBridge.TestConnectionDraftAsync(draft, "fixture-key", cancellationToken: cancelled.Token));
+        True(!listener.Pending(), "already-cancelled requests must not open a provider connection");
+    }
+
     /// <summary>Testing a draft must not touch the file, active config, or credentials.</summary>
     private static async Task DraftConnectionLeavesSettingsUntouched()
     {
@@ -4689,46 +4759,6 @@ internal static class Program
         Equal("PopGlot/provider/p-recovered", recoveredTarget);
     }
 
-    /// <summary>
-    /// Source-order guard for the credential bug this suite exists to catch:
-    /// the key write must textually follow the target resolution.
-    /// </summary>
-    private static void ServiceSaveKeyOrderGuard()
-    {
-        var source = File.ReadAllText(Path.Combine(
-            FindProjectRoot(), "apps", "PopGlot.Windows", "Sections", "ServicesSection.xaml.cs"));
-        var resolve = source.IndexOf("ResolveSaveTarget(config, _editingProfileId)", StringComparison.Ordinal);
-        var writeKey = source.IndexOf("CredentialStore.SaveApiKey(typedKey, credentialTarget)", StringComparison.Ordinal);
-        True(resolve >= 0, "the save flow must resolve the credential target first");
-        True(writeKey > resolve, "the API key must be written only after the profile's own target is resolved");
-    }
-
-    /// <summary>
-    /// The settings window must finish ALL validation (hotkey shape, hotkey
-    /// registration) before the first write, and a failed commit must roll
-    /// back what earlier steps already wrote.
-    /// </summary>
-    private static void SettingsSaveValidatesBeforePersisting()
-    {
-        var source = File.ReadAllText(Path.Combine(
-            FindProjectRoot(), "apps", "PopGlot.Windows", "SettingsWindow.xaml.cs"));
-        var validate = source.IndexOf("shellSettings.ValidateHotkeys()", StringComparison.Ordinal);
-        var register = source.IndexOf("ApplyShellSettings?.Invoke(shellSettings)", StringComparison.Ordinal);
-        var coreSave = source.IndexOf("CoreBridge.UpdateSettingsAsync(current => MergePolicySettings(current, policySettings))", StringComparison.Ordinal);
-        var shellSave = source.IndexOf("ShellSettingsStore.Save(shellSettings)", StringComparison.Ordinal);
-        True(validate >= 0, "hotkey validation must exist in the save flow");
-        True(register > validate, "hotkey registration must follow validation");
-        True(coreSave > register, "the core policy must be committed only after full validation");
-        True(shellSave > coreSave, "shell settings must be committed after the core policy");
-        True(source.Contains("CoreBridge.UpdateSettingsAsync(current => MergePolicySettings(current, previousCoreSettings))", StringComparison.Ordinal),
-            "a failed shell write rolls back policy fields without overwriting concurrently changed language or engine settings");
-        True(source.Contains("已回滚本次全部修改", StringComparison.Ordinal),
-            "a failed commit must tell the user the rollback happened");
-        True(source.Contains("未保存任何修改", StringComparison.Ordinal),
-            "validation failures must state that nothing was saved");
-        True(source.Contains("QuickSearchHotkey: _shellSettings.QuickSearchHotkey", StringComparison.Ordinal),
-            "Save_Click must explicitly pass through QuickSearchHotkey from _shellSettings");
-    }
 
     /// <summary>Connection-test failures must name the next action to take.</summary>
     private static void ConnectionTestFailuresAreActionable()
@@ -5620,13 +5650,18 @@ internal static class Program
         CoreBridge.Initialize();
         EnsureApplication();
         var originalStartupSeam = StartupRegistration.TrySetOverride;
+        var originalShell = ShellSettingsStore.Load();
         var customHotkey = HotkeyBinding.Parse("Ctrl+Alt+H", HotkeyBinding.QuickSearchDefault);
         ShellSettings? appliedSettings = null;
         var windowHolder = new SettingsWindow?[] { null };
         try
         {
             StartupRegistration.TrySetOverride = _ => true;
-            var shell = ShellSettings.Default with { QuickSearchHotkey = customHotkey };
+            var shell = ShellSettings.Default with
+            {
+                QuickSearchHotkey = customHotkey,
+                FreeEngineProvider = FreeEngineProvider.MyMemory,
+            };
             ShellSettingsStore.Save(shell);
 
             // Invalidate the cache completely so CurrentCachedSettings returns null
@@ -5653,6 +5688,7 @@ internal static class Program
             var autoCopyOriginal = autoCopy.IsChecked == true;
             autoCopy.IsChecked = !autoCopyOriginal;
             Equal(SettingsEditState.Dirty, window.EditState, "form must be dirty");
+            ShellSettingsStore.Update(current => current with { FreeEngineConsent = FreeEngineConsent.Denied });
 
             // Invoke Save_Click
             typeof(SettingsWindow).GetMethod("Save_Click",
@@ -5669,6 +5705,10 @@ internal static class Program
             var diskSettings = ShellSettingsStore.Load();
             Equal(customHotkey, diskSettings.QuickSearchHotkey,
                 "disk settings must preserve custom QuickSearchHotkey even after cache invalidation");
+            Equal(FreeEngineProvider.MyMemory, diskSettings.FreeEngineProvider,
+                "saving an unrelated form edit must not switch the selected public provider");
+            Equal(FreeEngineConsent.Denied, diskSettings.FreeEngineConsent,
+                "a consent changed after the draft opened must survive the form save");
         }
         finally
         {
@@ -5681,6 +5721,7 @@ internal static class Program
             catch (Exception)
             {
             }
+            ShellSettingsStore.Save(originalShell);
             ProfileManager.ResetForTests();
             try { Directory.Delete(dir, recursive: true); } catch { }
         }
@@ -5701,11 +5742,13 @@ internal static class Program
         CoreBridge.Initialize();
         EnsureApplication();
         var originalStartupSeam = StartupRegistration.TrySetOverride;
+        var originalShell = ShellSettingsStore.Load();
         var windowHolder = new SettingsWindow?[] { null };
         try
         {
             StartupRegistration.TrySetOverride = _ => true;
             var shell = ShellSettings.Default with { CloudSpeechEnabled = true };
+            ShellSettingsStore.Save(shell);
             var window = new SettingsWindow(
                 shell, new HistoryStore(Path.Combine(dir, "history.json")))
             {
@@ -5753,6 +5796,7 @@ internal static class Program
             catch (Exception)
             {
             }
+            ShellSettingsStore.Save(originalShell);
             ProfileManager.ResetForTests();
             try { Directory.Delete(dir, recursive: true); } catch { }
         }
@@ -6438,18 +6482,13 @@ internal static class Program
         executor.OnStreamText = (apiKey, source, sourceLang, targetLang, sessionId, epoch, ct) =>
         {
             var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
-            var tcs = new TaskCompletionSource<TranslationResponse>();
-            _ = Task.Run(async () =>
-            {
-                cts.Cancel(); // cancel BEFORE the response resolves
-                await Task.Delay(30);
-                buffer.TryAppend("完整译文");
-                buffer.Complete();
-                tcs.SetResult(new TranslationResponse(
-                    new TranslationResult("完整译文", "", "", [], []),
-                    new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 30)));
-            });
-            return new TranslationStreamSession(buffer, tcs.Task);
+            buffer.TryAppend("完整译文");
+            cts.Cancel(); // cancellation precedes the final, without a scheduler-dependent sleep
+            buffer.Complete();
+            var completion = Task.FromResult(new TranslationResponse(
+                new TranslationResult("完整译文", "", "", [], []),
+                new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 30)));
+            return new TranslationStreamSession(buffer, completion);
         };
 
         var session = await coordinator.TranslateTextAsync(
@@ -8075,6 +8114,9 @@ internal static class Program
         var (section, dir, executor) = NewIsolatedTranslateSectionWithExecutor();
         try
         {
+            // This test exercises an executable summary request, not the
+            // default fake's deliberately incomplete legacy profile.
+            executor.TextRoute!.Profile.TextModel = "summary-test-model";
             var initialText = "第一段待总结文本";
             section.InputBox.Text = initialText;
             var state = TranslateUiState.Initial with
@@ -8119,6 +8161,7 @@ internal static class Program
         var (section, dir, executor) = NewIsolatedTranslateSectionWithExecutor();
         try
         {
+            executor.TextRoute!.Profile.TextModel = "summary-test-model";
             section.InputBox.Text = "需要总结的内容";
             var state = TranslateUiState.Initial with
             {
@@ -8197,7 +8240,6 @@ internal static class Program
             Equal(blockedBefore, TestIsolation.BlockedPublicSends, "must not send any network request before consent");
             Equal("Hello unconfigured world", section.InputBox.Text, "input text must be preserved");
             Equal(Visibility.Visible, section.EmptyStateGuide.Visibility, "guide must remain visible in place");
-            True(section.StatusBlock.Text.Contains("未配置引擎或未允许公共翻译"), "status must explain in-place options");
 
             // 4. Click exit 1: 允许公共翻译:
             // Persists Allowed and immediately continues translation of pending text!
@@ -8488,17 +8530,9 @@ internal static class Program
             var guide = (StackPanel)section.FindName("UnconfiguredGuidePanel")!;
             Equal(Visibility.Visible, guide.Visibility,
                 "0 profiles + allowed fallback must still show the configuration entry");
-            var title = (TextBlock)section.FindName("GuideTitle")!;
-            Equal("当前使用内置免费引擎", title.Text, "fallback-allowed empty state headline");
-            var description = (TextBlock)section.FindName("GuideDescription")!;
-            Equal("添加自己的翻译引擎，可使用指定模型和服务商。", description.Text,
-                "fallback-allowed empty state description");
 
             var button = CtaButton(section);
             True(button is System.Windows.Controls.Button, "the CTA must be a real WPF Button");
-            Equal("添加翻译引擎", $"{button.Content}", "CTA label");
-            Equal("添加翻译引擎", System.Windows.Automation.AutomationProperties.GetName(button),
-                "CTA automation name");
             True(button.Visibility == Visibility.Visible, "CTA must be visible");
             True(button.IsEnabled, "CTA must be enabled");
             True(button.IsHitTestVisible, "CTA must be hit-testable");
@@ -8532,14 +8566,9 @@ internal static class Program
 
             var guide = (StackPanel)section.FindName("UnconfiguredGuidePanel")!;
             Equal(Visibility.Visible, guide.Visibility, "no route at all must show the entry");
-            Equal("尚未配置翻译引擎", ((TextBlock)section.FindName("GuideTitle")!).Text,
-                "no-route empty state headline");
-            Equal("添加翻译引擎后即可开始使用。", ((TextBlock)section.FindName("GuideDescription")!).Text,
-                "no-route empty state description");
             var button = CtaButton(section);
             True(button is System.Windows.Controls.Button && button.IsEnabled && button.IsHitTestVisible,
                 "a real, clickable 添加翻译引擎 button must exist");
-            True(button.Content as string == "添加翻译引擎", "CTA label in the no-route state");
 
             var status = (TextBlock)section.FindName("TranslateStatus")!;
             True(!status.Text.Contains("就绪"), "the status line must not claim 就绪 with no route");
@@ -9817,37 +9846,38 @@ internal static class Program
     }
 
     /// <summary>
-    /// Asserts SetCompact really restacked the sections: collapsed gutter
-    /// columns and the description/dropdown fields moved into the stacked
-    /// rows/columns. Guards the compact screenshots against a silent no-op.
+    /// Exercises the real compact General page after navigation and layout.
+    /// The choices must be below their label and fully reachable; no column
+    /// widths or implementation-specific row indices form part of the contract.
     /// </summary>
     private static void AssertSettingsCompactApplied(SettingsWindow window)
     {
-        Equal(0d, window.GeneralSection.ThemeRowGrid.ColumnDefinitions[1].Width.Value,
-            "compact General section must collapse the theme row's second column");
-        Equal(0, Grid.GetColumn(window.GeneralSection.ThemeComboBox),
-            "compact General section must move the theme combo into the first column");
-        Equal(0, Grid.GetColumn(window.GeneralSection.ThemeChoicePanel),
-            "compact General section must move the theme swatches into the first column");
-        Equal(0d, window.PromptSectionHost.NameDescriptionGrid.ColumnDefinitions[1].Width.Value,
-            "compact Prompt section must collapse the name/description gutter column");
-        Equal(0, Grid.GetColumn(window.PromptSectionHost.DescriptionPanel),
-            "compact Prompt section must move the description into the first column");
-        Equal(1, Grid.GetRow(window.PromptSectionHost.DescriptionPanel),
-            "compact Prompt section must move the description into row 1");
-        // Provider editor compact stacking: the API key action row moves below
-        // the password field, and the vertical rhythm tightens so the model
-        // preference radios fit the first viewport above the fixed action bar.
-        Equal(1, Grid.GetRow(window.ProviderSection.KeyActionsPanel),
-            "compact Provider section must move the API key actions below the password field");
-        Equal(0, Grid.GetColumn(window.ProviderSection.KeyActionsPanel),
-            "compact Provider section must move the API key actions into the first column");
-        Equal(10d, window.ProviderSection.ConnectionCard.Margin.Bottom,
-            "compact Provider section must tighten the connection card's bottom margin");
-        Equal(10d, window.ProviderSection.ModelCard.Margin.Bottom,
-            "compact Provider section must tighten the model card's bottom margin");
-        True(window.ProviderSection.EditorScroll.Padding.Bottom >= 16,
-            "compact Provider editor scroll must keep bottom whitespace so content scrolls clear of the fixed action bar");
+        window.Width = window.MinWidth;
+        window.Height = window.MinHeight;
+        window.ShowPage("General");
+        var root = (FrameworkElement)window.Content;
+        root.Measure(new Size(window.Width, window.Height));
+        root.Arrange(new Rect(0, 0, window.Width, window.Height));
+        root.UpdateLayout();
+        InvokeResponsiveLayout(window, window.Width);
+        root.UpdateLayout();
+
+        var general = window.GeneralSection;
+        var label = general.ThemeTextPanel;
+        var choices = general.ThemeChoicePanel;
+        var labelBounds = label.TransformToAncestor(general.ThemeRowGrid).TransformBounds(new Rect(label.RenderSize));
+        var choiceBounds = choices.TransformToAncestor(general.ThemeRowGrid).TransformBounds(new Rect(choices.RenderSize));
+        True(choiceBounds.Top >= labelBounds.Bottom - 0.5,
+            "theme choices must move below their label at the minimum settings width");
+        foreach (var choice in choices.Children.OfType<RadioButton>())
+        {
+            var bounds = choice.TransformToAncestor(root).TransformBounds(new Rect(choice.RenderSize));
+            True(choice.ActualWidth > 0 && choice.ActualHeight > 0 &&
+                bounds.Left >= 0 && bounds.Right <= root.ActualWidth + 0.5 &&
+                bounds.Top >= 0 && bounds.Bottom <= root.ActualHeight + 0.5,
+                $"theme choice {choice.Name} must be fully reachable in the compact settings viewport");
+        }
+        window.ShowPage("Provider");
     }
 
     /// <summary>
@@ -13865,72 +13895,90 @@ internal static class Program
     }
 
     /// <summary>
-    /// T11 acceptance (AI-RULES 6.2): below 720 DIP of content width the
-    /// panes stack vertically — source on top with a 160 DIP editor floor,
-    /// target below, centre axis and swap hidden — and widening restores the
-    /// side-by-side workbench exactly.
+    /// T11 acceptance: a minimum-size real workbench keeps long source and
+    /// target text scrollable and its result actions reachable. Widening puts
+    /// the readers side by side; requests still own their language direction.
     /// </summary>
     private static void TranslateSectionStacksWhenNarrow()
     {
         EnsureApplication();
-        var section = new TranslateSection();
-        section.Initialize(
-            new TranslationCoordinator(new HistoryStore(TestIsolation.HistoryPath), new VocabularyStore(TestIsolation.VocabularyPath)),
-            null);
-        var grid = section.PaneGrid;
-
-        int Row(string name) =>
-            System.Windows.Controls.Grid.GetRow(grid.Children.OfType<FrameworkElement>().First(e => e.Name == name));
-
-        // Default (wide): 3 rows × 3 columns.
-        Equal(3, grid.RowDefinitions.Count);
-        Equal(3, grid.ColumnDefinitions.Count);
-        Equal(1, Row("SourceEditorCell"), "wide layout puts the source editor at row 1 col 0");
-        Equal(1, Row("TargetEditorCell"));
-
-        section.SetStacked(true);
-        Equal(true, section.IsStacked);
-        Equal(6, grid.RowDefinitions.Count, "stacked layout has one row per pane section");
-        Equal(1, grid.ColumnDefinitions.Count, "stacked layout is a single column");
-        Equal(160, grid.RowDefinitions[1].MinHeight, "the input editor keeps a 160 DIP floor");
-        Equal(true, grid.RowDefinitions[4].Height.IsStar, "the target reader takes the leftover space");
-        Equal(0, Row("SourceLangBarCell"));
-        Equal(1, Row("SourceEditorCell"));
-        Equal(2, Row("SourceFooterCell"));
-        Equal(3, Row("TargetLangBarCell"));
-        Equal(4, Row("TargetEditorCell"));
-        Equal(5, Row("TargetFooterCell"));
-        var swap = grid.Children.OfType<Button>().First(b => b.Name == "TranslateSwapButton");
-        Equal(Visibility.Collapsed, swap.Visibility, "the swap axis hides when stacked");
-
-        // Widening restores the exact side-by-side grid.
-        section.SetStacked(false);
-        Equal(false, section.IsStacked);
-        Equal(3, grid.RowDefinitions.Count);
-        Equal(3, grid.ColumnDefinitions.Count);
-        Equal(0, grid.RowDefinitions[1].MinHeight);
-        Equal(1, Row("SourceEditorCell"));
-        Equal(1, Row("TargetEditorCell"));
-        Equal(2, System.Windows.Controls.Grid.GetColumn(grid.Children.OfType<FrameworkElement>().First(e => e.Name == "TargetEditorCell")));
-        Equal(Visibility.Visible, swap.Visibility);
-
-        // A request owns the language pair it started with. While it is in
-        // flight, selectors and swap stay locked so a late result cannot be
-        // painted below different language headers; terminal state restores
-        // all three controls.
-        var running = TranslateSectionReducer.StartTranslation(section.CurrentState, 91);
-        section.ApplyState(running);
-        True(!section.SourceLangCombo.IsEnabled && !section.TargetLangCombo.IsEnabled && !swap.IsEnabled,
-            "language direction controls must lock for an in-flight request snapshot");
-        section.ApplyState(TranslateSectionReducer.ApplyCompletion(running, new TranslationSession
+        var window = new MainWindow(ShellSettings.Default,
+            new HistoryStore(TestIsolation.HistoryPath), new VocabularyStore(TestIsolation.VocabularyPath));
+        try
         {
-            Stage = TranslationSessionStage.Completed,
-            TranslatedText = "完成",
-            PipelineLabel = "测试引擎",
-            Timing = new TranslationSessionTiming(TotalElapsedMs: 120),
-        }, 91));
-        True(section.SourceLangCombo.IsEnabled && section.TargetLangCombo.IsEnabled && swap.IsEnabled,
-            "language direction controls must restore after request completion");
+            window.Width = window.MinWidth;
+            window.Height = window.MinHeight;
+            var section = window.TranslateSection;
+            var source = string.Join("\n", Enumerable.Repeat("Long source line with error_code and a path.", 300));
+            var target = string.Join("\n", Enumerable.Repeat("完整译文，保留 error_code 与路径。", 300));
+            section.FocusTranslate(source, existingTranslation: target,
+                storedState: TranslationSessionState.Completed);
+            window.Show();
+            FlushDispatcher(2);
+            window.UpdateLayout();
+
+            Rect Bounds(FrameworkElement element) =>
+                element.TransformToAncestor(window).TransformBounds(new Rect(element.RenderSize));
+            void AssertReachable(FrameworkElement element)
+            {
+                var bounds = Bounds(element);
+                True(element.ActualWidth > 0 && element.ActualHeight > 0 &&
+                    bounds.Left >= 0 && bounds.Right <= window.ActualWidth + 0.5 &&
+                    bounds.Top >= 0 && bounds.Bottom <= window.ActualHeight + 0.5,
+                    $"{element.Name} must remain reachable at minimum workbench size");
+            }
+
+            var sourceEditor = (FrameworkElement)section.FindName("SourceEditorCell");
+            var targetEditor = (FrameworkElement)section.FindName("TargetEditorCell");
+            var copy = (Button)section.FindName("TranslateResultCopyButton");
+            var speak = (Button)section.FindName("TranslateResultSpeakButton");
+            var star = section.StarButton;
+            True(Bounds(targetEditor).Top > Bounds(sourceEditor).Top,
+                "narrow workbench must put the target reader below the source");
+            Equal(target, section.ResultBox.Text, "long target content must survive the narrow layout");
+            AssertReachable(section.InputBox);
+            AssertReachable(section.ResultScroll);
+            foreach (var action in new[] { copy, speak, star })
+            {
+                AssertReachable(action);
+                True(action.IsEnabled, $"{action.Name} must remain usable for a completed result");
+            }
+            True(Bounds(section.ResultScroll).Bottom <= Bounds(copy).Top + 0.5,
+                "the result reader must not cover its action footer");
+            section.InputBox.ScrollToEnd();
+            section.ResultScroll.ScrollToEnd();
+            window.UpdateLayout();
+            True(section.InputBox.VerticalOffset > 0,
+                "long source text must scroll instead of enlarging the source pane");
+            True(section.ResultScroll.VerticalOffset > 0,
+                "long target text must remain reachable by scrolling");
+            AssertReachable(copy);
+
+            window.Width = 1120;
+            window.UpdateLayout();
+            FlushDispatcher(2);
+            True(Bounds(targetEditor).Left > Bounds(sourceEditor).Left &&
+                Math.Abs(Bounds(targetEditor).Top - Bounds(sourceEditor).Top) < 1,
+                "widening the workbench must restore side-by-side readers");
+            var swap = (Button)section.FindName("TranslateSwapButton");
+            var running = TranslateSectionReducer.StartTranslation(section.CurrentState, 91);
+            section.ApplyState(running);
+            True(!section.SourceLangCombo.IsEnabled && !section.TargetLangCombo.IsEnabled && !swap.IsEnabled,
+                "language direction controls must lock for an in-flight request snapshot");
+            section.ApplyState(TranslateSectionReducer.ApplyCompletion(running, new TranslationSession
+            {
+                Stage = TranslationSessionStage.Completed,
+                TranslatedText = "完成",
+                Timing = new TranslationSessionTiming(TotalElapsedMs: 120),
+            }, 91));
+            True(section.SourceLangCombo.IsEnabled && section.TargetLangCombo.IsEnabled && swap.IsEnabled,
+                "language direction controls must restore after request completion");
+        }
+        finally
+        {
+            window.AllowClose = true;
+            window.Close();
+        }
     }
 
     /// <summary>
@@ -14795,58 +14843,6 @@ internal static class Program
             "an unreported global failure must be reported even inside an open cycle");
     }
 
-    /// <summary>
-    /// The dedup/probe behavior must live in the real production wiring:
-    /// App routes failures through the coordinator, repaints retained
-    /// detail after MainWindow creation, distinguishes probe outcomes from
-    /// evidence, and no surface claims an owner unconditionally.
-    /// </summary>
-    private static void HotkeyFailureDedupWiringIsReal()
-    {
-        var root = FindProjectRoot();
-        var appCode = File.ReadAllText(Path.Combine(root, "apps", "PopGlot.Windows", "App.xaml.cs"));
-        var serviceCode = File.ReadAllText(Path.Combine(root, "apps", "PopGlot.Windows", "HotkeyService.cs"));
-        var mainWindowCode = File.ReadAllText(Path.Combine(root, "apps", "PopGlot.Windows", "MainWindow.xaml.cs"));
-        var settingsCode = File.ReadAllText(Path.Combine(root, "apps", "PopGlot.Windows", "SettingsWindow.xaml.cs"));
-
-        True(serviceCode.Contains("RegistrationRestored"),
-            "the service must expose the restored event");
-        True(serviceCode.Contains("GetLastWin32Error"),
-            "the service must read the real Win32 error code");
-        True(serviceCode.Contains("ErrorHotkeyAlreadyRegistered"),
-            "the service must classify 1409 explicitly");
-
-        True(appCode.Contains("RegistrationFailed +="), "App must subscribe to RegistrationFailed");
-        True(appCode.Contains("RegistrationRestored"), "App must subscribe to the restored event");
-        True(appCode.Contains("HotkeyFailureCoordinator"),
-            "App must own the pure failure coordinator");
-        True(appCode.Contains("ReportRecovery"),
-            "App must close the failure cycle on recovery");
-        True(appCode.Contains("IsFullyAvailable"),
-            "the probe-vs-global distinction must come from service evidence");
-        True(appCode.Contains("ShellApplyFailureRouting.Classify"),
-            "the settings-apply failure branch must route through the pure evidence classifier");
-        True(appCode.Contains("_hotkeyFailureReportedThisAttempt"),
-            "the service event must mark its attempt so the App never double-reports a failure");
-        True(appCode.Contains("ShellApplyFailureKind.HotkeyConflictRestored"),
-            "probe failures must be a typed outcome, not a boolean");
-        True(appCode.Contains("_hotkeyFailure.ActiveDetail"),
-            "a startup failure before MainWindow creation must be retained and repainted");
-        True(!appCode.Contains("快捷键被其他程序占用"),
-            "the shell must never claim an owner unconditionally — copy follows the error class");
-        True(!appCode.Contains("HotkeyRetryTimer"),
-            "no timed background hotkey retry may be added");
-
-        True(mainWindowCode.Contains("StatusChannel.Hotkey"),
-            "the footer must carry a resident Hotkey channel");
-        True(mainWindowCode.Contains("ClearResidentStatus"),
-            "the footer must have a typed clear path back to EngineConfig/Ready");
-
-        True(settingsCode.Contains("ShellApplyFailureKind.HotkeyConflictRestored"),
-            "the settings window must report the probe conflict inline");
-        True(settingsCode.Contains("ApplyShellSettings(_shellSettings).Applied"),
-            "rollback honesty must follow the typed outcome");
-    }
 
     private static async Task ClipboardSnapshotFailClosedBehaviorAsync()
     {

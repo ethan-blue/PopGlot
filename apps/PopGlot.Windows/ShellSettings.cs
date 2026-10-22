@@ -388,6 +388,14 @@ internal static class ShellSettingsStore
 
     public static ShellSettings Load(string? settingsPath = null)
     {
+        lock (CacheLock)
+        {
+            return LoadUnlocked(settingsPath);
+        }
+    }
+
+    private static ShellSettings LoadUnlocked(string? settingsPath, bool throwOnFailure = false)
+    {
         var path = settingsPath ?? DefaultSettingsPath;
         try
         {
@@ -503,6 +511,10 @@ internal static class ShellSettingsStore
         }
         catch (Exception exception) when (exception is IOException or JsonException or UnauthorizedAccessException)
         {
+            if (throwOnFailure)
+            {
+                throw;
+            }
             // A transient failure (file locked, JSON mid-write, momentary
             // access denial) is a fallback, not a snapshot of the file.
             // Caching Default here used to make the failure sticky: the
@@ -544,6 +556,27 @@ internal static class ShellSettingsStore
     }
 
     public static void Save(ShellSettings settings, string? settingsPath = null)
+    {
+        lock (CacheLock)
+        {
+            SaveUnlocked(settings, settingsPath);
+        }
+    }
+
+    /// <summary>Merges a field edit into the latest disk snapshot under the
+    /// same lock as Load/Save. An unreadable file is never replaced by defaults.</summary>
+    public static ShellSettings Update(Func<ShellSettings, ShellSettings> update, string? settingsPath = null)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+        lock (CacheLock)
+        {
+            var settings = update(LoadUnlocked(settingsPath, throwOnFailure: true));
+            SaveUnlocked(settings, settingsPath);
+            return settings;
+        }
+    }
+
+    private static void SaveUnlocked(ShellSettings settings, string? settingsPath)
     {
         ArgumentNullException.ThrowIfNull(settings);
         var validationError = settings.ValidateHotkeys();

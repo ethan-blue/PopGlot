@@ -101,7 +101,10 @@ internal sealed class SummaryLifecycleCoordinator
         ArgumentNullException.ThrowIfNull(readingState);
         ArgumentNullException.ThrowIfNull(sourceText);
 
-        var gen = Interlocked.Increment(ref _generation);
+        // A cache hit is still a new request: it must stop the previous
+        // network operation instead of merely hiding its eventual result.
+        Cancel();
+        var gen = CurrentGeneration;
         var snapshot = coordinator.CreateSummarySnapshot(
             sourceText, sourceLanguage, targetLanguage, TextTaskKind.Summarize, gen);
 
@@ -119,29 +122,18 @@ internal sealed class SummaryLifecycleCoordinator
             return;
         }
 
-        // 2. Cancel prior operation
+        // 2. Own the cancellation source through every exit, including a
+        // failing onStarting callback and a normally completed request.
         CancellationTokenSource operation;
         lock (_gate)
         {
-            if (_activeCts is not null)
-            {
-                try
-                {
-                    _activeCts.Cancel();
-                    _activeCts.Dispose();
-                }
-                catch (ObjectDisposedException)
-                {
-                }
-            }
             operation = new CancellationTokenSource();
             _activeCts = operation;
         }
 
-        onStarting();
-
         try
         {
+            onStarting();
             var response = await coordinator.RunSummaryTaskAsync(snapshot, operation.Token);
 
             lock (_gate)
@@ -209,6 +201,7 @@ internal sealed class SummaryLifecycleCoordinator
                     _activeCts = null;
                 }
             }
+            operation.Dispose();
         }
     }
 }

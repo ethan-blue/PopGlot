@@ -211,6 +211,10 @@
                         Padding="12,5">
 
                     <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
 
                         <TextBlock x:Name="TranslateCounter" Style="{StaticResource Metadata}"
 
@@ -222,7 +226,7 @@
 
                                    Text="0 字符" TextTrimming="CharacterEllipsis" />
 
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
 
                             <Button x:Name="TranslateSourceSpeakButton" Style="{StaticResource IconButton}" Width="32" Height="32"
 
@@ -409,7 +413,7 @@
 
                         <StackPanel>
 
-                            <Grid MinHeight="140">
+                            <Grid>
 
                                 <TextBox x:Name="TranslateResult"
 
@@ -472,33 +476,28 @@
 
                                 <StackPanel x:Name="TranslateEmptyState" VerticalAlignment="Center"
 
-                                            HorizontalAlignment="Center">
+                                            HorizontalAlignment="Stretch">
 
                                     <!-- Unconfigured service guidance card. Shown whenever no fully
                                          configured user engine exists — the built-in free engine is a
                                          fallback route and never hides this entry. -->
-                                    <StackPanel x:Name="UnconfiguredGuidePanel" Visibility="Collapsed" HorizontalAlignment="Center" Margin="0,0,0,10">
-                                        <Border Width="36" Height="36" CornerRadius="10" Margin="0,0,0,8"
-                                                Background="{DynamicResource AccentSoftBrush}" HorizontalAlignment="Center">
-                                            <Path Data="{StaticResource IconProvider}" Width="16" Height="16" Stretch="Uniform"
-                                                  Fill="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                        </Border>
+                                    <StackPanel x:Name="UnconfiguredGuidePanel" Visibility="Collapsed" HorizontalAlignment="Stretch" Margin="0,0,0,10">
                                         <TextBlock x:Name="GuideTitle" Text="尚未配置翻译引擎" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center"
                                                    Foreground="{DynamicResource TextPrimaryBrush}" />
-                                        <TextBlock x:Name="GuideDescription" Text="添加翻译引擎后即可开始使用。"
-                                                   Style="{StaticResource Caption}" HorizontalAlignment="Center"
+                                        <TextBlock x:Name="GuideDescription" Text="公共翻译只发送文字，不发送截图。"
+                                                   Style="{StaticResource Caption}" TextAlignment="Center" TextWrapping="Wrap"
                                                    Foreground="{DynamicResource TextTertiaryBrush}" Margin="0,4,0,12" />
-                                        <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                        <WrapPanel Orientation="Horizontal" HorizontalAlignment="Stretch">
+                                            <Button x:Name="GoToSettingsButton" Content="添加翻译引擎" Style="{StaticResource PrimaryButton}"
+                                                    Padding="14,6" Margin="4" HorizontalAlignment="Center" Cursor="Hand"
+                                                    AutomationProperties.Name="添加翻译引擎"
+                                                    Click="OpenAddEngine_Click" />
                                             <Button x:Name="EnableFreeEngineButton" Content="允许公共翻译"
                                                     Style="{StaticResource GhostButton}" Padding="10,6" Margin="4"
                                                     HorizontalAlignment="Center"
                                                     AutomationProperties.Name="允许公共翻译"
                                                     ToolTip="只把待翻译文本发给你选中的公共翻译（Google 或 MyMemory）；不发送截图、历史或密钥"
                                                     Click="EnableFreeEngine_Click" />
-                                            <Button x:Name="GoToSettingsButton" Content="添加翻译引擎" Style="{StaticResource PrimaryButton}"
-                                                    Padding="14,6" Margin="4" HorizontalAlignment="Center" Cursor="Hand"
-                                                    AutomationProperties.Name="添加翻译引擎"
-                                                    Click="OpenAddEngine_Click" />
                                             <Button x:Name="ViewOfflineUsageButton" Content="查看离线用法"
                                                     Style="{StaticResource GhostButton}" Padding="10,6" Margin="4"
                                                     HorizontalAlignment="Center"
@@ -509,10 +508,10 @@
                                     </StackPanel>
 
                                     <!-- Normal idle guidance: one title, one hint, one primary CTA. -->
-                                    <StackPanel x:Name="NormalGuidePanel" HorizontalAlignment="Center">
+                                    <StackPanel x:Name="NormalGuidePanel" HorizontalAlignment="Stretch">
                                         <TextBlock x:Name="ShortcutEntriesHint" Text="划词 Ctrl+Alt+W · 截图 Ctrl+Alt+Space"
 
-                                                   Style="{StaticResource Caption}" HorizontalAlignment="Center"
+                                                   Style="{StaticResource Caption}" TextAlignment="Center" TextWrapping="Wrap"
 
                                                    Margin="0,0,0,12" Foreground="{DynamicResource TextTertiaryBrush}" />
 
@@ -562,18 +561,22 @@
                         CornerRadius="0,0,9,0"
                         Padding="12,5">
                     <Grid>
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
                             <TextBlock x:Name="TranslateEngineBadge" Style="{StaticResource Metadata}"
                                        Foreground="{DynamicResource TextTertiaryBrush}"
-                                       VerticalAlignment="Center" Text="等待输入" />
+                                       VerticalAlignment="Center" Text="等待输入" TextTrimming="CharacterEllipsis" />
                             <TextBlock x:Name="TranslateStatus" Style="{StaticResource Metadata}"
-                                       Margin="8,0,0,0" VerticalAlignment="Center"
+                                       Margin="0,2,8,0" VerticalAlignment="Center"
                                        MaxWidth="260" TextTrimming="CharacterEllipsis" Text="就绪"
                                        ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                        AutomationProperties.LiveSetting="Polite"
                                        AutomationProperties.Name="翻译状态" />
                         </StackPanel>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
                             <Button x:Name="TranslateResultSpeakButton" Style="{StaticResource IconButton}"
                                     Width="32" Height="32"
                                     AutomationProperties.Name="朗读译文" ToolTip="朗读译文"

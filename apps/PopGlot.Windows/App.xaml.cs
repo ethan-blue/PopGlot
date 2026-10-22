@@ -9,8 +9,10 @@ public partial class App : Application
 {
     private const string InstanceMutexName = @"Local\PopGlot.SingleInstance";
     private const string ShowWindowSignalName = @"Local\PopGlot.ShowWindow";
-    private readonly HistoryStore _history = new();
-    private readonly VocabularyStore _vocabulary = new();
+    // The data root is selected in OnStartup, after Application construction.
+    // Loading here would read/quarantine user files before smoke isolation.
+    private readonly Lazy<HistoryStore> _history = new(static () => new HistoryStore());
+    private readonly Lazy<VocabularyStore> _vocabulary = new(static () => new VocabularyStore());
     private readonly ClipboardSelectionService _selectionService =
         new(new WindowsSelectionClipboardAdapter());
 
@@ -994,7 +996,7 @@ public partial class App : Application
             return _mainWindow;
         }
         trace?.Mark(TracePoint.WindowConstructionStarted);
-        _mainWindow = new MainWindow(_shellSettings, _history, _vocabulary)
+        _mainWindow = new MainWindow(_shellSettings, _history.Value, _vocabulary.Value)
         {
             OpenSettings = () => ShowSettings(),
             OpenAddEngineFlow = () => ShowSettings(startAddEngineFlow: true),
@@ -1022,7 +1024,7 @@ public partial class App : Application
         {
             return _settingsWindow;
         }
-        var window = new SettingsWindow(_shellSettings, _history, _vocabulary)
+        var window = new SettingsWindow(ShellSettingsStore.Load(), _history.Value, _vocabulary.Value)
         {
             ApplyShellSettings = TryApplyShellSettings,
             SetHotkeysSuspended = suspended => _hotkeys?.SetSuspended(suspended),
@@ -1406,11 +1408,11 @@ public partial class App : Application
         trace?.Mark(TracePoint.WindowConstructionStarted);
         var panel = new TranslationPanelWindow(
             anchorPixels,
-            _history,
-            () => _shellSettings,
+            _history.Value,
+            () => ShellSettingsStore.Load(),
             () => ShowSettings(),
             OpenInMainWindow,
-            _vocabulary);
+            _vocabulary.Value);
         trace?.Mark(TracePoint.WindowConstructionEnded);
         _activePanel = panel;
         panel.Closed += (_, _) =>
@@ -1464,7 +1466,7 @@ public partial class App : Application
             // (panel/overlay teardown, owner, first-show convergence); without
             // it QuickSearch falls back to a bare SettingsWindow.
             trace?.Mark(TracePoint.WindowConstructionStarted);
-            _activeQuickSearch = new QuickSearchWindow(_history, _vocabulary, () => ShowSettings());
+            _activeQuickSearch = new QuickSearchWindow(_history.Value, _vocabulary.Value, () => ShowSettings());
             trace?.Mark(TracePoint.WindowConstructionEnded);
             _activeQuickSearch.Closed += (_, _) => _activeQuickSearch = null;
             trace?.Mark(TracePoint.ShowRequested);
@@ -1967,8 +1969,8 @@ public partial class App : Application
             // happens off the UI thread and only once for a normal exit.
             await Task.Run(() =>
             {
-                _vocabulary.Flush();
-                _history.Flush();
+                if (_vocabulary.IsValueCreated) _vocabulary.Value.Flush();
+                if (_history.IsValueCreated) _history.Value.Flush();
                 DiagnosticsLog.Flush();
                 InteractionTraceCollector.Flush(TimeSpan.FromSeconds(2));
             });
@@ -1987,8 +1989,8 @@ public partial class App : Application
         // user exit that already drained the stores in the background.
         if (!_storesFlushedForExit)
         {
-            _vocabulary.Flush();
-            _history.Flush();
+            if (_vocabulary.IsValueCreated) _vocabulary.Value.Flush();
+            if (_history.IsValueCreated) _history.Value.Flush();
             DiagnosticsLog.Flush();
             InteractionTraceCollector.Flush(TimeSpan.FromSeconds(1));
         }

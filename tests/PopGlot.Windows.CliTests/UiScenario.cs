@@ -28,6 +28,7 @@ internal static class UiScenario
         Console.WriteLine("UI resources ready");
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
         var section = new ServicesSection();
+        section.DiscoverCliTools = (_, _) => [];
         Console.WriteLine("UI section ready");
         var window = new Window { Content = section, Width = 800, Height = 600, Left = -12000, Top = -12000,
             ShowInTaskbar = false, WindowStyle = WindowStyle.None, Background = (Brush)app.Resources["CanvasBrush"] };
@@ -37,12 +38,19 @@ internal static class UiScenario
             Button Find(string name) => (Button)section.FindName(name);
             void Click(string name) { Find(name).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump(); }
             Click("ConnectLocalToolHeaderButton");
+            Until(() => Find("DetectCliToolsButton").IsEnabled, "initial discovery completes off the UI thread");
             var list = (ListBox)section.FindName("CliToolsListBox");
             list.ItemsSource = new[] { new ServicesSection.CliToolRow { ToolId = "codex", ToolName = "Codex CLI", EntryPath = Environment.ProcessPath! } };
             list.SelectedIndex = 0;
             Click("CliConnectButton");
             Console.WriteLine("UI connect submitted");
-            Until(() => Find("CliTestButton").IsEnabled, "connection should populate models");
+            Until(() => Find("CliTestButton").IsEnabled, "connection should populate models", () =>
+                $"status={((TextBlock)section.FindName("CliConnectionStatus")).Text}; " +
+                $"models={((ComboBox)section.FindName("CliModelCombo")).Items.Count}; " +
+                $"selected={((ComboBox)section.FindName("CliModelCombo")).SelectedItem}; " +
+                $"connectEnabled={Find("CliConnectButton").IsEnabled}; cancelVisible={Find("CliCancelButton").Visibility}");
+            Program.Assert(((ComboBox)section.FindName("CliModelCombo")).SelectedItem is CliModel { Id: "fixture", Provider: null },
+                "Codex restores its saved model by ID; an OMP-only provider field cannot invalidate a Codex catalog match");
             Click("CliTestButton");
             Console.WriteLine("UI test submitted");
             Until(() => ((TextBlock)section.FindName("CliConnectionStatus")).Text.StartsWith("测试通过"), "UI test translation should pass");
@@ -50,6 +58,24 @@ internal static class UiScenario
             Console.WriteLine("UI save submitted");
             Until(() => ((TextBlock)section.FindName("CliConnectionStatus")).Text.StartsWith("已保存并切换"), "save/use should persist");
             Program.Assert(ProfileManager.Load().TryGetActiveProfile()?.ExecutionFacts.TextCapable == true, "UI saved an executable CLI profile");
+            var savedCli = ProfileManager.Load().TryGetActiveProfile()!;
+            var profileCount = ProfileManager.Load().Profiles.Count;
+            typeof(ServicesSection).GetMethod("OpenProfileInEditor", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .Invoke(section, new object[] { savedCli.Id });
+            Program.Assert(((ComboBox)section.FindName("CliModelCombo")).SelectedItem is CliModel { Id: "fixture" } &&
+                !Find("CliSaveUseButton").IsEnabled, "saved CLI model echoes without inventing a live connection");
+            Click("DetectCliToolsButton");
+            Until(() => Find("DetectCliToolsButton").IsEnabled, "rescan completes");
+            Program.Assert(list.SelectedItem is ServicesSection.CliToolRow { StateBadge: "已保存入口" } &&
+                ((ComboBox)section.FindName("CliModelCombo")).SelectedItem is CliModel { Id: "fixture" },
+                "saved entry outside discovery paths remains selected and its model survives rescan");
+            Click("CliConnectButton");
+            Until(() => Find("CliSaveUseButton").IsEnabled, "saved CLI reconnects");
+            Click("CliSaveUseButton");
+            Until(() => ((TextBlock)section.FindName("CliConnectionStatus")).Text.StartsWith("已保存并切换"), "reconnected CLI saves");
+            var updatedCli = ProfileManager.Load().Profiles.Single(p => p.Id == savedCli.Id);
+            Program.Assert(ProfileManager.Load().Profiles.Count == profileCount && updatedCli.LastTestFingerprint == savedCli.LastTestFingerprint,
+                "reconnect/save edits the same profile and retains only unchanged verification evidence");
             var output = Path.GetFullPath("artifacts/cli-repair/connection-panel.png");
             Directory.CreateDirectory(Path.GetDirectoryName(output)!);
             window.UpdateLayout();
@@ -64,6 +90,8 @@ internal static class UiScenario
                 "disconnected UI and saved profile must both be disabled");
             var directProfile = DirectTests.UiProfile();
             typeof(ServicesSection).GetMethod("OpenDirectProfile", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(section, new object[] { directProfile });
+            Program.Assert(!Find("ChatGptTestButton").IsEnabled && !Find("ChatGptSaveUseButton").IsEnabled,
+                "restored direct model is not a fresh account catalog");
             Click("ChatGptRefreshButton");
             Until(() => Find("ChatGptTestButton").IsEnabled, "direct model list should enable testing");
             DirectTests.HoldUiRequest(); Click("ChatGptTestButton");
@@ -112,9 +140,39 @@ internal static class UiScenario
                 "cancel hides callback and releases UI; old completion cannot overwrite it");
             Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", null);
             VerifyLanguageSync(window, root);
+            VerifyApiEditor(section);
         }
         finally { DirectTests.Restore(); window.Close(); Pump(); }
     }
+    private static void VerifyApiEditor(ServicesSection section)
+    {
+        section.BeginAddEngineFlow();
+        ((Button)section.FindName("CustomPresetButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        ((TextBox)section.FindName("ServiceNameTextBox")).Text = "API edit regression";
+        var address = (TextBox)section.FindName("BaseUrlTextBox");
+        address.Text = "http://127.0.0.1:11434/v1";
+        var model = (ComboBox)section.FindName("TextModelCombo"); model.Text = "saved-model";
+        var pendingCatalog = new TaskCompletionSource<ModelCatalogResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        section.ModelCatalogExecutor = (_, _, _) => pendingCatalog.Task;
+        ((Button)section.FindName("FetchModelsButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        address.Text = "http://127.0.0.1:1234/v1";
+        pendingCatalog.SetResult(new(new[] { new ModelDescriptor("old-host-model", CapabilityState.Unknown, CapabilityState.Unknown, "fixture") },
+            new Uri("http://127.0.0.1:11434/v1/models"), 1, "fixture"));
+        Until(() => ((Button)section.FindName("FetchModelsButton")).IsEnabled, "stale model request releases its busy state");
+        Program.Assert(model.Items.Count == 0 && model.Text == "saved-model", "old-address model results cannot populate the new draft");
+        var count = ProfileManager.Load().Profiles.Count;
+        var firstSave = section.TrySaveServiceAsync();
+        var duplicateSave = section.TrySaveServiceAsync();
+        Program.Assert(duplicateSave.IsCompletedSuccessfully && !duplicateSave.Result, "double-save is rejected while the first commit is pending");
+        Until(() => firstSave.IsCompleted, "API draft commit completes");
+        Program.Assert(firstSave.Result && ProfileManager.Load().Profiles.Count == count + 1, "API save commits once without a successful health test");
+        var saved = ProfileManager.Load().Profiles.Single(p => p.Name == "API edit regression");
+        typeof(ServicesSection).GetMethod("OpenProfileInEditor", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .Invoke(section, new object[] { saved.Id });
+        Program.Assert(address.Text == saved.ApiBaseUrl && model.Text == saved.TextModel &&
+            ((StackPanel)section.FindName("BaseUrlPanel")).Visibility == Visibility.Visible, "saved API address and model remain editable");
+    }
+
     private static void VerifyLanguageSync(Window host, string root)
     {
         var original = CoreBridge.GetSettings();
@@ -159,11 +217,11 @@ internal static class UiScenario
         }
     }
 
-    private static void Until(Func<bool> test, string error)
+    private static void Until(Func<bool> test, string error, Func<string>? detail = null)
     {
         var watch = Stopwatch.StartNew();
         while (!test() && watch.Elapsed < TimeSpan.FromSeconds(15)) { Pump(); Thread.Sleep(10); }
-        if (!test()) throw new InvalidOperationException(error);
+        if (!test()) throw new InvalidOperationException(detail is null ? error : $"{error}: {detail()}");
     }
     private static void Pump()
     {

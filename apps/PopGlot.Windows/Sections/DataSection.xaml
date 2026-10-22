@@ -84,8 +84,8 @@
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="导出数据备份" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}"
-                           Text="导出历史记录、生词本与非秘密配置 · 零凭据 · 格式可读" />
+                <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap" Margin="0,4,12,0"
+                           Text="历史、生词本与非秘密配置；不含密钥" />
             </StackPanel>
             <Button x:Name="ExportBackupButton" Grid.Column="1" Content="导出备份"
                     VerticalAlignment="Center"
@@ -103,8 +103,8 @@
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="恢复数据备份" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}"
-                           Text="安全校验版本与结构 · 覆盖前自动生成本地还原副本" />
+                <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap" Margin="0,4,12,0"
+                           Text="覆盖前自动保留本地还原副本" />
             </StackPanel>
             <Button x:Name="ImportBackupButton" Grid.Column="1" Content="恢复备份"
                     VerticalAlignment="Center"
@@ -124,8 +124,8 @@
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="导出排障诊断包" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}"
-                           Text="仅含版本、错误码与协议 · 绝无原文/译文/密钥 · 零网络" />
+                <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap" Margin="0,4,12,0"
+                           Text="仅含版本、错误码与协议；不含原文、译文或密钥" />
             </StackPanel>
             <Button x:Name="ExportDiagnosticsButton" Grid.Column="1" Content="导出诊断"
                     VerticalAlignment="Center"

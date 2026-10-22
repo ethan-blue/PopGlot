@@ -101,9 +101,10 @@
                                 BorderBrush="{DynamicResource BorderSubtleBrush}"
                                 BorderThickness="1" CornerRadius="10"
                                 Padding="8,3" VerticalAlignment="Center" Margin="2,0,4,0">
-                            <TextBlock x:Name="LangBadge" Style="{StaticResource Metadata}"
+                            <TextBlock x:Name="LangBadge" Style="{StaticResource Metadata}" MaxWidth="120" TextTrimming="CharacterEllipsis"
                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                        FontSize="11" FontWeight="Medium"
+                                       ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                        VerticalAlignment="Center" Text="自动 → 中文" />
                         </Border>
 
@@ -159,6 +160,7 @@
 
             <!-- Live Result Container: Spotlight Card Hierarchy -->
             <Border x:Name="ResultContainer" Grid.Row="1" Padding="16,14" Visibility="Collapsed">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                 <StackPanel>
                     <!-- Result Card Box: clean elevated container -->
                     <Border Background="{DynamicResource ResultSurfaceBrush}"
@@ -167,7 +169,17 @@
                         <StackPanel>
                             <!-- Card Header: Pill, Phonetic, Status Indicator, Action Buttons -->
                             <Grid Margin="0,0,0,10">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Grid VerticalAlignment="Center">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
                                     <!-- Result Pill -->
                                     <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="4"
                                             Padding="6,2" Margin="0,0,8,0" VerticalAlignment="Center">
@@ -175,25 +187,25 @@
                                                    Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center" />
                                     </Border>
 
-                                    <TextBlock x:Name="PhoneticLabel" Style="{StaticResource MonoText}" FontSize="12"
+                                    <TextBlock x:Name="PhoneticLabel" Grid.Column="1" Style="{StaticResource MonoText}" FontSize="12"
                                                Foreground="{DynamicResource AccentBrush}"
                                                VerticalAlignment="Center" Visibility="Collapsed"
                                                TextTrimming="CharacterEllipsis" MaxWidth="240"
                                                Margin="0,0,8,0" />
-                                    <TextBlock x:Name="StreamIndicator" Style="{StaticResource Metadata}"
+                                    <TextBlock x:Name="StreamIndicator" Grid.Column="2" Style="{StaticResource Metadata}"
                                                Foreground="{DynamicResource AccentBrush}"
                                                FontWeight="SemiBold"
                                                VerticalAlignment="Center" Visibility="Collapsed"
                                                Margin="0,0,8,0" Text="正在生成…" />
-                                    <TextBlock x:Name="IncompleteBadge" Style="{StaticResource Metadata}"
+                                    <TextBlock x:Name="IncompleteBadge" Grid.Column="3" Style="{StaticResource Metadata}"
                                                Foreground="{DynamicResource WarningBrush}"
                                                FontWeight="SemiBold"
                                                VerticalAlignment="Center" Visibility="Collapsed"
                                                Margin="0,0,8,0" Text="未完成" />
-                                </StackPanel>
+                                </Grid>
 
                                 <!-- Top-right Action Buttons -->
-                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                                     <Button x:Name="SpeakButton" Style="{StaticResource IconButton}" Width="32" Height="32"
                                             AutomationProperties.Name="朗读译文"
                                             ToolTip="朗读译文 (Ctrl+P)" Click="Speak_Click">
@@ -280,7 +292,7 @@
                                   Fill="{DynamicResource DangerBrush}"
                                   Data="{StaticResource IconClear}" Margin="0,2,10,0" VerticalAlignment="Top" />
                             <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,8,0">
-                                <TextBlock x:Name="ErrorTitle" Text="需要处理" FontWeight="SemiBold"
+                                <TextBlock x:Name="ErrorTitle" Text="需要处理" FontWeight="SemiBold" TextWrapping="Wrap"
                                            Foreground="{DynamicResource DangerBrush}" FontSize="12.5" />
                                 <TextBlock x:Name="ErrorDetail" Style="{StaticResource Caption}"
                                            Foreground="{DynamicResource TextSecondaryBrush}"
@@ -292,6 +304,7 @@
                         </Grid>
                     </Border>
                 </StackPanel>
+                </ScrollViewer>
             </Border>
 
             <!-- Bottom Shortcuts footer: Spotlight/Raycast style -->
@@ -300,26 +313,35 @@
                     CornerRadius="0,0,11,11">
                 <Grid>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="3*" />
+                        <ColumnDefinition Width="2*" />
                     </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
+                    <Grid Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
                         <Ellipse x:Name="StatusDot" Width="6" Height="6" Fill="{DynamicResource TextTertiaryBrush}"
                                  Margin="0,0,8,0" VerticalAlignment="Center" />
-                        <TextBlock x:Name="FooterStatus" Style="{StaticResource Metadata}"
+                        <TextBlock x:Name="FooterStatus" Grid.Column="1" Style="{StaticResource Metadata}"
                                    Foreground="{DynamicResource TextSecondaryBrush}"
                                    VerticalAlignment="Center" Text="输入后按 Enter 翻译"
                                    TextTrimming="CharacterEllipsis"
                                    ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                    AutomationProperties.LiveSetting="Polite"
                                    AutomationProperties.Name="翻译状态" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    </Grid>
+                    <Grid Grid.Column="1" VerticalAlignment="Center">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
                         <!-- Dynamic per-state shortcut hints; text is owned by QuickSearchState.HintsText -->
                         <TextBlock x:Name="FooterHints" Text="Enter 翻译 · Shift+Enter 换行 · Esc 关闭" Style="{StaticResource Metadata}"
                                    Foreground="{DynamicResource TextTertiaryBrush}"
-                                   VerticalAlignment="Center" />
-                        <Border Background="{DynamicResource SurfaceRaisedBrush}"
+                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                        <Border Grid.Column="1" Background="{DynamicResource SurfaceRaisedBrush}"
                                 BorderBrush="{DynamicResource BorderSubtleBrush}"
                                 BorderThickness="1" CornerRadius="4"
                                 Padding="5,1.5" Margin="8,0,0,0" VerticalAlignment="Center"
@@ -327,7 +349,7 @@
                             <TextBlock Text="Esc" FontFamily="{StaticResource MonoFontFamily}" FontSize="10.5" FontWeight="SemiBold"
                                        Foreground="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center" />
                         </Border>
-                    </StackPanel>
+                    </Grid>
                 </Grid>
             </Border>
         </Grid>

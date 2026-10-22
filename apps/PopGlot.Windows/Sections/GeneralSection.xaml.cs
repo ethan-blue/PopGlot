@@ -196,8 +196,7 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
     {
         try
         {
-            var shell = ShellSettingsStore.Load();
-            ShellSettingsStore.Save(shell with { HasCompletedOnboarding = false });
+            ShellSettingsStore.Update(current => current with { HasCompletedOnboarding = false });
         }
         catch (System.Exception)
         {

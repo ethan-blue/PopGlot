@@ -115,7 +115,7 @@ internal static class LifecycleStress
                 break;
             }
         }
-        var survivorWindow = weakRefs[survivorCycle - 1].Target as Window;
+        var survivorWindow = survivorCycle > 0 ? weakRefs[survivorCycle - 1].Target as Window : null;
         Console.WriteLine($"[C12 {family}] survivor cycle: {survivorCycle} " +
                           $"isLoaded={survivorWindow?.IsLoaded.ToString() ?? "?"} " +
                           $"appWindows={Application.Current?.Windows.Count.ToString() ?? "?"}");
@@ -124,11 +124,14 @@ internal static class LifecycleStress
 
         var workingSets = new List<double>();
         var heaps = new List<double>();
+        var warmThreadBaseline = baselineThreads;
         foreach (var row in samples.Skip(1))
         {
             var columns = row.Split(',');
             workingSets.Add(double.Parse(columns[1], System.Globalization.CultureInfo.InvariantCulture));
             heaps.Add(double.Parse(columns[3], System.Globalization.CultureInfo.InvariantCulture));
+            if (workingSets.Count == 1)
+                warmThreadBaseline = int.Parse(columns[5], System.Globalization.CultureInfo.InvariantCulture);
         }
         var increases = WorkingSetIncreases(workingSets);
 
@@ -143,6 +146,7 @@ internal static class LifecycleStress
             $"alive_after_pin_clear_and_deep_drain={aliveAfterFinalGc}",
             $"theme_subs_baseline={baselineTheme} final={finalTheme}",
             $"threads_baseline={baselineThreads} final={process.Threads.Count} handles_baseline={baselineHandles} final={process.HandleCount}",
+            $"threads_after_first_sample={warmThreadBaseline}",
             $"ws_first={workingSets[0]:F1}MB ws_last={workingSets[^1]:F1}MB ws_max={workingSets.Max():F1}MB increases={increases}/{workingSets.Count - 1}",
             $"heap_first={heaps[0]:F1}MB heap_last={heaps[^1]:F1}MB",
         });
@@ -183,13 +187,16 @@ internal static class LifecycleStress
             throw new InvalidOperationException(
                 $"{family}: final managed heap {heaps[^1]:F0}MB exceeds the platform bound {heapBound:F0}MB (first sample {heaps[0]:F0}MB).");
         }
-        if (Math.Abs(process.Threads.Count - baselineThreads) > 6)
+        // The first shown WPF window initializes shared rendering and CLR
+        // workers. Bound growth after the first sampled batch, not that cold
+        // framework initialization; the raw cold count remains in the report.
+        if (process.Threads.Count - warmThreadBaseline > 6)
         {
             throw new InvalidOperationException(
-                $"{family}: thread count {baselineThreads}→{process.Threads.Count} — timers or async work are not being released.");
+                $"{family}: threads after the first {SampleEvery} cycles grew {warmThreadBaseline}→{process.Threads.Count} — repeated window work is not reaching a plateau.");
         }
 
-        Console.WriteLine($"[C12 {family}] alive=0 theme={finalTheme}(base {baselineTheme}) " +
+        Console.WriteLine($"[C12 {family}] alive={aliveAfterFinalGc} platformRetained={platformRetained} theme={finalTheme}(base {baselineTheme}) " +
                           $"ws {workingSets[0]:F0}→{workingSets[^1]:F0}MB (max {workingSets.Max():F0}) " +
                           $"heap {heaps[0]:F0}→{heaps[^1]:F0}MB — report: {reportPath}");
     }

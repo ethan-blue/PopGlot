@@ -67,6 +67,7 @@ internal static class TranslateSectionReducer
             StatusText = "连接中",
             BadgeText = "",
             ExplanationText = string.Empty,
+            ProtectedTerms = [],
             IsStreamLayerVisible = false,
             IsFinalLayerVisible = true,
             IsStreamIndicatorVisible = false,
@@ -193,7 +194,7 @@ internal static class TranslateSectionReducer
                 IsTranslateButtonEnabled = true,
                 AreResultActionsEnabled = false,
                 BadgeText = "内容不完整",
-                StatusText = $"内容不完整 · {TranslationElapsedText.ForMilliseconds(session.Timing.TotalElapsedMs)} · 见下方说明",
+                StatusText = $"内容不完整 · {TranslationElapsedText.ForMilliseconds(session.Timing.TotalElapsedMs)}",
                 ExplanationText = explanation,
                 ProtectedTerms = session.ProtectedTerms,
                 IsExplanationVisible = notes.Count > 0,
@@ -240,9 +241,7 @@ internal static class TranslateSectionReducer
             IsTranslateButtonEnabled = true,
             AreResultActionsEnabled = false,
             BadgeText = hasPartialFail ? "内容不完整" : "未完成",
-            StatusText = hasPartialFail
-                ? $"内容不完整 · {message}"
-                : (string.IsNullOrWhiteSpace(suggestion) ? message : $"{message} {suggestion}"),
+            StatusText = hasPartialFail ? "生成中断 · 内容不完整" : "翻译失败",
             ExplanationText = failExplanation,
             IsExplanationVisible = true,
             IsPartialIncomplete = hasPartialFail,
@@ -286,7 +285,7 @@ internal static class TranslateSectionReducer
             IsTranslateButtonEnabled = true,
             AreResultActionsEnabled = false,
             BadgeText = hasPartialErr ? "内容不完整" : "未完成",
-            StatusText = hasPartialErr ? $"内容不完整 · 翻译失败：{exception.Message}" : $"翻译失败：{exception.Message}",
+            StatusText = hasPartialErr ? "生成中断 · 内容不完整" : "翻译失败",
             ExplanationText = exception.Message,
             IsExplanationVisible = true,
             IsPartialIncomplete = hasPartialErr,
@@ -492,9 +491,9 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     }
 
     /// <summary>
-    /// Below 720 DIP of content width the panes stack vertically (AI-RULES
-    /// 6.2): source on top with at least 160 DIP of editor, target below,
-    /// the swap button and centre axis hidden instead of squeezing the text.
+    /// Below 720 DIP of content width the panes stack vertically. Both editors
+    /// share the available height and scroll internally; long input must never
+    /// push the result and its actions outside the work surface.
     /// </summary>
     internal void SetStacked(bool stacked)
     {
@@ -510,11 +509,10 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         {
             for (var row = 0; row < 6; row++)
             {
-                var inputRow = row == 1;
+                var editorRow = row is 1 or 4;
                 TranslatePaneGrid.RowDefinitions.Add(new RowDefinition
                 {
-                    Height = inputRow ? GridLength.Auto : row == 4 ? new GridLength(1, GridUnitType.Star) : GridLength.Auto,
-                    MinHeight = inputRow ? 160 : 0,
+                    Height = editorRow ? new GridLength(1, GridUnitType.Star) : GridLength.Auto,
                 });
             }
             TranslatePaneGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -900,7 +898,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             {
                 UnconfiguredGuidePanel.Visibility = Visibility.Visible;
             }
-            TranslateStatus.Text = "未配置引擎或未允许公共翻译，请在右侧选择接入方式。";
+            TranslateStatus.Text = "请先添加引擎或允许公共翻译";
             return;
         }
 
@@ -1125,8 +1123,8 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         TranslateStatus.Text = state.StatusText;
         if (!HasConfiguredUserEngine() && state.Phase == TranslateUiPhase.Idle && string.IsNullOrWhiteSpace(state.FinalText))
         {
-            TranslateEngineBadge.Text = HasFallbackRoute() ? EngineWording.FreePublicTranslationName : "未配置";
-            TranslateStatus.Text = HasFallbackRoute() ? "就绪" : "未配置引擎，请前往设置接入";
+            TranslateEngineBadge.Text = string.Empty;
+            TranslateStatus.Text = HasFallbackRoute() ? "就绪" : "等待配置";
         }
 
         // 免费引擎预提示不得被「连接中/正在生成…」这类准备态瞬间覆盖：在
@@ -1144,7 +1142,8 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         }
 
         TranslateResultSpeakButton.IsEnabled = state.AreResultActionsEnabled;
-        TranslateResultCopyButton.IsEnabled = state.AreResultActionsEnabled;
+        TranslateResultCopyButton.IsEnabled = state.AreResultActionsEnabled ||
+            (state.Phase == TranslateUiPhase.Partial && !string.IsNullOrWhiteSpace(state.FinalText));
         TranslateStarButton.IsEnabled = state.AreResultActionsEnabled;
 
         TranslateExplanation.Text = state.ExplanationText;
@@ -1369,8 +1368,8 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             if (GuideDescription is not null)
             {
                 GuideDescription.Text = hasFallbackRoute
-                    ? "添加自己的翻译引擎，可使用指定模型和服务商。"
-                    : "添加翻译引擎后即可开始使用。";
+                    ? "要点与自定义语气需要模型引擎。"
+                    : "公共翻译只发送文字，不发送截图。";
             }
         }
         if (EnableFreeEngineButton is not null)
@@ -1385,10 +1384,10 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         {
             if (!hasUserEngine)
             {
-                TranslateEngineBadge.Text = hasFallbackRoute ? EngineWording.FreePublicTranslationName : "未配置";
                 if (_currentState.Phase == TranslateUiPhase.Idle && string.IsNullOrWhiteSpace(_currentState.FinalText))
                 {
-                    TranslateStatus.Text = hasFallbackRoute ? $"当前使用{EngineWording.FreePublicTranslationName}" : "未配置引擎，请前往设置接入";
+                    TranslateEngineBadge.Text = string.Empty;
+                    TranslateStatus.Text = hasFallbackRoute ? "就绪" : "等待配置";
                 }
             }
             else
@@ -1435,9 +1434,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     {
         try
         {
-            var shell = ShellSettingsStore.Load();
-            var updated = shell with { FreeEngineConsent = FreeEngineConsent.Allowed };
-            ShellSettingsStore.Save(updated);
+            var updated = ShellSettingsStore.Update(current => current with { FreeEngineConsent = FreeEngineConsent.Allowed });
             UpdateServiceAvailability();
             var provider = updated.FreeEngineProvider;
             var host = provider == FreeEngineProvider.MyMemory
@@ -1563,6 +1560,15 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             {
                 ShowTranslationReading();
             }
+        }
+        if (_currentState.Phase != TranslateUiPhase.Idle)
+        {
+            // A changed source no longer describes the displayed result.
+            // Fence queued callbacks and close result actions before they can
+            // copy, speak or star the old translation against the new text.
+            _translateOperation?.Cancel();
+            var epoch = Interlocked.Increment(ref _currentEpoch);
+            ApplyState(TranslateUiState.Initial with { Epoch = epoch });
         }
     }
 
@@ -1775,10 +1781,15 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             TranslateStatus.Text = "已复制原文。";
             _ = FlashCopyCheckAsync(TranslateSourceCopyIcon);
         }
+        else
+        {
+            TranslateStatus.Text = "复制失败，剪贴板被占用";
+        }
     }
 
     private async Task CopyResultToClipboardAsync()
     {
+        if (TranslateResultCopyButton.IsEnabled != true) return;
         // Same formatter as the floating panel and quick search so every
         // entry point copies the identical agreed plain text.
         var clean = MarkdownPresenter.ToPlainText(TranslateResult.Text, preserveListStructure: true);
@@ -1786,6 +1797,10 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         {
             TranslateStatus.Text = _holdingSummary ? "已复制要点。" : "已复制译文。";
             _ = FlashCopyCheckAsync(TranslateResultCopyIcon);
+        }
+        else
+        {
+            TranslateStatus.Text = "复制失败，剪贴板被占用";
         }
     }
 
@@ -1929,8 +1944,8 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     /// <param name="storedState">
     /// State of the stored session the translation comes from, when known.
     /// Only a genuinely Completed session opens the full result actions on
-    /// restore; partial/cancelled/failed snapshots restore their text but
-    /// keep copy/speak/star gated. History/vocabulary loads pass Completed.
+    /// restore; partial/cancelled/failed snapshots restore their text and allow
+    /// manual copy only. Speech and starring require a completed translation.
     /// </param>
     /// <param name="explanation">Explanation/notes carried with the loaded entry, if any.</param>
     /// <param name="badge">Optional badge text for the loaded entry (e.g. 历史记录/生词本).</param>
@@ -1974,7 +1989,20 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
                     return;
                 }
             }
-            TranslateInput.Text = initialText;
+        }
+        if (!string.IsNullOrWhiteSpace(initialText) || existingTranslation is not null || storedState is not null)
+        {
+            _translateOperation?.Cancel();
+            _translateOperation?.Dispose();
+            _translateOperation = null;
+            CancelSummary();
+            _holdingSummary = false;
+            _reading.ClearSummaryDisplay();
+            _reading.CaptureTranslation(string.Empty, string.Empty);
+            ShowTranslationChoice.IsChecked = true;
+            var epoch = Interlocked.Increment(ref _currentEpoch);
+            ApplyState(TranslateUiState.Initial with { Epoch = epoch });
+            if (!string.IsNullOrWhiteSpace(initialText)) TranslateInput.Text = initialText;
         }
         _languageChangeSuspended = true;
         try
@@ -1998,14 +2026,15 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         {
             // A restored text is only a finished result when the stored
             // session says so (callers that predate the state parameter
-            // count as finished); anything else comes back with the full
-            // result actions gated.
+            // count as finished); unfinished text allows manual copy only.
             var isFinishedResult = storedState is null || storedState == TranslationSessionState.Completed;
             var restoredText = existingTranslation ?? string.Empty;
             var epoch = Interlocked.Increment(ref _currentEpoch);
             ApplyState(TranslateUiState.Initial with
             {
                 Epoch = epoch,
+                Phase = isFinishedResult ? TranslateUiPhase.Completed
+                    : string.IsNullOrWhiteSpace(restoredText) ? TranslateUiPhase.Cancelled : TranslateUiPhase.Partial,
                 FinalText = restoredText,
                 BadgeText = badge ?? (isFinishedResult
                     ? "已展开的译文"
@@ -2058,17 +2087,17 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         var hotkeys = ReadHotkeySummary();
         (string label, string title, string description, string primary) = _onboardingStep switch
         {
-            1 => ("新手引导 · 第 1 步 / 共 3 步",
-                  "接入一个翻译引擎",
-                  "点「添加翻译引擎」接入服务；也可稍后允许内置免费引擎。",
-                  "添加翻译引擎"),
-            2 => ("新手引导 · 第 2 步 / 共 3 步",
+            1 => ("引导 1 / 3",
+                  "选择翻译引擎",
+                  "添加自己的服务，或允许公共翻译。",
+                  "添加引擎"),
+            2 => ("引导 2 / 3",
                   "记住两个快捷键",
                   $"划词 {hotkeys.selection} · 截图 {hotkeys.screenshot}",
                   "下一步"),
-            _ => ("新手引导 · 第 3 步 / 共 3 步",
+            _ => ("引导 3 / 3",
                   "开始第一次翻译",
-                  "输入文本按 Enter 翻译；历史与生词保存在本机。",
+                  "输入文本，按 Enter 翻译。",
                   "完成引导"),
         };
         OnboardingStepLabel.Text = label;

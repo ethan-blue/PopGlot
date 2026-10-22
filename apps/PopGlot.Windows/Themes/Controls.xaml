@@ -1707,6 +1707,7 @@
                             CornerRadius="{StaticResource CardRadius}">
                         <StackPanel>
                             <ToggleButton x:Name="HeaderButton" Cursor="Hand" Focusable="True"
+                                          Foreground="{TemplateBinding Foreground}"
                                           FocusVisualStyle="{StaticResource FocusRing}"
                                           IsChecked="{Binding IsExpanded, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
                                 <ToggleButton.Template>

@@ -25,6 +25,18 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         InitializeComponent();
     }
 
+    private void PrivacySection_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var compact = e.NewSize.Width < 560;
+        Grid.SetColumn(FreeEngineConsentActions, compact ? 0 : 1);
+        Grid.SetRow(FreeEngineConsentActions, compact ? 1 : 0);
+        FreeEngineConsentActions.Margin = compact ? new Thickness(0, 8, 0, 0) : new Thickness(12, 0, 0, 0);
+        Grid.SetColumn(ModeComboBox, compact ? 0 : 1);
+        Grid.SetRow(ModeComboBox, compact ? 1 : 0);
+        ModeComboBox.HorizontalAlignment = compact ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
+        ModeComboBox.Margin = compact ? new Thickness(0, 8, 0, 0) : new Thickness(12, 0, 0, 0);
+    }
+
     // ================= Public accessors for MainWindow =================
 
     internal ToggleButton SafeMode => SafeModeToggle;
@@ -65,6 +77,11 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
 
     internal void RefreshRoutePreview()
     {
+        if (IsRouteDraftPending)
+        {
+            RefreshDraftRoutePreview();
+            return;
+        }
         try
         {
             RenderRoute(
@@ -73,6 +90,8 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         }
         catch (Exception exception)
         {
+            RouteCard.Visibility = Visibility.Visible;
+            RouteBadgeText.Text = "未知";
             RoutePreviewText.Text = $"无法判断线路：{exception.Message}";
         }
     }
@@ -105,6 +124,8 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         }
         catch (Exception exception)
         {
+            RouteCard.Visibility = Visibility.Visible;
+            RouteBadgeText.Text = "未知";
             RoutePreviewText.Text = $"无法预估保存后的线路：{exception.Message}";
         }
     }
@@ -118,9 +139,10 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
             ScreenshotPipeline.LocalOcr => "本地 OCR",
             _ => "不可用",
         };
+        RouteCard.Visibility = Visibility.Visible;
         RouteCardTitle.Text = title;
         RouteBadgeText.Text = pipeline;
-        RoutePreviewText.Text = $"截图将走「{pipeline}」。{route.ExplanationZh}";
+        RoutePreviewText.Text = route.ExplanationZh;
         var warning = route.MayUploadImage || route.ScreenshotPipeline == ScreenshotPipeline.Unavailable;
         RouteCard.SetResourceReference(Border.BackgroundProperty, warning ? "WarningSoftBrush" : "SurfaceMutedBrush");
         RouteBadge.SetResourceReference(Border.BackgroundProperty, warning ? "WarningSoftBrush" : "AccentSoftBrush");
@@ -163,9 +185,8 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         var enabled = CloudSpeechToggle.IsChecked == true;
         try
         {
-            var updated = _shellSettings with { CloudSpeechEnabled = enabled };
-            ShellSettingsStore.Save(updated);
-            _shellSettings = updated;
+            _shellSettings = ShellSettingsStore.Update(current => current with { CloudSpeechEnabled = enabled });
+            SidebarChanged?.Invoke();
             StatusChanged?.Invoke(
                 enabled
                     ? "已允许云端朗读：朗读文字将发送到 Microsoft 在线语音服务。"
@@ -208,7 +229,7 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         SetFreeEngineConsent(FreeEngineConsent.Allowed, "已允许内置免费引擎。");
 
     private void DenyFreeEngine_Click(object sender, RoutedEventArgs e) =>
-        SetFreeEngineConsent(FreeEngineConsent.Denied, "已拒绝内置免费引擎，翻译将不再出网。");
+        SetFreeEngineConsent(FreeEngineConsent.Denied, "已停用公共翻译；自建引擎的联网许可不变。");
 
     private void ResetFreeEngineConsent_Click(object sender, RoutedEventArgs e) =>
         SetFreeEngineConsent(FreeEngineConsent.Unset, "已恢复首次询问。");
@@ -217,9 +238,7 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
     {
         try
         {
-            var updated = _shellSettings with { FreeEngineConsent = consent };
-            ShellSettingsStore.Save(updated);
-            _shellSettings = updated;
+            _shellSettings = ShellSettingsStore.Update(current => current with { FreeEngineConsent = consent });
             RefreshFreeEngineState();
             SidebarChanged?.Invoke();
             StatusChanged?.Invoke(message, StatusTone.Info);

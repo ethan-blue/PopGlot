@@ -38,23 +38,7 @@ public partial class SettingsWindow : Window
 {
     private readonly HistoryStore _history;
     private readonly VocabularyStore? _vocabulary;
-    private ShellSettings _savedShellSettings = null!;
-    private ShellSettings _shellSettings
-    {
-        get
-        {
-            if (_loading || _savedShellSettings is null)
-            {
-                return _savedShellSettings!;
-            }
-            if (ShortcutsSection?.QuickSearchHotkey?.BindingValue is { } binding)
-            {
-                return _savedShellSettings with { QuickSearchHotkey = binding };
-            }
-            return _savedShellSettings;
-        }
-        set => _savedShellSettings = value;
-    }
+    private ShellSettings _shellSettings;
     private bool _loading = true;
     private SettingsEditState _state = SettingsEditState.Loading;
     private string _settingsBaseline = string.Empty;
@@ -94,7 +78,6 @@ public partial class SettingsWindow : Window
 
     internal SettingsWindow(ShellSettings shellSettings, HistoryStore history, VocabularyStore? vocabulary = null)
     {
-        _savedShellSettings = shellSettings;
         _shellSettings = shellSettings;
         _history = history;
         _vocabulary = vocabulary;
@@ -129,7 +112,7 @@ public partial class SettingsWindow : Window
         DataSection.DataCleared += () => LocalDataCleared?.Invoke();
 
         HookDirtyTracking();
-        LoadAll();
+        LoadAll(reloadShellSettings: false);
         _loading = false;
         ShowPage("Provider");
 
@@ -366,12 +349,13 @@ public partial class SettingsWindow : Window
 
     // ================= Loading =================
 
-    private void LoadAll()
+    private void LoadAll(bool reloadShellSettings = true)
     {
         _loading = true;
         _state = SettingsEditState.Loading;
         try
         {
+            if (reloadShellSettings) _shellSettings = ShellSettingsStore.Load();
             LoadShellSettings(_shellSettings);
             LoadPolicySettings();
             ProviderSection.LoadActiveProfileIntoForm();
@@ -651,7 +635,14 @@ public partial class SettingsWindow : Window
     private void UpdateResponsiveLayout(double windowWidth)
     {
         if (windowWidth <= 0) return;
-        var compact = windowWidth < 700;
+        var root = (Grid)Content;
+        var sidebarWidth = root.ColumnDefinitions[0].ActualWidth;
+        if (sidebarWidth <= 0) sidebarWidth = root.ColumnDefinitions[0].Width.Value;
+        // The scroll host is collapsed on engine/prompt pages and can still
+        // report zero or its previous width when navigation changes. Derive
+        // the available content width from the current window instead.
+        var contentWidth = windowWidth - sidebarWidth - SettingsScroll.Padding.Left - SettingsScroll.Padding.Right;
+        var compact = contentWidth < 700;
         GeneralSection?.SetCompact(compact);
         ProviderSection?.SetWindowWidthHint(windowWidth);
         PromptSectionHost?.SetCompact(compact);
@@ -686,27 +677,21 @@ public partial class SettingsWindow : Window
         try
         {
             // ===== Validation phase: nothing is persisted below this point. =====
-            var shellSettings = new ShellSettings(
-                ShellSettings.CurrentSchemaVersion,
-                ShortcutsSection.SelectionHotkey.BindingValue ?? _shellSettings.SelectionHotkey,
-                ShortcutsSection.ScreenshotHotkey.BindingValue ?? _shellSettings.ScreenshotHotkey,
-                ShortcutsSection.CloseHotkey.BindingValue ?? _shellSettings.CloseHotkey,
-                DataSection.HistoryEnabled.IsChecked == true,
-                Helpers.SelectedEnum(GeneralSection.ThemeCombo, ThemePreference.System),
-                GeneralSection.CloseOnFocusLoss.IsChecked == true,
-                GeneralSection.AutoCopy.IsChecked == true,
-                GeneralSection.StartWithWindows.IsChecked == true,
-                ShortcutsSection.ShowWindowHotkey.BindingValue ?? _shellSettings.ShowWindowHotkey ?? HotkeyBinding.ShowWindowDefault,
-                FreeEngineConsent: _shellSettings.FreeEngineConsent,
-                // Consents and one-time hints live outside this form; saving it
-                // must never silently reset them to the defaults.
-                CloseHintShown: _shellSettings.CloseHintShown,
-                CloudSpeechEnabled: _shellSettings.CloudSpeechEnabled,
-                CloseMainWindowToTray: GeneralSection.CloseToTray.IsChecked == true,
-                // 首次引导同样活在表单之外：ShellSettings 的默认值是 false，
-                // 漏传会把每一位已走过引导的用户拉回引导（升级路径除外）。
-                HasCompletedOnboarding: _shellSettings.HasCompletedOnboarding,
-                QuickSearchHotkey: _shellSettings.QuickSearchHotkey);
+            var shellSettings = ShellSettingsStore.Load() with
+            {
+                SchemaVersion = ShellSettings.CurrentSchemaVersion,
+                SelectionHotkey = ShortcutsSection.SelectionHotkey.BindingValue ?? _shellSettings.SelectionHotkey,
+                ScreenshotHotkey = ShortcutsSection.ScreenshotHotkey.BindingValue ?? _shellSettings.ScreenshotHotkey,
+                CloseHotkey = ShortcutsSection.CloseHotkey.BindingValue ?? _shellSettings.CloseHotkey,
+                HistoryEnabled = DataSection.HistoryEnabled.IsChecked == true,
+                Theme = Helpers.SelectedEnum(GeneralSection.ThemeCombo, ThemePreference.System),
+                ClosePanelOnFocusLoss = GeneralSection.CloseOnFocusLoss.IsChecked == true,
+                CopyTranslationAutomatically = GeneralSection.AutoCopy.IsChecked == true,
+                StartWithWindows = GeneralSection.StartWithWindows.IsChecked == true,
+                ShowWindowHotkey = ShortcutsSection.ShowWindowHotkey.BindingValue ?? _shellSettings.ShowWindowHotkey ?? HotkeyBinding.ShowWindowDefault,
+                CloseMainWindowToTray = GeneralSection.CloseToTray.IsChecked == true,
+                QuickSearchHotkey = ShortcutsSection.QuickSearchHotkey.BindingValue ?? _shellSettings.QuickSearchHotkey,
+            };
 
             var validationError = shellSettings.ValidateHotkeys();
             if (validationError is not null)
@@ -753,7 +738,7 @@ public partial class SettingsWindow : Window
 
             try
             {
-                await Task.Run(() => ShellSettingsStore.Save(shellSettings));
+                shellSettings = await Task.Run(() => ShellSettingsStore.Update(current => MergeShellFormSettings(current, shellSettings)));
             }
             catch (Exception commitException)
             {
@@ -807,7 +792,7 @@ public partial class SettingsWindow : Window
                 var rollbackWritten = true;
                 try
                 {
-                    await Task.Run(() => ShellSettingsStore.Save(rolledBack));
+                    rolledBack = await Task.Run(() => ShellSettingsStore.Update(current => current with { StartWithWindows = rolledBack.StartWithWindows }));
                 }
                 catch
                 {
@@ -911,6 +896,22 @@ public partial class SettingsWindow : Window
             ProtectCodeTokens = GeneralSection.ProtectTokens.IsChecked == true,
         };
     }
+
+    internal static ShellSettings MergeShellFormSettings(ShellSettings current, ShellSettings draft) => current with
+    {
+        SchemaVersion = ShellSettings.CurrentSchemaVersion,
+        SelectionHotkey = draft.SelectionHotkey,
+        ScreenshotHotkey = draft.ScreenshotHotkey,
+        CloseHotkey = draft.CloseHotkey,
+        ShowWindowHotkey = draft.ShowWindowHotkey,
+        QuickSearchHotkey = draft.QuickSearchHotkey,
+        HistoryEnabled = draft.HistoryEnabled,
+        Theme = draft.Theme,
+        ClosePanelOnFocusLoss = draft.ClosePanelOnFocusLoss,
+        CopyTranslationAutomatically = draft.CopyTranslationAutomatically,
+        StartWithWindows = draft.StartWithWindows,
+        CloseMainWindowToTray = draft.CloseMainWindowToTray,
+    };
 
     internal static ProviderSettings MergePolicySettings(ProviderSettings current, ProviderSettings policy) => current with
     {

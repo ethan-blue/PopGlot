@@ -61,8 +61,9 @@ public partial class ServicesSection
             OmpLoginProviderCombo.SelectedItem = result.providers.FirstOrDefault(p => p.Id == provider.Id);
             CliModelCombo.ItemsSource = result.models;
             CliModelCombo.SelectedItem = result.models.FirstOrDefault(m => m.Provider == provider.Id) ?? result.models.FirstOrDefault();
+            _cliReady = result.providers.Any(p => p.Id == provider.Id && p.Authenticated);
             CliConnectionStatus.Text = result.providers.Any(p => p.Id == provider.Id && p.Authenticated)
-                ? "OMP 已确认登录并保存账号。选择模型后测试翻译，再保存使用；重启后会复用此登录。"
+                ? "OMP 已确认登录并保存账号。选择模型后可测试或保存。"
                 : "OMP 已结束授权，但未确认账号状态。请刷新账号后检查，尚未验证可用。";
         }
         catch (OperationCanceledException)

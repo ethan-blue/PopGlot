@@ -88,4 +88,33 @@ internal static partial class Program
             CoreBridge.SaveSettings(original);
         }
     }
+    private static Task ProfileCommitIsolation()
+    {
+        var original = ProfileManager.Load();
+        try
+        {
+            var first = new ProviderProfile { Id = "commit-first", Name = "first", ApiBaseUrl = "http://127.0.0.1:11434/v1", TextModel = "first" };
+            ProfileManager.SaveApiProfile(first, null);
+            var staleEdit = ProfileManager.Load().Profiles.Single(p => p.Id == first.Id).Clone();
+            var second = new ProviderProfile { Id = "commit-second", Name = "second", ApiBaseUrl = "http://127.0.0.1:1234/v1", TextModel = "second" };
+            ProfileManager.SaveApiProfile(second, null);
+            Assert(ProfileManager.TrySwitchActiveProfile(second.Id, out _), "second profile can be selected without a health test");
+            staleEdit.Name = "edited first";
+            var merged = ProfileManager.SaveApiProfile(staleEdit, staleEdit.Id);
+            Assert(merged.Profiles.Any(p => p.Id == second.Id) && merged.ActiveProfileId == second.Id,
+                "an older editor commit preserves a newer profile and default-engine switch");
+            Assert(merged.Profiles.Count(p => p.Id == first.Id) == 1 && merged.Profiles.Single(p => p.Id == first.Id).Name == "edited first",
+                "editing replaces exactly one profile");
+            merged.PreferFreeEngine = true;
+            ProfileManager.Save(merged);
+            var stillFree = ProfileManager.SaveApiProfile(second, second.Id);
+            Assert(stillFree.PreferFreeEngine, "editing the remembered user engine does not silently replace the active free route");
+            var cli = FakeProfile(EngineExecutionKind.OmpRpc);
+            ProfileManager.SaveCliProfile(cli, null, false);
+            ProfileManager.SaveCliProfile(cli, null, false);
+            Assert(ProfileManager.Load().Profiles.Count(p => p.Id == cli.Id) == 1, "same CLI identity cannot be appended twice");
+        }
+        finally { ProfileManager.Save(original); ProfileManager.ApplyActiveToCore(original); }
+        return Task.CompletedTask;
+    }
 }

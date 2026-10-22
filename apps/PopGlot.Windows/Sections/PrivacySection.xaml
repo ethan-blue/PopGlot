@@ -2,7 +2,8 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:PopGlot.Windows"
-             xmlns:services="clr-namespace:PopGlot.Windows.Services">
+             xmlns:services="clr-namespace:PopGlot.Windows.Services"
+             SizeChanged="PrivacySection_SizeChanged">
 
     <!-- Compact desktop property list -->
     <StackPanel>
@@ -11,8 +12,9 @@
         <!-- Plain language privacy commitment card -->
         <Border Style="{StaticResource InlineCard}" Margin="0,0,0,16" Padding="14,12">
             <StackPanel>
-                <TextBlock Text="数据处理范围" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
-                <Grid Margin="0,2,0,2">
+                <TextBlock Text="仅在你发起翻译时处理所选内容。" Style="{StaticResource Caption}" TextWrapping="Wrap" />
+                <Expander Header="数据处理详情" Margin="0,8,0,0">
+                <Grid Margin="0,8,0,2">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="14" />
@@ -24,7 +26,7 @@
                         <StackPanel>
                             <TextBlock Text="需要联网时" FontWeight="SemiBold" FontSize="12.5" Foreground="{DynamicResource TextPrimaryBrush}" />
                             <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap" LineHeight="17"
-                                        Text="• 划词 / 输入翻译：仅发送文本&#x0a;• 免费引擎：仅发送待翻译文本&#x0a;• 截图翻译：默认仅本机识别，开启直译才上传截图" />
+                                        Text="• 输入与划词：发送待翻译文本&#x0a;• 本地 OCR：仅识别在本机，译文仍可联网生成&#x0a;• 视觉翻译：获准后可上传截图" />
                         </StackPanel>
                     </Border>
                     <Border Grid.Column="2" Background="{DynamicResource SurfaceBrush}"
@@ -33,10 +35,11 @@
                         <StackPanel>
                             <TextBlock Text="始终留在本机" FontWeight="SemiBold" FontSize="12.5" Foreground="{DynamicResource TextPrimaryBrush}" />
                             <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap" LineHeight="17"
-                                       Text="• 不收集按键、屏幕操作与无关剪贴板&#x0a;• API Key 加密存于本机凭据管理器&#x0a;• 离线模式断开全部网络" />
+                                       Text="• 不监听普通复制或后台屏幕&#x0a;• API Key 存入本机凭据管理器&#x0a;• 安全离线模式阻止云端请求" />
                         </StackPanel>
                     </Border>
                 </Grid>
+                </Expander>
             </StackPanel>
         </Border>
 
@@ -62,7 +65,7 @@
         <TextBlock x:Name="SafeModeGateNote" Style="{StaticResource Caption}"
                    Foreground="{DynamicResource WarningBrush}"
                    Margin="0,0,0,12" Visibility="Collapsed"
-                   Text="安全离线模式已开启，已暂停云端翻译与图片上传。" />
+                   Text="已暂停云端翻译、截图上传与云端朗读。" />
 
         <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
 
@@ -91,7 +94,7 @@
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="云端在线朗读" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}"
-                           Text="默认用 Windows 本地语音；开启后朗读文本发送至 Microsoft 语音服务" />
+                           Text="开启后将朗读文本发送至 Microsoft；默认使用本地语音" />
             </StackPanel>
             <ToggleButton x:Name="CloudSpeechToggle"
                           AutomationProperties.Name="云端在线朗读" Grid.Column="1"
@@ -144,19 +147,24 @@
 
                 <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
 
-                <Grid Style="{StaticResource SettingsRow}">
+                <Grid x:Name="FreeEngineConsentRow" Style="{StaticResource SettingsRow}">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="{x:Static services:EngineWording.FreePublicTranslationName}" Style="{StaticResource RowTitle}" />
                         <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap"
-                                   Text="{x:Static services:EngineWording.FreeEngineOnlineServiceNote}" />
+                                   ToolTip="{x:Static services:EngineWording.FreeEngineOnlineServiceNote}"
+                                   Text="仅发送待翻译文本，不发送截图" />
                         <TextBlock x:Name="FreeEngineConsentState" Style="{StaticResource Caption}"
                                    Margin="0,4,0,0" />
                     </StackPanel>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <StackPanel x:Name="FreeEngineConsentActions" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                         <Button Content="允许" Style="{StaticResource GhostButton}"
                                 Padding="10,5" Click="AllowFreeEngine_Click" />
                         <Button Content="拒绝" Margin="6,0,0,0" Style="{StaticResource GhostButton}"
@@ -170,15 +178,19 @@
 
                 <Border Style="{StaticResource SettingsDivider}" Margin="0,6,0,14" />
 
-                <Grid Style="{StaticResource SettingsRow}">
+                <Grid x:Name="ScreenshotModeRow" Style="{StaticResource SettingsRow}">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="280" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="截图翻译方式" Style="{StaticResource RowTitle}" />
                     </StackPanel>
-                    <ComboBox x:Name="ModeComboBox" Grid.Column="1" VerticalAlignment="Center"
+                    <ComboBox x:Name="ModeComboBox" Grid.Column="1" MaxWidth="280" HorizontalAlignment="Stretch" VerticalAlignment="Center"
                               AutomationProperties.Name="截图翻译方式"
                               SelectionChanged="ModeComboBox_SelectionChanged">
                         <ComboBoxItem Tag="LocalOcr">本机识别文字（推荐）</ComboBoxItem>

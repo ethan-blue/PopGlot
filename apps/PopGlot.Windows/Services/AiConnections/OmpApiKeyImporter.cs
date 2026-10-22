@@ -51,6 +51,7 @@ internal static class OmpApiKeyImporter
             TextEndpoint = "/chat/completions", TextModel = model, SupportsVision = false, VisionModel = "", CredentialRevision = 1, CredentialTarget = "PopGlot/provider/" + id };
         ct.ThrowIfCancellationRequested(); CredentialStore.SaveApiKey(key, profile.CredentialTarget);
         try { ct.ThrowIfCancellationRequested(); ProfileManager.SaveCliProfile(profile, null, true); }
+        catch (ProfileActivationException) { throw; }
         catch { CredentialStore.DeleteApiKey(profile.CredentialTarget); throw; }
         return profile;
     }

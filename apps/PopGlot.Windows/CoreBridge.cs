@@ -986,17 +986,12 @@ internal static partial class CoreBridge
         string requestId,
         CancellationToken cancellationToken)
     {
-        var work = Task.Run(blockingWork);
-        if (!cancellationToken.CanBeCanceled)
-        {
-            return await work;
-        }
-
+        cancellationToken.ThrowIfCancellationRequested();
         await using var registration = cancellationToken.Register(
             () => CancelRequest(requestId));
         try
         {
-            return await work;
+            return await Task.Run(blockingWork, cancellationToken);
         }
         catch (Exception) when (cancellationToken.IsCancellationRequested)
         {

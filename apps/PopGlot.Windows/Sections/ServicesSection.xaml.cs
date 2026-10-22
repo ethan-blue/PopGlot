@@ -24,9 +24,8 @@ internal sealed record ProfilesRow(
     System.Windows.Visibility SetDefaultVisibility);
 
 /// <summary>
-/// Service settings as a master–detail surface: profile list on the left,
-/// editor on the right. Key, connection test, and models are on the first
-/// screen; protocol and base URL appear only for custom or local services.
+/// Service settings switch between the saved-engine list and one editor.
+/// Connection and model fields stay editable; optional network details are collapsed.
 /// </summary>
 public partial class ServicesSection : System.Windows.Controls.UserControl
 {
@@ -60,8 +59,12 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     private string? _pendingTestFingerprint;
     private long _editorRevision;
     private bool _testInProgress;
+    private bool _saveInProgress;
+    private CancellationTokenSource? _catalogOperation;
     internal Func<ProviderSettings, string, Task<TranslationResponse>> ConnectionTestExecutor { get; set; } =
         (draft, key) => CoreBridge.TestConnectionDraftAsync(draft, key);
+    internal Func<ProviderSettings, string, CancellationToken, Task<ModelCatalogResult>> ModelCatalogExecutor { get; set; } =
+        (draft, key, ct) => ModelCatalogService.FetchAsync(draft, key, ct);
 
     /// <summary>
     /// Tracks vision model state across toggles of the shared-model checkbox.
@@ -92,7 +95,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     internal bool IsEditorDirty => _editorDirty;
 
     /// <summary>True while the service editor form is visible.</summary>
-    internal bool IsEditorOpen => EditorForm?.Visibility == Visibility.Visible;
+    internal bool IsEditorOpen => EditorForm?.Visibility == Visibility.Visible || CliConnectionsPanel?.Visibility == Visibility.Visible;
 
     public ServicesSection()
     {
@@ -462,6 +465,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         void WatchText(TextBox box) => box.TextChanged += (_, _) =>
         {
             MarkEditorDirty();
+            if (!_loading && box != ServiceNameTextBox) InvalidateModelCatalog();
             box.ToolTip = string.IsNullOrWhiteSpace(box.Text) ? null : box.Text;
         };
         // Editable ComboBoxes surface their inner TextBox via this routed event.
@@ -503,6 +507,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             _recommendationDebounce.Stop();
             textDpd.RemoveValueChanged(TextModelCombo, OnTextModelChanged);
             CancelCliOperation();
+            _catalogOperation?.Cancel();
         };
 
         void WatchToggle(System.Windows.Controls.Primitives.ToggleButton toggle)
@@ -527,6 +532,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         ApiKeyPasswordBox.PasswordChanged += (_, _) =>
         {
             MarkEditorDirty();
+            if (!_loading) InvalidateModelCatalog();
             UpdateCredentialGating();
         };
         ProviderTypeComboBox.SelectionChanged += (_, _) => MarkEditorDirty();
@@ -724,16 +730,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             return;
         }
         if (profile.ResolvedExecutionKind == EngineExecutionKind.ChatGptDirect) { OpenDirectProfile(profile); return; }
-        if (profile.ExecutionFacts.IsCliExecution)
-        {
-            OpenCliConnections_Click(this, new RoutedEventArgs());
-            var rows = (CliToolsListBox.ItemsSource as IEnumerable<CliToolRow>)?.ToList() ?? [];
-            var selected = rows.FirstOrDefault(r => string.Equals(r.EntryPath, profile.CliConnection?.ExecutablePath, StringComparison.OrdinalIgnoreCase));
-            if (selected is not null) CliToolsListBox.SelectedItem = selected;
-            _cliProfileId = profile.Id;
-            CliConnectionStatus.Text = "点击连接以重新检查此引擎的账号和模型。";
-            return;
-        }
+        if (profile.ExecutionFacts.IsCliExecution) { OpenCliProfile(profile); return; }
         _editingProfileId = profile.Id;
         _isAdding = false;
         LoadProfileIntoForm(profile);
@@ -754,6 +751,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     internal void LoadProfileIntoForm(ProviderProfile profile)
     {
         _editorRevision++;
+        _catalogOperation?.Cancel();
+        TextModelCombo.ItemsSource = null;
+        VisionModelCombo.ItemsSource = null;
         var wasLoading = _loading;
         _loading = true;
         _visionTracker.Reset();
@@ -786,19 +786,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             SupportsTextCheckBox.IsChecked = !string.IsNullOrWhiteSpace(profile.TextModel);
             SupportsVisionCheckBox.IsChecked = !string.IsNullOrWhiteSpace(profile.VisionModel);
             AllowInsecureTlsCheckBox.IsChecked = profile.AllowInsecureTls;
-            var presetHost = IsPresetCloudHost(profile.ApiBaseUrl);
             UpdateEditorIdentity(profile.Name, profile.ProviderType, profile.ApiBaseUrl, profile.IsLocal);
-            CustomProtocolGroup.Visibility = presetHost
-                ? Visibility.Collapsed
-                : Visibility.Visible;
-            BaseUrlPanel.Visibility = presetHost
-                ? Visibility.Collapsed
-                : Visibility.Visible;
-            // Built-in cloud providers expose key, models and the test only;
-            // endpoints, headers and TLS belong to custom or local services.
-            AdvancedGroup.Visibility = presetHost
-                ? Visibility.Collapsed
-                : Visibility.Visible;
+            CustomProtocolGroup.Visibility = Visibility.Visible;
+            BaseUrlPanel.Visibility = Visibility.Visible;
+            AdvancedGroup.Visibility = Visibility.Visible;
             ApplyEditorLayout();
             ApiKeyPasswordBox.Clear();
             LoadStoredTestEvidence(profile);
@@ -904,7 +895,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             AutomationProperties.SetName(ApiKeyPasswordBox, isLocal ? "API Key (本地引擎可留空)" : "API Key (未填写)");
         }
 
-        FetchModelsButton.IsEnabled = allowed;
+        FetchModelsButton.IsEnabled = allowed && _catalogOperation is null;
         FetchModelsButton.ToolTip = allowed
             ? "刷新模型列表"
             : "请先填写 API Key（本地服务除外）";
@@ -952,10 +943,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 stateText,
                 ToneBrush(stateTone),
                 ToneTextBrush(stateTone),
-                profile.Id == config.ActiveProfileId
+                !config.PreferFreeEngine && profile.Id == config.ActiveProfileId
                     ? Visibility.Visible
                     : Visibility.Collapsed,
-                profile.Id == config.ActiveProfileId
+                !config.PreferFreeEngine && profile.Id == config.ActiveProfileId
                     ? Visibility.Collapsed
                     : Visibility.Visible);
         }).ToList();
@@ -1231,6 +1222,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private void ShowEditorForm(bool addMode)
     {
+        CancelCliOperation();
+        CliConnectionsPanel.Visibility = Visibility.Collapsed;
+        ConnectLocalToolHeaderButton.Visibility = Visibility.Collapsed;
         if (AddEngineHeaderButton is not null)
         {
             AddEngineHeaderButton.Visibility = Visibility.Collapsed;
@@ -1398,6 +1392,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         };
 
         _loading = true;
+        _catalogOperation?.Cancel();
+        TextModelCombo.ItemsSource = null;
+        VisionModelCombo.ItemsSource = null;
         _cachedCatalogDescriptors = null;
         _catalogSourceHost = null;
         _catalogFetchedAtUtc = null;
@@ -1441,17 +1438,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             {
                 SharedModelHintText.Visibility = Visibility.Collapsed;
             }
-            // LiteLLM 与自定义引擎一样展示协议和请求地址：代理常部署在远程
-            // 主机，地址是该预设的核心字段，协议上 LiteLLM 代理也支持多家
-            // 原生格式透传。
-            var showConnectionFields = isCustom || preset == "litellm";
-            CustomProtocolGroup.Visibility = showConnectionFields ? Visibility.Visible : Visibility.Collapsed;
-            BaseUrlPanel.Visibility = showConnectionFields ? Visibility.Visible : Visibility.Collapsed;
-            // Preset cloud hosts hide the protocol surface entirely; custom and
-            // local services keep the advanced fields available.
-            AdvancedGroup.Visibility = showConnectionFields || !IsPresetCloudHost(baseUrl)
-                ? Visibility.Visible
-                : Visibility.Collapsed;
+            // Keep the actual address and protocol editable even for presets.
+            CustomProtocolGroup.Visibility = Visibility.Visible;
+            BaseUrlPanel.Visibility = Visibility.Visible;
+            AdvancedGroup.Visibility = Visibility.Visible;
             ApplyEditorLayout();
             ResetModelCatalogStatus();
         }
@@ -1542,20 +1532,53 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private void UpdateModelSuggestions(ProviderType providerType)
     {
-        // No invented model names: the picker stays empty until the user
-        // fetches the provider's real catalog or types a model themselves.
         _ = providerType;
+        InvalidateModelCatalog();
+    }
+
+    private void InvalidateModelCatalog()
+    {
+        _catalogOperation?.Cancel();
+        _cachedCatalogDescriptors = null; _catalogSourceHost = null; _catalogFetchedAtUtc = null;
+        var text = TextModelCombo.Text; var vision = VisionModelCombo.Text;
+        var wasLoading = _loading; _loading = true;
+        try
+        {
+            TextModelCombo.ItemsSource = null; VisionModelCombo.ItemsSource = null;
+            TextModelCombo.Text = text; VisionModelCombo.Text = vision;
+        }
+        finally { _loading = wasLoading; }
+        ResetModelCatalogStatus();
     }
 
     private async void FetchModels_Click(object sender, RoutedEventArgs e)
     {
-        var draft = BuildDraftSettings();
-        var typedKey = string.IsNullOrWhiteSpace(ApiKeyPasswordBox.Password)
-            ? CredentialStore.LoadApiKey(CurrentCredentialTarget())
-            : ApiKeyPasswordBox.Password.Trim();
+        if (_catalogOperation is not null) return;
+        var fetchedRevision = _editorRevision;
+        var fetchedProfileId = _editingProfileId;
+        using var operation = new CancellationTokenSource();
+        _catalogOperation = operation;
+        bool IsCurrentCatalog() => !operation.IsCancellationRequested && fetchedRevision == _editorRevision && fetchedProfileId == _editingProfileId;
+        ProviderSettings draft;
+        string? typedKey;
+        try
+        {
+            draft = BuildDraftSettings();
+            typedKey = string.IsNullOrWhiteSpace(ApiKeyPasswordBox.Password)
+                ? CredentialStore.LoadApiKey(CurrentCredentialTarget())
+                : ApiKeyPasswordBox.Password.Trim();
+            if (ProfileVerification.IsMaskNotAKey(typedKey)) typedKey = null;
+        }
+        catch (Exception exception)
+        {
+            _catalogOperation = null;
+            SetModelCatalogStatus(DescribeModelCatalogFailure(exception), StatusTone.Error);
+            return;
+        }
         if (string.IsNullOrWhiteSpace(typedKey) && !draft.TargetsLocalRuntime)
         {
             ApiKeyPasswordBox.Focus();
+            _catalogOperation = null;
             SetModelCatalogStatus("需要 API Key。本地服务可以留空。", StatusTone.Warning);
             UpdateCredentialGating();
             return;
@@ -1566,7 +1589,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         SetModelCatalogStatus("正在刷新…", StatusTone.Info);
         try
         {
-            var result = await ModelCatalogService.FetchAsync(draft, typedKey ?? string.Empty);
+            var result = await ModelCatalogExecutor(draft, typedKey ?? string.Empty, operation.Token);
+            if (!IsCurrentCatalog()) return;
 
             SetModelCatalogStatus(
                 ModelCatalogMessages.DescribeLoad(result.Models.Count),
@@ -1584,10 +1608,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
         catch (Exception exception)
         {
-            SetModelCatalogStatus(DescribeModelCatalogFailure(exception), StatusTone.Error);
+            if (IsCurrentCatalog()) SetModelCatalogStatus(DescribeModelCatalogFailure(exception), StatusTone.Error);
         }
         finally
         {
+            if (ReferenceEquals(_catalogOperation, operation)) _catalogOperation = null;
             UpdateCredentialGating();
         }
     }
@@ -1623,7 +1648,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             VisionModelCombo.Text = currentText;
         }
 
-        if (!string.IsNullOrWhiteSpace(currentVision) &&
+        if (!string.IsNullOrWhiteSpace(currentText) && result.Models.All(model => model.Id != currentText))
+        {
+            SetModelCatalogStatus("当前文字模型不在列表中；可按服务商文档确认，或重新选择。", StatusTone.Warning);
+        }
+        else if (!string.IsNullOrWhiteSpace(currentVision) &&
             !currentVision.StartsWith('{') &&
             result.Models.All(model => model.Id != currentVision))
         {
@@ -2567,17 +2596,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             return;
         }
+        if (_saveInProgress || _cliCommitInProgress) return;
         if (profile.ResolvedExecutionKind == EngineExecutionKind.ChatGptDirect) { OpenDirectProfile(profile); return; }
-        if (profile.ExecutionFacts.IsCliExecution)
-        {
-            OpenCliConnections_Click(this, new RoutedEventArgs());
-            var rows = (CliToolsListBox.ItemsSource as IEnumerable<CliToolRow>)?.ToList() ?? [];
-            var selected = rows.FirstOrDefault(r => string.Equals(r.EntryPath, profile.CliConnection?.ExecutablePath, StringComparison.OrdinalIgnoreCase));
-            if (selected is not null) CliToolsListBox.SelectedItem = selected;
-            _cliProfileId = profile.Id;
-            CliConnectionStatus.Text = "点击连接以重新检查此引擎的账号和模型。";
-            return;
-        }
+        if (profile.ExecutionFacts.IsCliExecution) { OpenCliProfile(profile); return; }
         _editingProfileId = profile.Id;
         _isAdding = false;
         LoadProfileIntoForm(profile);
@@ -2665,17 +2686,17 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     private async void SaveService_Click(object sender, RoutedEventArgs e) => await TrySaveServiceAsync();
 
     /// <summary>
-    /// Synchronous compatibility wrapper.
-    /// </summary>
-    internal bool TrySaveService() => TrySaveServiceAsync().GetAwaiter().GetResult();
-
-    /// <summary>
     /// Validates and persists the editor draft asynchronously. Returns false when nothing
     /// was saved (validation failed or the credential write failed), leaving
     /// the draft and the saved state untouched.
     /// </summary>
     internal async Task<bool> TrySaveServiceAsync()
     {
+        if (_saveInProgress) return false;
+        _saveInProgress = true;
+        EditorForm.IsEnabled = false;
+        BackToListHeaderButton.IsEnabled = ConnectLocalToolHeaderButton.IsEnabled = false;
+        var originalEditingId = _editingProfileId;
         try
         {
             var name = ServiceNameTextBox.Text.Trim();
@@ -2709,16 +2730,18 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             }
             catch (Exception)
             {
-                // Vault read failed; a rollback attempt would fail the same way.
+                throw new InvalidOperationException("无法读取已保存的密钥。请检查 Windows 凭据库后重试；未替换原密钥。");
             }
 
             var typedKey = ApiKeyPasswordBox.Password?.Trim();
+            if (ProfileVerification.IsMaskNotAKey(typedKey))
+                throw new InvalidOperationException("占位圆点不是 API Key。请粘贴真实密钥，或留空保留已有密钥。");
             var keyWritten = false;
             if (!string.IsNullOrEmpty(typedKey))
             {
                 CredentialStore.SaveApiKey(typedKey, credentialTarget);
                 keyWritten = true;
-                ApiKeyPasswordBox.Clear();
+                // Clear only after the profile commit succeeds; a failed save keeps the draft key.
             }
 
             draft.Id = profileId;
@@ -2726,7 +2749,6 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             var isFirstService = config.Profiles.Count == 0;
             var existingIndex = config.Profiles.FindIndex(p => p.Id == profileId);
             var existingProfile = existingIndex >= 0 ? config.Profiles[existingIndex] : null;
-            var wasActive = existingIndex >= 0 && config.Profiles[existingIndex].Id == config.ActiveProfileId;
             draft.CredentialRevision = (existingProfile?.CredentialRevision ?? 0) + (keyWritten ? 1 : 0);
 
             var credentialAvailable = ProviderSettings.IsLocalBaseUrl(draft.ApiBaseUrl) || keyWritten || hadPreviousKey;
@@ -2755,31 +2777,13 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             {
                 _testOutcomes.Remove(profileId);
             }
-            if (existingIndex >= 0)
-            {
-                config.Profiles[existingIndex] = draft;
-            }
-            else
-            {
-                config.Profiles.Add(draft);
-            }
-            _editingProfileId = profileId;
 
-            // Saving never silently reroutes the app: only the very first
-            // configured service activates (provided it has a valid text model),
-            // and editing the currently active service keeps it active. Everything
-            // else needs an explicit "设为文字默认".
+            // The manager merges this draft with the latest routes inside its lock.
             var canActivateForText = draft.SupportsText && !string.IsNullOrWhiteSpace(draft.TextModel);
-            var shouldActivate = wasActive || (isFirstService && canActivateForText);
-            if (shouldActivate)
-            {
-                config.ActiveProfileId = draft.Id;
-                config.PreferFreeEngine = false;
-            }
 
             try
             {
-                await ProfileManager.SaveAsync(config);
+                config = await Task.Run(() => ProfileManager.SaveApiProfile(draft, originalEditingId));
             }
             catch
             {
@@ -2793,13 +2797,18 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 _pendingTestFingerprint = null;
                 _testOutcomes.Remove(profileId);
                 SetTestResult(StatusTone.Warning, "保存失败", "密钥已恢复，之前的验证标记没有保留。");
-                _editingProfileId = null;
+                _editingProfileId = originalEditingId;
                 throw;
             }
 
+            _editingProfileId = profileId;
+            var wasLoading = _loading;
+            _loading = true;
+            try { ApiKeyPasswordBox.Clear(); }
+            finally { _loading = wasLoading; }
             try
             {
-                await ProfileManager.ApplyActiveToCoreAsync(config);
+                await ProfileManager.ApplyLatestToCoreAsync();
             }
             catch (Exception applyException)
             {
@@ -2840,7 +2849,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             RefreshApiKeyState();
             ClearEditorDirty();
             ProfileChanged?.Invoke();
-            if (config.ActiveProfileId == draft.Id)
+            if (!config.PreferFreeEngine && config.ActiveProfileId == draft.Id)
             {
                 StatusChanged?.Invoke($"引擎「{draft.Name}」已保存并作为默认文字引擎生效。", StatusTone.Success);
             }
@@ -2858,6 +2867,12 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             StatusChanged?.Invoke($"保存引擎失败：{exception.Message}", StatusTone.Error);
             return false;
+        }
+        finally
+        {
+            _saveInProgress = false;
+            EditorForm.IsEnabled = true;
+            BackToListHeaderButton.IsEnabled = ConnectLocalToolHeaderButton.IsEnabled = true;
         }
     }
 

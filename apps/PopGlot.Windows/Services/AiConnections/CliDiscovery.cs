@@ -26,7 +26,7 @@ internal static class CliDiscovery
     /// tool's candidate entries. Returns every hit with its offline facts;
     /// presence is NOT login state, NOT version compatibility, NOT usability.
     /// </summary>
-    public static IReadOnlyList<DiscoveredCliTool> Discover(string toolId, IReadOnlyList<string>? extraDirectories = null)
+    public static IReadOnlyList<DiscoveredCliTool> Discover(string toolId, IReadOnlyList<string>? extraDirectories = null, CancellationToken cancellationToken = default)
     {
         var candidates = toolId switch
         {
@@ -59,11 +59,13 @@ internal static class CliDiscovery
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var directory in searchDirs)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             // A relative PATH component must never discover a tool from the
             // application's current working directory.
             if (!Path.IsPathFullyQualified(directory)) continue;
             foreach (var candidate in candidates)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 string fullPath;
                 try
                 {

@@ -288,18 +288,32 @@ internal static class CliSubprocessTests
     {
         Program.EnsureApplication();
         var section = new ServicesSection();
-        // Open the panel: nothing scans or spawns by merely opening.
+        using var releaseScan = new ManualResetEventSlim();
+        using var enteredScan = new ManualResetEventSlim();
+        var uiThread = Environment.CurrentManagedThreadId;
+        var scanThread = uiThread;
+        section.DiscoverCliTools = (toolId, ct) =>
+        {
+            scanThread = Environment.CurrentManagedThreadId;
+            enteredScan.Set();
+            if (!releaseScan.Wait(TimeSpan.FromSeconds(5))) throw new InvalidOperationException("scan fixture timed out");
+            ct.ThrowIfCancellationRequested();
+            return [];
+        };
+        // Discovery may inspect entries, but must neither block the dispatcher nor launch a tool.
         section.ConnectLocalToolHeaderButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         True(section.CliConnectionsPanel.Visibility == Visibility.Visible,
             "the connection panel opens from the header entry");
         True(!section.CliTestButton.IsEnabled && !section.CliSaveUseButton.IsEnabled,
             "detection does not claim a connection or enable requests");
-        section.DetectCliToolsButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-        var rows = (section.CliToolsListBox.ItemsSource as IEnumerable<ServicesSection.CliToolRow> ?? []).ToList();
-        True(rows.Select(row => row.EntryPath).Distinct(StringComparer.OrdinalIgnoreCase).Count() == rows.Count,
-            "npm shims are deduplicated into executable installations");
-        foreach (var row in rows)
-            True(row.StateBadge == "已检测到", "detection reports entry facts only");
+        True(enteredScan.Wait(TimeSpan.FromSeconds(5)) && scanThread != uiThread,
+            "discovery runs on a background thread");
+        True(!section.DetectCliToolsButton.IsEnabled && section.CliCancelButton.Visibility == Visibility.Visible,
+            "discovery exposes a cancellable busy state");
+        section.CliCancelButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        True(section.DetectCliToolsButton.IsEnabled && !section.CliTestButton.IsEnabled,
+            "cancelling discovery releases UI without claiming a connection");
+        releaseScan.Set();
         // Returning to the overview restores the standard header actions.
         section.BackToListHeaderButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         True(section.CliConnectionsPanel.Visibility == Visibility.Collapsed,

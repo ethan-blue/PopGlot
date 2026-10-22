@@ -129,7 +129,18 @@ internal static class RouteCapabilityService
         }
 
         // 2. 本地运行时（Ollama / LM Studio）
-        var isLocal = activeProfile.IsLocal || activeProfile.ToProviderSettings(settings).TargetsLocalRuntime;
+        // Locality is a property of the effective endpoint, not the template
+        // flag (a local profile can be edited to point at a remote host).
+        var isLocal = activeProfile.ToProviderSettings(settings).TargetsLocalRuntime;
+        if (!activeProfile.SupportsText || string.IsNullOrWhiteSpace(activeProfile.TextModel))
+        {
+            return new SummaryCapability(
+                RouteCapabilityState.NeedsConfiguration,
+                isLocal ? RouteKind.LocalModel : RouteKind.MissingCredential,
+                "未配置文字模型，请在设置中补充。",
+                "未配置模型",
+                CanNavigateToAddEngine: true);
+        }
         if (isLocal)
         {
             return new SummaryCapability(
@@ -137,6 +148,16 @@ internal static class RouteCapabilityService
                 RouteKind.LocalModel,
                 "本地模型已就绪。",
                 "本地模型",
+                CanNavigateToAddEngine: false);
+        }
+
+        if (settings.SafeDevMode || !settings.NetworkEnabled)
+        {
+            return new SummaryCapability(
+                RouteCapabilityState.Unsupported,
+                RouteKind.ValidRemote,
+                "离线策略禁止此引擎出网。",
+                "已禁止联网",
                 CanNavigateToAddEngine: false);
         }
 
@@ -151,19 +172,6 @@ internal static class RouteCapabilityService
                 CanNavigateToAddEngine: true);
         }
 
-        // 4. 远端服务缺少模型名
-        var effectiveModel = !string.IsNullOrWhiteSpace(activeProfile.TextModel)
-            ? activeProfile.TextModel
-            : settings.TextModel;
-        if (string.IsNullOrWhiteSpace(effectiveModel))
-        {
-            return new SummaryCapability(
-                RouteCapabilityState.NeedsConfiguration,
-                RouteKind.MissingCredential,
-                "尚未配置模型名称，请在设置中补充。",
-                "未配置模型",
-                CanNavigateToAddEngine: true);
-        }
 
         // 5. 未知模型或自建端点
         var baseUrl = activeProfile.ApiBaseUrl ?? string.Empty;

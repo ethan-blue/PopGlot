@@ -460,14 +460,14 @@ public partial class MainWindow : Window
                 {
                     SetResidentStatus(
                         StatusChannel.EngineConfig,
-                        $"当前使用{EngineWording.FreePublicTranslationName} — 可添加自己的翻译引擎",
+                        $"当前使用{EngineWording.FreePublicTranslationName}",
                         StatusTone.Info);
                 }
                 else
                 {
                     SetResidentStatus(
                         StatusChannel.EngineConfig,
-                        "尚未配置翻译引擎 — 点击「添加翻译引擎」开始",
+                        "尚未配置翻译引擎",
                         StatusTone.Warning);
                 }
             }
@@ -1158,7 +1158,7 @@ public partial class MainWindow : Window
             {
                 // 引擎已在位说明上手早已完成：顺带把丢失/回退的闸门补成
                 // true，而不是给一个能用的安装再弹引导。
-                PersistOnboardingComplete(settings);
+                PersistOnboardingComplete();
                 return;
             }
             TranslateSection.BeginOnboarding();
@@ -1174,7 +1174,7 @@ public partial class MainWindow : Window
         TranslateSection.EndOnboarding();
         try
         {
-            PersistOnboardingComplete(ShellSettingsStore.Load());
+            PersistOnboardingComplete();
         }
         catch (Exception)
         {
@@ -1182,11 +1182,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private static void PersistOnboardingComplete(ShellSettings settings)
+    private static void PersistOnboardingComplete()
     {
         try
         {
-            ShellSettingsStore.Save(settings with { HasCompletedOnboarding = true });
+            ShellSettingsStore.Update(current => current with { HasCompletedOnboarding = true });
         }
         catch (Exception)
         {
@@ -1235,8 +1235,7 @@ public partial class MainWindow : Window
                     "已最小化到托盘；划词与截图翻译仍可用，托盘右键退出。");
                 try
                 {
-                    var settings = ShellSettingsStore.Load();
-                    ShellSettingsStore.Save(settings with { CloseHintShown = true });
+                    ShellSettingsStore.Update(current => current with { CloseHintShown = true });
                 }
                 catch (Exception)
                 {

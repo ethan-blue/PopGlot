@@ -401,6 +401,13 @@ internal static class ProviderCatalog
     }
 }
 
+internal sealed class ProfileActivationException : InvalidOperationException
+{
+    public string ProfileId { get; }
+    public ProfileActivationException(string profileId, Exception inner)
+        : base("连接已保存，但运行引擎未更新。请重启 PopGlot 后重试。", inner) => ProfileId = profileId;
+}
+
 internal static class ProfileManager
 {
     private static readonly object Gate = new();
@@ -639,20 +646,53 @@ internal static class ProfileManager
     public static Task SaveAsync(CoreProductConfig config) => Task.Run(() => Save(config));
 
     public static Task SaveProfilesAsync(CoreProductConfig config) => SaveAsync(config);
+    /// <summary>Merges one API editor commit into the latest configuration.</summary>
+    public static CoreProductConfig SaveApiProfile(ProviderProfile profile, string? editingId)
+    {
+        lock (Gate)
+        {
+            var config = Load();
+            var index = config.Profiles.FindIndex(p => p.Id == editingId);
+            if (editingId is not null && index < 0)
+                throw new InvalidOperationException("该引擎已被删除，请重新添加。");
+            var first = config.Profiles.Count == 0;
+            if (index >= 0) config.Profiles[index] = profile.Clone();
+            else config.Profiles.Add(profile.Clone());
+            if ((!config.PreferFreeEngine && config.ActiveProfileId == profile.Id) || (first && profile.SupportsText && !string.IsNullOrWhiteSpace(profile.TextModel)))
+            {
+                config.ActiveProfileId = profile.Id;
+                config.PreferFreeEngine = false;
+            }
+            SaveLocked(config);
+            return config;
+        }
+    }
 
     public static void SaveCliProfile(ProviderProfile profile, string? editingId, bool use)
     {
         lock (Gate)
         {
             var config = Load();
-            var index = config.Profiles.FindIndex(p => p.Id == editingId);
+            var index = config.Profiles.FindIndex(p => p.Id == (editingId ?? profile.Id));
             if (editingId is not null && index < 0) throw new InvalidOperationException("该连接已被删除，请重新连接后保存。");
             if (!profile.ExecutionFacts.TextCapable) throw new InvalidOperationException("连接未配置完整。");
+            if (editingId is not null && profile.Id != editingId) throw new InvalidOperationException("引擎标识已改变，请重新打开编辑。");
+            var existing = index >= 0 ? config.Profiles[index] : null;
+            if (profile.LastTestFingerprint is null && existing?.LastTestFingerprint == ProfileVerification.EvidenceFingerprint(profile, false))
+            {
+                profile.LastTestOutcome = existing.LastTestOutcome;
+                profile.LastTestedAtUtc = existing.LastTestedAtUtc;
+                profile.LastTestFingerprint = existing.LastTestFingerprint;
+            }
             if (index >= 0) config.Profiles[index] = profile.Clone();
             else config.Profiles.Add(profile.Clone());
             if (use) { config.ActiveProfileId = profile.Id; config.PreferFreeEngine = false; }
             SaveLocked(config);
-            if (use || config.ActiveProfileId == profile.Id) ApplyActiveToCore(config);
+            if (use || config.ActiveProfileId == profile.Id)
+            {
+                try { ApplyActiveToCore(config); }
+                catch (Exception exception) { throw new ProfileActivationException(profile.Id, exception); }
+            }
         }
     }
 
@@ -785,6 +825,10 @@ internal static class ProfileManager
     }
 
     public static Task ApplyActiveToCoreAsync(CoreProductConfig config) => Task.Run(() => ApplyActiveToCore(config));
+    public static Task ApplyLatestToCoreAsync() => Task.Run(() =>
+    {
+        lock (Gate) ApplyActiveToCore(Load());
+    });
 
     /// <summary>
     /// One-click text engine switch for the footer quick switcher. Validates
@@ -793,29 +837,32 @@ internal static class ProfileManager
     /// </summary>
     public static bool TrySwitchActiveProfile(string profileId, out string error)
     {
-        var config = Load();
-        var profile = config.Profiles.FirstOrDefault(p => p.Id == profileId);
-        if (profile is null)
+        lock (Gate)
         {
-            error = "该引擎已不存在，请刷新列表。";
-            return false;
+            var config = Load();
+            var profile = config.Profiles.FirstOrDefault(p => p.Id == profileId);
+            if (profile is null)
+            {
+                error = "该引擎已不存在，请刷新列表。";
+                return false;
+            }
+            if (!profile.SupportsText)
+            {
+                error = $"「{profile.Name}」未配置文字模型，不能作为文字引擎。";
+                return false;
+            }
+            if (!IsProfileExecutable(profile, out var notReady))
+            {
+                error = $"无法切换到「{profile.Name}」：{notReady}。";
+                return false;
+            }
+            config.ActiveProfileId = profile.Id;
+            config.PreferFreeEngine = false;
+            SaveLocked(config);
+            ApplyActiveToCore(config);
+            error = string.Empty;
+            return true;
         }
-        if (!profile.SupportsText)
-        {
-            error = $"「{profile.Name}」未配置文字模型，不能作为文字引擎。";
-            return false;
-        }
-        if (!IsProfileExecutable(profile, out var notReady))
-        {
-            error = $"无法切换到「{profile.Name}」：{notReady}。";
-            return false;
-        }
-        config.ActiveProfileId = profile.Id;
-        config.PreferFreeEngine = false;
-        Save(config);
-        ApplyActiveToCore(config);
-        error = string.Empty;
-        return true;
     }
 
     /// <summary>
@@ -838,14 +885,17 @@ internal static class ProfileManager
         var shell = ShellSettingsStore.Load();
         if (shell.FreeEngineProvider != provider)
         {
-            ShellSettingsStore.Save(shell with { FreeEngineProvider = provider });
+            ShellSettingsStore.Update(current => current with { FreeEngineProvider = provider });
         }
-        var config = Load();
-        config.PreferFreeEngine = true;
-        Save(config);
-        ApplyActiveToCore(config);
-        error = string.Empty;
-        return true;
+        lock (Gate)
+        {
+            var config = Load();
+            config.PreferFreeEngine = true;
+            SaveLocked(config);
+            ApplyActiveToCore(config);
+            error = string.Empty;
+            return true;
+        }
     }
 
     /// <summary>
@@ -854,26 +904,29 @@ internal static class ProfileManager
     /// </summary>
     public static bool TrySwitchVisionProfile(string? profileId, out string error)
     {
-        var config = Load();
-        if (profileId is not null)
+        lock (Gate)
         {
-            var profile = config.Profiles.FirstOrDefault(p => p.Id == profileId);
-            if (profile is null)
+            var config = Load();
+            if (profileId is not null)
             {
-                error = "该引擎已不存在，请刷新列表。";
-                return false;
+                var profile = config.Profiles.FirstOrDefault(p => p.Id == profileId);
+                if (profile is null)
+                {
+                    error = "该引擎已不存在，请刷新列表。";
+                    return false;
+                }
+                if (!profile.SupportsVision || string.IsNullOrWhiteSpace(profile.VisionModel))
+                {
+                    error = $"「{profile.Name}」未配置图片模型，不能作为图片引擎。";
+                    return false;
+                }
             }
-            if (!profile.SupportsVision || string.IsNullOrWhiteSpace(profile.VisionModel))
-            {
-                error = $"「{profile.Name}」未配置图片模型，不能作为图片引擎。";
-                return false;
-            }
+            config.VisionProfileId = profileId;
+            SaveLocked(config);
+            ApplyActiveToCore(config);
+            error = string.Empty;
+            return true;
         }
-        config.VisionProfileId = profileId;
-        Save(config);
-        ApplyActiveToCore(config);
-        error = string.Empty;
-        return true;
     }
 
     private static bool IsProfileExecutable(ProviderProfile profile, out string notReady)
