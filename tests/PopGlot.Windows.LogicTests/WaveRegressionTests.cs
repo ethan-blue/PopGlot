@@ -638,6 +638,16 @@ internal static class WaveRegressionTests
             True(quickSearch.LangBadge.Text.Contains("法语", StringComparison.Ordinal) &&
                  quickSearch.LangBadge.Text.Contains("德语", StringComparison.Ordinal),
                 $"the re-show must repaint the badge from the persisted pair, got '{quickSearch.LangBadge.Text}'");
+            // Click LangBadgeButton to swap languages: "法语 → 德语" must become "德语 → 法语"!
+            quickSearch.LangBadgeButton.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            PumpUntilCondition(() => CoreBridge.GetSettings().SourceLanguage == "de", "swapped settings must persist");
+
+            var swapped = CoreBridge.GetSettings();
+            Equal("de", swapped.SourceLanguage, "clicking LangBadgeButton must swap source language to German");
+            Equal("fr", swapped.TargetLanguage, "clicking LangBadgeButton must swap target language to French");
+            True(quickSearch.LangBadge.Text.StartsWith("德语", StringComparison.Ordinal) &&
+                 quickSearch.LangBadge.Text.EndsWith("法语", StringComparison.Ordinal),
+                $"clicking LangBadgeButton must repaint the badge to swapped languages, got '{quickSearch.LangBadge.Text}'");
 
             quickSearch.ForceClose = true;
             quickSearch.Close();
@@ -1914,13 +1924,19 @@ internal static class WaveRegressionTests
         var other = radios.First(r => r.IsChecked != true);
         other.SetCurrentValue(RadioButton.IsCheckedProperty, true);
         PumpPaintUntil(section,
-            () => Descendants<RadioButton>(section.BuiltinsList)
-                .SingleOrDefault(r => r.IsChecked == true)?.Tag as string == (string)other.Tag,
-            "checking another tone must switch the active template and repaint only it checked");
+            () => CoreBridge.GetActivePromptTemplate().Id == (string)other.Tag &&
+                  Descendants<RadioButton>(section.BuiltinsList)
+                      .SingleOrDefault(r => r.IsChecked == true)?.Tag as string == (string)other.Tag &&
+                  section.ActiveResetDefaultButton.Visibility == Visibility.Visible,
+            "checking another tone must switch the active template and expose ActiveResetDefaultButton");
         Equal((string)other.Tag, CoreBridge.GetActivePromptTemplate().Id,
             "the core's active template follows the checked radio choice");
+        section.ActiveResetDefaultButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        PumpPaintUntil(section,
+            () => CoreBridge.GetActivePromptTemplate().Id == "faithful" &&
+                  section.ActiveResetDefaultButton.Visibility == Visibility.Collapsed,
+            "clicking ActiveResetDefaultButton must reset active template to faithful and collapse");
     }
-
     /// <summary>U06: the custom rule row budgets its content — the name is a
     /// single ellipsized line, the description clamps to exactly two caption
     /// lines (12/17 DIP) instead of pushing the row arbitrarily tall, and the

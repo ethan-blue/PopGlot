@@ -1303,6 +1303,9 @@ public partial class TranslationPanelWindow : Window
         WarningBox.Visibility = warnings.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
 
         EngineBadge.Text = session.PipelineLabel ?? "翻译完成";
+        EngineBadge.ToolTip = string.IsNullOrWhiteSpace(session.PromptTemplateName)
+            ? $"引擎：{session.PipelineLabel}"
+            : $"引擎：{session.PipelineLabel}\n风格：{session.PromptTemplateName}";
         EngineBadge.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
         StatusDot.SetResourceReference(Border.BackgroundProperty, "AccentBrush");
 
@@ -1861,6 +1864,7 @@ public partial class TranslationPanelWindow : Window
     {
         try
         {
+            RefreshRouteSelection();
             TranslationStyleMenu.ApplyTo(StyleSelectorButton);
             StyleSelectorLabel.Text = TranslationStyleMenu.ActiveLabel();
         }
@@ -1870,13 +1874,111 @@ public partial class TranslationPanelWindow : Window
         }
     }
 
+    private System.Windows.Controls.ContextMenu? _routeMenu;
+    private bool _switchingRoute;
+
+    internal void RefreshRouteSelection()
+    {
+        if (RouteSelectorButton is null || RouteSelectorLabel is null) return;
+        try
+        {
+            var route = TextRouteMenu.ReadCurrent();
+            RouteSelectorLabel.Text = route.Label;
+            RouteSelectorButton.ToolTip = (route.Detail ?? string.Empty) + "\n点击切换模型 (Ctrl+M) · 下次翻译生效";
+        }
+        catch (Exception)
+        {
+            RouteSelectorLabel.Text = "配置不可用";
+            RouteSelectorButton.ToolTip = "无法读取引擎配置，请打开设置检查。";
+        }
+        RouteSelectorButton.IsEnabled = !_switchingRoute &&
+            _gate.Stage is not (TranslationPanelStage.Streaming or TranslationPanelStage.Finalizing);
+    }
+
+    internal System.Windows.Controls.ContextMenu BuildTextRouteMenu() =>
+        TextRouteMenu.Create(id => _ = SwitchProfileRouteAsync(id), SwitchPublicRouteAsync, () => SettingsButton_Click(this, new RoutedEventArgs()));
+
+    private void RouteSelector_Click(object sender, RoutedEventArgs e)
+    {
+        if (RouteSelectorButton is null || !RouteSelectorButton.IsEnabled) return;
+        if (_routeMenu is { IsOpen: true })
+        {
+            _routeMenu.IsOpen = false;
+            return;
+        }
+        try
+        {
+            var menu = BuildTextRouteMenu();
+            _routeMenu = menu;
+            menu.Closed += (_, _) =>
+            {
+                if (ReferenceEquals(_routeMenu, menu)) _routeMenu = null;
+            };
+            TranslationStyleMenu.Show(RouteSelectorButton, menu);
+        }
+        catch (Exception)
+        {
+            _routeMenu = null;
+            StatusText.Text = "无法读取路由，请检查设置。";
+        }
+    }
+
+    private Task SwitchProfileRouteAsync(string id) => ChangeTextRouteAsync(() =>
+    {
+        var ok = ProfileManager.TrySwitchActiveProfile(id, out var error);
+        return (ok, error);
+    });
+
+    private Task SwitchPublicRouteAsync(FreeEngineProvider provider) => ChangeTextRouteAsync(() =>
+    {
+        var ok = ProfileManager.TrySwitchToFreeEngine(provider, out var error);
+        return (ok, error);
+    });
+
+    private async Task ChangeTextRouteAsync(Func<(bool Ok, string Error)> change)
+    {
+        if (_switchingRoute) return;
+        if (_gate.Stage is TranslationPanelStage.Streaming or TranslationPanelStage.Finalizing)
+        {
+            StatusText.Text = "翻译进行中，稍后切换";
+            return;
+        }
+        _switchingRoute = true;
+        if (RouteSelectorButton is not null) RouteSelectorButton.IsEnabled = false;
+        StatusText.Text = "正在切换…";
+        try
+        {
+            var result = await Task.Run(change);
+            if (result.Ok)
+            {
+                var hasText = !string.IsNullOrWhiteSpace(SourceInputBox.Text);
+                StatusText.Text = hasText ? "已切换模型（按 Enter 或 Ctrl+R 生效）" : "已切换模型";
+            }
+            else
+            {
+                StatusText.Text = result.Error;
+            }
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = $"切换失败：{exception.Message}";
+        }
+        finally
+        {
+            _switchingRoute = false;
+            RefreshRouteSelection();
+            RefreshStyleSelector();
+            RefreshSummaryCapability();
+        }
+    }
+
     private void RefreshSummaryCapability()
     {
         var capability = RouteCapabilityService.EvaluateCurrent();
         var canSummarize = capability.State is RouteCapabilityState.Available or RouteCapabilityState.Unknown;
         ShowSummaryChoice.IsEnabled = canSummarize || _holdingSummary;
         ShowSummaryChoice.ToolTip = canSummarize
-            ? "整理原文要点，会额外使用一次模型额度。"
+            ? "提炼原文核心要点与摘要"
             : capability.Reason;
         if (!canSummarize && _summaryLifecycle.IsRunning)
         {
@@ -1893,11 +1995,6 @@ public partial class TranslationPanelWindow : Window
         // Re-probe at open time so the menu never claims support the next
         // request would not have.
         RefreshStyleSelector();
-        if (TranslationStyleMenu.ProbeNextTextRoute() == TranslationStyleSupport.FreeEngine)
-        {
-            StatusText.Text = TranslationStyleMenu.FreeEngineToolTip;
-            return;
-        }
         var menu = TranslationStyleMenu.Build(
             styleChosen: template => _ = ChooseStyleAsync(template),
             reportStatus: message => StatusText.Text = message,
@@ -2249,6 +2346,39 @@ public partial class TranslationPanelWindow : Window
             e.Handled = true;
             Retry_Click(this, new RoutedEventArgs());
             return;
+        }
+
+        // Ctrl+M: open model selector menu
+        if (e.Key == Key.M && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        {
+            if (RouteSelectorButton is not null && RouteSelectorButton.IsEnabled)
+            {
+                e.Handled = true;
+                RouteSelector_Click(RouteSelectorButton, new RoutedEventArgs());
+                return;
+            }
+        }
+
+        // Ctrl+T: open translation style menu
+        if (e.Key == Key.T && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        {
+            if (StyleSelectorButton is not null && StyleSelectorButton.IsEnabled)
+            {
+                e.Handled = true;
+                StyleSelector_Click(StyleSelectorButton, new RoutedEventArgs());
+                return;
+            }
+        }
+
+        // Ctrl+L: swap language direction
+        if (e.Key == Key.L && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        {
+            if (SwapLangButton is not null && SwapLangButton.IsEnabled)
+            {
+                e.Handled = true;
+                SwapLangButton_Click(SwapLangButton, new RoutedEventArgs());
+                return;
+            }
         }
 
         // Ctrl+Shift+C: copy translation directly

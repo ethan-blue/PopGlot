@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
+using System.Windows.Media;
 
 namespace PopGlot.Windows.Sections;
 
@@ -18,7 +19,8 @@ internal sealed record TemplateRow(
     Visibility ActionsVisibility,
     Visibility ConfirmDeleteVisibility,
     string DeleteConfirmText,
-    bool IsActive);
+    bool IsActive,
+    bool IsDefault = false);
 
 /// <summary>
 /// Normalized snapshot of the prompt editor's five fields. The editor is dirty
@@ -200,8 +202,8 @@ public partial class PromptSection : System.Windows.Controls.UserControl
         CustomQuotaText.Text = customs.Count == 0 ? string.Empty : $"{customs.Count} 条";
         AddTemplateButton.IsEnabled = !quotaFull;
         AddTemplateButton.ToolTip = quotaFull
-            ? $"已达上限（{MaxCustomTemplates} 个），请先删除"
-            : "创建一个自定义提示词模板";
+            ? $"自定义规则已达上限（{MaxCustomTemplates} 条）"
+            : "添加自定义翻译规则";
         CustomsEmptyPanel.Visibility = customs.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         CustomsList.Visibility = customs.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
 
@@ -214,13 +216,112 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             ActiveTemplateDescription.Text = string.IsNullOrWhiteSpace(active.Description)
                 ? "（无说明）"
                 : active.Description;
-            ActiveTemplateMeta.Text = $"{(active.IsBuiltIn ? "内置模板" : "自定义模板")} · 修订 {active.Revision}";
+            ActiveTemplateMeta.Text = $"{(active.IsBuiltIn ? "系统预置风格" : "自定义规则")} · 修订版本 {active.Revision}";
+            ActiveTemplateInstruction.Text = active.Instruction;
+            var isFaithfulDefault = string.Equals(active.Id, FaithfulId, StringComparison.Ordinal);
+            ActiveDefaultBadge.Visibility = isFaithfulDefault
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            ActiveResetDefaultButton.Visibility = isFaithfulDefault
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            ActiveInUseBadge.Visibility = active.Enabled ? Visibility.Visible : Visibility.Collapsed;
+            ActiveEditButton.Visibility = active.IsBuiltIn ? Visibility.Collapsed : Visibility.Visible;
+            var hasDomain = !string.IsNullOrWhiteSpace(active.Domain);
+            var hasAudience = !string.IsNullOrWhiteSpace(active.Audience);
+            if (hasDomain || hasAudience)
+            {
+                ActiveDomainAudiencePanel.Visibility = Visibility.Visible;
+                ActiveDomainBadge.Visibility = hasDomain ? Visibility.Visible : Visibility.Collapsed;
+                ActiveDomainText.Text = hasDomain ? $"领域：{active.Domain}" : string.Empty;
+                ActiveAudienceBadge.Visibility = hasAudience ? Visibility.Visible : Visibility.Collapsed;
+                ActiveAudienceText.Text = hasAudience ? $"受众：{active.Audience}" : string.Empty;
+            }
+            else
+            {
+                ActiveDomainAudiencePanel.Visibility = Visibility.Collapsed;
+            }
+        }
+    }
+
+    private async void CustomRow_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is DependencyObject source &&
+            (FindAncestor<Button>(source) is not null || FindAncestor<System.Windows.Controls.Primitives.ToggleButton>(source) is not null))
+        {
+            return;
+        }
+        if (sender is FrameworkElement { Tag: string id } && !string.IsNullOrWhiteSpace(id) && !_saving)
+        {
+            if (string.Equals(id, _activeId, StringComparison.Ordinal)) return;
+            await ActivateTemplateByIdAsync(id);
+        }
+    }
+
+    private static T? FindAncestor<T>(DependencyObject? current) where T : DependencyObject
+    {
+        while (current is not null)
+        {
+            if (current is T match) return match;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return null;
+    }
+
+    private async void ActiveCopy_Click(object sender, RoutedEventArgs e)
+    {
+        var text = ActiveTemplateInstruction.Text;
+        if (string.IsNullOrWhiteSpace(text)) return;
+        try
+        {
+            var copied = await Helpers.CopyToClipboardAsync(text);
+            if (copied)
+            {
+                var original = ActiveCopyButton.Content;
+                ActiveCopyButton.Content = "已复制";
+                StatusChanged?.Invoke("已复制提示词指令", StatusTone.Success);
+                _ = Task.Delay(1500).ContinueWith(_ =>
+                {
+                    Dispatcher.InvokeAsync(() => ActiveCopyButton.Content = original);
+                });
+            }
+            else
+            {
+                StatusChanged?.Invoke("复制到剪贴板失败：剪贴板被占用", StatusTone.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusChanged?.Invoke($"复制失败：{ex.Message}", StatusTone.Error);
+        }
+    }
+
+    private async void ActiveResetDefault_Click(object sender, RoutedEventArgs e)
+    {
+        if (_saving) return;
+        await ActivateTemplateByIdAsync(FaithfulId);
+    }
+
+    private void ActiveFork_Click(object sender, RoutedEventArgs e)
+    {
+        var active = _templates.FirstOrDefault(t => string.Equals(t.Id, _activeId, StringComparison.Ordinal))
+            ?? _templates.FirstOrDefault(t => string.Equals(t.Id, FaithfulId, StringComparison.Ordinal));
+        CopyToCustomDraft(active?.Id);
+    }
+
+    private void ActiveEdit_Click(object sender, RoutedEventArgs e)
+    {
+        var active = _templates.FirstOrDefault(t => string.Equals(t.Id, _activeId, StringComparison.Ordinal));
+        if (active is not null && !active.IsBuiltIn)
+        {
+            OpenEditor(active, adding: false, viewingBuiltin: false);
         }
     }
 
     private TemplateRow RowFor(PromptTemplateDto template, bool isBuiltIn)
     {
         var isActive = string.Equals(template.Id, _activeId, StringComparison.Ordinal);
+        var isDefault = string.Equals(template.Id, FaithfulId, StringComparison.Ordinal);
         // 停用是模板自身的开关：停用的模板即使被设为当前风格也不会被使用
         // （Rust 回退到内置 faithful），所以列表里必须如实标出。
         var meta = $"{(isBuiltIn ? "内置" : "自定义")} · 修订 {template.Revision}"
@@ -237,7 +338,8 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             confirming ? Visibility.Collapsed : Visibility.Visible,
             confirming ? Visibility.Visible : Visibility.Collapsed,
             $"删除「{template.Name}」？模板的历史修订版本会一并删除，此操作无法撤销。",
-            isActive);
+            isActive,
+            isDefault);
     }
 
     // ===================== Editor open/close =====================
@@ -277,10 +379,10 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             ? "停用后不参与翻译"
             : "已停用，不参与翻译";
         EditorMetaText.Text = viewingBuiltin
-            ? "内置规则，只能查看"
+            ? "系统预置风格（只读，支持基于此模板新建）"
             : adding
-                ? "保存后可以直接选择使用"
-                : "自定义规则";
+                ? "保存后可直接设为常用风格"
+                : "自定义翻译规则";
 
         ListHost.Visibility = Visibility.Collapsed;
         EditorForm.Visibility = Visibility.Visible;
@@ -373,7 +475,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             Enabled: true,
             IsBuiltIn: false);
         OpenEditor(draft, adding: true, viewingBuiltin: false);
-        StatusChanged?.Invoke($"已复制为自定义模板「{source.Name} 副本」，调整后保存", StatusTone.Info);
+        StatusChanged?.Invoke($"已复制为自定义规则「{source.Name} 副本」，调整后保存", StatusTone.Info);
     }
 
     /// <summary>The quota is enforced by Rust; the entry point checks it early
@@ -385,7 +487,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             return true;
         }
         StatusChanged?.Invoke(
-            $"自定义模板数量已达上限（{MaxCustomTemplates} 个），无法继续新增；请删除不需要的模板。",
+            $"自定义规则已达上限（最多 {MaxCustomTemplates} 条），请先删除不需要的规则。",
             StatusTone.Warning);
         return false;
     }

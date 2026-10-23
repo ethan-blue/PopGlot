@@ -895,6 +895,18 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
                     e.Handled = true;
                     await TranslateAsync();
                     return;
+                case Key.M when RouteSelectorButton?.IsEnabled == true:
+                    e.Handled = true;
+                    RouteSelector_Click(RouteSelectorButton, new RoutedEventArgs());
+                    return;
+                case Key.T when StyleSelectorButton?.IsEnabled == true:
+                    e.Handled = true;
+                    StyleSelector_Click(StyleSelectorButton, new RoutedEventArgs());
+                    return;
+                case Key.L when TranslateSwapButton?.IsEnabled == true:
+                    e.Handled = true;
+                    TranslateSwap_Click(TranslateSwapButton, new RoutedEventArgs());
+                    return;
             }
         }
 
@@ -1060,8 +1072,13 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             }
 
             ApplyState(TranslateSectionReducer.ApplyCompletion(_currentState, session, epoch));
+            if (!_holdingSummary)
+            {
+                TranslateEngineBadge.ToolTip = string.IsNullOrWhiteSpace(session.PromptTemplateName)
+                    ? $"引擎：{session.PipelineLabel}"
+                    : $"引擎：{session.PipelineLabel}\n风格：{session.PromptTemplateName}";
+            }
 
-            // Durable post-hoc honesty: when the free engine actually ran the
             // request, the selected style did not apply — keep saying so
             // instead of leaving only the transient pre-flight notice.
             // Decided by the TYPED prompt-support fact, rendered through the
@@ -1386,10 +1403,10 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         }
         ShowSummaryChoice.ToolTip = capability.State switch
         {
-            RouteCapabilityState.Unsupported => "当前公共翻译不支持整理要点，请配置模型引擎。",
+            RouteCapabilityState.Unsupported => "当前公共翻译不支持整理要点，请配置模型服务。",
             RouteCapabilityState.NeedsConfiguration => capability.Reason,
-            RouteCapabilityState.Unknown => "可以尝试整理要点，会额外使用一次模型额度。",
-            _ => "整理原文要点，会额外使用一次模型额度。",
+            RouteCapabilityState.Unknown => "提炼原文核心要点与摘要",
+            _ => "提炼原文核心要点与摘要",
         };
     }
 
@@ -1430,8 +1447,8 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             if (GuideDescription is not null)
             {
                 GuideDescription.Text = hasFallbackRoute
-                    ? "要点与自定义语气需要模型引擎。"
-                    : "公共翻译只发送文字，不发送截图。";
+                    ? "整理要点与自定风格需要模型服务。"
+                    : "免配置即开即用；仅传输文本，保障隐私安全。";
             }
         }
         if (EnableFreeEngineButton is not null)
@@ -1561,12 +1578,111 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     {
         try
         {
+            RefreshRouteSelection();
             TranslationStyleMenu.ApplyTo(StyleSelectorButton);
             StyleSelectorLabel.Text = TranslationStyleMenu.ActiveLabel();
         }
         catch (Exception)
         {
             // The selector is additive UI; never break the workbench over it.
+        }
+    }
+
+    private System.Windows.Controls.ContextMenu? _routeMenu;
+    private bool _switchingRoute;
+
+    internal void RefreshRouteSelection()
+    {
+        if (RouteSelectorButton is null) return;
+        try
+        {
+            var route = TextRouteMenu.ReadCurrent();
+            RouteSelectorLabel.Text = route.Label;
+            RouteSelectorButton.ToolTip = (route.Detail ?? string.Empty) + "\n点击切换模型 (Ctrl+M) · 下次翻译生效";
+        }
+        catch (Exception)
+        {
+            RouteSelectorLabel.Text = "配置不可用";
+            RouteSelectorButton.ToolTip = "无法读取引擎配置，请打开设置检查。";
+        }
+        RouteSelectorButton.IsEnabled = !_switchingRoute &&
+            _currentState.Phase is not (TranslateUiPhase.Streaming or TranslateUiPhase.Finalizing);
+    }
+
+    internal System.Windows.Controls.ContextMenu BuildTextRouteMenu() =>
+        TextRouteMenu.Create(id => _ = SwitchProfileRouteAsync(id), SwitchPublicRouteAsync, () => OpenSettings_Click(this, new RoutedEventArgs()));
+
+    private void RouteSelector_Click(object sender, RoutedEventArgs e)
+    {
+        if (!RouteSelectorButton.IsEnabled) return;
+        if (_routeMenu is { IsOpen: true })
+        {
+            _routeMenu.IsOpen = false;
+            return;
+        }
+        try
+        {
+            var menu = BuildTextRouteMenu();
+            _routeMenu = menu;
+            menu.Closed += (_, _) =>
+            {
+                if (ReferenceEquals(_routeMenu, menu)) _routeMenu = null;
+            };
+            TranslationStyleMenu.Show(RouteSelectorButton, menu);
+        }
+        catch (Exception)
+        {
+            _routeMenu = null;
+            TranslateStatus.Text = "无法读取路由，请检查设置。";
+        }
+    }
+
+    private Task SwitchProfileRouteAsync(string id) => ChangeTextRouteAsync(() =>
+    {
+        var ok = ProfileManager.TrySwitchActiveProfile(id, out var error);
+        return (ok, error);
+    });
+
+    private Task SwitchPublicRouteAsync(FreeEngineProvider provider) => ChangeTextRouteAsync(() =>
+    {
+        var ok = ProfileManager.TrySwitchToFreeEngine(provider, out var error);
+        return (ok, error);
+    });
+
+    private async Task ChangeTextRouteAsync(Func<(bool Ok, string Error)> change)
+    {
+        if (_switchingRoute) return;
+        if (_currentState.Phase is TranslateUiPhase.Streaming or TranslateUiPhase.Finalizing)
+        {
+            TranslateStatus.Text = "翻译进行中，稍后切换";
+            return;
+        }
+        _switchingRoute = true;
+        RouteSelectorButton.IsEnabled = false;
+        TranslateStatus.Text = "正在切换…";
+        try
+        {
+            var result = await Task.Run(change);
+            if (result.Ok)
+            {
+                var hasText = !string.IsNullOrWhiteSpace(TranslateInput.Text);
+                TranslateStatus.Text = hasText ? "已切换模型（点击翻译即可生效）" : "已切换模型";
+            }
+            else
+            {
+                TranslateStatus.Text = result.Error;
+            }
+        }
+        catch (Exception exception)
+        {
+            TranslateStatus.Text = $"切换失败：{exception.Message}";
+        }
+        finally
+        {
+            _switchingRoute = false;
+            RefreshRouteSelection();
+            RefreshStyleSelector();
+            UpdateSummaryCapabilityVisuals();
         }
     }
 
@@ -1580,11 +1696,6 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         // paint, and the honest state must match the route a new request
         // would actually take.
         RefreshStyleSelector();
-        if (TranslationStyleMenu.ProbeNextTextRoute() == TranslationStyleSupport.FreeEngine)
-        {
-            TranslateStatus.Text = TranslationStyleMenu.FreeEngineToolTip;
-            return;
-        }
         var menu = TranslationStyleMenu.Build(
             styleChosen: template => _ = ChooseStyleAsync(template),
             reportStatus: message => TranslateStatus.Text = message,

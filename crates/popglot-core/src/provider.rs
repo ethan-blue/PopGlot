@@ -1724,7 +1724,7 @@ fn validate_execution(
     if class != EndpointClass::Loopback && !settings.network_enabled {
         return Err(ProviderError::new(
             ProviderErrorKind::NetworkDisabled,
-            "网络访问未启用；未发送任何远程 Provider 请求。请在设置中勾选「启用大模型网络翻译」。",
+            "网络访问未启用；未发送任何远程服务请求。请在设置中允许联网翻译。",
         ));
     }
     if class == EndpointClass::PrivateNetwork && !settings.allow_lan_endpoints {

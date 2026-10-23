@@ -53,6 +53,7 @@
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="{x:Static services:EngineWording.SafeOfflineModeName}" Style="{StaticResource RowTitle}" />
+                <TextBlock Text="彻底断开外部网络通信，仅使用本机模型与本地词库" Style="{StaticResource RowHint}" />
             </StackPanel>
             <ToggleButton x:Name="SafeModeToggle"
                           AutomationProperties.Name="{x:Static services:EngineWording.SafeOfflineModeName}" Grid.Column="1"
@@ -75,10 +76,11 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="允许模型读取截图" Style="{StaticResource RowTitle}" />
+                <TextBlock Text="允许读取截图内容" Style="{StaticResource RowTitle}" />
+                <TextBlock Text="允许截图翻译分析画面中的文字与排版布局" Style="{StaticResource RowHint}" />
             </StackPanel>
             <ToggleButton x:Name="AllowImageUploadToggle"
-                          AutomationProperties.Name="允许模型读取截图" Grid.Column="1"
+                          AutomationProperties.Name="允许读取截图内容" Grid.Column="1"
                           VerticalAlignment="Center"
                           Style="{StaticResource ToggleSwitch}"
                           Checked="ProviderGate_Changed" Unchecked="ProviderGate_Changed" />
@@ -207,7 +209,7 @@
                         <TextBlock Text="{x:Static services:EngineWording.FreePublicTranslationName}" Style="{StaticResource RowTitle}" />
                         <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap"
                                    ToolTip="{x:Static services:EngineWording.FreeEngineOnlineServiceNote}"
-                                   Text="仅发送待翻译文本，不发送截图" />
+                                   Text="免配置即开即用；仅传输文本，保障隐私安全" />
                         <TextBlock x:Name="FreeEngineConsentState" Style="{StaticResource Caption}"
                                    Margin="0,4,0,0" />
                     </StackPanel>

@@ -233,9 +233,9 @@
                         <TextBlock Text="未选择条目" Style="{StaticResource SectionTitle}"
                                    Foreground="{DynamicResource TextSecondaryBrush}"
                                    HorizontalAlignment="Center" Margin="0,0,0,4" />
-                        <TextBlock Style="{StaticResource Caption}" MaxWidth="280" TextAlignment="Center"
+                        <TextBlock Style="{StaticResource Caption}" MaxWidth="320" TextAlignment="Center"
                                    HorizontalAlignment="Center" Foreground="{DynamicResource TextTertiaryBrush}"
-                                   Text="方向键切换 · Enter 载入工作台 · Delete 删除" />
+                                   Text="方向键切换 · Enter 载入工作台 · Ctrl+P 朗读 · Delete 删除" />
                     </StackPanel>
 
                     <!-- Selected entry: property list inspector style -->
@@ -321,15 +321,15 @@
                                 Padding="12,8">
                             <WrapPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                 <Button Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconSpeaker}"
-                                        ToolTip="朗读" AutomationProperties.Name="朗读所选记录" Click="CardSpeak_Click" />
+                                        ToolTip="朗读 (Ctrl+P)" AutomationProperties.Name="朗读所选记录" Click="CardSpeak_Click" />
                                 <Button Style="{StaticResource IconButton}" Margin="6,0,0,0"
-                                        local:Ui.Icon="{StaticResource IconCopy}" ToolTip="复制译文"
+                                        local:Ui.Icon="{StaticResource IconCopy}" ToolTip="复制译文 (Ctrl+Shift+C)"
                                         AutomationProperties.Name="复制所选译文" Click="CardCopy_Click" />
                                 <Button Style="{StaticResource GhostButton}" Margin="6,0,0,0"
-                                        Content="载入工作台" Padding="12,4" Click="CardLoad_Click" />
+                                        Content="载入工作台" Padding="12,4" ToolTip="载入工作台 (Enter)" Click="CardLoad_Click" />
                                 <Button x:Name="CardDeleteButton" Style="{StaticResource DangerButton}" Margin="6,0,0,0"
                                         Content="删除" Padding="12,4" Click="CardDelete_Click"
-                                        ToolTip="删除此条记录，可短时撤销"
+                                        ToolTip="删除此条记录 (Delete)"
                                         AutomationProperties.Name="删除此条记录" />
                             </WrapPanel>
                         </Border>

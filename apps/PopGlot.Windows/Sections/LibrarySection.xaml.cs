@@ -420,8 +420,17 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
                 DeleteRowNow(row);
             }
         }
+        else if (e.Key == Key.P && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        {
+            e.Handled = true;
+            CardSpeak_Click(this, new RoutedEventArgs());
+        }
+        else if (e.Key == Key.C && (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == (ModifierKeys.Control | ModifierKeys.Shift))
+        {
+            e.Handled = true;
+            CardCopy_Click(this, new RoutedEventArgs());
+        }
     }
-
     // ================= Detail actions =================
 
     private void CardSpeak_Click(object sender, RoutedEventArgs e)

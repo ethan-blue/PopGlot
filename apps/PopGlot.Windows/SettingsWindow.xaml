@@ -53,8 +53,8 @@
                                  local:Ui.Icon="{StaticResource IconProvider}"
                                  Checked="SubNav_Checked" Tag="Provider" Margin="0,2" />
                     <RadioButton x:Name="NavPrompt" Style="{StaticResource NavButton}"
-                                 GroupName="SettingsNav" Content="表达方式"
-                                 local:Ui.Icon="{StaticResource IconTranslate}"
+                                 GroupName="SettingsNav" Content="提示词与风格"
+                                 local:Ui.Icon="{StaticResource IconStyle}"
                                  Checked="SubNav_Checked" Tag="Prompt" Margin="0,2" />
                     <RadioButton x:Name="NavGeneral" Style="{StaticResource NavButton}"
                                  GroupName="SettingsNav" Content="通用"
@@ -66,7 +66,7 @@
                                  Checked="SubNav_Checked" Tag="Shortcuts" Margin="0,2" />
                     <RadioButton x:Name="NavPrivacy" Style="{StaticResource NavButton}"
                                  GroupName="SettingsNav" Content="隐私与数据"
-                                 local:Ui.Icon="{StaticResource IconCapture}"
+                                 local:Ui.Icon="{StaticResource IconShield}"
                                  Checked="SubNav_Checked" Tag="Privacy" Margin="0,2" />
                 </StackPanel>
             </Grid>

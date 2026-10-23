@@ -6,8 +6,8 @@
     <UserControl.Resources>
         <!-- 行卡片列表项：内容自绘，这里只提供键盘焦点与悬停反馈。 -->
         <Style x:Key="PromptListItem" TargetType="Border">
-            <Setter Property="Padding" Value="12,9" />
-            <Setter Property="Margin" Value="0,0,0,6" />
+            <Setter Property="Padding" Value="14,10" />
+            <Setter Property="Margin" Value="0,0,0,8" />
             <Setter Property="Background" Value="{DynamicResource InputBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
@@ -49,7 +49,7 @@
             <Setter Property="MinWidth" Value="76" />
             <Setter Property="Height" Value="34" />
             <Setter Property="Padding" Value="14,0" />
-            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="Margin" Value="0,0,8,8" />
             <Setter Property="SnapsToDevicePixels" Value="True" />
             <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
             <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
@@ -98,8 +98,10 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0" Margin="0,0,0,10">
-            <TextBlock Text="表达方式" Style="{StaticResource PageTitle}" />
+        <StackPanel Grid.Row="0" Margin="0,0,0,14">
+            <TextBlock Text="翻译提示词与风格" Style="{StaticResource PageTitle}" />
+            <TextBlock Text="自定义翻译时的语气风格、专业术语与提示指令" Style="{StaticResource Caption}"
+                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,0" />
         </StackPanel>
 
         <Grid Grid.Row="1">
@@ -112,7 +114,7 @@
                     </Grid.RowDefinitions>
 
                     <StackPanel Grid.Row="0" Margin="0,0,0,16">
-                        <TextBlock Text="翻译语气" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
+                        <TextBlock Text="预置翻译风格" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
                         <ItemsControl x:Name="BuiltinsList" IsTabStop="False" Focusable="False">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
@@ -121,27 +123,108 @@
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <RadioButton Content="{Binding DisplayName}" Tag="{Binding Id}"
+                                    <RadioButton Tag="{Binding Id}"
                                                  GroupName="PromptBuiltinStyle"
                                                  Style="{StaticResource PromptChoiceItem}"
                                                  IsChecked="{Binding IsActive, Mode=OneWay}"
                                                  ToolTip="{Binding DisplayDescription}"
                                                  AutomationProperties.Name="{Binding DisplayName}"
-                                                 Checked="BuiltinChoice_Checked" />
+                                                 Checked="BuiltinChoice_Checked">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding DisplayName}" VerticalAlignment="Center" />
+                                            <Border Visibility="{Binding IsDefault, Converter={StaticResource BoolToVisibility}}"
+                                                    Margin="6,0,0,0" Padding="4,1" Background="{DynamicResource AccentSoftBrush}"
+                                                    CornerRadius="3" VerticalAlignment="Center">
+                                                <TextBlock Text="默认" FontSize="10" FontWeight="SemiBold"
+                                                           Foreground="{DynamicResource AccentBrush}" />
+                                            </Border>
+                                        </StackPanel>
+                                    </RadioButton>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <TextBlock x:Name="ActiveTemplateDescription" Visibility="Collapsed" Style="{StaticResource Caption}"
-                                   Margin="0,6,0,0" />
 
-
-                        <!-- Values remain named for compatibility with the editor state model,
-                             but revision/type metadata is not useful in the normal product view. -->
-                        <StackPanel Visibility="Collapsed">
-                            <Border x:Name="ActiveKindBadge"><TextBlock x:Name="ActiveKindText" /></Border>
-                            <TextBlock x:Name="ActiveTemplateName" />
-                            <TextBlock x:Name="ActiveTemplateMeta" />
-                        </StackPanel>
+                        <!-- 当前生效提示词详情卡片：默认 prompt 明确可见、可直接查阅与复制 -->
+                        <Border x:Name="ActivePromptCard" Margin="0,12,0,0" Padding="14,12"
+                                Background="{DynamicResource SurfaceMutedBrush}"
+                                BorderBrush="{DynamicResource BorderSubtleBrush}"
+                                BorderThickness="1" CornerRadius="{DynamicResource CardRadius}">
+                            <StackPanel>
+                                <WrapPanel Margin="0,0,0,8" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock x:Name="ActiveTemplateName" FontSize="13.5" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
+                                    <Border x:Name="ActiveInUseBadge" Margin="8,0,0,0" Padding="6,1"
+                                            Background="{DynamicResource SuccessSoftBrush}" CornerRadius="4"
+                                            VerticalAlignment="Center">
+                                        <TextBlock Text="正在使用" FontSize="11" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource SuccessBrush}" />
+                                    </Border>
+                                    <Border x:Name="ActiveDefaultBadge" Margin="6,0,0,0" Padding="6,1"
+                                            Background="{DynamicResource AccentSoftBrush}" CornerRadius="4"
+                                            BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1"
+                                            VerticalAlignment="Center">
+                                        <TextBlock Text="系统预置" FontSize="11" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource AccentBrush}" />
+                                    </Border>
+                                    <Border x:Name="ActiveKindBadge" Margin="6,0,0,0" Padding="6,1"
+                                            Background="{DynamicResource SurfaceRaisedBrush}" CornerRadius="4"
+                                            BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
+                                            VerticalAlignment="Center">
+                                        <TextBlock x:Name="ActiveKindText" Text="内置" FontSize="11"
+                                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                                    </Border>
+                                </WrapPanel>
+                                <TextBlock x:Name="ActiveTemplateDescription" Style="{StaticResource Caption}"
+                                           Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,8" />
+                                <Border Background="{DynamicResource InputBrush}"
+                                        BorderBrush="{DynamicResource BorderSubtleBrush}"
+                                        BorderThickness="1" CornerRadius="6" Padding="10,8">
+                                    <TextBox x:Name="ActiveTemplateInstruction"
+                                             Style="{StaticResource FormTextArea}"
+                                             Background="Transparent" BorderThickness="0" Padding="0"
+                                             IsReadOnly="True" IsReadOnlyCaretVisible="False"
+                                             TextWrapping="Wrap" MaxHeight="140"
+                                             VerticalScrollBarVisibility="Auto"
+                                             FontSize="12" FontFamily="{StaticResource MonoFontFamily}"
+                                             AutomationProperties.Name="当前生效的提示词完整指令" />
+                                </Border>
+                                <StackPanel x:Name="ActiveDomainAudiencePanel" Orientation="Horizontal" Margin="0,8,0,0" Visibility="Collapsed">
+                                    <Border x:Name="ActiveDomainBadge" Style="{StaticResource StatusPill}" Margin="0,0,8,0"
+                                            Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}">
+                                        <TextBlock x:Name="ActiveDomainText" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                    </Border>
+                                    <Border x:Name="ActiveAudienceBadge" Style="{StaticResource StatusPill}"
+                                            Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}">
+                                        <TextBlock x:Name="ActiveAudienceText" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                    </Border>
+                                </StackPanel>
+                                <TextBlock x:Name="ActiveTemplateMeta" Style="{StaticResource Metadata}"
+                                           Margin="0,6,0,0" Foreground="{DynamicResource TextTertiaryBrush}" />
+                                <!-- 底部操作栏：独立占行自适应流动，确保窄窗口下多操作与长规则名互不挤占 -->
+                                <WrapPanel Margin="0,10,0,0">
+                                    <Button x:Name="ActiveResetDefaultButton" Style="{StaticResource GhostButton}"
+                                            Padding="10,4" Margin="0,0,8,4" Visibility="Collapsed"
+                                            Content="恢复默认" ToolTip="恢复使用系统默认提示词（准确）"
+                                            AutomationProperties.Name="恢复系统默认提示词"
+                                            Click="ActiveResetDefault_Click" />
+                                    <Button x:Name="ActiveCopyButton" Style="{StaticResource GhostButton}"
+                                            Padding="10,4" Margin="0,0,8,4"
+                                            Content="复制指令" ToolTip="复制当前提示词指令到剪贴板"
+                                            AutomationProperties.Name="复制当前提示词指令"
+                                            Click="ActiveCopy_Click" />
+                                    <Button x:Name="ActiveForkButton" Style="{StaticResource GhostButton}"
+                                            Padding="10,4" Margin="0,0,8,4"
+                                            Content="基于此规则新建" ToolTip="以此模板为起点创建自定义规则"
+                                            AutomationProperties.Name="基于此规则新建"
+                                            Click="ActiveFork_Click" />
+                                    <Button x:Name="ActiveEditButton" Style="{StaticResource GhostButton}"
+                                            Padding="10,4" Margin="0,0,8,4" Visibility="Collapsed"
+                                            Content="编辑规则" ToolTip="编辑此自定义规则"
+                                            AutomationProperties.Name="编辑当前自定义规则"
+                                            Click="ActiveEdit_Click" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
 
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="0,0,8,8">
@@ -164,7 +247,8 @@
                                           Visibility="Collapsed">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Style="{StaticResource PromptListItem}">
+                                        <Border Style="{StaticResource PromptListItem}" Tag="{Binding Id}" Cursor="Hand"
+                                                MouseLeftButtonUp="CustomRow_MouseLeftButtonUp">
                                             <Grid>
                                                 <Grid.RowDefinitions>
                                                     <RowDefinition Height="Auto" />
@@ -185,11 +269,12 @@
                                                                        FontWeight="SemiBold" VerticalAlignment="Center"
                                                                        TextTrimming="CharacterEllipsis"
                                                                        ToolTip="{Binding DisplayName}" />
-                                                            <Path Grid.Column="1" Visibility="{Binding ActiveBadge}"
-                                                                  Data="{StaticResource IconCheck}" Width="14" Height="14"
-                                                                  Margin="8,0,0,0" Stretch="Uniform"
-                                                                  Fill="{DynamicResource AccentBrush}" VerticalAlignment="Center"
-                                                                  ToolTip="正在使用" AutomationProperties.Name="正在使用" />
+                                                            <Border Grid.Column="1" Visibility="{Binding ActiveBadge}"
+                                                                    Background="{DynamicResource SuccessSoftBrush}" CornerRadius="4"
+                                                                    Padding="6,1" Margin="8,0,0,0" VerticalAlignment="Center">
+                                                                <TextBlock Text="正在使用" FontSize="11" FontWeight="SemiBold"
+                                                                           Foreground="{DynamicResource SuccessBrush}" />
+                                                            </Border>
                                                         </Grid>
                                                         <!-- 说明最多两行（12/17 行高）：超出省略；完整说明在
                                                              编辑器里始终可读（键盘可达），悬停与读屏另有全文。 -->
@@ -206,6 +291,11 @@
                                                                 local:Ui.Icon="{StaticResource IconEdit}" ToolTip="编辑"
                                                                 AutomationProperties.Name="{Binding DisplayName, StringFormat=编辑规则：{0}}"
                                                                 Click="EditTemplate_Click" />
+                                                        <Button Tag="{Binding Id}" Style="{StaticResource IconButton}"
+                                                                local:Ui.Icon="{StaticResource IconCopy}" Margin="4,0,0,0"
+                                                                ToolTip="复制为新规则"
+                                                                AutomationProperties.Name="{Binding DisplayName, StringFormat=复制规则：{0}}"
+                                                                Click="CopyTemplate_Click" />
                                                         <Button Tag="{Binding Id}" Style="{StaticResource IconButton}"
                                                                 local:Ui.Icon="{StaticResource IconCheck}" Margin="4,0,0,0"
                                                                 ToolTip="使用这条规则"
@@ -252,7 +342,8 @@
                             </ItemsControl>
 
                             <StackPanel x:Name="CustomsEmptyPanel" Margin="0,8,0,0" HorizontalAlignment="Left">
-                                <TextBlock Text="还没有额外规则" Style="{StaticResource Caption}"
+                                <TextBlock Text="暂无自定义规则。可基于上方预置模板新建，或点击右上角「+」添加。"
+                                           Style="{StaticResource Caption}"
                                            Foreground="{DynamicResource TextSecondaryBrush}" />
                             </StackPanel>
                         </StackPanel>
@@ -311,7 +402,7 @@
                                         Margin="10,0,0,0" VerticalAlignment="Center" Visibility="Collapsed"
                                         Background="{DynamicResource SurfaceRaisedBrush}"
                                         BorderBrush="{DynamicResource BorderSubtleBrush}">
-                                    <TextBlock Text="只读" FontSize="11" FontWeight="SemiBold"
+                                    <TextBlock Text="系统预置" FontSize="11" FontWeight="SemiBold"
                                                Foreground="{DynamicResource TextSecondaryBrush}" />
                                 </Border>
                             </StackPanel>
@@ -349,7 +440,7 @@
                                                 <TextBox x:Name="DescriptionTextBox"
                                                          Style="{StaticResource PromptTextField}"
                                                          MaxLength="256" MaxLines="1"
-                                                         local:Ui.Placeholder="描述模板用途"
+                                                         local:Ui.Placeholder="例如：地道自然，适合日常对话与阅读"
                                                          AutomationProperties.Name="模板说明"
                                                          TextChanged="EditorField_Changed" />
                                                 <TextBlock x:Name="DescriptionCounterText" Style="{StaticResource CounterText}"
@@ -376,11 +467,13 @@
                                 <Border Style="{StaticResource PromptSectionCard}">
                                     <StackPanel>
                                         <TextBlock Text="指令正文" Style="{StaticResource PromptSectionTitle}" />
-                                        <TextBlock Text="占位符发送前由本机展开；\{{ 表示字面 {{"
+                                        <TextBlock Text="支持动态变量；如需输入字面花括号，请使用 \{{ "
                                                    Style="{StaticResource Caption}" Margin="0,4,0,10" />
                                         <TextBox x:Name="InstructionTextBox" Style="{StaticResource FormTextArea}"
                                                  MinHeight="150" VerticalAlignment="Stretch"
-                                                 local:Ui.Placeholder="例如：使用自然的目标语言，保持术语一致，不增补原文没有的内容。"
+                                                 FontFamily="{StaticResource MonoFontFamily}"
+                                                 FontSize="12.5"
+                                                 local:Ui.Placeholder="例如：请将原文准确翻译为 {{target_language}}，保持专业术语严谨与文意通顺。"
                                                  AutomationProperties.Name="指令正文"
                                                  TextChanged="EditorField_Changed" />
                                         <Grid Margin="0,6,0,0">
@@ -467,7 +560,7 @@
                                             <StackPanel>
                                                 <TextBlock Text="效果预览" Style="{StaticResource PromptSectionTitle}" />
                                                 <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0"
-                                                           Text="本地展开占位符，不联网；目标语言默认 zh-CN" />
+                                                           Text="本地实时编译预览，不需要联网；示例目标语言为中文（简体）" />
                                             </StackPanel>
                                             <Button x:Name="CopyPreviewButton" Content="复制" HorizontalAlignment="Right"
                                                     VerticalAlignment="Top" Style="{StaticResource GhostButton}"
@@ -476,8 +569,9 @@
                                         </Grid>
                                         <TextBox x:Name="PreviewTextBox" Style="{StaticResource FormTextArea}"
                                                  Height="132" Margin="0,12,0,0"
+                                                 FontFamily="{StaticResource MonoFontFamily}"
                                                  IsReadOnly="True" IsReadOnlyCaretVisible="False"
-                                                 FontSize="12.5"
+                                                 FontSize="12"
                                                  AutomationProperties.Name="效果预览结果" />
                                         <TextBlock x:Name="PreviewStatusText" Style="{StaticResource Caption}"
                                                    Margin="2,8,0,0" TextWrapping="Wrap"
@@ -537,9 +631,9 @@
                                     ToolTip="删除此模板及其历史修订"
                                     Click="EditorDelete_Click" />
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                <Button x:Name="CopyBuiltinButton" Content="复制为自定义" Style="{StaticResource PrimaryButton}"
+                                <Button x:Name="CopyBuiltinButton" Content="基于此规则新建" Style="{StaticResource PrimaryButton}"
                                         Padding="14,6" Margin="0,0,8,0" Visibility="Collapsed"
-                                        AutomationProperties.Name="复制为自定义模板" Click="CopyBuiltinEditor_Click" />
+                                        AutomationProperties.Name="基于此规则新建" Click="CopyBuiltinEditor_Click" />
                                 <Border x:Name="EditorDirtyBadge" Visibility="Collapsed" Style="{StaticResource StatusPill}"
                                         Background="{DynamicResource WarningSoftBrush}"
                                         BorderBrush="{DynamicResource WarningBrush}" Padding="8,3"

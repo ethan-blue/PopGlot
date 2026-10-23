@@ -2,6 +2,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using ContextMenu = System.Windows.Controls.ContextMenu;
 using MenuItem = System.Windows.Controls.MenuItem;
@@ -219,6 +220,28 @@ public partial class MainWindow : Window
     // old footer duplicate was removed so "打开设置" names exactly one control.
     private void NavSettingsButton_Click(object sender, RoutedEventArgs e) =>
         OpenSettings?.Invoke();
+
+    private void MainWindow_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            switch (e.Key)
+            {
+                case Key.OemComma:
+                    e.Handled = true;
+                    OpenSettings?.Invoke();
+                    return;
+                case Key.D1:
+                    e.Handled = true;
+                    NavTranslate.IsChecked = true;
+                    return;
+                case Key.D2:
+                    e.Handled = true;
+                    NavLibrary.IsChecked = true;
+                    return;
+            }
+        }
+    }
 
     private void UpdateMaximizeButtonGlyph()
     {
@@ -1151,10 +1174,7 @@ internal static class TranslationStyleMenu
     /// source: <see cref="ApplyTo"/> always uses this constant, surfaces no
     /// longer pass their own copy.
     /// </summary>
-    internal const string SupportedToolTip = "文字翻译风格（下一次文字翻译生效）";
-
-    /// <summary>Public translators cannot apply custom model instructions.</summary>
-    internal const string FreeEngineToolTip = "公共翻译不支持风格";
+    internal const string SupportedToolTip = "翻译风格（点击切换）";
 
     internal const string UnknownToolTip = "无法确认风格支持，请检查当前模型";
 
@@ -1322,8 +1342,13 @@ internal static class TranslationStyleMenu
         }
 
         var menu = new ContextMenu();
-        menu.MinWidth = 100;
-        menu.MaxWidth = 135;
+        menu.MinWidth = 210;
+        menu.MaxWidth = 280;
+        if (ProbeNextTextRoute() == TranslationStyleSupport.FreeEngine)
+        {
+            menu.Items.Add(MakeDisabledItem("当前为公共直译 · 切换专属引擎后生效"));
+            menu.Items.Add(new Separator());
+        }
         var builtInCount = 0;
         foreach (var template in templates.Where(t => t.Enabled && t.IsBuiltIn))
         {
@@ -1348,7 +1373,7 @@ internal static class TranslationStyleMenu
         }
 
         menu.Items.Add(new Separator());
-        var manage = new MenuItem { Header = "管理" };
+        var manage = new MenuItem { Header = "管理翻译风格与提示词…" };
         manage.Click += (_, _) => managePrompts();
         menu.Items.Add(manage);
         return menu;
@@ -1377,7 +1402,14 @@ internal static class TranslationStyleMenu
         try
         {
             await CoreBridge.SetActivePromptTemplateAsync(templateId);
-            ReportOnUi(reportStatus, "下次翻译生效");
+            var isFree = ProbeNextTextRoute() == TranslationStyleSupport.FreeEngine;
+            var active = TryGetActiveTemplate();
+            var name = active is not null ? ShortLabel(active) : "风格";
+            if (active?.Id == FaithfulTemplateId)
+            {
+                name += "（默认）";
+            }
+            ReportOnUi(reportStatus, isFree ? $"已选定「{name}」（切换专属引擎后生效）" : $"已设为「{name}」，下次翻译生效");
             return true;
         }
         catch (Exception exception)
@@ -1442,13 +1474,35 @@ internal static class TranslationStyleMenu
     internal static TranslationStyleSupport ApplyTo(Button selectorButton)
     {
         var probe = ProbeNextTextRoute();
-        var message = probe switch
+        var active = TryGetActiveTemplate();
+        var styleName = active is not null ? ShortLabel(active) : null;
+        var styleDesc = active?.Description;
+
+        string message;
+        if (probe == TranslationStyleSupport.FreeEngine)
         {
-            TranslationStyleSupport.FreeEngine => FreeEngineToolTip,
-            TranslationStyleSupport.Unknown => UnknownToolTip,
-            _ => SupportedToolTip,
-        };
-        selectorButton.IsEnabled = probe != TranslationStyleSupport.FreeEngine;
+            message = styleName is null
+                ? "翻译风格（当前为公共直译；切换专属引擎后生效）"
+                : $"当前选定：{styleName}（公共直译下未应用；切换专属引擎后生效）";
+        }
+        else if (probe == TranslationStyleSupport.Unknown)
+        {
+            message = UnknownToolTip;
+        }
+        else
+        {
+            if (styleName is not null)
+            {
+                var descPart = string.IsNullOrWhiteSpace(styleDesc) ? string.Empty : $" · {styleDesc}";
+                message = $"当前风格：{styleName}{descPart}\n点击切换翻译风格 (Ctrl+T)";
+            }
+            else
+            {
+                message = $"{SupportedToolTip} (Ctrl+T)";
+            }
+        }
+
+        selectorButton.IsEnabled = true;
         selectorButton.ToolTip = message;
         System.Windows.Automation.AutomationProperties.SetHelpText(selectorButton, message);
         return probe;
@@ -1468,13 +1522,41 @@ internal static class TranslationStyleMenu
     {
         var id = template.Id;
         var isActive = string.Equals(id, activeId, StringComparison.Ordinal);
+        var isDefault = string.Equals(id, FaithfulTemplateId, StringComparison.Ordinal);
+
+        var stack = new StackPanel { Margin = new Thickness(0, 1, 0, 1) };
+        var titleText = ShortLabel(template) + (isDefault ? "（默认）" : string.Empty);
+        var title = new TextBlock
+        {
+            Text = titleText,
+            FontSize = 12.5,
+            FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
+        };
+        title.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
+        stack.Children.Add(title);
+
+        if (!string.IsNullOrWhiteSpace(template.Description))
+        {
+            var desc = new TextBlock
+            {
+                Text = template.Description,
+                FontSize = 11,
+                Margin = new Thickness(0, 2, 0, 0),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                MaxWidth = 200,
+            };
+            desc.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+            stack.Children.Add(desc);
+        }
+
         var item = new MenuItem
         {
-            Header = ShortLabel(template),
-            ToolTip = string.IsNullOrWhiteSpace(template.Description) ? null : template.Description,
+            Header = stack,
+            ToolTip = string.IsNullOrWhiteSpace(template.Instruction) ? template.Description : template.Instruction,
             FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
             Icon = isActive ? MakeActiveCheck() : null,
         };
+        System.Windows.Automation.AutomationProperties.SetName(item, titleText);
         item.Click += (_, _) =>
         {
             if (!isActive)

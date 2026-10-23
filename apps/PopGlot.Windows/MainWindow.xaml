@@ -11,7 +11,8 @@
         UseLayoutRounding="True" SnapsToDevicePixels="True"
         TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType"
         RenderOptions.ClearTypeHint="Enabled"
-        WindowStartupLocation="Manual">
+        WindowStartupLocation="Manual"
+        KeyDown="MainWindow_KeyDown">
 
     <WindowChrome.WindowChrome>
         <WindowChrome CaptionHeight="38" CornerRadius="0" GlassFrameThickness="0"
@@ -74,7 +75,7 @@
                             Content="设置" Margin="0"
                             local:Ui.Icon="{StaticResource IconSettings}"
                             AutomationProperties.Name="打开设置"
-                            ToolTip="打开设置"
+                            ToolTip="打开设置 (Ctrl+,)"
                             Click="NavSettingsButton_Click" />
                 </StackPanel>
             </Grid>

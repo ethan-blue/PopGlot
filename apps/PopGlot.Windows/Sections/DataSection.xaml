@@ -33,7 +33,7 @@
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="清空翻译历史" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}"
-                           Text="清空后可短时撤销" />
+                           Text="移除本地全部翻译历史记录；清空后支持短时撤销" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
             <Button x:Name="UndoHistoryButton" Content="撤销" Margin="0,0,8,0"
@@ -58,7 +58,7 @@
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="清空生词本" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}"
-                           Text="清空后可短时撤销" />
+                           Text="移除本地收藏的全部生词条目；清空后支持短时撤销" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
             <Button x:Name="UndoVocabularyButton" Content="撤销" Margin="0,0,8,0"
@@ -85,7 +85,7 @@
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="导出数据备份" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap" Margin="0,4,12,0"
-                           Text="历史、生词本与非秘密配置；不含密钥" />
+                           Text="导出本地历史、生词本与非敏感设置（JSON 格式，不含密钥）" />
             </StackPanel>
             <Button x:Name="ExportBackupButton" Grid.Column="1" Content="导出备份"
                     VerticalAlignment="Center"
@@ -104,7 +104,7 @@
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="恢复数据备份" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap" Margin="0,4,12,0"
-                           Text="覆盖前自动保留本地还原副本" />
+                           Text="从备份文件还原历史与配置；覆盖前自动创建本地还原快照" />
             </StackPanel>
             <Button x:Name="ImportBackupButton" Grid.Column="1" Content="恢复备份"
                     VerticalAlignment="Center"
@@ -125,7 +125,7 @@
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="导出排障诊断包" Style="{StaticResource RowTitle}" />
                 <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap" Margin="0,4,12,0"
-                           Text="仅含版本、错误码与协议；不含原文、译文或密钥" />
+                           Text="导出脱敏的系统版本、运行日志与诊断信息（不含翻译原文、译文或密钥）" />
             </StackPanel>
             <Button x:Name="ExportDiagnosticsButton" Grid.Column="1" Content="导出诊断"
                     VerticalAlignment="Center"

@@ -48,6 +48,14 @@ Copy-Item $rustDll (Join-Path $publishDir 'popglot_ffi.dll') -Force
 $gitCommit = (git -C $repoRoot rev-parse HEAD).Trim()
 $diffText = (git -C $repoRoot diff HEAD) -join "`n"
 $sha = [System.Security.Cryptography.SHA256]::Create()
+function Compute-FileSha256($filePath) {
+    $stream = [System.IO.File]::OpenRead($filePath)
+    try {
+        ([System.BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', '').ToLowerInvariant()
+    } finally {
+        $stream.Dispose()
+    }
+}
 $dirtyDiffHash = if ($diffText.Length -gt 0) {
     ([System.BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($diffText))) -replace '-', '').Substring(0, 16).ToLowerInvariant()
 } else { 'clean-tree' }
@@ -59,7 +67,7 @@ if (Test-Path $oldManifest) { Remove-Item $oldManifest -Force }
 $files = @(Get-ChildItem $publishDir -Recurse -File | ForEach-Object {
     [PSCustomObject]@{
         file = $_.FullName.Substring($publishDir.Length + 1)
-        sha256 = (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        sha256 = (Compute-FileSha256 $_.FullName)
     }
 })
 if ($files.Count -eq 0) { throw 'the publish directory is empty; nothing to certify' }
@@ -68,7 +76,7 @@ $manifest = [PSCustomObject]@{
     gitCommit = $gitCommit
     dirtyDiffHash = $dirtyDiffHash
     untrackedInputs = $untrackedInputs
-    rustFfiSha256 = (Get-FileHash -Path $rustDll -Algorithm SHA256).Hash.ToLowerInvariant()
+    rustFfiSha256 = (Compute-FileSha256 $rustDll)
     generatedAt = [DateTimeOffset]::UtcNow.ToString('o')
     files = $files
 }

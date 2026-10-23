@@ -104,18 +104,18 @@
                             <ColumnDefinition Width="*" MinWidth="68" MaxWidth="110" />
                         </Grid.ColumnDefinitions>
                         <ComboBox x:Name="SourceLangCombo" Grid.Column="0" Style="{StaticResource LanguagePickerComboBox}"
-                                  MinHeight="32" HorizontalAlignment="Stretch" ToolTip="原文语言"
+                                  Height="28" HorizontalAlignment="Stretch" ToolTip="原文语言"
                                   AutomationProperties.Name="原文语言"
                                   SelectionChanged="Language_SelectionChanged" />
                         <Button x:Name="SwapLangButton" Grid.Column="1" Style="{StaticResource IconButton}"
                                 AutomationProperties.Name="交换语言方向"
-                                Width="32" Height="32" Margin="4,0" ToolTip="交换语言；按 Enter 翻译" Click="SwapLangButton_Click">
+                                Width="28" Height="28" Margin="4,0" ToolTip="交换语言方向 (Ctrl+L)" Click="SwapLangButton_Click">
                             <Path Width="12" Height="12" Stretch="Uniform"
                                   Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                   Data="{StaticResource IconSwap}" />
                         </Button>
                         <ComboBox x:Name="TargetLangCombo" Grid.Column="2" Style="{StaticResource LanguagePickerComboBox}"
-                                  MinHeight="32" HorizontalAlignment="Stretch" ToolTip="译文语言"
+                                  Height="28" HorizontalAlignment="Stretch" ToolTip="译文语言"
                                   AutomationProperties.Name="译文语言"
                                   SelectionChanged="Language_SelectionChanged" />
                     </Grid>
@@ -199,18 +199,38 @@
                         <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                             <!-- Global TEXT-translation style selector: compact icon+label+chevron so the
                                  header (and the window itself) is never squeezed. -->
+                            <!-- Global TEXT-translation model selector: 1-click model switching on the fly -->
+                            <Button x:Name="RouteSelectorButton" Style="{StaticResource IconButton}"
+                                    Width="Auto" MinWidth="32" Height="26" Padding="6,0" Margin="0,0,6,0"
+                                    AutomationProperties.Name="文字翻译模型"
+                                    ToolTipService.ShowOnDisabled="True"
+                                    ToolTip="文字翻译模型（点击切换）"
+                                    Click="RouteSelector_Click">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Path Width="12" Height="12" Stretch="Uniform"
+                                          Fill="{DynamicResource AccentBrush}"
+                                          Data="{StaticResource IconProvider}" VerticalAlignment="Center" />
+                                    <TextBlock x:Name="RouteSelectorLabel" Text="模型" FontSize="11.5"
+                                               Margin="4,0,0,0" VerticalAlignment="Center" MaxWidth="80"
+                                               TextTrimming="CharacterEllipsis"
+                                               Foreground="{DynamicResource TextPrimaryBrush}" />
+                                    <Path Width="8" Height="8" Stretch="Uniform" Margin="3,0,0,0"
+                                          Fill="{DynamicResource TextTertiaryBrush}"
+                                          Data="{StaticResource IconChevronDown}" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
                             <Button x:Name="StyleSelectorButton" Style="{StaticResource IconButton}"
-                                    Width="Auto" MinWidth="32" Padding="4,0" Margin="0,0,6,0"
+                                    Width="Auto" MinWidth="32" Height="26" Padding="6,0" Margin="0,0,6,0"
                                     AutomationProperties.Name="文字翻译风格"
                                     ToolTipService.ShowOnDisabled="True"
-                                    ToolTip="文字翻译风格（下一次文字翻译生效）"
+                                    ToolTip="文字翻译风格（点击切换）"
                                     Click="StyleSelector_Click">
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                     <Path Width="12" Height="12" Stretch="Uniform"
                                           Fill="{DynamicResource AccentBrush}"
                                           Data="{StaticResource IconStyle}" VerticalAlignment="Center" />
                                     <TextBlock x:Name="StyleSelectorLabel" Text="风格" FontSize="11.5"
-                                               Margin="4,0,0,0" VerticalAlignment="Center" MaxWidth="56"
+                                               Margin="4,0,0,0" VerticalAlignment="Center" MaxWidth="80"
                                                TextTrimming="CharacterEllipsis"
                                                Foreground="{DynamicResource TextPrimaryBrush}" />
                                     <Path Width="8" Height="8" Stretch="Uniform" Margin="3,0,0,0"
@@ -296,7 +316,7 @@
                             <RadioButton x:Name="ShowSummaryChoice" Content="要点" GroupName="PanelReading"
                                          Style="{StaticResource SegmentChoice}"
                                          AutomationProperties.Name="显示要点"
-                                         ToolTip="整理原文要点，会额外使用一次模型额度。"
+                                         ToolTip="提炼原文核心要点与摘要"
                                          Click="ShowSummary_Click" />
                             </StackPanel>
                             <TextBlock x:Name="EngineBadge" Grid.Column="1" Style="{StaticResource Metadata}"

@@ -9,7 +9,7 @@ PopGlot 是 Windows 上的划词和截图翻译。这些页面存在本机，不
 ### 1. [快速上手指南 (Getting Started)](getting-started.md)
 - 核心交互四入口：划词翻译 (`Ctrl+Alt+W`)、截图翻译 (`Ctrl+Alt+Space`)、主工作台 (`Ctrl+Alt+O`)、极速查词
 - 首次无配置运行与「尚未配置翻译引擎」引导卡
-- 内置公共翻译与个人大模型引擎的快速切换
+- 内置公共翻译与专属引擎的快速切换
 - 常用设置项概览
 
 ### 2. [隐私边界与数据安全 (Privacy & Security)](privacy-and-security.md)

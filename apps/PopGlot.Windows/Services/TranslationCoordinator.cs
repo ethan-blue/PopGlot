@@ -2100,7 +2100,7 @@ internal sealed class TranslationCoordinator
             return new TranslationError(
                 TranslationErrorKind.NetworkDisabled,
                 msg,
-                "可在设置中开启大模型网络翻译。");
+                "可在设置中允许联网翻译。");
         }
         if (msg.Contains("429") || msg.Contains("限流") || msg.Contains("rate", StringComparison.OrdinalIgnoreCase))
         {

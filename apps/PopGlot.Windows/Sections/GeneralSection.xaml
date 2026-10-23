@@ -177,6 +177,7 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="新手引导" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="初次使用时的快速功能引导介绍" Style="{StaticResource RowHint}" />
                     </StackPanel>
                     <Button x:Name="RestartOnboardingButton" Grid.Column="1"
                             Content="重新显示引导"
@@ -242,6 +243,7 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="自动复制译文" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="翻译完成后自动将译文结果复制到剪贴板" Style="{StaticResource RowHint}" />
                     </StackPanel>
                     <ToggleButton x:Name="AutoCopyToggle"
                                   AutomationProperties.Name="译后自动复制" Grid.Column="1"
@@ -264,6 +266,7 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="补充说明" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="翻译时若存在词法、语境或歧义，附带简明解析" Style="{StaticResource RowHint}" />
                     </StackPanel>
                     <ToggleButton x:Name="IncludeExplanationToggle" Grid.Column="1"
                                   AutomationProperties.Name="显示详细解析"
@@ -280,6 +283,7 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="保护代码与变量" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="识别代码标识符与变量名，避免被翻译改写" Style="{StaticResource RowHint}" />
                     </StackPanel>
                     <ToggleButton x:Name="ProtectTokensToggle" Grid.Column="1"
                             AutomationProperties.Name="保留代码与变量名原文"
@@ -299,6 +303,7 @@
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="版本" Style="{StaticResource RowTitle}" />
+                <TextBlock Text="PopGlot 本机桌面客户端" Style="{StaticResource RowHint}" />
             </StackPanel>
             <TextBlock x:Name="AppVersionText" Grid.Column="1"
                        VerticalAlignment="Center"

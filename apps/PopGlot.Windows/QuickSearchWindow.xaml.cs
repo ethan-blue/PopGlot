@@ -184,6 +184,8 @@ public partial class QuickSearchWindow : Window
                 // The persisted language pair may have changed on another
                 // surface while this window was hidden — the badge must not
                 // go stale on a re-show.
+                _sessionSourceLanguage = null;
+                _sessionTargetLanguage = null;
                 RefreshLangBadge();
                 RefreshRouteSelection();
             }
@@ -514,6 +516,30 @@ public partial class QuickSearchWindow : Window
         {
             e.Handled = true;
             Star_Click(this, new RoutedEventArgs());
+        }
+        else if (e.Key == Key.M && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        {
+            if (RouteSelectorButton is not null && RouteSelectorButton.IsEnabled)
+            {
+                e.Handled = true;
+                RouteSelector_Click(RouteSelectorButton, new RoutedEventArgs());
+            }
+        }
+        else if (e.Key == Key.T && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        {
+            if (StyleSelectorButton is not null && StyleSelectorButton.IsEnabled)
+            {
+                e.Handled = true;
+                StyleSelector_Click(StyleSelectorButton, new RoutedEventArgs());
+            }
+        }
+        else if (e.Key == Key.L && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        {
+            if (LangBadgeButton is not null && LangBadgeButton.IsEnabled)
+            {
+                e.Handled = true;
+                LangBadgeButton_Click(LangBadgeButton, new RoutedEventArgs());
+            }
         }
     }
 
@@ -888,7 +914,7 @@ public partial class QuickSearchWindow : Window
         {
             var route = TextRouteMenu.ReadCurrent();
             RouteSelectorLabel.Text = route.Label;
-            RouteSelectorButton.ToolTip = route.Detail + "\n下一次翻译生效，不自动重发当前结果。";
+            RouteSelectorButton.ToolTip = (route.Detail ?? string.Empty) + "\n点击切换模型 (Ctrl+M) · 下次翻译生效";
         }
         catch (Exception)
         {
@@ -956,12 +982,14 @@ public partial class QuickSearchWindow : Window
         }
         _switchingRoute = true;
         RouteSelectorButton.IsEnabled = false;
-        FooterStatus.Text = "切换中…";
+        FooterStatus.Text = "正在切换…";
         try
         {
             var result = await Task.Run(change);
             if (_isClosed) return;
-            _state.PostPendingNotice(result.Ok ? "下次生效" : result.Error, error: !result.Ok);
+            var hasText = !string.IsNullOrWhiteSpace(SearchBox.Text);
+            var notice = result.Ok ? (hasText ? "已切换模型（按 Enter 立即翻译）" : "已切换模型") : result.Error;
+            _state.PostPendingNotice(notice, error: !result.Ok);
             SyncUiWithState();
         }
         catch (Exception exception)
@@ -1005,10 +1033,12 @@ public partial class QuickSearchWindow : Window
         try
         {
             var settings = CoreBridge.GetSettings();
-            var source = _state.IsResultVisible ? _sessionSourceLanguage ?? settings.SourceLanguage : settings.SourceLanguage;
-            var target = _state.IsResultVisible ? _sessionTargetLanguage ?? settings.TargetLanguage : settings.TargetLanguage;
+            var source = _sessionSourceLanguage ?? settings.SourceLanguage;
+            var target = _sessionTargetLanguage ?? settings.TargetLanguage;
             LangBadge.Text = $"{ShortLanguage(source)} → {ShortLanguage(target)}";
-            LangBadge.ToolTip = $"{LanguageCatalog.DisplayName(source)} → {LanguageCatalog.DisplayName(target)}";
+            var tip = $"{LanguageCatalog.DisplayName(source)} → {LanguageCatalog.DisplayName(target)}（点击交换方向）";
+            if (LangBadgeButton is not null) LangBadgeButton.ToolTip = tip;
+            LangBadge.ToolTip = tip;
         }
         catch (Exception)
         {
@@ -1023,6 +1053,34 @@ public partial class QuickSearchWindow : Window
         "zh-TW" => "繁中",
         var tag => LanguageCatalog.DisplayName(tag),
     };
+
+    private async void LangBadgeButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isClosed) return;
+        try
+        {
+            var settings = CoreBridge.GetSettings();
+            var currentSource = _sessionSourceLanguage ?? settings.SourceLanguage ?? LanguageCatalog.Auto;
+            var currentTarget = _sessionTargetLanguage ?? settings.TargetLanguage ?? "zh-CN";
+            var (source, target) = LanguageCatalog.Swap(currentSource, currentTarget);
+            _sessionSourceLanguage = source;
+            _sessionTargetLanguage = target;
+            RefreshLangBadge();
+            await CoreBridge.SaveSettingsAsync(settings with
+            {
+                SourceLanguage = source,
+                TargetLanguage = target,
+            });
+            if (!string.IsNullOrWhiteSpace(SearchBox.Text))
+            {
+                await PerformTranslateAsync();
+            }
+        }
+        catch
+        {
+            // Ignore swap error
+        }
+    }
 
     // ================= Global translation-style selector =================
 
@@ -1054,11 +1112,6 @@ public partial class QuickSearchWindow : Window
         // Re-probe at open time so the menu never claims support the next
         // request would not have.
         RefreshStyleSelector();
-        if (TranslationStyleMenu.ProbeNextTextRoute() == TranslationStyleSupport.FreeEngine)
-        {
-            FooterStatus.Text = TranslationStyleMenu.FreeEngineToolTip;
-            return;
-        }
         var menu = TranslationStyleMenu.Build(
             styleChosen: template => _ = ChooseStyleAsync(template),
             reportStatus: message => FooterStatus.Text = message,
