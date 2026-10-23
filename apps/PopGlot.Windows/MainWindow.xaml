@@ -12,7 +12,7 @@
         TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType"
         RenderOptions.ClearTypeHint="Enabled"
         WindowStartupLocation="Manual"
-        KeyDown="MainWindow_KeyDown">
+        PreviewKeyDown="MainWindow_KeyDown">
 
     <WindowChrome.WindowChrome>
         <WindowChrome CaptionHeight="38" CornerRadius="0" GlassFrameThickness="0"

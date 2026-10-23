@@ -34,6 +34,7 @@ public partial class ServicesSection
         _cliConnection = null; _cliProfileId = null; _cliTestedModel = null; _cliTestedAt = null;
         CliModelCombo.ItemsSource = null;
         OmpLoginProviderCombo.ItemsSource = null;
+        SetOmpProviders([]);
     }
 
     private void OpenCliProfile(ProviderProfile profile)
@@ -137,10 +138,10 @@ public partial class ServicesSection
                 CliToolsListBox.SelectedItem = null;
             }
             finally { _selectingCliTool = false; }
-            CliDetectStatusText.Text = rows.Count > 0 ? $"发现 {rows.Count} 个入口。选择工具继续。" : "未发现工具。安装 Codex 或 OMP 后重新检测。";
+            CliDetectStatusText.Text = rows.Count > 0 ? $"发现 {rows.Count} 个入口。选择工具后确认连接。" : "未发现工具。安装 Codex 或 OMP 后重新检测。";
         }
         catch (OperationCanceledException) { }
-        catch (Exception) { if (ReferenceEquals(_cliOperation, operation)) CliDetectStatusText.Text = "检测失败。请检查工具安装位置后重试。"; }
+        catch (Exception ex) { if (ReferenceEquals(_cliOperation, operation)) CliDetectStatusText.Text = $"检测失败。{CliFailureText(ex)}"; }
         finally
         {
             if (ReferenceEquals(_cliScanOperation, operation)) _cliScanOperation = null;
@@ -157,10 +158,8 @@ public partial class ServicesSection
         _editingProfileId = null;
         ShowConnectionEditor(direct: false, adding: true);
         SetCliSourceIdentity(row);
-        // 0.1.27：选中工具后立即自动检查账号与模型，不再把一个空编辑器
-        // 「啪」地扔给用户、还要求自己点「连接 / 刷新账号」——检测→选择→
-        // 连接是一条连续流程。失败时状态行会说明原因，可手动重试。
-        CliConnect_Click(this, new RoutedEventArgs());
+        CliConnectionStatus.Text = "点击「连接 / 刷新账号」后启动此工具，读取其账号与模型。不会发送翻译请求。";
+        ClearEditorDirty();
     }
 
     private async void CliConnect_Click(object sender, RoutedEventArgs e)
@@ -171,6 +170,7 @@ public partial class ServicesSection
         var selectedModel = CliModelCombo.SelectedItem as CliModel;
         var operation = new CancellationTokenSource(TimeSpan.FromSeconds(40));
         _cliOperation = operation;
+        _cliReady = false;
         _cliTestedModel = null; _cliTestedAt = null;
         var kind = row.ToolId == CliDiscovery.CodexToolId ? EngineExecutionKind.CodexAppServer : EngineExecutionKind.OmpRpc;
         _cliKind = kind;
@@ -189,24 +189,23 @@ public partial class ServicesSection
             });
             if (!ReferenceEquals(_cliOperation, operation)) return;
             _cliConnection = connection;
-            // 0.1.27：刷新账号只列出已登录的提供方；全部未登录时才展开
-            // 完整登录列表（那时用户要的就是新登录）。
-            var authenticated = result.providers.Where(p => p.Authenticated).ToList();
-            var loginChoices = authenticated.Count > 0 ? authenticated : result.providers.ToList();
-            OmpLoginProviderCombo.ItemsSource = loginChoices;
-            OmpLoginProviderCombo.SelectedItem = loginChoices.FirstOrDefault(p => p.Authenticated)
-                ?? loginChoices.FirstOrDefault(p => p.Available);
-            CliModelCombo.ItemsSource = result.models;
-            _cliReady = result.account.State != CliConnectionState.NeedsLogin;
+            SetOmpProviders(result.providers);
+            var models = kind == EngineExecutionKind.OmpRpc
+                ? AuthenticatedOmpModels(result.models, result.providers) : result.models;
+            CliModelCombo.ItemsSource = models;
+            _cliReady = kind == EngineExecutionKind.OmpRpc
+                ? result.providers.Any(p => p.Authenticated) : result.account.State != CliConnectionState.NeedsLogin;
             _cliProfileId = existing?.Id;
-            CliModelCombo.SelectedItem = result.models.FirstOrDefault(m => m.Id == selectedModel?.Id &&
+            CliModelCombo.SelectedItem = models.FirstOrDefault(m => m.Id == selectedModel?.Id &&
                 (kind != EngineExecutionKind.OmpRpc || m.Provider == selectedModel?.Provider))
-                ?? (selectedModel is null ? result.models.FirstOrDefault(m => m.IsDefault) ?? result.models.FirstOrDefault() : null);
+                ?? (selectedModel is null ? models.FirstOrDefault(m => m.IsDefault) ?? models.FirstOrDefault() : null);
             CliConnectionStatus.Text = result.account.DetailZh ?? "账号状态已读取，选择模型后测试。";
-            if (result.models.Count > 0 && selectedModel is not null && CliModelCombo.SelectedItem is null)
+            if (models.Count > 0 && selectedModel is not null && CliModelCombo.SelectedItem is null)
                 CliConnectionStatus.Text = "原模型未出现在当前列表中。请选择一个模型后再保存。";
-            if (result.models.Count == 0 && result.account.State != CliConnectionState.NeedsLogin)
-                CliConnectionStatus.Text = "连接成功，但工具未返回支持的模型。请先在工具中配置提供方后重试。";
+            if (kind == EngineExecutionKind.OmpRpc && !_cliReady)
+                CliConnectionStatus.Text = "尚未确认已登录的提供方。请选择提供方，通过 OMP 登录后继续。";
+            else if (models.Count == 0 && result.account.State != CliConnectionState.NeedsLogin)
+                CliConnectionStatus.Text = "已读取账号，但没有已登录提供方的可用模型。请检查工具配置后刷新。";
         }
         catch (OperationCanceledException)
         { if (ReferenceEquals(_cliOperation, operation)) CliConnectionStatus.Text = "连接已取消或超时。检查工具登录和网络后重试。"; }
@@ -255,8 +254,7 @@ public partial class ServicesSection
             var stream = CliTranslationExecutor.Stream(profile, "Hello world", "en", "zh", null, operation.Token, enforceSavedState: false);
             var response = await stream.Completion;
             if (!ReferenceEquals(_cliOperation, operation)) return;
-            // 0.1.27：建议性警告（如非 SSE 回退）不再判为测试失败——完整性
-            // 以 is_partial 与空译文为准。
+            operation.Token.ThrowIfCancellationRequested();
             if (response.Result.IsPartial || string.IsNullOrWhiteSpace(response.Result.TranslatedText))
                 throw new InvalidOperationException("工具返回了不完整的翻译，请重试。");
             _cliTestedModel = ModelIdentity(); _cliTestedAt = DateTime.UtcNow;
@@ -367,6 +365,5 @@ public partial class ServicesSection
         UpdateOmpLoginButtons(busy);
         UpdateChatGptButtons();
     }
-    private static string CliFailureText(Exception ex) => ex is InvalidOperationException
-        ? ex.Message : "账号或工具操作失败。请检查登录状态、程序入口和网络后重试。";
+    private static string CliFailureText(Exception ex) => GitHubIssueReporter.SafeError(ex);
 }

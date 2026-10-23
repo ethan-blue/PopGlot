@@ -172,6 +172,11 @@ public partial class SettingsWindow : Window
         ShortcutsSection.InterfaceModelHotkey.Recorded += MarkDirtyHandler;
         ShortcutsSection.InterfaceStyleHotkey.Recorded += MarkDirtyHandler;
         ShortcutsSection.InterfaceSwapHotkey.Recorded += MarkDirtyHandler;
+        ShortcutsSection.InterfaceWorkbenchHotkey.Recorded += MarkDirtyHandler;
+        ShortcutsSection.InterfaceLibraryHotkey.Recorded += MarkDirtyHandler;
+        ShortcutsSection.InterfaceSettingsHotkey.Recorded += MarkDirtyHandler;
+        ShortcutsSection.InterfaceTranslateHotkey.Recorded += MarkDirtyHandler;
+        ShortcutsSection.InterfaceSpeakHotkey.Recorded += MarkDirtyHandler;
 
         Watch(DataSection.HistoryEnabled);
 
@@ -298,6 +303,11 @@ public partial class SettingsWindow : Window
         yield return ShortcutsSection.InterfaceModelHotkey;
         yield return ShortcutsSection.InterfaceStyleHotkey;
         yield return ShortcutsSection.InterfaceSwapHotkey;
+        yield return ShortcutsSection.InterfaceWorkbenchHotkey;
+        yield return ShortcutsSection.InterfaceLibraryHotkey;
+        yield return ShortcutsSection.InterfaceSettingsHotkey;
+        yield return ShortcutsSection.InterfaceTranslateHotkey;
+        yield return ShortcutsSection.InterfaceSpeakHotkey;
     }
 
     private string CaptureSettingsDraft() =>
@@ -324,7 +334,12 @@ public partial class SettingsWindow : Window
             ShortcutsSection.QuickSearchHotkey.BindingValue?.Serialize(),
             ShortcutsSection.InterfaceModelHotkey.BindingValue?.Serialize(),
             ShortcutsSection.InterfaceStyleHotkey.BindingValue?.Serialize(),
-            ShortcutsSection.InterfaceSwapHotkey.BindingValue?.Serialize());
+            ShortcutsSection.InterfaceSwapHotkey.BindingValue?.Serialize(),
+            ShortcutsSection.InterfaceWorkbenchHotkey.BindingValue?.Serialize(),
+            ShortcutsSection.InterfaceLibraryHotkey.BindingValue?.Serialize(),
+            ShortcutsSection.InterfaceSettingsHotkey.BindingValue?.Serialize(),
+            ShortcutsSection.InterfaceTranslateHotkey.BindingValue?.Serialize(),
+            ShortcutsSection.InterfaceSpeakHotkey.BindingValue?.Serialize());
 
     private RouteDraftSnapshot CaptureRouteDraftSnapshot() =>
         RouteDraftSnapshot.Create(
@@ -409,6 +424,11 @@ public partial class SettingsWindow : Window
         ShortcutsSection.InterfaceModelHotkey.BindingValue = settings.InterfaceModelHotkey;
         ShortcutsSection.InterfaceStyleHotkey.BindingValue = settings.InterfaceStyleHotkey;
         ShortcutsSection.InterfaceSwapHotkey.BindingValue = settings.InterfaceSwapHotkey;
+        ShortcutsSection.InterfaceWorkbenchHotkey.BindingValue = settings.InterfaceWorkbenchHotkey;
+        ShortcutsSection.InterfaceLibraryHotkey.BindingValue = settings.InterfaceLibraryHotkey;
+        ShortcutsSection.InterfaceSettingsHotkey.BindingValue = settings.InterfaceSettingsHotkey;
+        ShortcutsSection.InterfaceTranslateHotkey.BindingValue = settings.InterfaceTranslateHotkey;
+        ShortcutsSection.InterfaceSpeakHotkey.BindingValue = settings.InterfaceSpeakHotkey;
         DataSection.HistoryEnabled.IsChecked = settings.HistoryEnabled;
         GeneralSection.CloseOnFocusLoss.IsChecked = settings.ClosePanelOnFocusLoss;
         GeneralSection.AutoCopy.IsChecked = settings.CopyTranslationAutomatically;
@@ -706,6 +726,11 @@ public partial class SettingsWindow : Window
                 InterfaceModelHotkey = ShortcutsSection.InterfaceModelHotkey.BindingValue ?? _shellSettings.InterfaceModelHotkey,
                 InterfaceStyleHotkey = ShortcutsSection.InterfaceStyleHotkey.BindingValue ?? _shellSettings.InterfaceStyleHotkey,
                 InterfaceSwapHotkey = ShortcutsSection.InterfaceSwapHotkey.BindingValue ?? _shellSettings.InterfaceSwapHotkey,
+                InterfaceWorkbenchHotkey = ShortcutsSection.InterfaceWorkbenchHotkey.BindingValue ?? _shellSettings.InterfaceWorkbenchHotkey,
+                InterfaceLibraryHotkey = ShortcutsSection.InterfaceLibraryHotkey.BindingValue ?? _shellSettings.InterfaceLibraryHotkey,
+                InterfaceSettingsHotkey = ShortcutsSection.InterfaceSettingsHotkey.BindingValue ?? _shellSettings.InterfaceSettingsHotkey,
+                InterfaceTranslateHotkey = ShortcutsSection.InterfaceTranslateHotkey.BindingValue ?? _shellSettings.InterfaceTranslateHotkey,
+                InterfaceSpeakHotkey = ShortcutsSection.InterfaceSpeakHotkey.BindingValue ?? _shellSettings.InterfaceSpeakHotkey,
             };
 
             var validationError = shellSettings.ValidateHotkeys();
@@ -923,6 +948,11 @@ public partial class SettingsWindow : Window
         InterfaceModelHotkey = draft.InterfaceModelHotkey,
         InterfaceStyleHotkey = draft.InterfaceStyleHotkey,
         InterfaceSwapHotkey = draft.InterfaceSwapHotkey,
+        InterfaceWorkbenchHotkey = draft.InterfaceWorkbenchHotkey,
+        InterfaceLibraryHotkey = draft.InterfaceLibraryHotkey,
+        InterfaceSettingsHotkey = draft.InterfaceSettingsHotkey,
+        InterfaceTranslateHotkey = draft.InterfaceTranslateHotkey,
+        InterfaceSpeakHotkey = draft.InterfaceSpeakHotkey,
         HistoryEnabled = draft.HistoryEnabled,
         Theme = draft.Theme,
         ClosePanelOnFocusLoss = draft.ClosePanelOnFocusLoss,

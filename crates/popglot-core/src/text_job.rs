@@ -343,6 +343,8 @@ impl TextJobManager {
             None => (assembled.text, Vec::new()),
         };
         let state = match completion {
+            TextJobCompletion::Completed if !integrity_warnings.is_empty() => "partial",
+            TextJobCompletion::Completed if text.trim().is_empty() => "partial",
             TextJobCompletion::Completed => "completed",
             TextJobCompletion::Cancelled => "cancelled",
             TextJobCompletion::Failed => "failed",

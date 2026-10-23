@@ -318,6 +318,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     public TranslateSection()
     {
         InitializeComponent();
+        InterfaceKeys.RefreshHints(this);
         Ui.AttachCompositionTracker(TranslateInput);
         TranslateSourceLang.ItemsSource = LanguageCatalog.Sources;
         TranslateTargetLang.ItemsSource = LanguageCatalog.Targets;
@@ -402,17 +403,6 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     internal Button OfflineUsageEntryButton => ViewOfflineUsageButton;
     internal Action? OpenSettings { get; set; }
 
-    /// <summary>
-    /// 0.1.27：顶栏模型切换器移除后，Ctrl+M 由外壳接管，打开主窗口底部
-    /// 的引擎快速切换器（唯一入口）。未设置时回退到宿主窗口查找。
-    /// </summary>
-    internal Action? OpenEngineMenu { get; set; }
-
-    private Action? DefaultEngineMenu => () =>
-    {
-        var main = Window.GetWindow(this) as MainWindow ?? Application.Current?.MainWindow as MainWindow;
-        main?.OpenEngineSwitcherMenu();
-    };
 
     /// <summary>
     /// Direct route for the 添加翻译引擎 call to action: opens settings,
@@ -864,7 +854,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
     private async void TranslateInput_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter || (Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+        if (e.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.None)
         {
             return;
         }
@@ -891,37 +881,37 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             }
             return;
         }
-        // 0.1.27：模型/风格/语言互换走可自定义的界面快捷键（默认
-        // Ctrl+M/T/L，设置 → 快捷键可改绑）。放在 Ctrl 专用分支之前，
-        // 改绑后的组合不再被修饰键门槛挡住。
-        var modifiers = Keyboard.Modifiers;
-        if (InterfaceKeys.IsSwitchModel(e.Key, modifiers))
+        var key = InterfaceKeys.Normalize(e);
+        var action = InterfaceKeys.Resolve(key, Keyboard.Modifiers);
+        switch (action)
         {
-            e.Handled = true;
-            (OpenEngineMenu ?? DefaultEngineMenu)?.Invoke();
-            return;
-        }
-        if (InterfaceKeys.IsSwitchStyle(e.Key, modifiers) && StyleSelectorButton?.IsEnabled == true)
-        {
-            e.Handled = true;
-            StyleSelector_Click(StyleSelectorButton, new RoutedEventArgs());
-            return;
-        }
-        if (InterfaceKeys.IsSwapLanguages(e.Key, modifiers) && TranslateSwapButton?.IsEnabled == true)
-        {
-            e.Handled = true;
-            TranslateSwap_Click(TranslateSwapButton, new RoutedEventArgs());
-            return;
+            case InterfaceAction.Model:
+                e.Handled = true;
+                (Window.GetWindow(this) as MainWindow ?? Application.Current?.MainWindow as MainWindow)?.OpenEngineSwitcherMenu();
+                return;
+            case InterfaceAction.Style when StyleSelectorButton?.IsEnabled == true:
+                e.Handled = true;
+                StyleSelector_Click(StyleSelectorButton, new RoutedEventArgs());
+                return;
+            case InterfaceAction.Swap when TranslateSwapButton?.IsEnabled == true:
+                e.Handled = true;
+                TranslateSwap_Click(TranslateSwapButton, new RoutedEventArgs());
+                return;
+            case InterfaceAction.Translate when TranslateButton?.IsEnabled == true:
+                if (Ui.IsImeComposing(TranslateInput, e)) return;
+                e.Handled = true;
+                await TranslateAsync();
+                return;
+            case InterfaceAction.Speak when TranslateResultSpeakButton?.IsEnabled == true:
+                e.Handled = true;
+                TranslateResultSpeak_Click(this, new RoutedEventArgs());
+                return;
         }
 
         if (Keyboard.Modifiers == ModifierKeys.Control)
         {
             switch (e.Key)
             {
-                case Key.P when TranslateResultSpeakButton?.IsEnabled == true:
-                    e.Handled = true;
-                    TranslateResultSpeak_Click(this, new RoutedEventArgs());
-                    return;
                 case Key.S when TranslateStarButton?.IsEnabled == true:
                     e.Handled = true;
                     TranslateStar_Click(this, new RoutedEventArgs());
@@ -1306,8 +1296,8 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             }
             if (TranslateResultSpeakButton is not null)
             {
-                TranslateResultSpeakButton.ToolTip = isSpeaking ? "停止朗读" : "朗读译文";
-                System.Windows.Automation.AutomationProperties.SetName(TranslateResultSpeakButton, (string)TranslateResultSpeakButton.ToolTip);
+                TranslateResultSpeakButton.ToolTip = $"{(isSpeaking ? "停止朗读" : "朗读译文")} ({InterfaceKeys.SpeakHotkey.DisplayName})";
+                System.Windows.Automation.AutomationProperties.SetName(TranslateResultSpeakButton, isSpeaking ? "停止朗读" : "朗读译文");
             }
         });
     }
@@ -1424,9 +1414,13 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         {
             CancelSummary();
         }
+        var isPublicRoute = capability.RouteKind == RouteKind.FreeEngine;
+        if (isPublicRoute && _holdingSummary) ShowTranslationReading();
+        ShowSummaryChoice.Visibility = isPublicRoute ? Visibility.Collapsed : Visibility.Visible;
+        if (isPublicRoute) ShowSummaryChoice.IsEnabled = false;
         ShowSummaryChoice.ToolTip = capability.State switch
         {
-            RouteCapabilityState.Unsupported => "当前公共翻译不支持整理要点，请配置模型服务。",
+            RouteCapabilityState.Unsupported => capability.Reason,
             RouteCapabilityState.NeedsConfiguration => capability.Reason,
             RouteCapabilityState.Unknown => "提炼原文核心要点与摘要",
             _ => "提炼原文核心要点与摘要",

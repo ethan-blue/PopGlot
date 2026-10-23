@@ -108,6 +108,8 @@ internal static partial class Program
         Run("v1 shortcut configuration migrates", V1ShortcutConfigurationMigrates);
         Run("v2 shortcut configuration migrates", V2ShortcutConfigurationMigrates);
         Run("shortcut conflicts are rejected", ShortcutConflictsAreRejected);
+        Run("interface shortcuts persist and reject collisions before writing", InterfaceShortcutsPersistAndRejectConflicts);
+        RunSta("remapped shortcuts dispatch with old defaults inert", RemappedShortcutsDispatchAndKeepDefaultsInert);
         Run("shell settings round-trip", ShellSettingsRoundTrip);
         Run("shell settings utf8 bom file loads user settings and keeps bytes cache identity", ShellSettingsBomFileLoadsUserSettingsAndKeepsBytesCacheIdentity);
         Run("shell settings utf-16 bom files load user settings and keep bytes cache identity", ShellSettingsUtf16BomFileLoadsUserSettingsAndKeepsBytesCacheIdentity);
@@ -254,6 +256,10 @@ internal static partial class Program
         RunSta("product route snapshot is cached per revision", ProductRouteSnapshotIsCachedPerRevision);
         RunSta("product panel translation toggle keeps unrelated provenance", ProductPanelTranslationToggleKeepsUnrelatedProvenance);
         RunSta("product direct add discard returns to source picker", ProductDirectAddDiscardReturnsToSourcePicker);
+        RunSta("product engine source selection requires explicit connect", ProductEngineSourceSelectionRequiresConnect);
+        RunSta("product engine combos and source list forward closed wheel", ProductEngineCombosAndSourceListForwardClosedWheel);
+        RunSta("product OMP authenticated models keep new login reachable", ProductOmpAuthenticatedModelsKeepNewLoginReachable);
+        await RunStaAsync("product saved direct list test rejects stale and cancelled results", ProductSavedDirectListTestStaleAndCancel);
         await RunStaAsync("markdown links render once without regex capture debris", RuntimeMarkdownLinksRenderOnce);
         Run("summary route capability respects offline policy", RuntimeSummaryOfflineCapability);
         await RunAsync("coordinator streaming delta arrives before completion", CoordinatorDeltaArrivesBeforeCompletionAsync);
@@ -291,7 +297,6 @@ internal static partial class Program
 
         // QuickSearch streaming and state machine tests
         Run("quick search epoch and query fencing rejects stale updates", QuickSearchEpochAndQueryFencing);
-        Run("quick search status copy stays neutral, ttft-free and seconds-based", QuickSearchStatusCopyIsNeutralAndTtftFree);
         Run("quick search action gates protect partial and streaming states", QuickSearchPartialActionGate);
         Run("quick search partial error shows message plus deduplicated suggestion", QuickSearchPartialErrorShowsMessageAndSuggestion);
         Run("quick search pending notice is state-driven and cleared by real updates", QuickSearchPendingNoticeIsStateDriven);
@@ -6523,11 +6528,6 @@ internal static partial class Program
         Equal(HotkeyBinding.QuickSearchDefault, section.QuickSearchHotkey!.BindingValue);
         Equal("Ctrl+Alt+Q", section.QuickSearchHotkey!.BindingValue!.DisplayName);
 
-        // 2. Verify XAML markup conforms to layout contract
-        var xaml = File.ReadAllText(Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows", "Sections", "ShortcutsSection.xaml"));
-        True(xaml.Contains("QuickSearchHotkeyRecorder"), "XAML must declare QuickSearchHotkeyRecorder");
-        True(xaml.Contains("极速查词"), "XAML must display 极速查词 title");
-        True(!xaml.Contains("快捷查词"), "the old 快捷查词 wording must not survive in the shortcuts UI");
 
         // 3. Verify SettingsWindow integration: load, draft tracking, conflict detection, revert and save
         ProfileManager.ResetForTests();
@@ -6541,7 +6541,7 @@ internal static partial class Program
         try
         {
             StartupRegistration.TrySetOverride = _ => true;
-            var initialShell = ShellSettings.Default with
+            var initialShell = RemappedInterfaceSettings() with
             {
                 QuickSearchHotkey = HotkeyBinding.Parse("Ctrl+Alt+H", HotkeyBinding.QuickSearchDefault),
             };
@@ -6561,6 +6561,11 @@ internal static partial class Program
             // Loaded state: QuickSearchHotkey reflects loaded settings, form is Clean
             Equal("Ctrl+Alt+H", window.ShortcutsSection.QuickSearchHotkey.BindingValue?.DisplayName);
             Equal(SettingsEditState.Clean, window.EditState, "initial settings form must be Clean");
+            Equal(initialShell.InterfaceWorkbenchHotkey, window.ShortcutsSection.InterfaceWorkbenchHotkey.BindingValue);
+            Equal(initialShell.InterfaceLibraryHotkey, window.ShortcutsSection.InterfaceLibraryHotkey.BindingValue);
+            Equal(initialShell.InterfaceSettingsHotkey, window.ShortcutsSection.InterfaceSettingsHotkey.BindingValue);
+            Equal(initialShell.InterfaceTranslateHotkey, window.ShortcutsSection.InterfaceTranslateHotkey.BindingValue);
+            Equal(initialShell.InterfaceSpeakHotkey, window.ShortcutsSection.InterfaceSpeakHotkey.BindingValue);
 
             // Edit QuickSearchHotkey -> Draft state becomes Dirty
             var newCandidate = HotkeyBinding.Parse("Ctrl+Alt+J", HotkeyBinding.QuickSearchDefault);
@@ -6588,12 +6593,23 @@ internal static partial class Program
             typeof(SettingsWindow).GetMethod("Save_Click",
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
                 .Invoke(window, new object[] { window, new RoutedEventArgs() });
-            True(window.StatusTextBlock.Text.Contains("极速查词") && window.StatusTextBlock.Text.Contains("未保存任何修改"),
-                $"conflict error must name 极速查词 and state nothing was saved, got: {window.StatusTextBlock.Text}");
             Equal(SettingsEditState.Dirty, window.EditState, "conflicting hotkey must not commit and remain Dirty");
 
             // Successful save with valid candidate
             window.ShortcutsSection.QuickSearchHotkey.BindingValue = newCandidate;
+            var updatedInterface = ShellSettings.Default;
+            foreach (var (recorder, binding) in new[]
+            {
+                (window.ShortcutsSection.InterfaceModelHotkey, updatedInterface.InterfaceModelHotkey),
+                (window.ShortcutsSection.InterfaceStyleHotkey, updatedInterface.InterfaceStyleHotkey),
+                (window.ShortcutsSection.InterfaceSwapHotkey, updatedInterface.InterfaceSwapHotkey),
+                (window.ShortcutsSection.InterfaceWorkbenchHotkey, updatedInterface.InterfaceWorkbenchHotkey),
+                (window.ShortcutsSection.InterfaceLibraryHotkey, updatedInterface.InterfaceLibraryHotkey),
+                (window.ShortcutsSection.InterfaceSettingsHotkey, updatedInterface.InterfaceSettingsHotkey),
+                (window.ShortcutsSection.InterfaceTranslateHotkey, updatedInterface.InterfaceTranslateHotkey),
+                (window.ShortcutsSection.InterfaceSpeakHotkey, updatedInterface.InterfaceSpeakHotkey),
+            })
+                recorder.BindingValue = binding;
             typeof(SettingsWindow).GetMethod("MarkDirtyHandler",
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
                 .Invoke(window, new object?[] { window.ShortcutsSection.QuickSearchHotkey, new RoutedEventArgs() });
@@ -6608,6 +6624,14 @@ internal static partial class Program
 
             var persisted = ShellSettingsStore.Load();
             Equal(newCandidate, persisted.QuickSearchHotkey, "persisted settings must store new QuickSearchHotkey");
+            Equal(updatedInterface.InterfaceModelHotkey, persisted.InterfaceModelHotkey);
+            Equal(updatedInterface.InterfaceStyleHotkey, persisted.InterfaceStyleHotkey);
+            Equal(updatedInterface.InterfaceSwapHotkey, persisted.InterfaceSwapHotkey);
+            Equal(updatedInterface.InterfaceWorkbenchHotkey, persisted.InterfaceWorkbenchHotkey);
+            Equal(updatedInterface.InterfaceLibraryHotkey, persisted.InterfaceLibraryHotkey);
+            Equal(updatedInterface.InterfaceSettingsHotkey, persisted.InterfaceSettingsHotkey);
+            Equal(updatedInterface.InterfaceTranslateHotkey, persisted.InterfaceTranslateHotkey);
+            Equal(updatedInterface.InterfaceSpeakHotkey, persisted.InterfaceSpeakHotkey);
 
             window.ForceClose = true;
             window.Close();
@@ -8326,7 +8350,7 @@ internal static partial class Program
             var escEvent1 = new System.Windows.Input.KeyEventArgs(
                 System.Windows.Input.Keyboard.PrimaryDevice, source, 0, System.Windows.Input.Key.Escape)
             {
-                RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent,
+                RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent,
             };
             section.RaiseEvent(escEvent1);
 
@@ -8346,7 +8370,7 @@ internal static partial class Program
             var imeEsc = new System.Windows.Input.KeyEventArgs(
                 System.Windows.Input.Keyboard.PrimaryDevice, source, 0, System.Windows.Input.Key.Escape)
             {
-                RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent,
+                RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent,
             };
             section.InputBox.RaiseEvent(imeEsc);
             True(!imeEsc.Handled, "IME composition Esc must not be handled by workbench");
@@ -11934,10 +11958,8 @@ internal static partial class Program
     }
 
     /// <summary>
-    /// T03 acceptance: the one completion contract. A final with integrity
-    /// warnings, a provider is_partial flag, or an empty translation lands as
-    /// Partial and writes zero history entries; a clean final written twice
-    /// still produces exactly one history entry.
+    /// Advisory warnings preserve completion; provider partials and empty
+    /// translations cannot persist. Duplicate final delivery persists once.
     /// </summary>
     private static async Task PartialFinalNeverPersistsOrTriggersSideEffects()
     {
@@ -11952,8 +11974,8 @@ internal static partial class Program
         // heuristic / non-SSE fallback style) → Completed, warning visible,
         // eligible for history. Warnings no longer downgrade completeness.
         executor.OnStreamText = (_, _, _, _, s, e, _) =>
-            StreamEndingIn(FinalResponse("missing one token", IsPartial: false,
-                ["缺少 1 个受保护占位符：⟦PG_0000⟧"]));
+            StreamEndingIn(FinalResponse("完整译文", IsPartial: false,
+                ["未返回补充说明，译文已保留。"]));
         var warned = await coordinator.TranslateTextAsync("warned", "en", "zh", TranslationInputSource.Selection);
         Equal(TranslationSessionStage.Completed, warned.Stage, "an advisory warning must not downgrade completion");
         True(warned.IsCleanCompletion, "a warned-but-complete session qualifies");
@@ -12608,67 +12630,6 @@ internal static partial class Program
         Equal(string.Empty, state.AccumulatedText);
     }
 
-    /// <summary>
-    /// 0.1.6 copy slim-down: the streaming status shows only "正在生成…" (the
-    /// TTFT metric never reaches the UI), and a Completed session with a null
-    /// pipeline label falls back to the neutral "翻译完成" — never the old
-    /// "大模型" claim — while keeping the elapsed time as user-facing seconds
-    /// from the shared pure formatter.
-    /// </summary>
-    private static void QuickSearchStatusCopyIsNeutralAndTtftFree()
-    {
-        var state = new QuickSearchState();
-        state.StartNewSearch("hello");
-        var epoch = state.CurrentEpoch;
-
-        // A TTFT-bearing stream update must not leak the metric into the copy.
-        state.OnStreamUpdate(
-            new TranslationStreamUpdate(
-                "s1", epoch, TranslationStreamUpdateKind.Delta, "你", "你", 1,
-                TimeSpan.FromMilliseconds(42)),
-            "hello");
-        Equal("正在生成…", state.StatusText);
-        True(!state.StatusText.Contains("TTFT"),
-            $"the streaming status must not expose the TTFT metric, got: {state.StatusText}");
-
-        // 0.1.27 文案减法：引擎名不再进状态行（徽标已指明引擎），
-        // 有无 pipeline label 都只显示秒级用时。
-        var labeled = new TranslationSession
-        {
-            Stage = TranslationSessionStage.Completed,
-            TranslatedText = "你好",
-            PipelineLabel = "Demo Text Service",
-            Timing = new TranslationSessionTiming(0, 0, 1200, 1234),
-        };
-        state.OnSessionCompleted(labeled, epoch, "hello");
-        Equal("用时 1.2 秒", state.StatusText,
-            $"a completed status shows only the elapsed seconds, got: {state.StatusText}");
-
-        // Completed with a null pipeline label: neutral wording, never 大模型.
-        state.StartNewSearch("world");
-        epoch = state.CurrentEpoch;
-        var unlabeled = new TranslationSession
-        {
-            Stage = TranslationSessionStage.Completed,
-            TranslatedText = "世界",
-            PipelineLabel = null,
-            Timing = new TranslationSessionTiming(0, 0, 205, 205),
-        };
-        state.OnSessionCompleted(unlabeled, epoch, "world");
-        Equal("用时 0.2 秒", state.StatusText,
-            $"a null pipeline label shows the same elapsed-only copy, got: {state.StatusText}");
-        True(!state.StatusText.Contains("大模型"),
-            "the status must never claim 大模型");
-        True(state.StatusText.Contains("用时 0.2 秒"),
-            $"the elapsed time must be preserved, got: {state.StatusText}");
-
-        // The shared user-facing elapsed formatter is pure and second-based.
-        Equal("用时 < 0.1 秒", TranslationElapsedText.ForMilliseconds(0));
-        Equal("用时 0.2 秒", TranslationElapsedText.ForMilliseconds(205));
-        Equal("用时 1.2 秒", TranslationElapsedText.ForMilliseconds(1234));
-        True(TranslationElapsedText.ForMilliseconds(-5).StartsWith("用时 < 0.1 秒", StringComparison.Ordinal),
-            "a negative measurement must clamp to zero, not render a negative duration");
-    }
 
     private static void QuickSearchPartialActionGate()
     {

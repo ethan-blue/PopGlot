@@ -43,6 +43,8 @@ internal static class UiScenario
             var list = (ListBox)section.FindName("CliToolsListBox");
             list.ItemsSource = new[] { new ServicesSection.CliToolRow { ToolId = "codex", ToolName = "Codex CLI", EntryPath = Environment.ProcessPath! } };
             list.SelectedIndex = 0;
+            Program.Assert(Find("CliConnectButton").IsEnabled && Find("CliCancelButton").Visibility == Visibility.Collapsed,
+                "choosing a discovered tool must wait for explicit connection consent");
             Click("CliConnectButton");
             Console.WriteLine("UI connect submitted");
             Until(() => Find("CliTestButton").IsEnabled, "connection should populate models", () =>
@@ -118,8 +120,19 @@ internal static class UiScenario
             Click("AddEngineHeaderButton");
             Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", "login_input");
             list.ItemsSource = new[] { new ServicesSection.CliToolRow { ToolId = "omp", ToolName = "oh-my-pi", EntryPath = Environment.ProcessPath! } };
-            list.SelectedIndex = 0; Click("CliConnectButton");
+            list.SelectedIndex = 0;
+            Program.Assert(Find("CliConnectButton").IsEnabled, "OMP source selection does not start an implicit connection");
+            Click("CliConnectButton");
             Until(() => Find("OmpLoginButton").IsEnabled, "OMP login provider list must be populated");
+            var ompModels = (ComboBox)section.FindName("CliModelCombo");
+            var ompProviders = (ComboBox)section.FindName("OmpLoginProviderCombo");
+            Program.Assert(ompModels.Items.Count == 1 && ompModels.SelectedItem is CliModel { Provider: "google-antigravity" },
+                "refresh exposes models only for authenticated OMP providers");
+            Click("OmpAddProviderButton");
+            Program.Assert(ompProviders.SelectedItem is OmpRpcBackend.LoginProvider { Id: "signed-out" },
+                "an authenticated account does not hide the explicit second-provider login action");
+            Click("OmpAddProviderButton");
+            ompProviders.IsDropDownOpen = false;
             var browserOpened = false;
             section.OmpOpenBrowser = _ => browserOpened = true;
             Click("OmpLoginButton");
@@ -129,7 +142,16 @@ internal static class UiScenario
             Click("OmpSubmitCallbackButton");
             Until(() => ((TextBlock)section.FindName("CliConnectionStatus")).Text.StartsWith("OMP 已确认登录"), "OMP final login and model refresh must complete");
             Program.Assert(((TextBox)section.FindName("OmpCallbackInput")).Text.Length == 0, "callback input cleared after completion");
+            Program.Assert(ompModels.Items.Count == 1 && ompModels.SelectedItem is CliModel { Provider: "google-antigravity" },
+                "post-login model refresh applies the same authentication boundary");
             window.UpdateLayout();
+            var selectedModel = (ContentPresenter)ompModels.Template.FindName("Selection", ompModels);
+            selectedModel.ApplyTemplate();
+            var modelText = (TextBlock)VisualTreeHelper.GetChild(selectedModel, 0);
+            var textInset = modelText.TranslatePoint(new Point(), ompModels).X;
+            Program.Assert(textInset >= 8 && textInset <= 24,
+                $"selected model text stays aligned with the field edge, not centered by a width cap ({textInset:F1} DIP)");
+            Console.WriteLine($"UI selected-model left inset: {textInset:F1} DIP");
             var ompBitmap = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
             ompBitmap.Render(window); var ompEncoder = new PngBitmapEncoder(); ompEncoder.Frames.Add(BitmapFrame.Create(ompBitmap));
             using (var stream = File.Create(Path.GetFullPath("artifacts/cli-repair/omp-login-panel.png"))) ompEncoder.Save(stream);

@@ -131,6 +131,8 @@ public partial class QuickSearchWindow : Window
         _openSettings = openSettings;
         _coordinator = new TranslationCoordinator(_history, _vocabulary);
         InitializeComponent();
+        InterfaceKeys.RefreshHints(this);
+        PreviewKeyDown += Window_PreviewShortcutKeyDown;
         _debounceTimer.Tick += DebounceTimer_Tick;
         CoreBridge.LanguagePairChanged += OnLanguagePairChanged;
         // E3: the sampler must register BEFORE the Ui composition tracker —
@@ -484,12 +486,8 @@ public partial class QuickSearchWindow : Window
 
     private async void SearchBox_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter)
+        if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.None)
         {
-            if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
-            {
-                return; // Shift+Enter inserts newline
-            }
             // IME composition confirm: the composition owns this Enter.
             if (Ui.IsImeComposing(SearchBox, e))
             {
@@ -499,48 +497,6 @@ public partial class QuickSearchWindow : Window
             _debounceTimer.Stop();
             _state.OnQueryTextChanged(SearchBox.Text);
             await PerformTranslateAsync();
-        }
-        else if (e.Key == Key.P && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
-        {
-            // Ctrl+P: speak. Ctrl+R stays reserved for retry semantics
-            // elsewhere (translation panel), one key one meaning.
-            e.Handled = true;
-            SpeakCurrent();
-        }
-        else if (e.Key == Key.C && (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == (ModifierKeys.Control | ModifierKeys.Shift))
-        {
-            e.Handled = true;
-            Copy_Click(this, new RoutedEventArgs());
-        }
-        else if (e.Key == Key.S && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && _state.CanStar)
-        {
-            e.Handled = true;
-            Star_Click(this, new RoutedEventArgs());
-        }
-        // 0.1.27：模型/风格/语言互换走可自定义的界面快捷键（默认 Ctrl+M/T/L）。
-        else if (InterfaceKeys.IsSwitchModel(e.Key, Keyboard.Modifiers))
-        {
-            if (RouteSelectorButton is not null && RouteSelectorButton.IsEnabled)
-            {
-                e.Handled = true;
-                RouteSelector_Click(RouteSelectorButton, new RoutedEventArgs());
-            }
-        }
-        else if (InterfaceKeys.IsSwitchStyle(e.Key, Keyboard.Modifiers))
-        {
-            if (StyleSelectorButton is not null && StyleSelectorButton.IsEnabled)
-            {
-                e.Handled = true;
-                StyleSelector_Click(StyleSelectorButton, new RoutedEventArgs());
-            }
-        }
-        else if (InterfaceKeys.IsSwapLanguages(e.Key, Keyboard.Modifiers))
-        {
-            if (LangBadgeButton is not null && LangBadgeButton.IsEnabled)
-            {
-                e.Handled = true;
-                LangBadgeButton_Click(LangBadgeButton, new RoutedEventArgs());
-            }
         }
     }
 
@@ -1325,7 +1281,7 @@ public partial class QuickSearchWindow : Window
             if (isSpeaking)
             {
                 SpeakIcon.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "AccentBrush");
-                SpeakButton.ToolTip = "停止朗读 (Ctrl+P)";
+                SpeakButton.ToolTip = $"停止朗读 ({InterfaceKeys.SpeakHotkey.DisplayName})";
             }
             else
             {
@@ -1336,7 +1292,7 @@ public partial class QuickSearchWindow : Window
                 {
                     SpeakIcon.SetBinding(System.Windows.Shapes.Shape.FillProperty, _speakIconFillBinding);
                 }
-                SpeakButton.ToolTip = "朗读译文 (Ctrl+P)";
+                SpeakButton.ToolTip = $"朗读译文 ({InterfaceKeys.SpeakHotkey.DisplayName})";
             }
             // The accessibility name must follow the ToolTip so screen readers
             // announce the action the click will actually perform right now.
@@ -1405,6 +1361,46 @@ public partial class QuickSearchWindow : Window
         base.OnClosing(e);
     }
 
+    private async void Window_PreviewShortcutKeyDown(object sender, KeyEventArgs e)
+    {
+        var action = InterfaceKeys.Resolve(InterfaceKeys.Normalize(e), Keyboard.Modifiers);
+        switch (action)
+        {
+            case InterfaceAction.Model when RouteSelectorButton.IsEnabled:
+                e.Handled = true;
+                RouteSelector_Click(RouteSelectorButton, new RoutedEventArgs());
+                break;
+            case InterfaceAction.Style when StyleSelectorButton.IsEnabled:
+                e.Handled = true;
+                StyleSelector_Click(StyleSelectorButton, new RoutedEventArgs());
+                break;
+            case InterfaceAction.Swap when LangBadgeButton.IsEnabled:
+                e.Handled = true;
+                LangBadgeButton_Click(LangBadgeButton, new RoutedEventArgs());
+                break;
+            case InterfaceAction.Translate:
+                if (Ui.IsImeComposing(SearchBox, e)) return;
+                e.Handled = true;
+                _debounceTimer.Stop();
+                _state.OnQueryTextChanged(SearchBox.Text);
+                await PerformTranslateAsync();
+                break;
+            case InterfaceAction.Speak when _state.CanSpeak:
+                e.Handled = true;
+                SpeakCurrent();
+                break;
+            case InterfaceAction.Settings:
+            case InterfaceAction.Workbench:
+            case InterfaceAction.Library:
+                if (Application.Current is App app)
+                {
+                    e.Handled = true;
+                    app.NavigateFromShortcut(action);
+                }
+                break;
+        }
+    }
+
     private void Window_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Escape || e.ImeProcessedKey == Key.Escape)
@@ -1436,42 +1432,15 @@ public partial class QuickSearchWindow : Window
             }
             Hide();
         }
-        else if (e.Key == Key.S && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && _state.CanStar)
+        else if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control && _state.CanStar)
         {
             e.Handled = true;
             Star_Click(this, new RoutedEventArgs());
         }
-        else if (e.Key == Key.P && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && _state.CanSpeak)
+        else if (e.Key == Key.C && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && _state.CanCopy)
         {
             e.Handled = true;
-            SpeakCurrent();
-        }
-        else if (e.Key == Key.C && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && _state.CanCopy)
-
-        {
-
-            // Plain Ctrl+C keeps the native selection copy everywhere: the
-
-            // search editor and any selected range in the result boxes are
-
-            // handled by the focused control itself. Copying the FULL
-
-            // translation from the keyboard is Ctrl+Shift+C ONLY — never the
-
-            // bare shortcut.
-
-            if ((Keyboard.Modifiers & ModifierKeys.Shift) == 0)
-
-            {
-
-                return;
-
-            }
-
-            e.Handled = true;
-
             Copy_Click(this, new RoutedEventArgs());
-
         }
 
     }

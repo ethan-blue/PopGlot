@@ -104,8 +104,6 @@
         </Grid>
 
 
-        <!-- 0.1.27：界面快捷键可改绑——默认 Ctrl+M/T/L 与其他软件冲突时，
-             用户自己换一个组合即可，不再是写死的只读列表。 -->
         <TextBlock Text="界面快捷键（应用内）" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
 
         <Grid Style="{StaticResource SettingsRow}">
@@ -157,46 +155,51 @@
                                   AutomationProperties.HelpText="点击后按下组合键完成录制，Esc 取消录制" />
         </Grid>
 
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,16,0,16" />
-
-        <TextBlock Text="界面快捷操作" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
-
-        <Border Style="{StaticResource InlineCard}" Padding="14,12">
-            <StackPanel>
-                <TextBlock Text="在悬浮窗、极速查词或工作台内随时使用：" Style="{StaticResource Caption}" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,10" />
-                <UniformGrid Columns="2">
-                    <StackPanel Orientation="Horizontal" Margin="0,4,8,4">
-                        <Border Style="{StaticResource StatusPill}" Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}" Padding="6,2" Margin="0,0,8,0">
-                            <TextBlock Text="Ctrl + Enter" FontSize="11" FontFamily="{StaticResource MonoFontFamily}" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" />
-                        </Border>
-                        <TextBlock Text="立即发起翻译" FontSize="12.5" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
-                    </StackPanel>
-                    <StackPanel Orientation="Horizontal" Margin="0,4,8,4">
-                        <Border Style="{StaticResource StatusPill}" Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}" Padding="6,2" Margin="0,0,8,0">
-                            <TextBlock Text="Ctrl + P" FontSize="11" FontFamily="{StaticResource MonoFontFamily}" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" />
-                        </Border>
-                        <TextBlock Text="朗读原文 / 译文" FontSize="12.5" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
-                    </StackPanel>
-                    <StackPanel Orientation="Horizontal" Margin="0,4,8,4">
-                        <Border Style="{StaticResource StatusPill}" Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}" Padding="6,2" Margin="0,0,8,0">
-                            <TextBlock Text="Ctrl + ," FontSize="11" FontFamily="{StaticResource MonoFontFamily}" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" />
-                        </Border>
-                        <TextBlock Text="打开设置中心" FontSize="12.5" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
-                    </StackPanel>
-                    <StackPanel Orientation="Horizontal" Margin="0,4,8,4">
-                        <Border Style="{StaticResource StatusPill}" Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}" Padding="6,2" Margin="0,0,8,0">
-                            <TextBlock Text="Ctrl + 1 / 2" FontSize="11" FontFamily="{StaticResource MonoFontFamily}" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" />
-                        </Border>
-                        <TextBlock Text="切换工作台 / 资料库" FontSize="12.5" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
-                    </StackPanel>
-                    <StackPanel Orientation="Horizontal" Margin="0,4,8,4">
-                        <Border Style="{StaticResource StatusPill}" Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}" Padding="6,2" Margin="0,0,8,0">
-                            <TextBlock Text="Esc" FontSize="11" FontFamily="{StaticResource MonoFontFamily}" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" />
-                        </Border>
-                        <TextBlock Text="关闭浮窗或取消生成" FontSize="12.5" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
-                    </StackPanel>
-                </UniformGrid>
-            </StackPanel>
-        </Border>
+        <Grid Style="{StaticResource SettingsRow}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="200" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="打开工作台" Style="{StaticResource RowTitle}" VerticalAlignment="Center" />
+            <local:HotkeyRecorder x:Name="InterfaceWorkbenchHotkeyRecorder" Grid.Column="1" Height="34"
+                                  AutomationProperties.Name="打开工作台快捷键" />
+        </Grid>
+        <Grid Style="{StaticResource SettingsRow}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="200" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="打开资料库" Style="{StaticResource RowTitle}" VerticalAlignment="Center" />
+            <local:HotkeyRecorder x:Name="InterfaceLibraryHotkeyRecorder" Grid.Column="1" Height="34"
+                                  AutomationProperties.Name="打开资料库快捷键" />
+        </Grid>
+        <Grid Style="{StaticResource SettingsRow}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="200" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="打开设置" Style="{StaticResource RowTitle}" VerticalAlignment="Center" />
+            <local:HotkeyRecorder x:Name="InterfaceSettingsHotkeyRecorder" Grid.Column="1" Height="34"
+                                  AutomationProperties.Name="打开设置快捷键" />
+        </Grid>
+        <Grid Style="{StaticResource SettingsRow}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="200" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="发起翻译" Style="{StaticResource RowTitle}" VerticalAlignment="Center" />
+            <local:HotkeyRecorder x:Name="InterfaceTranslateHotkeyRecorder" Grid.Column="1" Height="34"
+                                  AutomationProperties.Name="发起翻译快捷键" />
+        </Grid>
+        <Grid Style="{StaticResource SettingsRow}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="200" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="朗读译文" Style="{StaticResource RowTitle}" VerticalAlignment="Center" />
+            <local:HotkeyRecorder x:Name="InterfaceSpeakHotkeyRecorder" Grid.Column="1" Height="34"
+                                  AutomationProperties.Name="朗读译文快捷键" />
+        </Grid>
+        <TextBlock Text="Esc 与文本编辑快捷键保持不变" Style="{StaticResource RowHint}" Margin="0,8,0,0" />
     </StackPanel>
 </UserControl>

@@ -51,9 +51,6 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
     internal void SetShellSettings(ShellSettings settings)
     {
         _shellSettings = settings;
-        // 0.1.25：设置窗口每次同步设置快照时刷新 GitHub 上报卡（同意开关
-        // 与凭据掩码），与 RefreshCloudSpeechState/RefreshFreeEngineState
-        // 同一初始化路径。
         RefreshIssueUploadState();
     }
 
@@ -444,16 +441,17 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         }
     }
 
-    /// <summary>
-    /// 0.1.27：「如何生成令牌？」——直接打开 GitHub 预填 repo 权限的令牌
-    /// 生成页。此前用户不知道 PAT 从哪来，只能卡在上报设置里。
-    /// </summary>
-    private void IssueUploadPatHelp_Click(object sender, RoutedEventArgs e)
+    private void ReportIssue_Click(object sender, RoutedEventArgs e) =>
+        OpenIssuePage("https://github.com/ethan-blue/PopGlot/issues/new/choose");
+
+    private void IssueUploadPatHelp_Click(object sender, RoutedEventArgs e) =>
+        OpenIssuePage("https://github.com/settings/personal-access-tokens/new");
+
+    private void OpenIssuePage(string address)
     {
         try
         {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
-                "https://github.com/settings/tokens/new?scopes=repo&description=PopGlot")
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(address)
             {
                 UseShellExecute = true,
             });

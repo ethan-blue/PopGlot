@@ -489,7 +489,10 @@ internal sealed class TranslationCoordinator
                 TranslatedText = restored.Text,
                 ProtectedTerms = protectedText.Tokens.Select(token => token.Original).ToList(),
                 Warnings = warnings,
-                IsPartial = response.Result.IsPartial || warnings.Count > 0,
+                IsPartial = response.Result.IsPartial ||
+                    restored.DroppedTerms.Count > 0 ||
+                    restored.DuplicatedTerms.Count > 0 ||
+                    restored.UnknownPlaceholders.Count > 0,
             },
         };
     }
@@ -1967,11 +1970,8 @@ internal sealed class TranslationCoordinator
             ? response.Result.Warnings
             : [.. response.Result.Warnings, qualityWarning];
 
-        // 0.1.27：完整性只来自 provider 契约——is_partial 终态或空译文。
-        // 任何 warning（语言启发式、非 SSE 回退、占位符重复等）都是建议性
-        // 诊断，不再把整场会话降级为「内容不完整」：旧谓词让正常完成的
-        // 翻译也高频挂上不完整徽标并失去历史/收藏资格，是划词翻译
-        // 「内容生成不完整」误报的最大来源。警告照常展示在说明区。
+        // Executors set IsPartial for truncation or token-integrity loss.
+        // Metadata/transport advisories alone do not make complete text partial.
         var incomplete =
             response.Result.IsPartial ||
             string.IsNullOrWhiteSpace(response.Result.TranslatedText);
@@ -1998,10 +1998,7 @@ internal sealed class TranslationCoordinator
 
     private void WriteHistoryOnce(TranslationSession session, TranslationInputSource sourceKind)
     {
-        // Eligibility, not "a result arrived": integrity warnings, an
-        // is_partial final, an empty translation, cancellations and failures
-        // never enter history. At most one write per session, so a duplicated
-        // final delivery cannot persist twice.
+        // Only complete, nonempty content enters history, once per session.
         if (!session.IsCleanCompletion || _history is null || session.HistoryCommitted)
         {
             return;

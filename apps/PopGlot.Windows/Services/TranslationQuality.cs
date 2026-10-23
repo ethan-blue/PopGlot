@@ -3,9 +3,9 @@ using System.Text.RegularExpressions;
 namespace PopGlot.Windows.Services;
 
 /// <summary>
-/// Conservative diagnostics, not a language detector. A valid stream can still
-/// be in the wrong language. Keep its text, flag it as partial, and let the user
-/// retry explicitly; never silently submit a second paid request.
+/// Advisory language diagnostics, not a language detector or a completeness
+/// signal. Preserve the text and let the user retry explicitly; never silently
+/// submit a second paid request.
 /// </summary>
 internal static class TranslationQuality
 {

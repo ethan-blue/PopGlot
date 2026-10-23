@@ -94,6 +94,7 @@ public partial class App : Application
             StoragePaths.RootOverride = dataDir;
             CredentialStore.OverrideVault = new Services.MemoryCredentialVault();
             _shellSettings = ShellSettingsStore.Load();
+            InterfaceKeys.Apply(_shellSettings);
             ThemeService.Apply(_shellSettings.Theme);
             CoreBridge.Initialize();
             TtsService.CleanupStaleTempFiles();
@@ -214,6 +215,7 @@ public partial class App : Application
             StoragePaths.RootOverride = args.DataDir;
             CredentialStore.OverrideVault = new Services.MemoryCredentialVault();
             _shellSettings = ShellSettingsStore.Load();
+            InterfaceKeys.Apply(_shellSettings);
             // The wake loop closes the main window between samples; only the
             // close-to-tray variant is a wake (the other variant exits).
             if (!_shellSettings.CloseMainWindowToTray)
@@ -485,6 +487,7 @@ public partial class App : Application
         try
         {
             _shellSettings = ShellSettingsStore.Load();
+            InterfaceKeys.Apply(_shellSettings);
             ThemeService.Apply(_shellSettings.Theme);
             CoreBridge.Initialize();
             // C01: the send boundary re-reads the live core settings before
@@ -1075,6 +1078,20 @@ public partial class App : Application
         if (startAddEngineFlow)
         {
             window.ShowProviderAddFlow();
+        }
+    }
+
+    internal void NavigateFromShortcut(InterfaceAction action)
+    {
+        if (action == InterfaceAction.Settings)
+        {
+            ShowSettings();
+            return;
+        }
+        if (action is InterfaceAction.Workbench or InterfaceAction.Library)
+        {
+            ShowMainWindow();
+            _mainWindow?.NavigateFromShortcut(action);
         }
     }
 
@@ -1695,6 +1712,7 @@ public partial class App : Application
         }
 
         _shellSettings = settings;
+        InterfaceKeys.Apply(settings);
         ThemeService.Apply(settings.Theme);
         // Full success closes any active failure cycle: surfaces clear and a
         // future failure may notify again. Idempotent when nothing failed.

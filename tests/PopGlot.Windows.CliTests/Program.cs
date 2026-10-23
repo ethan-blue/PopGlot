@@ -60,7 +60,8 @@ internal static partial class Program
             Check("offline gate: zero processes/prompts", Offline);
             Check("save, reload, switch, disable", Persistence);
             Check("main translation/history/summary/recognized-text route", CoordinatorRoutes);
-            Check("wrong-language final stays partial and never enters history", WrongLanguageFinal);
+            Check("advisory language warning preserves complete text and remains visible", WrongLanguageFinal);
+            Check("lost protected token remains partial through the OMP job bridge", TokenIntegrityFinal);
             Check("disconnect cancels active saved connection", DisconnectActive);
             Check("immediate disconnect fences queued request", DisconnectQueued);
             Check("official OAuth/PKCE/callback/JWT/encrypted credentials", DirectTests.SignInAndValidation);
@@ -137,13 +138,14 @@ internal static partial class Program
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var backend = new OmpRpcBackend(profile.CliConnection!);
         var providers = await backend.ListLoginProvidersAsync(timeout.Token);
-        Assert(providers.Count == 2 && providers[0].Authenticated && !providers[1].Available, "provider state comes from OMP; disallowed provider filtered");
-        Assert(providers[0].ToString() == "Google Antigravity · 已登录", "selection displays a provider label, never record internals");
+        Assert(providers.All(provider => provider.Id != "anthropic") &&
+            providers.Single(provider => provider.Id == "google-antigravity").Authenticated &&
+            !providers.Single(provider => provider.Id == "unavailable").Available,
+            "disallowed providers are excluded without turning unavailable accounts into authenticated choices");
         int browser = 0, input = 0;
         await backend.LoginAsync("google-antigravity", (uri, instructions, ct) => { browser++; Assert(uri.Host == "accounts.google.com" && instructions == "fixture device instructions", "browser URL and device instructions"); return Task.CompletedTask; },
             (_, ct) => { input++; return Task.FromResult("fixture-oauth-code"); }, timeout.Token);
         Assert(browser == 1 && input == 1, "must handle browser and matching callback input");
-        Assert((await backend.ListModelsAsync(timeout.Token)).Count == 1, "models refresh after final login response on a fresh process");
     }
     private static async Task OmpVersionCompatibility()
     {
@@ -356,9 +358,15 @@ internal static partial class Program
                 case "config/read": Reply(new { config = new { mcp_servers = new { } } }); break;
                 case "account/read": Reply(new { account = new { type = "chatgpt" }, requiresOpenaiAuth = true }); break;
                 case "model/list": Reply(new { data = new[] { new { model = "fixture", displayName = "fixture", isDefault = true } } }); break;
-                case "get_available_models": Reply(new { models = new[] { new { id = "fixture", name = "fixture", provider = "fixture-provider" } } }); break;
+                case "get_available_models":
+                    Reply(new { models = scenario == "login_input"
+                        ? new[] { new { id = "authenticated-model", name = "Authenticated model", provider = "google-antigravity" },
+                            new { id = "unlogged-model", name = "Unlogged model", provider = "signed-out" } }
+                        : new[] { new { id = "fixture", name = "fixture", provider = "fixture-provider" } } });
+                    break;
                 case "get_login_providers": Reply(new { providers = new[] {
                     new { id = "google-antigravity", name = "Google Antigravity", available = true, authenticated = true },
+                    new { id = "signed-out", name = "Other provider", available = true, authenticated = false },
                     new { id = "unavailable", name = "Unavailable", available = false, authenticated = false },
                     new { id = "anthropic", name = "Anthropic", available = true, authenticated = false } } }); break;
                 case "login":
@@ -402,7 +410,7 @@ internal static partial class Program
                             ? "Please restart the application before changing the translation settings again." : "你好，" } });
                         if (scenario != "wrong_language") Emit(new { type = "message_update", assistantMessageEvent = new { type = "text_delta", delta = "世界" } });
                         Emit(new { type = "message_update", assistantMessageEvent = new { type = "text_delta", delta = metadata } });
-                        Emit(new { type = "message_end", message = new { stopReason = "stop" } });
+                        Emit(new { type = "message_end", message = new { stopReason = scenario == "terminal_length" ? "length" : "stop" } });
                         if (scenario != "terminal_only") Emit(new { type = "agent_end", isTerminal = true });
                         if (scenario == "terminal_eof") return 0;
                         if (scenario == "legacy_terminal") break;

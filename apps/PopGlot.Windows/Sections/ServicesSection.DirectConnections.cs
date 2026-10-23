@@ -173,8 +173,8 @@ public partial class ServicesSection
         {
             var response = await CliTranslationExecutor.Stream(profile, "Hello world", "en", "zh", null, ct, enforceSavedState: false).Completion;
             ct.ThrowIfCancellationRequested();
-            if (response.Result.IsPartial || response.Result.Warnings.Count > 0 || string.IsNullOrWhiteSpace(response.Result.TranslatedText))
-                throw new InvalidOperationException("直连翻译未完整返回，请重试。");
+            if (response.Result.IsPartial || string.IsNullOrWhiteSpace(response.Result.TranslatedText))
+                throw new InvalidOperationException(response.Result.Warnings.FirstOrDefault() ?? "直连翻译未完整返回，请重试。");
             _directTestIdentity = identity; _directTestedAt = DateTime.UtcNow;
             return $"直连测试通过：{response.Result.TranslatedText}（{response.ElapsedMs / 1000.0:F1} 秒）。";
         }, "正在通过官方 Responses API 测试翻译…");

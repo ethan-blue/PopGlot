@@ -60,6 +60,7 @@ internal static class TestIsolation
         // 1. Every default storage path now lives under the test root.
         StoragePaths.RootOverride = Root;
         ShellSettingsStore.InvalidateCache();
+        InterfaceKeys.Apply(ShellSettings.Default);
         App.SharedSessionStore.Clear();
 
         // 2. Fixed demo services: the only provider names any rendered surface

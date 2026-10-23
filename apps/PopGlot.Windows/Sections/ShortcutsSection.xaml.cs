@@ -15,7 +15,11 @@ public partial class ShortcutsSection : System.Windows.Controls.UserControl
     internal HotkeyRecorder QuickSearchHotkey => QuickSearchHotkeyRecorder;
     internal HotkeyRecorder CloseHotkey => CloseHotkeyRecorder;
     internal HotkeyRecorder ShowWindowHotkey => ShowWindowHotkeyRecorder;
-    // 0.1.27：界面快捷键同样可录制改绑。
+    internal HotkeyRecorder InterfaceWorkbenchHotkey => InterfaceWorkbenchHotkeyRecorder;
+    internal HotkeyRecorder InterfaceLibraryHotkey => InterfaceLibraryHotkeyRecorder;
+    internal HotkeyRecorder InterfaceSettingsHotkey => InterfaceSettingsHotkeyRecorder;
+    internal HotkeyRecorder InterfaceTranslateHotkey => InterfaceTranslateHotkeyRecorder;
+    internal HotkeyRecorder InterfaceSpeakHotkey => InterfaceSpeakHotkeyRecorder;
     internal HotkeyRecorder InterfaceModelHotkey => InterfaceModelHotkeyRecorder;
     internal HotkeyRecorder InterfaceStyleHotkey => InterfaceStyleHotkeyRecorder;
     internal HotkeyRecorder InterfaceSwapHotkey => InterfaceSwapHotkeyRecorder;
@@ -31,6 +35,11 @@ public partial class ShortcutsSection : System.Windows.Controls.UserControl
         InterfaceModelHotkey.BindingValue = HotkeyBinding.InterfaceModelDefault;
         InterfaceStyleHotkey.BindingValue = HotkeyBinding.InterfaceStyleDefault;
         InterfaceSwapHotkey.BindingValue = HotkeyBinding.InterfaceSwapDefault;
+        InterfaceWorkbenchHotkey.BindingValue = HotkeyBinding.InterfaceWorkbenchDefault;
+        InterfaceLibraryHotkey.BindingValue = HotkeyBinding.InterfaceLibraryDefault;
+        InterfaceSettingsHotkey.BindingValue = HotkeyBinding.InterfaceSettingsDefault;
+        InterfaceTranslateHotkey.BindingValue = HotkeyBinding.InterfaceTranslateDefault;
+        InterfaceSpeakHotkey.BindingValue = HotkeyBinding.InterfaceSpeakDefault;
     }
 
     private void ResetDefaultsButton_Click(object sender, System.Windows.RoutedEventArgs e) =>

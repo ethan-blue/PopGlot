@@ -12,11 +12,9 @@
         <!-- Plain language privacy commitment card -->
         <Border Style="{StaticResource InlineCard}" Margin="0,0,0,16" Padding="14,12">
             <StackPanel>
-                <TextBlock Text="仅在你发起翻译时处理所选内容。" Style="{StaticResource Caption}" TextWrapping="Wrap" />
-                <!-- 0.1.27：去掉折叠，事实直接可见——两行说清，不再让用户
-                     展开一张「详情」折叠板。 -->
+                <TextBlock Text="翻译内容由你发起处理，不持续监听剪贴板或屏幕。" Style="{StaticResource Caption}" TextWrapping="Wrap" />
                 <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap" LineHeight="17"
-                           Text="联网时仅发送待翻译文本，视觉翻译获准后才会上传截图；OCR 识别、密钥存储与安全离线模式都在本机完成，不监听复制或屏幕。" />
+                           Text="联网翻译会发送文本，图片直译获准后才上传截图；账号登录与续期、云端朗读，以及你启用的诊断上报也会联网。凭据在本机存储；本地 OCR 不上传截图。" />
             </StackPanel>
         </Border>
 
@@ -30,7 +28,7 @@
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="{x:Static services:EngineWording.SafeOfflineModeName}" Style="{StaticResource RowTitle}" />
-                <TextBlock Text="彻底断开外部网络通信，仅使用本机模型与本地词库" Style="{StaticResource RowHint}" />
+                <TextBlock Text="暂停云端功能，仅使用本机模型与本地词库" Style="{StaticResource RowHint}" />
             </StackPanel>
             <ToggleButton x:Name="SafeModeToggle"
                           AutomationProperties.Name="{x:Static services:EngineWording.SafeOfflineModeName}" Grid.Column="1"
@@ -84,59 +82,48 @@
 
         <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
 
-        <!-- 0.1.25 自我迭代：GitHub 问题上报。默认关闭的 opt-in 诊断上传，
-             令牌只存 Windows 凭据管理器，正文仅脱敏诊断与版本信息。 -->
-        <TextBlock Text="GitHub 问题上报" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
+        <TextBlock Text="问题反馈" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
         <Border Style="{StaticResource InlineCard}" Margin="0,0,0,14" Padding="14,12">
             <StackPanel>
-                <CheckBox x:Name="IssueUploadConsentToggle"
-                          AutomationProperties.Name="允许崩溃时上传脱敏诊断到 GitHub"
-                          Checked="IssueUploadConsent_Changed"
-                          Unchecked="IssueUploadConsent_Changed">
-                    <TextBlock Text="程序遇到严重问题时，上传脱敏诊断到 GitHub Issues" TextWrapping="Wrap" />
-                </CheckBox>
-                <TextBlock Style="{StaticResource Caption}" Margin="20,4,0,0" TextWrapping="Wrap" LineHeight="17"
-                           Text="默认关闭。仅上传版本、系统信息与已脱敏的崩溃类型和堆栈；绝不包含翻译文本、截图、带查询串的地址或凭据。随时取消勾选即可撤销。" />
-                <Grid Margin="0,10,0,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <PasswordBox x:Name="IssueUploadPatBox"
-                                 Style="{StaticResource FormPasswordBox}"
-                                 local:Ui.Placeholder="留空保留"
-                                 AutomationProperties.Name="GitHub 访问令牌"
-                                 PasswordChanged="IssueUploadPat_PasswordChanged" />
-                    <Button x:Name="IssueUploadPatClearButton" Grid.Column="1"
-                            Content="清除令牌" Margin="8,0,0,0" Padding="10,5"
-                            Style="{StaticResource GhostButton}" VerticalAlignment="Center"
-                            AutomationProperties.Name="清除已保存的 GitHub 令牌"
-                            Click="IssueUploadPatClear_Click" />
-                    <Button x:Name="IssueUploadTestButton" Grid.Column="2"
-                            Content="发送测试诊断" Margin="8,0,0,0" Padding="10,5"
-                            Style="{StaticResource GhostButton}" VerticalAlignment="Center"
-                            AutomationProperties.Name="发送测试诊断到 GitHub"
-                            ToolTipService.ShowOnDisabled="True"
-                            ToolTip="需要先勾选上传同意，并保存 GitHub 访问令牌（需 Issues 写权限）。"
-                            Click="IssueUploadTest_Click" />
-                    <Button x:Name="IssueUploadPatHelpButton" Grid.Column="3"
-                            Content="如何生成令牌？" Margin="8,0,0,0" Padding="10,5"
-                            Style="{StaticResource GhostButton}" VerticalAlignment="Center"
-                            AutomationProperties.Name="打开 GitHub 令牌生成页"
-                            ToolTip="打开 GitHub 的令牌生成页（勾选 repo 权限），生成后粘贴到左侧输入框。"
-                            Click="IssueUploadPatHelp_Click" />
-                </Grid>
-                <!-- 0.1.27：令牌是什么、去哪生成直接说清——不知道 PAT 为何物
-                     的用户此前只能卡在这里。 -->
-                <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap" LineHeight="17"
-                           Text="令牌是 GitHub 的访问密码：点「如何生成令牌？」会打开 GitHub 生成页（勾选 repo 权限），把生成结果粘贴到上面输入框即可。不想上传也可以只用「数据页 → 导出诊断」手动反馈。" />
-                <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap"
-                           Text="令牌仅由你粘贴，保存在本机 Windows 凭据管理器（PopGlot/telemetry/github），不写入配置文件或日志；留空保留已保存的令牌。" />
-                <TextBlock x:Name="IssueUploadStatusText" Margin="0,8,0,0" TextWrapping="Wrap"
-                           FontSize="12" LineHeight="17"
-                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                <Button x:Name="ReportIssueButton" Content="在浏览器中报告问题"
+                        Style="{StaticResource GhostButton}" HorizontalAlignment="Left" Padding="10,5"
+                        AutomationProperties.Name="在浏览器中报告问题"
+                        ToolTip="打开 GitHub Issues；无需令牌，不会自动附加或上传数据。"
+                        Click="ReportIssue_Click" />
+                <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,10" TextWrapping="Wrap"
+                           Text="无需令牌；由你检查并提交内容，不自动附加诊断。" />
+                <Expander Header="可选：自动上传崩溃诊断">
+                    <StackPanel Margin="0,10,0,0">
+                        <CheckBox x:Name="IssueUploadConsentToggle"
+                                  AutomationProperties.Name="允许崩溃时上传脱敏诊断到 GitHub"
+                                  Checked="IssueUploadConsent_Changed" Unchecked="IssueUploadConsent_Changed">
+                            <TextBlock Text="允许上传脱敏崩溃诊断" TextWrapping="Wrap" />
+                        </CheckBox>
+                        <TextBlock Style="{StaticResource Caption}" Margin="20,4,0,8" TextWrapping="Wrap"
+                                   Text="默认关闭。仅发送版本、系统信息与脱敏堆栈，不含翻译、截图或凭据；取消勾选即可停用。" />
+                        <PasswordBox x:Name="IssueUploadPatBox" Style="{StaticResource FormPasswordBox}"
+                                     local:Ui.Placeholder="留空保留" AutomationProperties.Name="GitHub 访问令牌"
+                                     PasswordChanged="IssueUploadPat_PasswordChanged" />
+                        <WrapPanel Margin="0,6,0,0">
+                            <Button x:Name="IssueUploadPatClearButton" Content="清除令牌" Margin="0,0,6,4" Padding="10,5"
+                                    Style="{StaticResource GhostButton}" AutomationProperties.Name="清除已保存的 GitHub 令牌"
+                                    Click="IssueUploadPatClear_Click" />
+                            <Button x:Name="IssueUploadTestButton" Content="发送测试诊断" Margin="0,0,6,4" Padding="10,5"
+                                    Style="{StaticResource GhostButton}" AutomationProperties.Name="发送测试诊断到 GitHub"
+                                    ToolTipService.ShowOnDisabled="True"
+                                    ToolTip="需同意上传并保存具有目标仓库 Issues 写权限的细粒度令牌。"
+                                    Click="IssueUploadTest_Click" />
+                            <Button x:Name="IssueUploadPatHelpButton" Content="创建细粒度令牌" Margin="0,0,0,4" Padding="10,5"
+                                    Style="{StaticResource GhostButton}" AutomationProperties.Name="打开 GitHub 细粒度令牌生成页"
+                                    ToolTip="仅授权目标仓库的 Issues: Read and write；无需广泛 repo 权限。"
+                                    Click="IssueUploadPatHelp_Click" />
+                        </WrapPanel>
+                        <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap"
+                                   Text="仅授权目标仓库的 Issues 读写；无仓库权限请用浏览器反馈。令牌保存在 Windows 凭据管理器，留空保留。" />
+                        <TextBlock x:Name="IssueUploadStatusText" Margin="0,8,0,0" TextWrapping="Wrap"
+                                   FontSize="12" LineHeight="17" Foreground="{DynamicResource TextSecondaryBrush}" />
+                    </StackPanel>
+                </Expander>
             </StackPanel>
         </Border>
 
@@ -162,9 +149,7 @@
             </StackPanel>
         </Border>
 
-        <!-- Advanced settings expander: Outbound details & Local OCR language packs -->
-        <Expander Header="高级设置" Margin="0,0,0,12">
-            <StackPanel Margin="0,12,0,0">
+            <StackPanel Margin="0,12,0,12">
                 <TextBlock Text="云端翻译" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
 
                 <Grid Style="{StaticResource SettingsRow}">
@@ -197,7 +182,7 @@
                         <TextBlock Text="{x:Static services:EngineWording.FreePublicTranslationName}" Style="{StaticResource RowTitle}" />
                         <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap"
                                    ToolTip="{x:Static services:EngineWording.FreeEngineOnlineServiceNote}"
-                                   Text="免配置即开即用；仅传输文本，保障隐私安全" />
+                                   Text="发送待译文本至所选公共服务" />
                         <TextBlock x:Name="FreeEngineConsentState" Style="{StaticResource Caption}"
                                    Margin="0,4,0,0" />
                     </StackPanel>
@@ -252,6 +237,5 @@
                     <Run Text='缺少语言包：Windows 设置 → 时间和语言 → 语言和区域 → 语言选项 → 光学字符识别' />
                 </TextBlock>
             </StackPanel>
-        </Expander>
     </StackPanel>
 </UserControl>

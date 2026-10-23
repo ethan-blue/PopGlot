@@ -99,7 +99,6 @@ internal static class TextRouteMenu
 
     internal static ContextMenu Create(Action<string> selectProfile, Func<FreeEngineProvider, Task> selectFree, Action manage)
     {
-        // 0.1.27：不再钉死 264 宽——单行紧凑项按内容自适应，只保底/封顶。
         var menu = new ContextMenu { MinWidth = 190, MaxWidth = 264, MaxHeight = 420 };
         AddTextChoices(menu, selectProfile, selectFree);
         menu.Items.Add(new Separator());
@@ -115,7 +114,7 @@ internal static class TextRouteMenu
         var current = ReadCurrent();
         var activeId = current.Profile?.Id;
         var shell = ShellSettingsStore.Load();
-        menu.Items.Add(Header("模型"));
+        menu.Items.Add(Header("模型 · 风格与要点"));
         foreach (var profile in config.Profiles.Where(profile => profile.SupportsText))
         {
             var id = profile.Id;
@@ -145,11 +144,10 @@ internal static class TextRouteMenu
 
     internal static MenuItem ProfileItem(ProviderProfile profile, string model, bool active)
     {
-        // 0.1.27 文案减法：单行紧凑项——勾选并入行首窄槽（图标列偏宽），
-        // 模型名以次要色内联在引擎名之后，完整说明仍由悬停 ToolTip 提供。
+        // Keep the model once; connection and profile details belong in the tooltip.
         var item = new MenuItem
         {
-            Header = CheckRow(ShortName(profile), model, active),
+            Header = CheckRow(string.IsNullOrWhiteSpace(model) ? ShortName(profile) : model, null, active),
             ToolTip = Detail(profile, model),
             FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal,
         };
@@ -209,7 +207,7 @@ internal static class TextRouteMenu
 
     private static TextBlock Label(string text) => new()
     {
-        Text = text, MaxWidth = 204, TextTrimming = TextTrimming.CharacterEllipsis,
+        Text = text, MaxWidth = 180, TextTrimming = TextTrimming.CharacterEllipsis,
         VerticalAlignment = VerticalAlignment.Center,
     };
 

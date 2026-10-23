@@ -102,14 +102,14 @@ impl TextFirstAssembler {
             if let Ok(metadata) = serde_json::from_str::<TranslationMetadata>(self.trailer.trim()) {
                 Some(metadata)
             } else {
-                warnings.push("translation metadata 无法解析，已保留正文。".to_owned());
+                warnings.push("补充说明无法读取，译文已保留。".to_owned());
                 None
             }
         } else {
             None
         };
         if !self.matched && !self.delimiter.is_empty() {
-            warnings.push("translation metadata trailer 缺失，已保留正文。".to_owned());
+            warnings.push("未返回补充说明，译文已保留。".to_owned());
         }
         TextFirstResult {
             text: self.body.clone(),

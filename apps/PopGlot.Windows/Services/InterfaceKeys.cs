@@ -1,74 +1,113 @@
+using System.Windows;
 using System.Windows.Input;
 
 namespace PopGlot.Windows.Services;
 
-/// <summary>
-/// 0.1.27：界面快捷键（工作台 / 翻译浮窗 / 极速查词共用的应用内组合键）
-/// 的统一判定入口。绑定保存在 <see cref="ShellSettings"/>（默认 Ctrl+M /
-/// Ctrl+T / Ctrl+L），与全局热键同一 <see cref="HotkeyBinding"/> 形态；
-/// 用户组合与其他软件冲突时可以自行改绑。
-///
-/// 判定规则：修饰键必须与绑定完全一致（Ctrl+Shift+M 不会误命中 Ctrl+M）。
-/// 读取设置失败时回落默认组合，绝不抛出——快捷键路径不允许炸窗口。
-/// </summary>
+internal enum InterfaceAction
+{
+    None, Model, Style, Swap, Workbench, Library, Settings, Translate, Speak,
+}
+
+/// <summary>Applied settings snapshot; keyboard dispatch never reads the settings file.</summary>
 internal static class InterfaceKeys
 {
-    public static HotkeyBinding ModelHotkey => LoadOrNull()?.InterfaceModelHotkey
-        ?? HotkeyBinding.InterfaceModelDefault;
+    private static ShellSettings _settings = ShellSettings.Default;
+    internal static ShellSettings Snapshot => _settings;
 
-    public static HotkeyBinding StyleHotkey => LoadOrNull()?.InterfaceStyleHotkey
-        ?? HotkeyBinding.InterfaceStyleDefault;
+    public static HotkeyBinding ModelHotkey => _settings.InterfaceModelHotkey;
+    public static HotkeyBinding StyleHotkey => _settings.InterfaceStyleHotkey;
+    public static HotkeyBinding SwapHotkey => _settings.InterfaceSwapHotkey;
+    public static HotkeyBinding WorkbenchHotkey => _settings.InterfaceWorkbenchHotkey;
+    public static HotkeyBinding LibraryHotkey => _settings.InterfaceLibraryHotkey;
+    public static HotkeyBinding SettingsHotkey => _settings.InterfaceSettingsHotkey;
+    public static HotkeyBinding TranslateHotkey => _settings.InterfaceTranslateHotkey;
+    public static HotkeyBinding SpeakHotkey => _settings.InterfaceSpeakHotkey;
 
-    public static HotkeyBinding SwapHotkey => LoadOrNull()?.InterfaceSwapHotkey
-        ?? HotkeyBinding.InterfaceSwapDefault;
-
-    /// <summary>切换当前模型（默认 Ctrl+M）。</summary>
-    public static bool IsSwitchModel(Key key, ModifierKeys modifiers) =>
-        Matches(ModelHotkey, key, modifiers);
-
-    /// <summary>切换翻译风格（默认 Ctrl+T）。</summary>
-    public static bool IsSwitchStyle(Key key, ModifierKeys modifiers) =>
-        Matches(StyleHotkey, key, modifiers);
-
-    /// <summary>互换源/目标语言（默认 Ctrl+L）。</summary>
-    public static bool IsSwapLanguages(Key key, ModifierKeys modifiers) =>
-        Matches(SwapHotkey, key, modifiers);
-
-    private static ShellSettings? LoadOrNull()
+    public static void Apply(ShellSettings settings)
     {
-        try
+        _settings = settings;
+        if (Application.Current is not { } app || !app.Dispatcher.CheckAccess()) return;
+        foreach (Window window in app.Windows)
         {
-            return ShellSettingsStore.Load();
+            RefreshHints(window);
+            if (window.FindName("TranslateSection") is FrameworkElement section) RefreshHints(section);
         }
-        catch
-        {
-            return null;
-        }
+    }
+
+    public static Key Normalize(KeyEventArgs e) => e.Key == Key.System ? e.SystemKey : e.Key;
+
+    public static InterfaceAction Resolve(Key key, ModifierKeys modifiers)
+    {
+        if (Matches(ModelHotkey, key, modifiers)) return InterfaceAction.Model;
+        if (Matches(StyleHotkey, key, modifiers)) return InterfaceAction.Style;
+        if (Matches(SwapHotkey, key, modifiers)) return InterfaceAction.Swap;
+        if (Matches(WorkbenchHotkey, key, modifiers)) return InterfaceAction.Workbench;
+        if (Matches(LibraryHotkey, key, modifiers)) return InterfaceAction.Library;
+        if (Matches(SettingsHotkey, key, modifiers)) return InterfaceAction.Settings;
+        if (Matches(TranslateHotkey, key, modifiers)) return InterfaceAction.Translate;
+        if (Matches(SpeakHotkey, key, modifiers)) return InterfaceAction.Speak;
+        return InterfaceAction.None;
+    }
+
+    internal static bool IsFixedAction(HotkeyBinding binding) =>
+        (binding.Modifiers == HotkeyBinding.ModControl && binding.VirtualKey is 0x52 or 0x53) ||
+        (binding.Modifiers == (HotkeyBinding.ModControl | HotkeyBinding.ModShift) && binding.VirtualKey == 0x43);
+
+    public static bool IsReserved(HotkeyBinding binding)
+    {
+        var key = binding.VirtualKey;
+        var modifiers = binding.Modifiers;
+        if (IsFixedAction(binding)) return true;
+        if (key == 0x1B) return true; // Escape belongs to transient surfaces and IME.
+        if (modifiers == HotkeyBinding.ModControl)
+            return key is 0x41 or 0x42 or 0x43 or 0x49 or 0x55 or 0x56 or 0x58 or 0x59 or 0x5A
+                or 0x08 or 0x2E or 0x25 or 0x26 or 0x27 or 0x28 or 0x24 or 0x23 or 0x2D or 0x09 or 0x20;
+        if (modifiers == (HotkeyBinding.ModControl | HotkeyBinding.ModShift))
+            return key is 0x41 or 0x43 or 0x56 or 0x58 or 0x59 or 0x5A or 0x08 or 0x2E
+                or 0x25 or 0x26 or 0x27 or 0x28 or 0x24 or 0x23 or 0x09 or 0x20;
+        if (modifiers == (HotkeyBinding.ModAlt | HotkeyBinding.ModShift) && key == 0x08) return true;
+        return modifiers == HotkeyBinding.ModAlt && key is 0x08 or 0x73 or 0x20; // Undo / Alt+F4 / system menu.
     }
 
     private static bool Matches(HotkeyBinding binding, Key key, ModifierKeys modifiers)
     {
-        var expected = ModifierKeys.None;
-        if ((binding.Modifiers & HotkeyBinding.ModControl) != 0)
+        uint actual = 0;
+        if ((modifiers & ModifierKeys.Control) != 0) actual |= HotkeyBinding.ModControl;
+        if ((modifiers & ModifierKeys.Alt) != 0) actual |= HotkeyBinding.ModAlt;
+        if ((modifiers & ModifierKeys.Shift) != 0) actual |= HotkeyBinding.ModShift;
+        if ((modifiers & ModifierKeys.Windows) != 0) actual |= HotkeyBinding.ModWin;
+        return actual == binding.Modifiers && KeyInterop.KeyFromVirtualKey((int)binding.VirtualKey) == key;
+    }
+
+    internal static void RefreshHints(FrameworkElement scope)
+    {
+        void Hint(string name, string text, HotkeyBinding binding)
         {
-            expected |= ModifierKeys.Control;
+            if (scope.FindName(name) is FrameworkElement element)
+            {
+                element.ToolTip = $"{text} ({binding.DisplayName})";
+                System.Windows.Automation.AutomationProperties.SetAcceleratorKey(element, binding.DisplayName);
+            }
         }
-        if ((binding.Modifiers & HotkeyBinding.ModAlt) != 0)
+        Hint("NavTranslate", "工作台", WorkbenchHotkey);
+        Hint("NavLibrary", "资料库", LibraryHotkey);
+        Hint("NavSettingsButton", "设置", SettingsHotkey);
+        Hint("SettingsButton", "设置", SettingsHotkey);
+        Hint("RouteSelectorButton", "切换模型", ModelHotkey);
+        Hint("StyleSelectorButton", "切换翻译风格", StyleHotkey);
+        Hint("SwapLangButton", "交换语言方向", SwapHotkey);
+        Hint("TranslateSwapButton", "交换语言方向", SwapHotkey);
+        Hint("LangBadgeButton", "交换语言方向", SwapHotkey);
+        Hint("TranslateButton", "发起翻译", TranslateHotkey);
+        var speechAction = TtsService.IsSpeaking ? "停止朗读" : "朗读译文";
+        Hint("TranslateResultSpeakButton", speechAction, SpeakHotkey);
+        Hint("ResultSpeakBtn", speechAction, SpeakHotkey);
+        Hint("SpeakButton", speechAction, SpeakHotkey);
+        foreach (var name in new[] { "TranslateInput", "SourceInputBox", "SearchBox" })
         {
-            expected |= ModifierKeys.Alt;
+            if (scope.FindName(name) is FrameworkElement editor)
+                System.Windows.Automation.AutomationProperties.SetHelpText(editor,
+                    $"Enter 翻译 · Shift+Enter 换行 · {TranslateHotkey.DisplayName} 翻译");
         }
-        if ((binding.Modifiers & HotkeyBinding.ModShift) != 0)
-        {
-            expected |= ModifierKeys.Shift;
-        }
-        if ((binding.Modifiers & HotkeyBinding.ModWin) != 0)
-        {
-            expected |= ModifierKeys.Windows;
-        }
-        if (modifiers != expected)
-        {
-            return false;
-        }
-        return KeyInterop.KeyFromVirtualKey((int)binding.VirtualKey) == key;
     }
 }

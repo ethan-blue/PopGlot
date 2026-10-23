@@ -221,7 +221,10 @@ internal sealed class OmpRpcBackend : ICliBackend
             { sawText = true; delta(messageEvent.GetProperty("delta").GetString() ?? ""); }
             if (type == "message_end" && root.TryGetProperty("message", out var message) && message.TryGetProperty("stopReason", out var reason))
             {
-                failed |= reason.GetString() is "error" or "aborted";
+                var stopReason = reason.GetString();
+                failed |= stopReason is "error" or "aborted" or "length";
+                if (stopReason == "length")
+                    providerFailure = "OMP 输出达到长度上限，内容未完整返回。";
                 if (reason.GetString() == "error" && message.TryGetProperty("errorMessage", out var errorMessage) && errorMessage.ValueKind == JsonValueKind.String)
                 {
                     // Expose only an HTTP code, never upstream text (which can contain credentials).

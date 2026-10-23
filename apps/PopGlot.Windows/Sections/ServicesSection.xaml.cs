@@ -66,6 +66,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     internal Func<ProviderSettings, string, CancellationToken, Task<ModelCatalogResult>> ModelCatalogExecutor { get; set; } =
         (draft, key, ct) => ModelCatalogService.FetchAsync(draft, key, ct);
 
+    internal Func<ProviderProfile, CancellationToken, Task<TranslationResponse>> SavedConnectionTestExecutor { get; set; } =
+        (profile, ct) => CliTranslationExecutor.Stream(profile, "Hello world", "en", "zh", null, ct).Completion;
+    private readonly Dictionary<string, CancellationTokenSource> _listTests = new(StringComparer.Ordinal);
+    private readonly ComboBox[] _editorCombos;
     /// <summary>
     /// Tracks vision model state across toggles of the shared-model checkbox.
     /// </summary>
@@ -115,12 +119,19 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         _deleteConfirm = ConfirmButton.Attach(DeleteServiceButton, "确认删除？", DeleteSelectedProfile);
         _clearKeyConfirm = ConfirmButton.Attach(ClearKeyButton, "确认清除？", ClearKeyForCurrentProfile);
         EditorScroll.ScrollChanged += EditorScroll_ScrollChanged;
-        ProviderTypeComboBox.DropDownOpened += EditorCombo_DropDownOpened;
-        TextModelCombo.DropDownOpened += EditorCombo_DropDownOpened;
-        VisionModelCombo.DropDownOpened += EditorCombo_DropDownOpened;
-        ProviderTypeComboBox.DropDownClosed += EditorCombo_DropDownClosed;
-        TextModelCombo.DropDownClosed += EditorCombo_DropDownClosed;
-        VisionModelCombo.DropDownClosed += EditorCombo_DropDownClosed;
+        _editorCombos = [ProviderTypeComboBox, TextModelCombo, VisionModelCombo, CliModelCombo,
+            OmpLoginProviderCombo, ChatGptAccountCombo, ChatGptModelCombo];
+        foreach (var combo in _editorCombos)
+        {
+            combo.DropDownOpened += EditorCombo_DropDownOpened;
+            combo.DropDownClosed += EditorCombo_DropDownClosed;
+            HookComboWheel(combo);
+        }
+        Unloaded += (_, _) => CancelListTests();
+        IsVisibleChanged += (_, _) =>
+        {
+            if (!IsVisible) CancelListTests();
+        };
         TextModelCombo.SelectionChanged += (_, _) =>
         {
             if (UseTextModelForVisionCheckBox.IsChecked == true)
@@ -143,9 +154,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 VisionModelCombo.Focus();
             }
         };
-        HookComboWheel(TextModelCombo);
-        HookComboWheel(VisionModelCombo);
-        HookComboWheel(ProviderTypeComboBox);
+    }
+
+    private void CancelListTests()
+    {
+        foreach (var operation in _listTests.Values.ToArray()) operation.Cancel();
     }
 
     internal bool IsLoading { get => _loading; set => _loading = value; }
@@ -287,7 +300,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             return;
         }
 
-        foreach (var combo in new[] { ProviderTypeComboBox, TextModelCombo, VisionModelCombo })
+        foreach (var combo in _editorCombos)
         {
             if (combo.IsDropDownOpen)
             {
@@ -319,7 +332,21 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                     e.Handled = true;
                 }
             }
+            else
+            {
+                ForwardEditorWheel(s, e);
+            }
         };
+    }
+
+    private void ForwardEditorWheel(object sender, MouseWheelEventArgs e)
+    {
+        e.Handled = true;
+        EditorScroll.RaiseEvent(new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
+        {
+            RoutedEvent = Mouse.MouseWheelEvent,
+            Source = EditorScroll,
+        });
     }
 
     private void EditorCombo_DropDownOpened(object? sender, EventArgs e)
@@ -657,10 +684,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         EditorDirtyBadge.Visibility = _editorDirty ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>
-    /// Resolves an unsaved editor draft INLINE (bar above the action bar)
-    /// before a pending action proceeds — switching service, page, adding, or
-    /// closing. No system dialog: the bar offers save/discard/cancel and the
-    /// pending action runs only after a save or discard.
+    /// Resolves an unsaved draft beside the top return navigation.
+    /// The pending action runs only after an explicit save or discard.
     /// </summary>
     internal void BeginDraftGuard(string message, Action? proceed = null)
     {
@@ -2226,13 +2251,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             return;
         }
-        if (profile.ResolvedExecutionKind == EngineExecutionKind.ChatGptDirect) { OpenDirectProfile(profile); return; }
-        if (profile.ExecutionFacts.IsCliExecution)
+        if (profile.ExecutionFacts.IsCliExecution || profile.ResolvedExecutionKind == EngineExecutionKind.ChatGptDirect)
         {
-            // 0.1.27：列表上的「测试」直接用已保存的连接实测 Hello world，
-            // 不再跳进引擎编辑器让用户「自己再去测」——那不是用户该操心
-            // 的流程。账号失效时报告原因，由用户决定是否进编辑器。
-            await RunCliListTestAsync(profile, button);
+            await RunSavedListTestAsync(profile, button);
             return;
         }
         var key = LoadStoredKey(profile);
@@ -2255,6 +2276,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
         button.IsEnabled = false;
         var profileName = profile.Name;
+        using var operation = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        _listTests.Add(profileId, operation);
         try
         {
             StatusChanged?.Invoke($"正在测试「{profileName}」的文字生成…", StatusTone.Info);
@@ -2267,19 +2290,20 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 }
 
                 var settings = captured.ToProviderSettings(CoreBridge.GetSettings());
-                await CoreBridge.TestConnectionDraftAsync(
+                await ConnectionTestExecutor(
                     settings, string.IsNullOrWhiteSpace(liveKey) ? "local" : liveKey);
                 return "ok";
-            });
+            }, operation.Token);
 
             ReportListTestOutcome(completion, profileId, profileName);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            StatusChanged?.Invoke("测试失败。请稍后重试。", StatusTone.Error);
+            StatusChanged?.Invoke($"「{profileName}」{CliFailureText(ex)}", StatusTone.Error);
         }
         finally
         {
+            _listTests.Remove(profileId);
             button.IsEnabled = true;
         }
     }
@@ -2313,8 +2337,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         var message = completion.Apply switch
         {
             VerificationApplyResult.Applied when completion.Outcome == "ok" =>
-                $"「{profileName}」上次成功。这次只检查了文字生成。",
-            VerificationApplyResult.Applied => $"「{profileName}」{label}",
+                $"「{profileName}」测试通过。这次只检查了文字生成。",
+            VerificationApplyResult.Applied => $"「{profileName}」{label}。{(completion.Error is null ? "" : CliFailureText(completion.Error))}",
             VerificationApplyResult.Busy => "这个引擎正在测试。请等这次结束再试。",
             VerificationApplyResult.Cancelled => "测试已取消，没有写入配置。",
             _ => $"「{profileName}」的配置已变化，这次结果没有写入。",
@@ -2322,29 +2346,25 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         StatusChanged?.Invoke(message, tone);
     }
 
-    /// <summary>
-    /// 0.1.27：本机工具引擎（OMP / Codex）在引擎列表上直接实测：用已保存
-    /// 的连接发送 Hello world（enforceSavedState 默认校验保存状态仍然有效）。
-    /// </summary>
-    private async Task RunCliListTestAsync(ProviderProfile profile, Button button)
+    private async Task RunSavedListTestAsync(ProviderProfile profile, Button button)
     {
         button.IsEnabled = false;
         var profileName = profile.Name;
+        using var operation = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        _listTests.Add(profile.Id, operation);
         try
         {
             StatusChanged?.Invoke($"正在通过「{profileName}」发送测试句 Hello world…", StatusTone.Info);
             var completion = await ConnectionTestRunner.RunListTestAsync(profile.Id, async captured =>
             {
-                using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
-                var stream = CliTranslationExecutor.Stream(captured, "Hello world", "en", "zh", null, cts.Token);
-                var response = await stream.Completion;
+                var response = await SavedConnectionTestExecutor(captured, operation.Token);
                 if (response.Result.IsPartial || string.IsNullOrWhiteSpace(response.Result.TranslatedText))
                 {
                     throw new InvalidOperationException(
                         response.Result.Warnings.FirstOrDefault() ?? "工具返回了不完整的翻译。");
                 }
                 return "ok";
-            });
+            }, operation.Token);
             ReportListTestOutcome(completion, profile.Id, profileName);
         }
         catch (Exception ex)
@@ -2354,6 +2374,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
         finally
         {
+            _listTests.Remove(profile.Id);
             button.IsEnabled = true;
         }
     }

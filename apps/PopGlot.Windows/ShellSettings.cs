@@ -43,7 +43,11 @@ internal sealed record HotkeyBinding(uint Modifiers, uint VirtualKey)
     public static HotkeyBinding ScreenshotDefault => new(ModControl | ModAlt, 0x20); // Ctrl+Alt+Space
     public static HotkeyBinding CloseDefault => new(ModControl | ModAlt, 0x58); // Ctrl+Alt+X
     public static HotkeyBinding ShowWindowDefault => new(ModControl | ModAlt, 0x4F); // Ctrl+Alt+O
-    // 0.1.27：界面内组合键（应用内生效，不注册系统热键）也可自定义。
+    public static HotkeyBinding InterfaceWorkbenchDefault => new(ModControl, 0x31);
+    public static HotkeyBinding InterfaceLibraryDefault => new(ModControl, 0x32);
+    public static HotkeyBinding InterfaceSettingsDefault => new(ModControl, 0xBC);
+    public static HotkeyBinding InterfaceTranslateDefault => new(ModControl, 0x0D);
+    public static HotkeyBinding InterfaceSpeakDefault => new(ModControl, 0x50);
     public static HotkeyBinding InterfaceModelDefault => new(ModControl, 0x4D); // Ctrl+M
     public static HotkeyBinding InterfaceStyleDefault => new(ModControl, 0x54); // Ctrl+T
     public static HotkeyBinding InterfaceSwapDefault => new(ModControl, 0x4C);  // Ctrl+L
@@ -249,11 +253,15 @@ internal sealed record ShellSettings(
     // 0.1.25 自我迭代：GitHub Issue 诊断上报授权。默认关闭；旧配置文件缺少
     // 该字段时同样读作 false，升级绝不隐式授予上传许可。
     bool IssueUploadConsent = false,
-    // 0.1.27：界面快捷键（工作台/浮窗/极速查词共用）。null 一律回落默认，
-    // 旧配置文件升级后行为与历史版本完全一致。
+    // Missing interface bindings retain the defaults when upgrading.
     HotkeyBinding? InterfaceModelHotkey = null,
     HotkeyBinding? InterfaceStyleHotkey = null,
-    HotkeyBinding? InterfaceSwapHotkey = null)
+    HotkeyBinding? InterfaceSwapHotkey = null,
+    HotkeyBinding? InterfaceWorkbenchHotkey = null,
+    HotkeyBinding? InterfaceLibraryHotkey = null,
+    HotkeyBinding? InterfaceSettingsHotkey = null,
+    HotkeyBinding? InterfaceTranslateHotkey = null,
+    HotkeyBinding? InterfaceSpeakHotkey = null)
 {
     public HotkeyBinding QuickSearchHotkey { get; init; } =
         QuickSearchHotkey ?? HotkeyBinding.QuickSearchDefault;
@@ -266,6 +274,17 @@ internal sealed record ShellSettings(
 
     public HotkeyBinding InterfaceSwapHotkey { get; init; } =
         InterfaceSwapHotkey ?? HotkeyBinding.InterfaceSwapDefault;
+
+    public HotkeyBinding InterfaceWorkbenchHotkey { get; init; } =
+        InterfaceWorkbenchHotkey ?? HotkeyBinding.InterfaceWorkbenchDefault;
+    public HotkeyBinding InterfaceLibraryHotkey { get; init; } =
+        InterfaceLibraryHotkey ?? HotkeyBinding.InterfaceLibraryDefault;
+    public HotkeyBinding InterfaceSettingsHotkey { get; init; } =
+        InterfaceSettingsHotkey ?? HotkeyBinding.InterfaceSettingsDefault;
+    public HotkeyBinding InterfaceTranslateHotkey { get; init; } =
+        InterfaceTranslateHotkey ?? HotkeyBinding.InterfaceTranslateDefault;
+    public HotkeyBinding InterfaceSpeakHotkey { get; init; } =
+        InterfaceSpeakHotkey ?? HotkeyBinding.InterfaceSpeakDefault;
 
     public const int CurrentSchemaVersion = 3;
 
@@ -318,6 +337,10 @@ internal sealed record ShellSettings(
             {
                 return $"{ActionName(action)}的快捷键“{binding.DisplayName}”无效：至少需要包含 Ctrl、Alt 或 Win，并搭配一个普通按键。";
             }
+            if (InterfaceKeys.IsFixedAction(binding))
+            {
+                return $"{ActionName(action)}的快捷键“{binding.DisplayName}”与保留的复制、收藏或重试快捷键冲突。";
+            }
         }
 
         var duplicate = Hotkeys
@@ -328,19 +351,27 @@ internal sealed record ShellSettings(
             return $"快捷键 {duplicate.Key} 被重复用于{string.Join("、", duplicate.Select(pair => ActionName(pair.Key)))}。";
         }
 
-        // 0.1.27：界面快捷键也要有效、且彼此/与全局键不重复——同一组合
-        // 同时命中两个动作是最典型的改绑事故。
+        // All interface actions share one collision domain with global hotkeys.
         var interfaceKeys = new (string Name, HotkeyBinding Binding)[]
         {
             ("切换当前模型", InterfaceModelHotkey),
             ("切换翻译风格", InterfaceStyleHotkey),
             ("互换源/目标语言", InterfaceSwapHotkey),
+            ("打开工作台", InterfaceWorkbenchHotkey),
+            ("打开资料库", InterfaceLibraryHotkey),
+            ("打开设置", InterfaceSettingsHotkey),
+            ("发起翻译", InterfaceTranslateHotkey),
+            ("朗读", InterfaceSpeakHotkey),
         };
         foreach (var (name, binding) in interfaceKeys)
         {
             if (!binding.IsValid)
             {
                 return $"{name}的快捷键“{binding.DisplayName}”无效：至少需要包含 Ctrl、Alt 或 Win，并搭配一个普通按键。";
+            }
+            if (InterfaceKeys.IsReserved(binding))
+            {
+                return $"{name}的快捷键“{binding.DisplayName}”与固定操作或文本编辑快捷键冲突。";
             }
         }
         var allPairs = Hotkeys.Select(pair => (Label: ActionName(pair.Key), pair.Value))
@@ -549,7 +580,7 @@ internal static class ShellSettingsStore
                     : FreeEngineProvider.Google,
             // 0.1.25：旧文件没有该字段 → false，默认关闭诊断上传。
             persisted.IssueUploadConsent ?? false,
-            // 0.1.27：界面快捷键缺失 → 默认组合。
+            // Missing bindings preserve the defaults.
             persisted.InterfaceModelHotkey is not null
                 ? HotkeyBinding.Parse(persisted.InterfaceModelHotkey, defaults.InterfaceModelHotkey)
                 : defaults.InterfaceModelHotkey,
@@ -558,7 +589,12 @@ internal static class ShellSettingsStore
                 : defaults.InterfaceStyleHotkey,
             persisted.InterfaceSwapHotkey is not null
                 ? HotkeyBinding.Parse(persisted.InterfaceSwapHotkey, defaults.InterfaceSwapHotkey)
-                : defaults.InterfaceSwapHotkey);
+                : defaults.InterfaceSwapHotkey,
+            HotkeyBinding.Parse(persisted.InterfaceWorkbenchHotkey, defaults.InterfaceWorkbenchHotkey),
+            HotkeyBinding.Parse(persisted.InterfaceLibraryHotkey, defaults.InterfaceLibraryHotkey),
+            HotkeyBinding.Parse(persisted.InterfaceSettingsHotkey, defaults.InterfaceSettingsHotkey),
+            HotkeyBinding.Parse(persisted.InterfaceTranslateHotkey, defaults.InterfaceTranslateHotkey),
+            HotkeyBinding.Parse(persisted.InterfaceSpeakHotkey, defaults.InterfaceSpeakHotkey));
 
             lock (CacheLock)
             {
@@ -676,7 +712,12 @@ internal static class ShellSettingsStore
             settings.IssueUploadConsent,
             settings.InterfaceModelHotkey.Serialize(),
             settings.InterfaceStyleHotkey.Serialize(),
-            settings.InterfaceSwapHotkey.Serialize());
+            settings.InterfaceSwapHotkey.Serialize(),
+            settings.InterfaceWorkbenchHotkey.Serialize(),
+            settings.InterfaceLibraryHotkey.Serialize(),
+            settings.InterfaceSettingsHotkey.Serialize(),
+            settings.InterfaceTranslateHotkey.Serialize(),
+            settings.InterfaceSpeakHotkey.Serialize());
 
         // Write through a temporary file so a crash mid-write cannot leave the
         // user without settings on the next launch: exclusive-access write,
@@ -728,5 +769,10 @@ internal static class ShellSettingsStore
         bool? IssueUploadConsent = null,
         string? InterfaceModelHotkey = null,
         string? InterfaceStyleHotkey = null,
-        string? InterfaceSwapHotkey = null);
+        string? InterfaceSwapHotkey = null,
+        string? InterfaceWorkbenchHotkey = null,
+        string? InterfaceLibraryHotkey = null,
+        string? InterfaceSettingsHotkey = null,
+        string? InterfaceTranslateHotkey = null,
+        string? InterfaceSpeakHotkey = null);
 }

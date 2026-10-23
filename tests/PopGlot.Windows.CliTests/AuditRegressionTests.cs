@@ -8,7 +8,7 @@ internal static partial class Program
 {
     private static async Task OmpPromptTerminals()
     {
-        foreach (var scenario in new[] { "terminal_error", "terminal_aborted", "terminal_wrong_id", "terminal_eof" })
+        foreach (var scenario in new[] { "terminal_error", "terminal_aborted", "terminal_wrong_id", "terminal_eof", "terminal_length" })
             await FailureFake(scenario);
         foreach (var scenario in new[] { "multi_run", "terminal_only", "legacy_terminal" })
         {
@@ -48,6 +48,33 @@ internal static partial class Program
         Assert(quick.Explanation?.Contains("所选中文") == true,
             "quick-search renders the quality warning in the explanation area");
         Assert(quick.CanSpeak && quick.CanStar, "completed content keeps the full action set");
+    }
+
+    private static async Task TokenIntegrityFinal()
+    {
+        var original = CoreBridge.GetSettings();
+        CoreBridge.SaveSettings(original with { ProtectCodeTokens = true });
+        try
+        {
+            var profile = FakeProfile(EngineExecutionKind.OmpRpc);
+            ProfileManager.SaveCliProfile(profile,
+                ProfileManager.Load().Profiles.Any(p => p.Id == profile.Id) ? profile.Id : null, true);
+            Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", "");
+            var history = new HistoryStore();
+            var before = history.Load().Count;
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var session = await new TranslationCoordinator(history).TranslateTextAsync(
+                "Call `customer_id` before retrying the operation.", "en", "zh-CN",
+                TranslationInputSource.Manual, deadline.Token);
+            Assert(session.Stage == TranslationSessionStage.Partial && !session.IsCleanCompletion,
+                "an executor completion cannot hide protected-token loss");
+            Assert(session.Warnings.Any(warning => warning.Contains("保护词")) &&
+                !session.TranslatedText.Contains("customer_id"),
+                "retained text exposes the genuine token loss");
+            Assert(!session.HistoryCommitted && history.Load().Count == before,
+                "integrity loss cannot enter history as a successful translation");
+        }
+        finally { CoreBridge.SaveSettings(original); }
     }
 
     private static async Task SettingsFieldUpdates()

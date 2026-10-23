@@ -8,6 +8,39 @@ namespace PopGlot.Windows.Sections;
 public partial class ServicesSection
 {
     private TaskCompletionSource<string>? _ompCallback;
+    private IReadOnlyList<OmpRpcBackend.LoginProvider> _ompProviders = [];
+    private bool _showNewOmpProviders;
+
+    internal static IReadOnlyList<CliModel> AuthenticatedOmpModels(
+        IReadOnlyList<CliModel> models, IReadOnlyList<OmpRpcBackend.LoginProvider> providers)
+    {
+        var authenticated = providers.Where(p => p.Authenticated).Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
+        return models.Where(m => m.Provider is not null && authenticated.Contains(m.Provider)).ToArray();
+    }
+
+    internal void SetOmpProviders(IReadOnlyList<OmpRpcBackend.LoginProvider> providers, string? selectedId = null)
+    {
+        _ompProviders = providers;
+        _showNewOmpProviders = !providers.Any(p => p.Authenticated);
+        RefreshOmpProviderChoices(selectedId);
+    }
+
+    private void RefreshOmpProviderChoices(string? selectedId = null)
+    {
+        var choices = _ompProviders.Where(p => _showNewOmpProviders ? !p.Authenticated && p.Available : p.Authenticated).ToArray();
+        OmpLoginProviderCombo.ItemsSource = choices;
+        OmpLoginProviderCombo.SelectedItem = choices.FirstOrDefault(p => p.Id == selectedId) ?? choices.FirstOrDefault();
+        UpdateOmpLoginButtons(_cliOperation is not null);
+    }
+
+    private void OmpAddProvider_Click(object sender, RoutedEventArgs e)
+    {
+        if (_cliOperation is not null) return;
+        _showNewOmpProviders = !_showNewOmpProviders;
+        RefreshOmpProviderChoices();
+        OmpLoginProviderCombo.Focus();
+        OmpLoginProviderCombo.IsDropDownOpen = true;
+    }
     internal Action<Uri> OmpOpenBrowser { get; set; } = uri =>
         Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
 
@@ -21,6 +54,9 @@ public partial class ServicesSection
             OmpLoginProviderCombo.SelectedItem is OmpRpcBackend.LoginProvider { Available: true };
         OmpLoginButton.Content = OmpLoginProviderCombo.SelectedItem is OmpRpcBackend.LoginProvider { Authenticated: true }
             ? "重新授权" : "通过 OMP 登录";
+        OmpAddProviderButton.Content = _showNewOmpProviders ? "返回已登录提供方" : "登录其他提供方";
+        OmpAddProviderButton.IsEnabled = !busy && (_showNewOmpProviders
+            ? _ompProviders.Any(p => p.Authenticated) : _ompProviders.Any(p => !p.Authenticated && p.Available));
     }
 
     private void OmpLoginProvider_Changed(object sender, SelectionChangedEventArgs e)
@@ -57,19 +93,19 @@ public partial class ServicesSection
                 return (providers, models);
             });
             if (!ReferenceEquals(_cliOperation, operation)) return;
-            OmpLoginProviderCombo.ItemsSource = result.providers;
-            OmpLoginProviderCombo.SelectedItem = result.providers.FirstOrDefault(p => p.Id == provider.Id);
-            CliModelCombo.ItemsSource = result.models;
-            CliModelCombo.SelectedItem = result.models.FirstOrDefault(m => m.Provider == provider.Id) ?? result.models.FirstOrDefault();
-            _cliReady = result.providers.Any(p => p.Id == provider.Id && p.Authenticated);
+            SetOmpProviders(result.providers, provider.Id);
+            var models = AuthenticatedOmpModels(result.models, result.providers);
+            CliModelCombo.ItemsSource = models;
+            CliModelCombo.SelectedItem = models.FirstOrDefault(m => m.Provider == provider.Id) ?? models.FirstOrDefault();
+            _cliReady = result.providers.Any(p => p.Authenticated);
             CliConnectionStatus.Text = result.providers.Any(p => p.Id == provider.Id && p.Authenticated)
                 ? "OMP 已确认登录并保存账号。选择模型后可测试或保存。"
                 : "OMP 已结束授权，但未确认账号状态。请刷新账号后检查，尚未验证可用。";
         }
         catch (OperationCanceledException)
         { if (ReferenceEquals(_cliOperation, operation)) CliConnectionStatus.Text = "OMP 登录已取消或超时。已有登录保留；可以刷新账号检查状态。"; }
-        catch (Exception)
-        { if (ReferenceEquals(_cliOperation, operation)) CliConnectionStatus.Text = "OMP 登录未完成。请检查浏览器授权、账号资格和网络，或在 OMP 中登录后刷新账号。"; }
+        catch (Exception ex)
+        { if (ReferenceEquals(_cliOperation, operation)) CliConnectionStatus.Text = $"OMP 登录未完成。{CliFailureText(ex)}"; }
         finally
         {
             if (ReferenceEquals(_cliOperation, operation))

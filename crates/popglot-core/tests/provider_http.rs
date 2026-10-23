@@ -925,13 +925,6 @@ async fn openai_json_stream_fallback_preserves_body_without_or_with_bad_trailer(
         assert_eq!(response.result.translated_text, "正文");
         assert!(!response.result.translated_text.contains(delimiter));
         assert_eq!(response.result.explanation, "");
-        assert!(
-            response
-                .result
-                .warnings
-                .iter()
-                .any(|warning| warning.contains("metadata"))
-        );
         assert_eq!(server.requests().len(), 1);
     }
 }

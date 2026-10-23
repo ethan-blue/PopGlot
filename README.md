@@ -85,9 +85,9 @@ Run `PopGlot.exe`. It stays in the tray. Allow the free engine under Settings �
 
 ## 下载
 
-**0.1.27** 文案减法与截断修复版：菜单单行化并以图标承载说明、结果页脚只留用时、修复“内容生成不完整”高频误报（警告不再降级完整性、识别 finish_reason 截断）、界面快捷键可改绑、引擎列表直接测试、添加引擎流程连续化。发布状态与附件以 [Releases](https://github.com/ethan-blue/PopGlot/releases) 为准。
+**0.1.28** 交互打磨版：菜单更紧凑、公共翻译隐藏不适用的风格和要点操作、界面与页面导航快捷键可改绑、引擎列表原地测试、问题反馈无需令牌。普通提示不再误标“不完整”，真实截断与代码保护词缺失仍会明确提示。发布状态与附件以 [Releases](https://github.com/ethan-blue/PopGlot/releases) 为准。
 
-[下载 PopGlot 0.1.27](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.27/PopGlot-v0.1.27-win-x64.zip)
+[下载 PopGlot 0.1.28](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.28/PopGlot-v0.1.28-win-x64.zip)
 
 每一版的发布页都用同一个样子：标题是 `PopGlot 版本号`，页上直接写这一版改了什么，并附上 zip 和 `.sha256`。不用再点进另一份说明。
 
@@ -99,8 +99,8 @@ Run `PopGlot.exe`. It stays in the tray. Allow the free engine under Settings �
 文件名始终是 `PopGlot-v版本号-win-x64.zip`。校验：
 
 ```powershell
-(Get-FileHash -Path .\PopGlot-v0.1.27-win-x64.zip -Algorithm SHA256).Hash.ToLower()
-Get-Content .\PopGlot-v0.1.27-win-x64.zip.sha256
+(Get-FileHash -Path .\PopGlot-v0.1.28-win-x64.zip -Algorithm SHA256).Hash.ToLower()
+Get-Content .\PopGlot-v0.1.28-win-x64.zip.sha256
 ```
 
 全部发布页在 [Releases](https://github.com/ethan-blue/PopGlot/releases)。

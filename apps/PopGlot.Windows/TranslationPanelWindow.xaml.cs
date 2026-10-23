@@ -118,6 +118,7 @@ public partial class TranslationPanelWindow : Window
         _coordinator = new TranslationCoordinator(history, vocabulary);
 
         InitializeComponent();
+        InterfaceKeys.RefreshHints(this);
         Ui.AttachCompositionTracker(SourceInputBox);
         _sourceSpeakIconFillBinding = SourceSpeakIcon.GetBindingExpression(System.Windows.Shapes.Shape.FillProperty)?.ParentBinding;
         _resultSpeakIconFillBinding = ResultSpeakIcon.GetBindingExpression(System.Windows.Shapes.Shape.FillProperty)?.ParentBinding;
@@ -219,11 +220,11 @@ public partial class TranslationPanelWindow : Window
                 }
             }
             SourceSpeakBtn.ToolTip = isSpeaking ? "停止朗读" : "朗读原文";
-            ResultSpeakBtn.ToolTip = isSpeaking ? "停止朗读" : "朗读译文";
+            ResultSpeakBtn.ToolTip = $"{(isSpeaking ? "停止朗读" : "朗读译文")} ({InterfaceKeys.SpeakHotkey.DisplayName})";
             // The accessibility name follows the ToolTip so screen readers
             // announce the action the click will actually perform right now.
             System.Windows.Automation.AutomationProperties.SetName(SourceSpeakBtn, (string)SourceSpeakBtn.ToolTip);
-            System.Windows.Automation.AutomationProperties.SetName(ResultSpeakBtn, (string)ResultSpeakBtn.ToolTip);
+            System.Windows.Automation.AutomationProperties.SetName(ResultSpeakBtn, isSpeaking ? "停止朗读" : "朗读译文");
         });
     }
 
@@ -506,8 +507,7 @@ public partial class TranslationPanelWindow : Window
             ShowIfPresent(PhoneticText, session.Phonetic, value => $"[{value}]");
             TermsList.ItemsSource = session.ProtectedTerms;
             TermsList.Visibility = session.ProtectedTerms.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-            WarningText.Text = string.Join("\n", session.Warnings);
-            WarningBox.Visibility = session.Warnings.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            ShowCompletedNotes(session);
         }
         StatusText.Text = _gate.Stage switch
         {
@@ -522,6 +522,16 @@ public partial class TranslationPanelWindow : Window
             failed: _gate.Stage is TranslationPanelStage.FailedWithPartial or TranslationPanelStage.FailedWithoutPartial,
             partial: _gate.Stage == TranslationPanelStage.CancelledWithPartial);
     }
+
+    private void ShowCompletedNotes(TranslationSession session)
+    {
+        var notes = new[] { session.Explanation }.Concat(session.Warnings)
+            .Where(note => !string.IsNullOrWhiteSpace(note));
+        ShowIfPresent(ExplanationText, string.Join("\n", notes), value => value, ExplanationBox);
+        WarningText.Text = string.Empty;
+        WarningBox.Visibility = Visibility.Collapsed;
+    }
+
 
     private async void ShowSummary_Click(object sender, RoutedEventArgs e) =>
         await TriggerPanelSummaryAsync();
@@ -1298,17 +1308,7 @@ public partial class TranslationPanelWindow : Window
             ? Visibility.Collapsed
             : Visibility.Visible;
 
-        // 0.1.27：已完成会话的警告不再走黄色警示框——完整性事实由阶段
-        // 表达（Partial 才是不完整），建议性警告（语言启发式、非 SSE
-        // 回退等）并入中性说明区，正常结果不再“泛黄”。
-        var warnings = session.Warnings;
-        var notes = new[] { session.Explanation }
-            .Concat(warnings)
-            .Where(note => !string.IsNullOrWhiteSpace(note))
-            .ToList();
-        ShowIfPresent(ExplanationText, string.Join("\n", notes), value => value, ExplanationBox);
-        WarningText.Text = string.Empty;
-        WarningBox.Visibility = Visibility.Collapsed;
+        ShowCompletedNotes(session);
 
         EngineBadge.Text = session.PipelineLabel ?? "翻译完成";
         EngineBadge.ToolTip = string.IsNullOrWhiteSpace(session.PromptTemplateName)
@@ -1317,9 +1317,7 @@ public partial class TranslationPanelWindow : Window
         EngineBadge.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
         StatusDot.SetResourceReference(Border.BackgroundProperty, "AccentBrush");
 
-        // 0.1.27 页脚减法：引擎名不再进页脚（徽标与悬停提示已指明引擎，
-        // 产品本身就是 OMP/PopGlot，无需重复自称），只保留截图隐私事实
-        // 与总用时。Timing 数据结构本身保持不变。
+        // The result badge identifies the engine; the footer keeps timing and screenshot privacy.
         var totalMs = session.Timing.TotalElapsedMs + (ulong)Math.Max(0, _inputAcquisitionMs);
         var footerParts = new List<string>();
         if (session.InputSource == TranslationInputSource.Screenshot)
@@ -1993,6 +1991,10 @@ public partial class TranslationPanelWindow : Window
         {
             CancelSummary();
         }
+        var isPublicRoute = capability.RouteKind == RouteKind.FreeEngine;
+        if (isPublicRoute && _holdingSummary) ShowStoredTranslation();
+        ShowSummaryChoice.Visibility = isPublicRoute ? Visibility.Collapsed : Visibility.Visible;
+        if (isPublicRoute) ShowSummaryChoice.IsEnabled = false;
     }
 
     private void StyleSelector_Click(object sender, RoutedEventArgs e)
@@ -2073,12 +2075,7 @@ public partial class TranslationPanelWindow : Window
 
     private async void SourceInputBox_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter)
-        {
-            return;
-        }
-        // Shift+Enter inserts a newline; Enter translates.
-        if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+        if (e.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.None)
         {
             return;
         }
@@ -2088,6 +2085,11 @@ public partial class TranslationPanelWindow : Window
             return;
         }
         e.Handled = true;
+        await TranslateSourceInputAsync();
+    }
+
+    private async Task TranslateSourceInputAsync()
+    {
         var text = SourceInputBox.Text.Trim();
         if (string.IsNullOrEmpty(text))
         {
@@ -2286,7 +2288,7 @@ public partial class TranslationPanelWindow : Window
         Focus();
     }
 
-    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    protected override async void OnPreviewKeyDown(KeyEventArgs e)
     {
         base.OnPreviewKeyDown(e);
         if (e.Key == Key.Escape)
@@ -2350,46 +2352,50 @@ public partial class TranslationPanelWindow : Window
         }
 
         // Ctrl+R: quickly retry translation
-        if (e.Key == Key.R && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control)
         {
             e.Handled = true;
             Retry_Click(this, new RoutedEventArgs());
             return;
         }
 
-        // 0.1.27：模型/风格/语言互换走可自定义的界面快捷键（默认 Ctrl+M/T/L）。
-        if (InterfaceKeys.IsSwitchModel(e.Key, Keyboard.Modifiers))
+        var action = InterfaceKeys.Resolve(InterfaceKeys.Normalize(e), Keyboard.Modifiers);
+        switch (action)
         {
-            if (RouteSelectorButton is not null && RouteSelectorButton.IsEnabled)
-            {
+            case InterfaceAction.Model when RouteSelectorButton.IsEnabled:
                 e.Handled = true;
                 RouteSelector_Click(RouteSelectorButton, new RoutedEventArgs());
                 return;
-            }
-        }
-
-        if (InterfaceKeys.IsSwitchStyle(e.Key, Keyboard.Modifiers))
-        {
-            if (StyleSelectorButton is not null && StyleSelectorButton.IsEnabled)
-            {
+            case InterfaceAction.Style when StyleSelectorButton.IsEnabled:
                 e.Handled = true;
                 StyleSelector_Click(StyleSelectorButton, new RoutedEventArgs());
                 return;
-            }
-        }
-
-        if (InterfaceKeys.IsSwapLanguages(e.Key, Keyboard.Modifiers))
-        {
-            if (SwapLangButton is not null && SwapLangButton.IsEnabled)
-            {
+            case InterfaceAction.Swap when SwapLangButton.IsEnabled:
                 e.Handled = true;
                 SwapLangButton_Click(SwapLangButton, new RoutedEventArgs());
                 return;
-            }
+            case InterfaceAction.Translate:
+                if (Ui.IsImeComposing(SourceInputBox, e)) return;
+                e.Handled = true;
+                await TranslateSourceInputAsync();
+                return;
+            case InterfaceAction.Speak when ResultSpeakBtn.IsEnabled:
+                e.Handled = true;
+                ResultSpeak_Click(this, new RoutedEventArgs());
+                return;
+            case InterfaceAction.Settings:
+            case InterfaceAction.Workbench:
+            case InterfaceAction.Library:
+                if (Application.Current is App app)
+                {
+                    e.Handled = true;
+                    app.NavigateFromShortcut(action);
+                }
+                return;
         }
 
         // Ctrl+Shift+C: copy translation directly
-        if (e.Key == Key.C && (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == (ModifierKeys.Control | ModifierKeys.Shift))
+        if (e.Key == Key.C && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
         {
             if (ResultCopyBtn.IsEnabled && !string.IsNullOrWhiteSpace(_holdingSummary ? _summaryStreamText : _translation))
             {

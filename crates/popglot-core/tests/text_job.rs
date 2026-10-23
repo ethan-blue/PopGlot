@@ -169,13 +169,6 @@ fn delimiter_lookalike_in_body_stays_visible() {
         TextJobCompletion::Completed,
     );
     assert_eq!(result.translated_text, format!("start {lookalike} end"));
-    assert!(
-        result
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("缺失")),
-        "a missing trailer produces an honest warning, not a failure"
-    );
 }
 
 #[test]
@@ -194,13 +187,6 @@ fn damaged_metadata_keeps_the_body() {
         .expect("finish");
     manager.free(&prepared.job_handle);
     assert_eq!(result.translated_text, "正文");
-    assert!(
-        result
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("无法解析")),
-        "damaged metadata is reported, the body survives"
-    );
 }
 
 #[test]
@@ -326,6 +312,61 @@ fn cancelled_and_failed_completions_keep_partial_text_honestly() {
         );
         manager.free(&prepared.job_handle);
     }
+}
+
+#[test]
+fn terminal_completion_distinguishes_advisory_metadata_from_integrity_loss() {
+    let manager = TextJobManager::default();
+    let (_, advisory) = run_job(
+        &manager,
+        &request("hello"),
+        &["你好"],
+        TextJobCompletion::Completed,
+    );
+    assert_eq!(advisory.state, "completed");
+    assert_eq!(advisory.translated_text, "你好");
+    assert_ne!(advisory.warnings, Vec::<String>::new());
+
+    for occurrence_count in [0, 1, 2] {
+        let req = TextJobRequest {
+            protect_code_tokens: true,
+            ..request("fix `my_cool_function`")
+        };
+        let prepared = manager.prepare(&req).expect("prepare protected request");
+        let placeholder = placeholder_from_payload(&prepared.user_payload);
+        let body = format!("修复 {}", placeholder.repeat(occurrence_count));
+        manager
+            .push(&prepared.job_handle, &body)
+            .expect("push protected response");
+        let result = manager
+            .finish(&prepared.job_handle, TextJobCompletion::Completed)
+            .expect("finish protected response");
+        assert_eq!(
+            result.state,
+            if occurrence_count == 1 {
+                "completed"
+            } else {
+                "partial"
+            }
+        );
+        assert_eq!(
+            result.translated_text.matches("my_cool_function").count(),
+            occurrence_count
+        );
+    }
+}
+
+#[test]
+fn completed_executor_without_translation_never_claims_complete_content() {
+    let manager = TextJobManager::default();
+    let (_, result) = run_job(
+        &manager,
+        &request("hello"),
+        &[" \n\t"],
+        TextJobCompletion::Completed,
+    );
+    assert_eq!(result.state, "partial");
+    assert_eq!(result.translated_text.trim(), "");
 }
 
 // ---------- helpers ----------

@@ -29,12 +29,13 @@ public partial class MainWindow : Window
         _coordinator = new TranslationCoordinator(history, vocabulary);
 
         InitializeComponent();
+        Services.InterfaceKeys.RefreshHints(this);
 
         TranslateSection.Initialize(_coordinator, vocabulary);
         LibrarySection.Initialize(history, vocabulary);
 
         // Wire up cross-section events.
-        TranslateSection.OpenEngineMenu = OpenEngineSwitcherMenu;
+        LibrarySection.StatusChanged += SetStatus;
         LibrarySection.LoadToTranslate += OnLoadToTranslate;
 
         // 状态行的瞬时回落定时器（见 SetStatus / SetResidentStatus）。
@@ -223,24 +224,33 @@ public partial class MainWindow : Window
 
     private void MainWindow_KeyDown(object sender, KeyEventArgs e)
     {
-        if (Keyboard.Modifiers == ModifierKeys.Control)
+        if (!e.Handled) e.Handled = DispatchShortcut(Services.InterfaceKeys.Normalize(e), Keyboard.Modifiers);
+    }
+
+    internal bool DispatchShortcut(Key key, ModifierKeys modifiers)
+    {
+        var action = Services.InterfaceKeys.Resolve(key, modifiers);
+        switch (action)
         {
-            switch (e.Key)
-            {
-                case Key.OemComma:
-                    e.Handled = true;
-                    OpenSettings?.Invoke();
-                    return;
-                case Key.D1:
-                    e.Handled = true;
-                    NavTranslate.IsChecked = true;
-                    return;
-                case Key.D2:
-                    e.Handled = true;
-                    NavLibrary.IsChecked = true;
-                    return;
-            }
+            case Services.InterfaceAction.Settings:
+                OpenSettings?.Invoke();
+                return true;
+            case Services.InterfaceAction.Workbench:
+            case Services.InterfaceAction.Library:
+                NavigateFromShortcut(action);
+                return true;
+            case Services.InterfaceAction.Model:
+                OpenEngineSwitcherMenu();
+                return true;
+            default:
+                return false;
         }
+    }
+
+    internal void NavigateFromShortcut(Services.InterfaceAction action)
+    {
+        if (action == Services.InterfaceAction.Workbench) NavTranslate.IsChecked = true;
+        if (action == Services.InterfaceAction.Library) NavLibrary.IsChecked = true;
     }
 
     private void UpdateMaximizeButtonGlyph()
@@ -316,7 +326,7 @@ public partial class MainWindow : Window
             var tone = route.Tone;
             EngineSummary.Text = route.Label;
             EngineSummary.ToolTip = route.Detail;
-            EngineHealthButton.ToolTip = route.Detail;
+            EngineHealthButton.ToolTip = EngineSwitcherHint(route.Detail);
             EngineDot.Tag = null;
             EngineDot.SetResourceReference(Border.BackgroundProperty, tone switch
             {
@@ -512,7 +522,7 @@ public partial class MainWindow : Window
             var tone = route.Tone;
             EngineSummary.Text = route.Label;
             EngineSummary.ToolTip = route.Detail;
-            EngineHealthButton.ToolTip = route.Detail;
+            EngineHealthButton.ToolTip = EngineSwitcherHint(route.Detail);
             EngineDot.Tag = null;
             EngineDot.SetResourceReference(Border.BackgroundProperty, tone switch
             {
@@ -582,14 +592,13 @@ public partial class MainWindow : Window
             {
                 EngineSummary.Text = EngineWording.ActiveFreeEngineName();
                 EngineDot.SetResourceReference(Border.BackgroundProperty, "SuccessBrush");
-                EngineHealthButton.ToolTip = $"{EngineWording.ActiveFreeEngineName()}可用 · 延迟 {health.LatencyMs} ms · 点击重新检测";
+                EngineHealthButton.ToolTip = EngineSwitcherHint($"{EngineWording.ActiveFreeEngineName()}可用 · 延迟 {health.LatencyMs} ms");
             }
             else
             {
                 EngineSummary.Text = EngineWording.ActiveFreeEngineName();
                 EngineDot.SetResourceReference(Border.BackgroundProperty, "WarningBrush");
-                EngineHealthButton.ToolTip =
-                    $"{EngineWording.ActiveFreeEngineName()}不可用：{health.Error} · 可在引擎菜单改选另一条免费引擎";
+                EngineHealthButton.ToolTip = EngineSwitcherHint($"{EngineWording.ActiveFreeEngineName()}不可用：{health.Error}");
             }
         }
         catch (Exception)
@@ -608,10 +617,13 @@ public partial class MainWindow : Window
         EngineDot.Tag = null;
         EngineSummary.Text = EngineWording.ActiveFreeEngineName();
         EngineDot.SetResourceReference(Border.BackgroundProperty, "TextSecondaryBrush");
-        EngineHealthButton.ToolTip = denial is null
-            ? $"{EngineWording.ActiveFreeEngineName()}未检测 · 点击重新检测"
-            : $"未检测：{denial.Message}";
+        EngineHealthButton.ToolTip = EngineSwitcherHint(denial is null
+            ? $"{EngineWording.ActiveFreeEngineName()}未检测"
+            : $"未检测：{denial.Message}");
     }
+
+    private static string EngineSwitcherHint(string? detail) =>
+        $"{detail}\n切换引擎 ({InterfaceKeys.ModelHotkey.DisplayName}) · 模型支持风格与要点";
 
     private bool IsActiveRouteFreeEngine()
     {
@@ -875,17 +887,17 @@ public partial class MainWindow : Window
         if (NavTranslate is not null)
         {
             NavTranslate.Content = compact ? null : "翻译";
-            NavTranslate.ToolTip = "翻译";
+            NavTranslate.ToolTip = $"工作台 ({Services.InterfaceKeys.WorkbenchHotkey.DisplayName})";
         }
         if (NavLibrary is not null)
         {
             NavLibrary.Content = compact ? null : "资料库";
-            NavLibrary.ToolTip = "资料库";
+            NavLibrary.ToolTip = $"资料库 ({Services.InterfaceKeys.LibraryHotkey.DisplayName})";
         }
         if (NavSettingsButton is not null)
         {
             NavSettingsButton.Content = compact ? null : "设置";
-            NavSettingsButton.ToolTip = "设置（引擎、快捷键、隐私）";
+            NavSettingsButton.ToolTip = $"设置 ({Services.InterfaceKeys.SettingsHotkey.DisplayName})";
         }
     }
 
@@ -1377,7 +1389,7 @@ internal static class TranslationStyleMenu
         }
 
         menu.Items.Add(new Separator());
-        var manage = new MenuItem { Header = "管理翻译风格与提示词…" };
+        var manage = new MenuItem { Header = "管理风格" };
         manage.Click += (_, _) => managePrompts();
         menu.Items.Add(manage);
         return menu;
@@ -1461,16 +1473,7 @@ internal static class TranslationStyleMenu
         _ => string.Empty,
     };
 
-    /// <summary>
-    /// Applies the probed capability to a surface's selector button: grayed
-    /// with the exact honest wording on the free engine, visible with an
-    /// honest caveat when unreadable, normal otherwise. The tooltip comes
-    /// from the single <see cref="SupportedToolTip"/> source — surfaces can
-    /// no longer pass drifting copies. The tooltip is also mirrored into
-    /// automation HelpText so screen readers get the same truth; buttons set
-    /// ToolTipService.ShowOnDisabled so the grayed state still explains
-    /// itself. Returns the probe.
-    /// </summary>
+    /// <summary>Shows the style selector only on text routes that can apply it.</summary>
     internal static TranslationStyleSupport ApplyTo(Button selectorButton)
     {
         var probe = ProbeNextTextRoute();
@@ -1502,7 +1505,9 @@ internal static class TranslationStyleMenu
             }
         }
 
-        selectorButton.IsEnabled = true;
+        selectorButton.IsEnabled = probe != TranslationStyleSupport.FreeEngine;
+        selectorButton.Visibility = probe == TranslationStyleSupport.FreeEngine
+            ? Visibility.Collapsed : Visibility.Visible;
         selectorButton.ToolTip = message;
         System.Windows.Automation.AutomationProperties.SetHelpText(selectorButton, message);
         return probe;
@@ -1523,12 +1528,9 @@ internal static class TranslationStyleMenu
         var id = template.Id;
         var isActive = string.Equals(id, activeId, StringComparison.Ordinal);
 
-        // 0.1.27 文案减法：单行菜单项。勾选标记并入行首固定窄槽（不再
-        // 占用 MenuItem 的图标列，那一列明显偏宽）；「（默认）」后缀删除
-        // ——勾选本身就标明了当前生效项；行尾 ⓘ 徽标提示有说明，悬停整项
-        // 即弹出完整描述，第二行长文案不再占位。
+        // The shared MenuItem template collapses empty icon and shortcut gutters.
         var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 1, 0, 1) };
-        var slot = new Border { Width = 16, VerticalAlignment = VerticalAlignment.Center };
+        var slot = new Border { Width = 20, VerticalAlignment = VerticalAlignment.Center };
         if (isActive)
         {
             slot.Child = MakeActiveCheck();
@@ -1539,6 +1541,8 @@ internal static class TranslationStyleMenu
         {
             Text = titleText,
             FontSize = 12.5,
+            MaxWidth = 150,
+            TextTrimming = TextTrimming.CharacterEllipsis,
             VerticalAlignment = VerticalAlignment.Center,
             FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
         };
@@ -1549,13 +1553,13 @@ internal static class TranslationStyleMenu
         {
             var info = new System.Windows.Shapes.Path
             {
-                Data = Geometry.Parse(
-                    "M12,2 C17.52,2 22,6.48 22,12 C22,17.52 17.52,22 12,22 C6.48,22 2,17.52 2,12 C2,6.48 6.48,2 12,2 Z M11,7 L13,7 L13,9 L11,9 Z M11,11 L13,11 L13,17 L11,17 Z"),
+                Data = (Geometry)Application.Current.FindResource("IconInfo"),
                 Width = 11,
                 Height = 11,
                 Stretch = Stretch.Uniform,
                 Margin = new Thickness(6, 0, 0, 0),
                 VerticalAlignment = VerticalAlignment.Center,
+                ToolTip = template.Description,
             };
             info.SetResourceReference(System.Windows.Shapes.Path.FillProperty, "TextTertiaryBrush");
             row.Children.Add(info);
@@ -1564,7 +1568,7 @@ internal static class TranslationStyleMenu
         var item = new MenuItem
         {
             Header = row,
-            ToolTip = string.IsNullOrWhiteSpace(template.Instruction) ? template.Description : template.Instruction,
+            ToolTip = string.IsNullOrWhiteSpace(template.Description) ? null : template.Description,
             FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
         };
         System.Windows.Automation.AutomationProperties.SetName(item, titleText);
@@ -1580,8 +1584,7 @@ internal static class TranslationStyleMenu
 
     private static FrameworkElement MakeActiveCheck()
     {
-        var geom = Application.Current?.TryFindResource("IconCheck") as Geometry
-            ?? Geometry.Parse("M 9.5,17.5 L 4,12 L 5.25,10.75 L 9.5,15 L 18.75,5.75 L 20,7 Z");
+        var geom = (Geometry)Application.Current.FindResource("IconCheck");
         var path = new System.Windows.Shapes.Path
         {
             Data = geom,

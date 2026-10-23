@@ -289,7 +289,12 @@ public sealed record SettingsFormSnapshot(
     string QuickSearchHotkey = "",
     string InterfaceModelHotkey = "",
     string InterfaceStyleHotkey = "",
-    string InterfaceSwapHotkey = "")
+    string InterfaceSwapHotkey = "",
+    string InterfaceWorkbenchHotkey = "",
+    string InterfaceLibraryHotkey = "",
+    string InterfaceSettingsHotkey = "",
+    string InterfaceTranslateHotkey = "",
+    string InterfaceSpeakHotkey = "")
 {
     public static SettingsFormSnapshot Create(
         string? selectionHotkey,
@@ -308,7 +313,12 @@ public sealed record SettingsFormSnapshot(
         string? quickSearchHotkey = null,
         string? interfaceModelHotkey = null,
         string? interfaceStyleHotkey = null,
-        string? interfaceSwapHotkey = null)
+        string? interfaceSwapHotkey = null,
+        string? interfaceWorkbenchHotkey = null,
+        string? interfaceLibraryHotkey = null,
+        string? interfaceSettingsHotkey = null,
+        string? interfaceTranslateHotkey = null,
+        string? interfaceSpeakHotkey = null)
     {
         return new SettingsFormSnapshot(
             selectionHotkey ?? string.Empty,
@@ -327,7 +337,12 @@ public sealed record SettingsFormSnapshot(
             quickSearchHotkey ?? string.Empty,
             interfaceModelHotkey ?? string.Empty,
             interfaceStyleHotkey ?? string.Empty,
-            interfaceSwapHotkey ?? string.Empty);
+            interfaceSwapHotkey ?? string.Empty,
+            interfaceWorkbenchHotkey ?? string.Empty,
+            interfaceLibraryHotkey ?? string.Empty,
+            interfaceSettingsHotkey ?? string.Empty,
+            interfaceTranslateHotkey ?? string.Empty,
+            interfaceSpeakHotkey ?? string.Empty);
     }
 
     public string Serialize() => string.Join('\u001f',
@@ -347,5 +362,10 @@ public sealed record SettingsFormSnapshot(
         QuickSearchHotkey,
         InterfaceModelHotkey,
         InterfaceStyleHotkey,
-        InterfaceSwapHotkey);
+        InterfaceSwapHotkey,
+        InterfaceWorkbenchHotkey,
+        InterfaceLibraryHotkey,
+        InterfaceSettingsHotkey,
+        InterfaceTranslateHotkey,
+        InterfaceSpeakHotkey);
 }
