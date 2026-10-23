@@ -157,8 +157,10 @@ public partial class ServicesSection
         _editingProfileId = null;
         ShowConnectionEditor(direct: false, adding: true);
         SetCliSourceIdentity(row);
-        CliConnectionStatus.Text = "尚未检查账号。点击「连接 / 刷新账号」继续。";
-        ClearEditorDirty();
+        // 0.1.27：选中工具后立即自动检查账号与模型，不再把一个空编辑器
+        // 「啪」地扔给用户、还要求自己点「连接 / 刷新账号」——检测→选择→
+        // 连接是一条连续流程。失败时状态行会说明原因，可手动重试。
+        CliConnect_Click(this, new RoutedEventArgs());
     }
 
     private async void CliConnect_Click(object sender, RoutedEventArgs e)
@@ -187,8 +189,13 @@ public partial class ServicesSection
             });
             if (!ReferenceEquals(_cliOperation, operation)) return;
             _cliConnection = connection;
-            OmpLoginProviderCombo.ItemsSource = result.providers;
-            OmpLoginProviderCombo.SelectedItem = result.providers.FirstOrDefault(p => p.Authenticated) ?? result.providers.FirstOrDefault(p => p.Available);
+            // 0.1.27：刷新账号只列出已登录的提供方；全部未登录时才展开
+            // 完整登录列表（那时用户要的就是新登录）。
+            var authenticated = result.providers.Where(p => p.Authenticated).ToList();
+            var loginChoices = authenticated.Count > 0 ? authenticated : result.providers.ToList();
+            OmpLoginProviderCombo.ItemsSource = loginChoices;
+            OmpLoginProviderCombo.SelectedItem = loginChoices.FirstOrDefault(p => p.Authenticated)
+                ?? loginChoices.FirstOrDefault(p => p.Available);
             CliModelCombo.ItemsSource = result.models;
             _cliReady = result.account.State != CliConnectionState.NeedsLogin;
             _cliProfileId = existing?.Id;
@@ -248,7 +255,9 @@ public partial class ServicesSection
             var stream = CliTranslationExecutor.Stream(profile, "Hello world", "en", "zh", null, operation.Token, enforceSavedState: false);
             var response = await stream.Completion;
             if (!ReferenceEquals(_cliOperation, operation)) return;
-            if (response.Result.IsPartial || response.Result.Warnings.Count > 0 || string.IsNullOrWhiteSpace(response.Result.TranslatedText))
+            // 0.1.27：建议性警告（如非 SSE 回退）不再判为测试失败——完整性
+            // 以 is_partial 与空译文为准。
+            if (response.Result.IsPartial || string.IsNullOrWhiteSpace(response.Result.TranslatedText))
                 throw new InvalidOperationException("工具返回了不完整的翻译，请重试。");
             _cliTestedModel = ModelIdentity(); _cliTestedAt = DateTime.UtcNow;
             CliConnectionStatus.Text = $"测试通过：{response.Result.TranslatedText}（{response.ElapsedMs / 1000.0:F1} 秒）。可保存并使用。";

@@ -99,7 +99,8 @@ internal static class TextRouteMenu
 
     internal static ContextMenu Create(Action<string> selectProfile, Func<FreeEngineProvider, Task> selectFree, Action manage)
     {
-        var menu = new ContextMenu { Width = 264, MaxWidth = 264, MaxHeight = 420 };
+        // 0.1.27：不再钉死 264 宽——单行紧凑项按内容自适应，只保底/封顶。
+        var menu = new ContextMenu { MinWidth = 190, MaxWidth = 264, MaxHeight = 420 };
         AddTextChoices(menu, selectProfile, selectFree);
         menu.Items.Add(new Separator());
         var settings = new MenuItem { Header = "管理引擎" };
@@ -131,10 +132,9 @@ internal static class TextRouteMenu
             var active = freeSelected && shell.FreeEngineProvider == provider;
             var item = new MenuItem
             {
-                Header = Label(FreeName(provider)),
+                Header = CheckRow(FreeName(provider), null, active),
                 ToolTip = FreeDetail(provider),
                 FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal,
-                Icon = active ? ActiveCheck() : null,
                 Tag = provider,
             };
             System.Windows.Automation.AutomationProperties.SetName(item, FreeName(provider));
@@ -145,27 +145,48 @@ internal static class TextRouteMenu
 
     internal static MenuItem ProfileItem(ProviderProfile profile, string model, bool active)
     {
-        var content = new StackPanel();
-        content.Children.Add(Label(ShortName(profile)));
-        if (!string.IsNullOrWhiteSpace(model))
-        {
-            var detail = Label(model);
-            detail.FontSize = 11;
-            detail.Margin = new Thickness(0, 3, 0, 0);
-            detail.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
-            content.Children.Add(detail);
-        }
-        var description = Detail(profile, model);
+        // 0.1.27 文案减法：单行紧凑项——勾选并入行首窄槽（图标列偏宽），
+        // 模型名以次要色内联在引擎名之后，完整说明仍由悬停 ToolTip 提供。
         var item = new MenuItem
         {
-            Header = content,
-            ToolTip = description,
+            Header = CheckRow(ShortName(profile), model, active),
+            ToolTip = Detail(profile, model),
             FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal,
-            Icon = active ? ActiveCheck() : null,
         };
-        System.Windows.Automation.AutomationProperties.SetName(item, description);
+        System.Windows.Automation.AutomationProperties.SetName(item, Detail(profile, model));
         return item;
     }
+
+    /// <summary>
+    /// Shared single-line menu row: fixed 16px leading check slot (no wide
+    /// MenuItem icon column), primary label, optional inline secondary label.
+    /// </summary>
+    internal static StackPanel CheckRow(string primary, string? secondary, bool active)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 1, 0, 1) };
+        var slot = new Border { Width = 16, VerticalAlignment = VerticalAlignment.Center };
+        if (active)
+        {
+            slot.Child = ActiveCheck();
+        }
+        row.Children.Add(slot);
+        var name = Label(primary);
+        name.VerticalAlignment = VerticalAlignment.Center;
+        name.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal;
+        row.Children.Add(name);
+        if (!string.IsNullOrWhiteSpace(secondary))
+        {
+            var detail = Label(secondary);
+            detail.FontSize = 11;
+            detail.Margin = new Thickness(8, 0, 0, 0);
+            detail.MaxWidth = 120;
+            detail.VerticalAlignment = VerticalAlignment.Center;
+            detail.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+            row.Children.Add(detail);
+        }
+        return row;
+    }
+
 
     internal static MenuItem Header(string text)
     {

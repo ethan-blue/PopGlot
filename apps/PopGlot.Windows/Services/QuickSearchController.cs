@@ -196,7 +196,8 @@ internal sealed class QuickSearchState
             FinalRenderedText = session.TranslatedText;
             AccumulatedText = session.TranslatedText;
             Phonetic = session.Phonetic;
-            Explanation = session.Explanation;
+            Explanation = string.Join("\n", new[] { session.Explanation }
+                .Concat(session.Warnings).Where(note => !string.IsNullOrWhiteSpace(note)).Distinct());
             ErrorMessage = null;
             IsResultVisible = true;
             IsStreamLayerVisible = false;
@@ -205,10 +206,9 @@ internal sealed class QuickSearchState
             CanCopy = !string.IsNullOrWhiteSpace(session.TranslatedText);
             CanSpeak = !string.IsNullOrWhiteSpace(session.TranslatedText);
             CanStar = true;
-            // 0.1.6 文案减法：PipelineLabel 缺失时用中性的「翻译完成」兜底，
-            // 绝不再声称"大模型"；耗时保留为面向用户的秒级文案。
-            var engine = session.PipelineLabel ?? "翻译完成";
-            StatusText = $"{engine} · {TranslationElapsedText.ForMilliseconds(session.Timing.TotalElapsedMs)}";
+            // 0.1.27 文案减法：引擎名不再进状态行（产品即 PopGlot/OMP，
+            // 徽标已指明引擎），只保留面向用户的秒级用时。
+            StatusText = TranslationElapsedText.ForMilliseconds(session.Timing.TotalElapsedMs);
             RefreshHints();
             return true;
         }
@@ -240,7 +240,7 @@ internal sealed class QuickSearchState
             CanStar = false;
             StatusText = partialError is not null
                 ? $"{partialError}（部分内容已保留）"
-                : $"部分完成 · {TranslationElapsedText.ForMilliseconds(session.Timing.TotalElapsedMs)} · 译文不完整";
+                : $"译文不完整 · {TranslationElapsedText.ForMilliseconds(session.Timing.TotalElapsedMs)}";
             RefreshHints();
             return true;
         }

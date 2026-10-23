@@ -296,15 +296,15 @@ internal sealed class TranslationSession
     public ulong? PromptTemplateRevision { get; set; }
 
     /// <summary>
-    /// The one completion contract every consumer shares: only a non-empty
-    /// Completed stage with no integrity warnings is eligible for history,
-    /// auto-copy, speech, starring or code-block copy. "The request returned
-    /// a result" is not "the result is complete"; a Partial stays visible but
-    /// never triggers side effects.
+    /// The one completion contract every consumer shares: a non-empty
+    /// Completed stage is eligible for history, auto-copy, speech, starring
+    /// or code-block copy. 0.1.27: advisory warnings (language heuristic,
+    /// non-SSE fallback, duplicated placeholders) no longer revoke this —
+    /// content integrity is expressed by the stage itself (is_partial / empty
+    /// text land on Partial); warnings stay visible in the explanation area.
     /// </summary>
     public bool IsCleanCompletion =>
         Stage == TranslationSessionStage.Completed &&
-        Warnings.Count == 0 &&
         !string.IsNullOrWhiteSpace(TranslatedText);
 }
 

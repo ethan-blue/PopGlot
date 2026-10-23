@@ -48,10 +48,10 @@ internal static class ReadingRequestCopy
 
     public const string SummaryCancelled = "已取消要点";
 
-    public const string Cached = "已缓存";
+    public const string Cached = "上次要点";
 
     public static string Finished(ulong elapsedMs) =>
-        $"已完成 · {TranslationElapsedText.ForMilliseconds(elapsedMs)}";
+        TranslationElapsedText.ForMilliseconds(elapsedMs);
 }
 
 /// <summary>

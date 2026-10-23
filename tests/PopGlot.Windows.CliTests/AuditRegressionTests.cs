@@ -33,18 +33,21 @@ internal static partial class Program
         var session = await coordinator.TranslateTextAsync(
             "Please restart the application before changing the translation settings again.",
             "auto", "zh-CN", TranslationInputSource.Manual, deadline.Token);
-        Assert(session.Stage == TranslationSessionStage.Partial && !session.IsCleanCompletion,
-            "valid protocol in the wrong language is not clean completion");
+        // 0.1.27 契约：协议有效、内容完整的“错误语言”结果是 Completed——
+        // 语言启发式警告保持建议性（展示在说明区），不再把整场会话降级为
+        // “内容不完整”，也不再没收历史与操作资格。
+        Assert(session.Stage == TranslationSessionStage.Completed && session.IsCleanCompletion,
+            "a valid protocol final with complete text is clean completion; the wrong-language warning stays advisory");
         Assert(session.TranslatedText.StartsWith("Please restart") && session.Warnings.Any(w => w.Contains("所选中文")),
             "preserves text and exposes an actionable language warning");
-        Assert(!session.HistoryCommitted && history.Load().Count == before,
-            "quality warning fences history and clean-final side effects");
+        Assert(session.HistoryCommitted && history.Load().Count == before + 1,
+            "an advisory quality warning no longer fences history");
         var quick = new QuickSearchState();
         quick.StartNewSearch(session.SourceText);
         quick.OnSessionCompleted(session, quick.CurrentEpoch, session.SourceText);
-        Assert(quick.Explanation?.Contains("所选中文") == true && quick.StatusText.Contains("所选中文"),
-            "quick-search renders the quality warning, not just a generic incomplete status");
-        Assert(!quick.CanSpeak && !quick.CanStar, "warning preserves the partial action gate");
+        Assert(quick.Explanation?.Contains("所选中文") == true,
+            "quick-search renders the quality warning in the explanation area");
+        Assert(quick.CanSpeak && quick.CanStar, "completed content keeps the full action set");
     }
 
     private static async Task SettingsFieldUpdates()

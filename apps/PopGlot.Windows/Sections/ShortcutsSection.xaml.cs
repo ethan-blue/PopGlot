@@ -15,6 +15,10 @@ public partial class ShortcutsSection : System.Windows.Controls.UserControl
     internal HotkeyRecorder QuickSearchHotkey => QuickSearchHotkeyRecorder;
     internal HotkeyRecorder CloseHotkey => CloseHotkeyRecorder;
     internal HotkeyRecorder ShowWindowHotkey => ShowWindowHotkeyRecorder;
+    // 0.1.27：界面快捷键同样可录制改绑。
+    internal HotkeyRecorder InterfaceModelHotkey => InterfaceModelHotkeyRecorder;
+    internal HotkeyRecorder InterfaceStyleHotkey => InterfaceStyleHotkeyRecorder;
+    internal HotkeyRecorder InterfaceSwapHotkey => InterfaceSwapHotkeyRecorder;
 
     /// <summary>Resets all shortcut fields to their factory defaults.</summary>
     internal void ResetDefaults()
@@ -24,6 +28,9 @@ public partial class ShortcutsSection : System.Windows.Controls.UserControl
         QuickSearchHotkey.BindingValue = HotkeyBinding.QuickSearchDefault;
         CloseHotkey.BindingValue = HotkeyBinding.CloseDefault;
         ShowWindowHotkey.BindingValue = HotkeyBinding.ShowWindowDefault;
+        InterfaceModelHotkey.BindingValue = HotkeyBinding.InterfaceModelDefault;
+        InterfaceStyleHotkey.BindingValue = HotkeyBinding.InterfaceStyleDefault;
+        InterfaceSwapHotkey.BindingValue = HotkeyBinding.InterfaceSwapDefault;
     }
 
     private void ResetDefaultsButton_Click(object sender, System.Windows.RoutedEventArgs e) =>

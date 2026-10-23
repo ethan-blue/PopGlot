@@ -34,8 +34,8 @@ public partial class MainWindow : Window
         LibrarySection.Initialize(history, vocabulary);
 
         // Wire up cross-section events.
+        TranslateSection.OpenEngineMenu = OpenEngineSwitcherMenu;
         LibrarySection.LoadToTranslate += OnLoadToTranslate;
-        LibrarySection.StatusChanged += SetStatus;
 
         // 状态行的瞬时回落定时器（见 SetStatus / SetResidentStatus）。
         _transientRevertTimer = new System.Windows.Threading.DispatcherTimer
@@ -624,6 +624,11 @@ public partial class MainWindow : Window
             return false;
         }
     }
+    /// <summary>
+    /// 0.1.27：工作台顶栏的模型切换器移除后唯一的快捷入口——打开右下角
+    /// 快速切换器菜单（按钮点击与 Ctrl+M 共用）。
+    /// </summary>
+    internal void OpenEngineSwitcherMenu() => ShowEngineSwitchMenu(EngineHealthButton);
 
     private void EngineHealthButton_Click(object sender, RoutedEventArgs e)
     {
@@ -679,16 +684,15 @@ public partial class MainWindow : Window
     internal ContextMenu BuildEngineSwitchMenu()
     {
         var config = ProfileManager.Load();
-        var menu = new ContextMenu { Width = 264, MaxWidth = 264, MaxHeight = 420 };
+        var menu = new ContextMenu { MinWidth = 190, MaxWidth = 264, MaxHeight = 420 };
         TextRouteMenu.AddTextChoices(menu, SwitchTextEngine, SwitchToFreeEngineAsync);
         menu.Items.Add(new Separator());
         menu.Items.Add(TextRouteMenu.Header("图片"));
         var follow = string.IsNullOrEmpty(config.VisionProfileId);
         var visionFollow = new MenuItem
         {
-            Header = "跟随文字",
+            Header = TextRouteMenu.CheckRow("跟随文字", null, follow),
             FontWeight = follow ? FontWeights.SemiBold : FontWeights.Normal,
-            Icon = follow ? TextRouteMenu.ActiveCheck() : null,
         };
         visionFollow.Click += (_, _) => SwitchVisionEngine(null);
         menu.Items.Add(visionFollow);
@@ -1342,8 +1346,8 @@ internal static class TranslationStyleMenu
         }
 
         var menu = new ContextMenu();
-        menu.MinWidth = 210;
-        menu.MaxWidth = 280;
+        menu.MinWidth = 150;
+        menu.MaxWidth = 260;
         if (ProbeNextTextRoute() == TranslationStyleSupport.FreeEngine)
         {
             menu.Items.Add(MakeDisabledItem("当前为公共直译 · 切换专属引擎后生效"));
@@ -1405,10 +1409,6 @@ internal static class TranslationStyleMenu
             var isFree = ProbeNextTextRoute() == TranslationStyleSupport.FreeEngine;
             var active = TryGetActiveTemplate();
             var name = active is not null ? ShortLabel(active) : "风格";
-            if (active?.Id == FaithfulTemplateId)
-            {
-                name += "（默认）";
-            }
             ReportOnUi(reportStatus, isFree ? $"已选定「{name}」（切换专属引擎后生效）" : $"已设为「{name}」，下次翻译生效");
             return true;
         }
@@ -1494,11 +1494,11 @@ internal static class TranslationStyleMenu
             if (styleName is not null)
             {
                 var descPart = string.IsNullOrWhiteSpace(styleDesc) ? string.Empty : $" · {styleDesc}";
-                message = $"当前风格：{styleName}{descPart}\n点击切换翻译风格 (Ctrl+T)";
+                message = $"当前风格：{styleName}{descPart}\n点击切换翻译风格 ({Services.InterfaceKeys.StyleHotkey.DisplayName})";
             }
             else
             {
-                message = $"{SupportedToolTip} (Ctrl+T)";
+                message = $"{SupportedToolTip} ({Services.InterfaceKeys.StyleHotkey.DisplayName})";
             }
         }
 
@@ -1522,39 +1522,50 @@ internal static class TranslationStyleMenu
     {
         var id = template.Id;
         var isActive = string.Equals(id, activeId, StringComparison.Ordinal);
-        var isDefault = string.Equals(id, FaithfulTemplateId, StringComparison.Ordinal);
 
-        var stack = new StackPanel { Margin = new Thickness(0, 1, 0, 1) };
-        var titleText = ShortLabel(template) + (isDefault ? "（默认）" : string.Empty);
+        // 0.1.27 文案减法：单行菜单项。勾选标记并入行首固定窄槽（不再
+        // 占用 MenuItem 的图标列，那一列明显偏宽）；「（默认）」后缀删除
+        // ——勾选本身就标明了当前生效项；行尾 ⓘ 徽标提示有说明，悬停整项
+        // 即弹出完整描述，第二行长文案不再占位。
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 1, 0, 1) };
+        var slot = new Border { Width = 16, VerticalAlignment = VerticalAlignment.Center };
+        if (isActive)
+        {
+            slot.Child = MakeActiveCheck();
+        }
+        row.Children.Add(slot);
+        var titleText = ShortLabel(template);
         var title = new TextBlock
         {
             Text = titleText,
             FontSize = 12.5,
+            VerticalAlignment = VerticalAlignment.Center,
             FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
         };
         title.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
-        stack.Children.Add(title);
+        row.Children.Add(title);
 
         if (!string.IsNullOrWhiteSpace(template.Description))
         {
-            var desc = new TextBlock
+            var info = new System.Windows.Shapes.Path
             {
-                Text = template.Description,
-                FontSize = 11,
-                Margin = new Thickness(0, 2, 0, 0),
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                MaxWidth = 200,
+                Data = Geometry.Parse(
+                    "M12,2 C17.52,2 22,6.48 22,12 C22,17.52 17.52,22 12,22 C6.48,22 2,17.52 2,12 C2,6.48 6.48,2 12,2 Z M11,7 L13,7 L13,9 L11,9 Z M11,11 L13,11 L13,17 L11,17 Z"),
+                Width = 11,
+                Height = 11,
+                Stretch = Stretch.Uniform,
+                Margin = new Thickness(6, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
             };
-            desc.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
-            stack.Children.Add(desc);
+            info.SetResourceReference(System.Windows.Shapes.Path.FillProperty, "TextTertiaryBrush");
+            row.Children.Add(info);
         }
 
         var item = new MenuItem
         {
-            Header = stack,
+            Header = row,
             ToolTip = string.IsNullOrWhiteSpace(template.Instruction) ? template.Description : template.Instruction,
             FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal,
-            Icon = isActive ? MakeActiveCheck() : null,
         };
         System.Windows.Automation.AutomationProperties.SetName(item, titleText);
         item.Click += (_, _) =>

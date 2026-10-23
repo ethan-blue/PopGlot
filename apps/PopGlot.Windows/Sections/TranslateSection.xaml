@@ -67,24 +67,8 @@
                        Margin="12,0,12,0" TextTrimming="CharacterEllipsis" />
 
             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                <Button x:Name="RouteSelectorButton" Style="{StaticResource GhostButton}"
-                        Height="28" Padding="10,0" Margin="0,0,8,0"
-                        AutomationProperties.Name="切换文字模型"
-                        ToolTipService.ShowOnDisabled="True"
-                        ToolTip="文字翻译模型（点击切换）"
-                        Click="RouteSelector_Click">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <Path Width="12" Height="12" Stretch="Uniform"
-                              Fill="{DynamicResource AccentBrush}"
-                              Data="{StaticResource IconProvider}" VerticalAlignment="Center" />
-                        <TextBlock x:Name="RouteSelectorLabel" Text="选择模型" Margin="6,0,0,0"
-                                   VerticalAlignment="Center" MaxWidth="120"
-                                   TextTrimming="CharacterEllipsis" />
-                        <Path Width="8" Height="8" Stretch="Uniform" Margin="5,0,0,0"
-                              Fill="{DynamicResource TextTertiaryBrush}"
-                              Data="{StaticResource IconChevronDown}" VerticalAlignment="Center" />
-                    </StackPanel>
-                </Button>
+                <!-- 0.1.27：模型切换入口唯一化——工作台顶栏不再重复摆一个
+                     模型切换器，统一走主窗口底部的快速切换器（Ctrl+M 不变）。 -->
                 <Button x:Name="StyleSelectorButton" Style="{StaticResource GhostButton}"
                         Height="28" Padding="10,0" Margin="0,0,8,0"
                         AutomationProperties.Name="翻译风格"
@@ -103,8 +87,9 @@
                               Data="{StaticResource IconChevronDown}" VerticalAlignment="Center" />
                     </StackPanel>
                 </Button>
-                <Button x:Name="RestoreSessionButton" Style="{StaticResource GhostButton}"
-                        Height="28" Padding="10,0" Margin="0,0,8,0" Content="恢复"
+                <Button x:Name="RestoreSessionButton" Style="{StaticResource IconButton}"
+                        local:Ui.Icon="{StaticResource IconHistory}"
+                        Width="28" Height="28" Margin="0,0,8,0"
                         ToolTip="恢复上次暂存内容"
                         AutomationProperties.Name="恢复暂存会话"
                         Click="RestoreSession_Click" />

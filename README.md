@@ -1,7 +1,7 @@
 # PopGlot
 
 [![Windows](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D4)](https://github.com/ethan-blue/PopGlot/releases)
-[![Version](https://img.shields.io/badge/version-0.1.26-5B67B5)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.1.27-5B67B5)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-3D8B6E)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/ethan-blue/PopGlot/ci.yml?branch=main&label=CI)](https://github.com/ethan-blue/PopGlot/actions)
 
@@ -85,9 +85,9 @@ Run `PopGlot.exe`. It stays in the tray. Allow the free engine under Settings �
 
 ## 下载
 
-**0.1.26** 界面与交互体验全面重构版：系统提示词指令透明可见与一键恢复默认、快捷键中心参考指南卡片、全端模型与风格极速切换、全端控制栏与文字等宽对齐、去除所有技术腔与防御文案。发布状态与附件以 [Releases](https://github.com/ethan-blue/PopGlot/releases) 为准。
+**0.1.27** 文案减法与截断修复版：菜单单行化并以图标承载说明、结果页脚只留用时、修复“内容生成不完整”高频误报（警告不再降级完整性、识别 finish_reason 截断）、界面快捷键可改绑、引擎列表直接测试、添加引擎流程连续化。发布状态与附件以 [Releases](https://github.com/ethan-blue/PopGlot/releases) 为准。
 
-[下载 PopGlot 0.1.26](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.26/PopGlot-v0.1.26-win-x64.zip)
+[下载 PopGlot 0.1.27](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.27/PopGlot-v0.1.27-win-x64.zip)
 
 每一版的发布页都用同一个样子：标题是 `PopGlot 版本号`，页上直接写这一版改了什么，并附上 zip 和 `.sha256`。不用再点进另一份说明。
 
@@ -99,8 +99,8 @@ Run `PopGlot.exe`. It stays in the tray. Allow the free engine under Settings �
 文件名始终是 `PopGlot-v版本号-win-x64.zip`。校验：
 
 ```powershell
-(Get-FileHash -Path .\PopGlot-v0.1.26-win-x64.zip -Algorithm SHA256).Hash.ToLower()
-Get-Content .\PopGlot-v0.1.26-win-x64.zip.sha256
+(Get-FileHash -Path .\PopGlot-v0.1.27-win-x64.zip -Algorithm SHA256).Hash.ToLower()
+Get-Content .\PopGlot-v0.1.27-win-x64.zip.sha256
 ```
 
 全部发布页在 [Releases](https://github.com/ethan-blue/PopGlot/releases)。

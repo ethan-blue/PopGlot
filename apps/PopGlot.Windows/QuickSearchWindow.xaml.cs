@@ -517,7 +517,8 @@ public partial class QuickSearchWindow : Window
             e.Handled = true;
             Star_Click(this, new RoutedEventArgs());
         }
-        else if (e.Key == Key.M && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        // 0.1.27：模型/风格/语言互换走可自定义的界面快捷键（默认 Ctrl+M/T/L）。
+        else if (InterfaceKeys.IsSwitchModel(e.Key, Keyboard.Modifiers))
         {
             if (RouteSelectorButton is not null && RouteSelectorButton.IsEnabled)
             {
@@ -525,7 +526,7 @@ public partial class QuickSearchWindow : Window
                 RouteSelector_Click(RouteSelectorButton, new RoutedEventArgs());
             }
         }
-        else if (e.Key == Key.T && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        else if (InterfaceKeys.IsSwitchStyle(e.Key, Keyboard.Modifiers))
         {
             if (StyleSelectorButton is not null && StyleSelectorButton.IsEnabled)
             {
@@ -533,7 +534,7 @@ public partial class QuickSearchWindow : Window
                 StyleSelector_Click(StyleSelectorButton, new RoutedEventArgs());
             }
         }
-        else if (e.Key == Key.L && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        else if (InterfaceKeys.IsSwapLanguages(e.Key, Keyboard.Modifiers))
         {
             if (LangBadgeButton is not null && LangBadgeButton.IsEnabled)
             {
@@ -914,7 +915,8 @@ public partial class QuickSearchWindow : Window
         {
             var route = TextRouteMenu.ReadCurrent();
             RouteSelectorLabel.Text = route.Label;
-            RouteSelectorButton.ToolTip = (route.Detail ?? string.Empty) + "\n点击切换模型 (Ctrl+M) · 下次翻译生效";
+            RouteSelectorButton.ToolTip = (route.Detail ?? string.Empty) +
+                $"\n点击切换模型 ({InterfaceKeys.ModelHotkey.DisplayName}) · 下次翻译生效";
         }
         catch (Exception)
         {

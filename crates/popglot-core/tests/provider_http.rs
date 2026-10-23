@@ -1436,6 +1436,42 @@ async fn clean_eof_without_completion_event_yields_partial_warning() {
 }
 
 #[tokio::test]
+async fn finish_reason_length_yields_partial_with_truncation_warning() {
+    // 0.1.27：finish_reason=length 后即使网关补发 [DONE]，也必须按
+    // 「内容不完整」落盘并给出截断原因——截断事实不能被 [DONE] 覆盖。
+    let server = SseServer::start(vec![
+        (
+            "data: {\"choices\":[{\"delta\":{\"content\":\"前半段\"}}]}\n\n"
+                .as_bytes()
+                .to_vec(),
+            Duration::ZERO,
+        ),
+        (
+            "data: {\"choices\":[{\"delta\":{\"content\":\"尾段\"},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n"
+                .as_bytes()
+                .to_vec(),
+            Duration::ZERO,
+        ),
+    ]);
+    let (deltas, response) = collect_stream(
+        ProviderType::OpenAiCompatible,
+        &server,
+        "PGMETA_trunc_length_0123",
+    )
+    .await;
+    assert_eq!(deltas.concat(), "前半段尾段");
+    assert_eq!(response.result.translated_text, "前半段尾段");
+    assert!(response.result.is_partial);
+    assert!(
+        response
+            .result
+            .warnings
+            .iter()
+            .any(|w| w.contains("长度上限"))
+    );
+}
+
+#[tokio::test]
 async fn chat_sse_handles_utf8_split_multiple_events_and_heartbeat() {
     let delimiter = "PGMETA_utf8_split_0123456789";
     let payload = format!("你好\n{delimiter}\n{{\"warnings\":[\"mock warning\"]}}");

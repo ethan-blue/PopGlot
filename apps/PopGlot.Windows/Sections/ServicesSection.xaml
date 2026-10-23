@@ -263,8 +263,13 @@
                                             <Button x:Name="CancelCliDetectButton" Content="取消" Style="{StaticResource GhostButton}" Click="CliCancel_Click" Visibility="Collapsed" Margin="8,0,0,0"/>
                                         </WrapPanel>
                                         <TextBlock x:Name="CliDetectStatusText" Text="检测已安装的 Codex 和 OMP。" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,8"/>
-                                        <ListBox x:Name="CliToolsListBox" MaxHeight="220" Background="Transparent" BorderThickness="0"
-                                                 ItemContainerStyle="{StaticResource CliToolItem}" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                        <!-- 0.1.27：禁用内部滚动并去掉 MaxHeight——嵌套滚动会吃掉
+                                             鼠标滚轮，页面滚动发涩；入口数量本来就少，整列直接
+                                             随页面滚动。 -->
+                                        <ListBox x:Name="CliToolsListBox" Background="Transparent" BorderThickness="0"
+                                                 ItemContainerStyle="{StaticResource CliToolItem}"
+                                                 ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                                  SelectionChanged="CliToolsListBox_SelectionChanged" AutomationProperties.Name="选择本机工具">
                                             <ListBox.ItemTemplate>
                                                 <DataTemplate>

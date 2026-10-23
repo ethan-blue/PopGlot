@@ -1650,7 +1650,7 @@ internal sealed class TranslationCoordinator
                     $"本次翻译已达到 {MaxTextSessionOutputBytes / 1024 / 1024} MiB 输出上限；" +
                     $"已保留前 {index} 段，后续内容未继续请求。");
                 throw new SegmentSessionException(
-                    BuildSegmentResponse(merged, explanations, warnings, networkMs, session.TextEngineProfile, lastSegment));
+                    BuildSegmentResponse(merged, explanations, warnings, networkMs, session.TextEngineProfile, lastSegment, isPartial: true));
             }
             var streamSession = CreateTextStream(
                 segments[index], sourceLang, targetLang, textRuntimeSettings, textApiKey,
@@ -1682,7 +1682,7 @@ internal sealed class TranslationCoordinator
                 {
                     warnings.Add($"第 {index + 1} 段翻译失败，仅保留已返回片段。");
                     throw new SegmentSessionException(
-                        BuildSegmentResponse(new StringBuilder(visiblePartial), explanations, warnings, networkMs, session.TextEngineProfile, lastSegment));
+                        BuildSegmentResponse(new StringBuilder(visiblePartial), explanations, warnings, networkMs, session.TextEngineProfile, lastSegment, isPartial: true));
                 }
                 throw;
             }
@@ -1691,7 +1691,7 @@ internal sealed class TranslationCoordinator
             var result = segmentResponse.Result;
             networkMs += segmentResponse.ElapsedMs;
             var segmentIncomplete =
-                result.Warnings.Count > 0 || result.IsPartial || string.IsNullOrWhiteSpace(result.TranslatedText);
+                result.IsPartial || string.IsNullOrWhiteSpace(result.TranslatedText);
             if (segmentIncomplete)
             {
                 warnings.Add($"第 {index + 1} 段未完整返回。");
@@ -1713,7 +1713,7 @@ internal sealed class TranslationCoordinator
                     $"已保留前 {index} 段，后续内容未继续请求。");
                 session.TranslatedText = merged.ToString();
                 throw new SegmentSessionException(
-                    BuildSegmentResponse(merged, explanations, warnings, networkMs, session.TextEngineProfile, lastSegment));
+                    BuildSegmentResponse(merged, explanations, warnings, networkMs, session.TextEngineProfile, lastSegment, isPartial: true));
             }
             merged.Append(segmentText);
             mergedBytes += segmentBytes;
@@ -1724,7 +1724,7 @@ internal sealed class TranslationCoordinator
             if (segmentIncomplete)
             {
                 throw new SegmentSessionException(
-                    BuildSegmentResponse(merged, explanations, warnings, networkMs, session.TextEngineProfile, lastSegment));
+                    BuildSegmentResponse(merged, explanations, warnings, networkMs, session.TextEngineProfile, lastSegment, isPartial: true));
             }
         }
 
@@ -1778,14 +1778,18 @@ internal sealed class TranslationCoordinator
         StringBuilder merged,
         IReadOnlyList<string> explanations,
         IReadOnlyList<string> warnings,
-        ulong networkMs, ProviderProfile? engineProfile = null, TranslationResponse? lastSegment = null) =>
+        ulong networkMs,
+        ProviderProfile? engineProfile = null,
+        TranslationResponse? lastSegment = null,
+        bool isPartial = false) =>
         new(
             new TranslationResult(
                 TranslatedText: merged.ToString(),
                 Transcription: string.Empty,
                 Explanation: string.Join("\n\n", explanations),
                 ProtectedTerms: [],
-                Warnings: warnings),
+                Warnings: warnings,
+                IsPartial: isPartial),
             engineProfile?.ExecutionFacts.IsCliExecution == true ? null : new ProviderDiagnostics(
                 RequestId: "segmented",
                 ProviderType: ProviderType.OpenAiCompatible,
@@ -1963,11 +1967,12 @@ internal sealed class TranslationCoordinator
             ? response.Result.Warnings
             : [.. response.Result.Warnings, qualityWarning];
 
-        // Integrity comes from the provider contract, not just warnings: an
-        // is_partial final, integrity warnings, or an empty translation are
-        // all incomplete states. They stay visible but never qualify.
+        // 0.1.27：完整性只来自 provider 契约——is_partial 终态或空译文。
+        // 任何 warning（语言启发式、非 SSE 回退、占位符重复等）都是建议性
+        // 诊断，不再把整场会话降级为「内容不完整」：旧谓词让正常完成的
+        // 翻译也高频挂上不完整徽标并失去历史/收藏资格，是划词翻译
+        // 「内容生成不完整」误报的最大来源。警告照常展示在说明区。
         var incomplete =
-            session.Warnings.Count > 0 ||
             response.Result.IsPartial ||
             string.IsNullOrWhiteSpace(response.Result.TranslatedText);
         session.Stage = incomplete

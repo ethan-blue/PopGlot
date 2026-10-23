@@ -6017,9 +6017,10 @@ internal static partial class Program
     }
 
     /// <summary>
-    /// T12 acceptance: an incomplete SEGMENT (is_partial / dropped-token
-    /// warnings / empty text) ends the session as Partial instead of gluing
-    /// further segments onto an unreliable fragment — no fake success.
+    /// T12 acceptance: an incomplete SEGMENT (is_partial / empty text) ends
+    /// the session as Partial instead of gluing further segments onto an
+    /// unreliable fragment — no fake success. 0.1.27：分段的完整性由
+    /// is_partial/空文本表达；建议性警告不再中断后续分段。
     /// </summary>
     private static async Task IncompleteSegmentStopsSessionAsPartialAsync()
     {
@@ -6038,12 +6039,14 @@ internal static partial class Program
                 await Task.Delay(15);
                 if (count == 1)
                 {
-                    // Segment 1 "finishes" but reports a dropped placeholder:
-                    // an integrity failure this session must not paper over.
+                    // Segment 1 "finishes" but the provider flags truncation
+                    // (is_partial): an integrity failure this session must
+                    // not paper over — 0.1.27 起由 is_partial 表达完整性，
+                    // 警告不再触发降级。
                     buffer.TryAppend("第一段不完整");
                     buffer.Complete();
                     tcs.SetResult(new TranslationResponse(
-                        new TranslationResult("第一段不完整", "", "", [], ["缺失占位符 PG_0000"]),
+                        new TranslationResult("第一段不完整", "", "", [], ["缺失占位符 PG_0000"], IsPartial: true),
                         new ProviderDiagnostics(sessionId, ProviderType.OpenAiCompatible, "https://api.openai.com", 1, 200, 20)));
                     return;
                 }
@@ -8695,10 +8698,10 @@ internal static partial class Program
                 };
                 var textSection = menu.Items.OfType<System.Windows.Controls.MenuItem>().TakeWhile(item => HeaderText(item) != "图片");
                 var visionSection = menu.Items.OfType<System.Windows.Controls.MenuItem>().SkipWhile(item => HeaderText(item) != "图片");
-                var textMarks = textSection
-                    .Count(item => item.Icon is not null || $"{item.Header}".Contains("（当前）"));
-                var visionMarks = visionSection
-                    .Count(item => item.Icon is not null || $"{item.Header}".Contains("（当前）"));
+                // 0.1.27：勾选标记并入行内 StackPanel 后不再有 MenuItem.Icon；
+                // 当前路由以 SemiBold 字重标记（ProfileItem/CheckRow/跟随文字）。
+                var textMarks = textSection.Count(item => item.Icon is not null || item.FontWeight == FontWeights.SemiBold);
+                var visionMarks = visionSection.Count(item => item.Icon is not null || item.FontWeight == FontWeights.SemiBold);
                 Equal(1, textMarks, "exactly one current TEXT route marker in the menu");
                 Equal(1, visionMarks, "exactly one current IMAGE route marker in the menu");
                 Equal(blockedBefore, TestIsolation.BlockedPublicSends,
@@ -11945,14 +11948,17 @@ internal static partial class Program
         static TranslationStreamSession StreamEndingIn(TranslationResponse final) =>
             MakeStreamSession("preview text", final);
 
-        // 1. Non-empty final with an integrity warning → Partial, no history.
+        // 1. Non-empty final with only an ADVISORY warning (0.1.27: quality
+        // heuristic / non-SSE fallback style) → Completed, warning visible,
+        // eligible for history. Warnings no longer downgrade completeness.
         executor.OnStreamText = (_, _, _, _, s, e, _) =>
             StreamEndingIn(FinalResponse("missing one token", IsPartial: false,
                 ["缺少 1 个受保护占位符：⟦PG_0000⟧"]));
         var warned = await coordinator.TranslateTextAsync("warned", "en", "zh", TranslationInputSource.Selection);
-        Equal(TranslationSessionStage.Partial, warned.Stage, "an integrity warning must yield Partial");
-        True(!warned.IsCleanCompletion, "a warned session must not qualify");
-        Equal(0, history.Entries.Count, "a warned Partial must never enter history");
+        Equal(TranslationSessionStage.Completed, warned.Stage, "an advisory warning must not downgrade completion");
+        True(warned.IsCleanCompletion, "a warned-but-complete session qualifies");
+        True(warned.Warnings.Count == 1, "the advisory warning stays visible on the session");
+        Equal(1, history.Entries.Count, "a complete session with an advisory warning enters history");
 
         // 2. is_partial=true with empty warnings → Partial, no history.
         executor.OnStreamText = (_, _, _, _, s, e, _) =>
@@ -11960,14 +11966,14 @@ internal static partial class Program
         var providerPartial = await coordinator.TranslateTextAsync("provider partial", "en", "zh", TranslationInputSource.Selection);
         Equal(TranslationSessionStage.Partial, providerPartial.Stage, "a provider is_partial final must yield Partial");
         True(!providerPartial.IsCleanCompletion, "a provider-partial session must not qualify");
-        Equal(0, history.Entries.Count, "a provider-partial final must never enter history");
+        Equal(1, history.Entries.Count, "a provider-partial final must never enter history (count keeps the case-1 advisory entry)");
 
         // 3. Completed-flagged but empty translation → never qualifies.
         executor.OnStreamText = (_, _, _, _, s, e, _) =>
             StreamEndingIn(FinalResponse(string.Empty, IsPartial: false, []));
         var empty = await coordinator.TranslateTextAsync("empty final", "en", "zh", TranslationInputSource.Selection);
         True(!empty.IsCleanCompletion, "an empty translation must not qualify regardless of stage");
-        Equal(0, history.Entries.Count, "an empty translation must never enter history");
+        Equal(1, history.Entries.Count, "an empty translation must never enter history (advisory entry from case 1 remains)");
 
         // 4. Clean final → Completed, exactly one history entry even when the
         // final response is delivered a second time.
@@ -11976,7 +11982,7 @@ internal static partial class Program
         var clean = await coordinator.TranslateTextAsync("clean", "en", "zh", TranslationInputSource.Selection);
         Equal(TranslationSessionStage.Completed, clean.Stage);
         True(clean.IsCleanCompletion, "a clean completion must qualify");
-        Equal(1, history.Entries.Count, "a clean final writes exactly one history entry");
+        Equal(2, history.Entries.Count, "a clean final writes exactly one more history entry");
 
         var response = FinalResponse("完整的最终译文", IsPartial: false, []);
         var applyFinal = typeof(TranslationCoordinator).GetMethod("ApplyFinalResponse",
@@ -11989,7 +11995,7 @@ internal static partial class Program
         };
         applyFinal.Invoke(coordinator, parameters);
         applyFinal.Invoke(coordinator, parameters);
-        Equal(1, history.Entries.Count, "a duplicated final delivery must not write history twice");
+        Equal(2, history.Entries.Count, "a duplicated final delivery must not write history twice");
     }
 
     private static TranslationResponse FinalResponse(string text, bool IsPartial, string[] warnings) => new(
@@ -12625,7 +12631,8 @@ internal static partial class Program
         True(!state.StatusText.Contains("TTFT"),
             $"the streaming status must not expose the TTFT metric, got: {state.StatusText}");
 
-        // Completed with a pipeline label keeps the label and the seconds text.
+        // 0.1.27 文案减法：引擎名不再进状态行（徽标已指明引擎），
+        // 有无 pipeline label 都只显示秒级用时。
         var labeled = new TranslationSession
         {
             Stage = TranslationSessionStage.Completed,
@@ -12634,10 +12641,8 @@ internal static partial class Program
             Timing = new TranslationSessionTiming(0, 0, 1200, 1234),
         };
         state.OnSessionCompleted(labeled, epoch, "hello");
-        True(state.StatusText.StartsWith("Demo Text Service", StringComparison.Ordinal),
-            $"a present pipeline label must be shown, got: {state.StatusText}");
-        True(state.StatusText.Contains("用时 1.2 秒"),
-            $"the elapsed time must stay, in seconds, got: {state.StatusText}");
+        Equal("用时 1.2 秒", state.StatusText,
+            $"a completed status shows only the elapsed seconds, got: {state.StatusText}");
 
         // Completed with a null pipeline label: neutral wording, never 大模型.
         state.StartNewSearch("world");
@@ -12650,8 +12655,8 @@ internal static partial class Program
             Timing = new TranslationSessionTiming(0, 0, 205, 205),
         };
         state.OnSessionCompleted(unlabeled, epoch, "world");
-        True(state.StatusText.StartsWith("翻译完成", StringComparison.Ordinal),
-            $"a missing pipeline label must fall back to the neutral wording, got: {state.StatusText}");
+        Equal("用时 0.2 秒", state.StatusText,
+            $"a null pipeline label shows the same elapsed-only copy, got: {state.StatusText}");
         True(!state.StatusText.Contains("大模型"),
             "the status must never claim 大模型");
         True(state.StatusText.Contains("用时 0.2 秒"),

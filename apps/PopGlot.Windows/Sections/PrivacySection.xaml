@@ -13,33 +13,10 @@
         <Border Style="{StaticResource InlineCard}" Margin="0,0,0,16" Padding="14,12">
             <StackPanel>
                 <TextBlock Text="仅在你发起翻译时处理所选内容。" Style="{StaticResource Caption}" TextWrapping="Wrap" />
-                <Expander Header="数据处理详情" Margin="0,8,0,0">
-                <Grid Margin="0,8,0,2">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="14" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <Border Grid.Column="0" Background="{DynamicResource SurfaceBrush}"
-                            BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                            CornerRadius="{StaticResource ControlRadius}" Padding="12,10">
-                        <StackPanel>
-                            <TextBlock Text="需要联网时" FontWeight="SemiBold" FontSize="12.5" Foreground="{DynamicResource TextPrimaryBrush}" />
-                            <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap" LineHeight="17"
-                                        Text="• 输入与划词：发送待翻译文本&#x0a;• 本地 OCR：仅识别在本机，译文仍可联网生成&#x0a;• 视觉翻译：获准后可上传截图" />
-                        </StackPanel>
-                    </Border>
-                    <Border Grid.Column="2" Background="{DynamicResource SurfaceBrush}"
-                            BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                            CornerRadius="{StaticResource ControlRadius}" Padding="12,10">
-                        <StackPanel>
-                            <TextBlock Text="始终留在本机" FontWeight="SemiBold" FontSize="12.5" Foreground="{DynamicResource TextPrimaryBrush}" />
-                            <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap" LineHeight="17"
-                                       Text="• 不监听普通复制或后台屏幕&#x0a;• API Key 存入本机凭据管理器&#x0a;• 安全离线模式阻止云端请求" />
-                        </StackPanel>
-                    </Border>
-                </Grid>
-                </Expander>
+                <!-- 0.1.27：去掉折叠，事实直接可见——两行说清，不再让用户
+                     展开一张「详情」折叠板。 -->
+                <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap" LineHeight="17"
+                           Text="联网时仅发送待翻译文本，视觉翻译获准后才会上传截图；OCR 识别、密钥存储与安全离线模式都在本机完成，不监听复制或屏幕。" />
             </StackPanel>
         </Border>
 
@@ -125,6 +102,7 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <PasswordBox x:Name="IssueUploadPatBox"
                                  Style="{StaticResource FormPasswordBox}"
@@ -143,7 +121,17 @@
                             ToolTipService.ShowOnDisabled="True"
                             ToolTip="需要先勾选上传同意，并保存 GitHub 访问令牌（需 Issues 写权限）。"
                             Click="IssueUploadTest_Click" />
+                    <Button x:Name="IssueUploadPatHelpButton" Grid.Column="3"
+                            Content="如何生成令牌？" Margin="8,0,0,0" Padding="10,5"
+                            Style="{StaticResource GhostButton}" VerticalAlignment="Center"
+                            AutomationProperties.Name="打开 GitHub 令牌生成页"
+                            ToolTip="打开 GitHub 的令牌生成页（勾选 repo 权限），生成后粘贴到左侧输入框。"
+                            Click="IssueUploadPatHelp_Click" />
                 </Grid>
+                <!-- 0.1.27：令牌是什么、去哪生成直接说清——不知道 PAT 为何物
+                     的用户此前只能卡在这里。 -->
+                <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap" LineHeight="17"
+                           Text="令牌是 GitHub 的访问密码：点「如何生成令牌？」会打开 GitHub 生成页（勾选 repo 权限），把生成结果粘贴到上面输入框即可。不想上传也可以只用「数据页 → 导出诊断」手动反馈。" />
                 <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap"
                            Text="令牌仅由你粘贴，保存在本机 Windows 凭据管理器（PopGlot/telemetry/github），不写入配置文件或日志；留空保留已保存的令牌。" />
                 <TextBlock x:Name="IssueUploadStatusText" Margin="0,8,0,0" TextWrapping="Wrap"

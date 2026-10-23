@@ -2229,8 +2229,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         if (profile.ResolvedExecutionKind == EngineExecutionKind.ChatGptDirect) { OpenDirectProfile(profile); return; }
         if (profile.ExecutionFacts.IsCliExecution)
         {
-            OpenProfileInEditor(profileId);
-            CliConnectionStatus.Text = "请连接后点击测试翻译；只发送测试句 Hello world。";
+            // 0.1.27：列表上的「测试」直接用已保存的连接实测 Hello world，
+            // 不再跳进引擎编辑器让用户「自己再去测」——那不是用户该操心
+            // 的流程。账号失效时报告原因，由用户决定是否进编辑器。
+            await RunCliListTestAsync(profile, button);
             return;
         }
         var key = LoadStoredKey(profile);
@@ -2270,40 +2272,85 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 return "ok";
             });
 
-            var label = ConnectionTestDiagnostics.ShortLabel(
-                completion.Apply is VerificationApplyResult.Stale or VerificationApplyResult.Missing
-                    ? "stale"
-                    : completion.Outcome);
-            if (completion.Apply == VerificationApplyResult.Applied)
-            {
-                _testOutcomes[profileId] = completion.Outcome;
-            }
-            else
-            {
-                _testOutcomes.Remove(profileId);
-            }
-
-            RefreshProfilesList();
-            ProfileChanged?.Invoke();
-            var tone = completion.Apply == VerificationApplyResult.Applied && completion.Outcome == "ok"
-                ? StatusTone.Success
-                : completion.Apply == VerificationApplyResult.Applied
-                    ? StatusTone.Error
-                    : StatusTone.Warning;
-            var message = completion.Apply switch
-            {
-                VerificationApplyResult.Applied when completion.Outcome == "ok" =>
-                    $"「{profileName}」上次成功。这次只检查了文字生成。",
-                VerificationApplyResult.Applied => $"「{profileName}」{label}",
-                VerificationApplyResult.Busy => "这个引擎正在测试。请等这次结束再试。",
-                VerificationApplyResult.Cancelled => "测试已取消，没有写入配置。",
-                _ => $"「{profileName}」的配置已变化，这次结果没有写入。",
-            };
-            StatusChanged?.Invoke(message, tone);
+            ReportListTestOutcome(completion, profileId, profileName);
         }
         catch (Exception)
         {
             StatusChanged?.Invoke("测试失败。请稍后重试。", StatusTone.Error);
+        }
+        finally
+        {
+            button.IsEnabled = true;
+        }
+    }
+
+    /// <summary>
+    /// Shared outcome reporting for list-level engine tests: persists the
+    /// outcome, repaints the list and reports status.
+    /// </summary>
+    private void ReportListTestOutcome(ListTestCompletion completion, string profileId, string profileName)
+    {
+        var label = ConnectionTestDiagnostics.ShortLabel(
+            completion.Apply is VerificationApplyResult.Stale or VerificationApplyResult.Missing
+                ? "stale"
+                : completion.Outcome);
+        if (completion.Apply == VerificationApplyResult.Applied)
+        {
+            _testOutcomes[profileId] = completion.Outcome;
+        }
+        else
+        {
+            _testOutcomes.Remove(profileId);
+        }
+
+        RefreshProfilesList();
+        ProfileChanged?.Invoke();
+        var tone = completion.Apply == VerificationApplyResult.Applied && completion.Outcome == "ok"
+            ? StatusTone.Success
+            : completion.Apply == VerificationApplyResult.Applied
+                ? StatusTone.Error
+                : StatusTone.Warning;
+        var message = completion.Apply switch
+        {
+            VerificationApplyResult.Applied when completion.Outcome == "ok" =>
+                $"「{profileName}」上次成功。这次只检查了文字生成。",
+            VerificationApplyResult.Applied => $"「{profileName}」{label}",
+            VerificationApplyResult.Busy => "这个引擎正在测试。请等这次结束再试。",
+            VerificationApplyResult.Cancelled => "测试已取消，没有写入配置。",
+            _ => $"「{profileName}」的配置已变化，这次结果没有写入。",
+        };
+        StatusChanged?.Invoke(message, tone);
+    }
+
+    /// <summary>
+    /// 0.1.27：本机工具引擎（OMP / Codex）在引擎列表上直接实测：用已保存
+    /// 的连接发送 Hello world（enforceSavedState 默认校验保存状态仍然有效）。
+    /// </summary>
+    private async Task RunCliListTestAsync(ProviderProfile profile, Button button)
+    {
+        button.IsEnabled = false;
+        var profileName = profile.Name;
+        try
+        {
+            StatusChanged?.Invoke($"正在通过「{profileName}」发送测试句 Hello world…", StatusTone.Info);
+            var completion = await ConnectionTestRunner.RunListTestAsync(profile.Id, async captured =>
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+                var stream = CliTranslationExecutor.Stream(captured, "Hello world", "en", "zh", null, cts.Token);
+                var response = await stream.Completion;
+                if (response.Result.IsPartial || string.IsNullOrWhiteSpace(response.Result.TranslatedText))
+                {
+                    throw new InvalidOperationException(
+                        response.Result.Warnings.FirstOrDefault() ?? "工具返回了不完整的翻译。");
+                }
+                return "ok";
+            });
+            ReportListTestOutcome(completion, profile.Id, profileName);
+        }
+        catch (Exception ex)
+        {
+            StatusChanged?.Invoke($"「{profileName}」{CliFailureText(ex)}", StatusTone.Error);
+            RefreshProfilesList();
         }
         finally
         {

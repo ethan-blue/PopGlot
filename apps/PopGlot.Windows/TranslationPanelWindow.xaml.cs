@@ -954,7 +954,8 @@ public partial class TranslationPanelWindow : Window
         _translationSource = source;
         _translationSession = session;
         _translationBadge = session.PipelineLabel ?? "翻译";
-        _translationRoute = $"{_translationBadge} · {TranslationElapsedText.ForMilliseconds(session.Timing.TotalElapsedMs)}";
+        // 0.1.27：页脚不再拼引擎名，只保留用时与截图隐私事实。
+        _translationRoute = TranslationElapsedText.ForMilliseconds(session.Timing.TotalElapsedMs);
         if (session.InputSource == TranslationInputSource.Screenshot)
             _translationRoute += session.ImageUploaded ? " · 图片已进入视觉请求" : " · 图片未上传";
         _translationStatus = string.IsNullOrWhiteSpace(pipelineNote)
@@ -1291,16 +1292,23 @@ public partial class TranslationPanelWindow : Window
         // Phonetic is romanization of the source; it is a distinct field from
         // Transcription so a screenshot's OCR text is never rendered as one.
         ShowIfPresent(PhoneticText, session.Phonetic, value => $"[{value}]");
-        ShowIfPresent(ExplanationText, session.Explanation, value => value, ExplanationBox);
 
         TermsList.ItemsSource = session.ProtectedTerms;
         TermsList.Visibility = session.ProtectedTerms.Count == 0
             ? Visibility.Collapsed
             : Visibility.Visible;
 
+        // 0.1.27：已完成会话的警告不再走黄色警示框——完整性事实由阶段
+        // 表达（Partial 才是不完整），建议性警告（语言启发式、非 SSE
+        // 回退等）并入中性说明区，正常结果不再“泛黄”。
         var warnings = session.Warnings;
-        WarningText.Text = warnings.Count == 0 ? string.Empty : string.Join("\n", warnings);
-        WarningBox.Visibility = warnings.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        var notes = new[] { session.Explanation }
+            .Concat(warnings)
+            .Where(note => !string.IsNullOrWhiteSpace(note))
+            .ToList();
+        ShowIfPresent(ExplanationText, string.Join("\n", notes), value => value, ExplanationBox);
+        WarningText.Text = string.Empty;
+        WarningBox.Visibility = Visibility.Collapsed;
 
         EngineBadge.Text = session.PipelineLabel ?? "翻译完成";
         EngineBadge.ToolTip = string.IsNullOrWhiteSpace(session.PromptTemplateName)
@@ -1309,11 +1317,11 @@ public partial class TranslationPanelWindow : Window
         EngineBadge.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
         StatusDot.SetResourceReference(Border.BackgroundProperty, "AccentBrush");
 
-        // 0.1.6 页脚减法：只保留用户需要的事实——管线名、截图是否上传
-        // （隐私事实）与总用时（秒级）。取词/OCR/路由/网络等内部毫秒拆分
-        // 不再展示；Timing 数据结构本身保持不变。
+        // 0.1.27 页脚减法：引擎名不再进页脚（徽标与悬停提示已指明引擎，
+        // 产品本身就是 OMP/PopGlot，无需重复自称），只保留截图隐私事实
+        // 与总用时。Timing 数据结构本身保持不变。
         var totalMs = session.Timing.TotalElapsedMs + (ulong)Math.Max(0, _inputAcquisitionMs);
-        var footerParts = new List<string> { session.PipelineLabel ?? "翻译" };
+        var footerParts = new List<string>();
         if (session.InputSource == TranslationInputSource.Screenshot)
         {
             footerParts.Add(session.ImageUploaded ? "图片已进入视觉请求" : "图片未上传");
@@ -1884,7 +1892,8 @@ public partial class TranslationPanelWindow : Window
         {
             var route = TextRouteMenu.ReadCurrent();
             RouteSelectorLabel.Text = route.Label;
-            RouteSelectorButton.ToolTip = (route.Detail ?? string.Empty) + "\n点击切换模型 (Ctrl+M) · 下次翻译生效";
+            RouteSelectorButton.ToolTip = (route.Detail ?? string.Empty) +
+                $"\n点击切换模型 ({InterfaceKeys.ModelHotkey.DisplayName}) · 下次翻译生效";
         }
         catch (Exception)
         {
@@ -2348,8 +2357,8 @@ public partial class TranslationPanelWindow : Window
             return;
         }
 
-        // Ctrl+M: open model selector menu
-        if (e.Key == Key.M && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        // 0.1.27：模型/风格/语言互换走可自定义的界面快捷键（默认 Ctrl+M/T/L）。
+        if (InterfaceKeys.IsSwitchModel(e.Key, Keyboard.Modifiers))
         {
             if (RouteSelectorButton is not null && RouteSelectorButton.IsEnabled)
             {
@@ -2359,8 +2368,7 @@ public partial class TranslationPanelWindow : Window
             }
         }
 
-        // Ctrl+T: open translation style menu
-        if (e.Key == Key.T && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        if (InterfaceKeys.IsSwitchStyle(e.Key, Keyboard.Modifiers))
         {
             if (StyleSelectorButton is not null && StyleSelectorButton.IsEnabled)
             {
@@ -2370,8 +2378,7 @@ public partial class TranslationPanelWindow : Window
             }
         }
 
-        // Ctrl+L: swap language direction
-        if (e.Key == Key.L && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        if (InterfaceKeys.IsSwapLanguages(e.Key, Keyboard.Modifiers))
         {
             if (SwapLangButton is not null && SwapLangButton.IsEnabled)
             {

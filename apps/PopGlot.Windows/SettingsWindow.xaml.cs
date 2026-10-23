@@ -169,6 +169,9 @@ public partial class SettingsWindow : Window
         ShortcutsSection.QuickSearchHotkey.Recorded += MarkDirtyHandler;
         ShortcutsSection.CloseHotkey.Recorded += MarkDirtyHandler;
         ShortcutsSection.ShowWindowHotkey.Recorded += MarkDirtyHandler;
+        ShortcutsSection.InterfaceModelHotkey.Recorded += MarkDirtyHandler;
+        ShortcutsSection.InterfaceStyleHotkey.Recorded += MarkDirtyHandler;
+        ShortcutsSection.InterfaceSwapHotkey.Recorded += MarkDirtyHandler;
 
         Watch(DataSection.HistoryEnabled);
 
@@ -292,6 +295,9 @@ public partial class SettingsWindow : Window
         yield return ShortcutsSection.QuickSearchHotkey;
         yield return ShortcutsSection.CloseHotkey;
         yield return ShortcutsSection.ShowWindowHotkey;
+        yield return ShortcutsSection.InterfaceModelHotkey;
+        yield return ShortcutsSection.InterfaceStyleHotkey;
+        yield return ShortcutsSection.InterfaceSwapHotkey;
     }
 
     private string CaptureSettingsDraft() =>
@@ -315,7 +321,10 @@ public partial class SettingsWindow : Window
             Helpers.SelectedEnum(GeneralSection.ThemeCombo, ThemePreference.System).ToString(),
             CaptureRouteDraftSnapshot(),
             GeneralSection.CloseToTray.IsChecked == true,
-            ShortcutsSection.QuickSearchHotkey.BindingValue?.Serialize());
+            ShortcutsSection.QuickSearchHotkey.BindingValue?.Serialize(),
+            ShortcutsSection.InterfaceModelHotkey.BindingValue?.Serialize(),
+            ShortcutsSection.InterfaceStyleHotkey.BindingValue?.Serialize(),
+            ShortcutsSection.InterfaceSwapHotkey.BindingValue?.Serialize());
 
     private RouteDraftSnapshot CaptureRouteDraftSnapshot() =>
         RouteDraftSnapshot.Create(
@@ -397,6 +406,9 @@ public partial class SettingsWindow : Window
         ShortcutsSection.QuickSearchHotkey.BindingValue = settings.QuickSearchHotkey ?? HotkeyBinding.QuickSearchDefault;
         ShortcutsSection.CloseHotkey.BindingValue = settings.CloseHotkey;
         ShortcutsSection.ShowWindowHotkey.BindingValue = settings.ShowWindowHotkey ?? HotkeyBinding.ShowWindowDefault;
+        ShortcutsSection.InterfaceModelHotkey.BindingValue = settings.InterfaceModelHotkey;
+        ShortcutsSection.InterfaceStyleHotkey.BindingValue = settings.InterfaceStyleHotkey;
+        ShortcutsSection.InterfaceSwapHotkey.BindingValue = settings.InterfaceSwapHotkey;
         DataSection.HistoryEnabled.IsChecked = settings.HistoryEnabled;
         GeneralSection.CloseOnFocusLoss.IsChecked = settings.ClosePanelOnFocusLoss;
         GeneralSection.AutoCopy.IsChecked = settings.CopyTranslationAutomatically;
@@ -691,6 +703,9 @@ public partial class SettingsWindow : Window
                 ShowWindowHotkey = ShortcutsSection.ShowWindowHotkey.BindingValue ?? _shellSettings.ShowWindowHotkey ?? HotkeyBinding.ShowWindowDefault,
                 CloseMainWindowToTray = GeneralSection.CloseToTray.IsChecked == true,
                 QuickSearchHotkey = ShortcutsSection.QuickSearchHotkey.BindingValue ?? _shellSettings.QuickSearchHotkey,
+                InterfaceModelHotkey = ShortcutsSection.InterfaceModelHotkey.BindingValue ?? _shellSettings.InterfaceModelHotkey,
+                InterfaceStyleHotkey = ShortcutsSection.InterfaceStyleHotkey.BindingValue ?? _shellSettings.InterfaceStyleHotkey,
+                InterfaceSwapHotkey = ShortcutsSection.InterfaceSwapHotkey.BindingValue ?? _shellSettings.InterfaceSwapHotkey,
             };
 
             var validationError = shellSettings.ValidateHotkeys();
@@ -905,6 +920,9 @@ public partial class SettingsWindow : Window
         CloseHotkey = draft.CloseHotkey,
         ShowWindowHotkey = draft.ShowWindowHotkey,
         QuickSearchHotkey = draft.QuickSearchHotkey,
+        InterfaceModelHotkey = draft.InterfaceModelHotkey,
+        InterfaceStyleHotkey = draft.InterfaceStyleHotkey,
+        InterfaceSwapHotkey = draft.InterfaceSwapHotkey,
         HistoryEnabled = draft.HistoryEnabled,
         Theme = draft.Theme,
         ClosePanelOnFocusLoss = draft.ClosePanelOnFocusLoss,

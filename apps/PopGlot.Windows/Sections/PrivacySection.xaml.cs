@@ -444,6 +444,26 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         }
     }
 
+    /// <summary>
+    /// 0.1.27：「如何生成令牌？」——直接打开 GitHub 预填 repo 权限的令牌
+    /// 生成页。此前用户不知道 PAT 从哪来，只能卡在上报设置里。
+    /// </summary>
+    private void IssueUploadPatHelp_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                "https://github.com/settings/tokens/new?scopes=repo&description=PopGlot")
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception exception)
+        {
+            StatusChanged?.Invoke($"无法打开浏览器：{exception.Message}", StatusTone.Error);
+        }
+    }
+
     private async void IssueUploadTest_Click(object sender, RoutedEventArgs e)
     {
         if (_issueUploadTestBusy)

@@ -43,6 +43,10 @@ internal sealed record HotkeyBinding(uint Modifiers, uint VirtualKey)
     public static HotkeyBinding ScreenshotDefault => new(ModControl | ModAlt, 0x20); // Ctrl+Alt+Space
     public static HotkeyBinding CloseDefault => new(ModControl | ModAlt, 0x58); // Ctrl+Alt+X
     public static HotkeyBinding ShowWindowDefault => new(ModControl | ModAlt, 0x4F); // Ctrl+Alt+O
+    // 0.1.27：界面内组合键（应用内生效，不注册系统热键）也可自定义。
+    public static HotkeyBinding InterfaceModelDefault => new(ModControl, 0x4D); // Ctrl+M
+    public static HotkeyBinding InterfaceStyleDefault => new(ModControl, 0x54); // Ctrl+T
+    public static HotkeyBinding InterfaceSwapDefault => new(ModControl, 0x4C);  // Ctrl+L
     public static HotkeyBinding QuickSearchDefault => new(ModControl | ModAlt, 0x51); // Ctrl+Alt+Q
 
     public string DisplayName
@@ -244,10 +248,24 @@ internal sealed record ShellSettings(
     FreeEngineProvider FreeEngineProvider = FreeEngineProvider.Google,
     // 0.1.25 自我迭代：GitHub Issue 诊断上报授权。默认关闭；旧配置文件缺少
     // 该字段时同样读作 false，升级绝不隐式授予上传许可。
-    bool IssueUploadConsent = false)
+    bool IssueUploadConsent = false,
+    // 0.1.27：界面快捷键（工作台/浮窗/极速查词共用）。null 一律回落默认，
+    // 旧配置文件升级后行为与历史版本完全一致。
+    HotkeyBinding? InterfaceModelHotkey = null,
+    HotkeyBinding? InterfaceStyleHotkey = null,
+    HotkeyBinding? InterfaceSwapHotkey = null)
 {
     public HotkeyBinding QuickSearchHotkey { get; init; } =
         QuickSearchHotkey ?? HotkeyBinding.QuickSearchDefault;
+
+    public HotkeyBinding InterfaceModelHotkey { get; init; } =
+        InterfaceModelHotkey ?? HotkeyBinding.InterfaceModelDefault;
+
+    public HotkeyBinding InterfaceStyleHotkey { get; init; } =
+        InterfaceStyleHotkey ?? HotkeyBinding.InterfaceStyleDefault;
+
+    public HotkeyBinding InterfaceSwapHotkey { get; init; } =
+        InterfaceSwapHotkey ?? HotkeyBinding.InterfaceSwapDefault;
 
     public const int CurrentSchemaVersion = 3;
 
@@ -267,7 +285,10 @@ internal sealed record ShellSettings(
         CloudSpeechEnabled: false,
         CloseMainWindowToTray: true,
         HasCompletedOnboarding: false,
-        QuickSearchHotkey: HotkeyBinding.QuickSearchDefault);
+        QuickSearchHotkey: HotkeyBinding.QuickSearchDefault,
+        InterfaceModelHotkey: HotkeyBinding.InterfaceModelDefault,
+        InterfaceStyleHotkey: HotkeyBinding.InterfaceStyleDefault,
+        InterfaceSwapHotkey: HotkeyBinding.InterfaceSwapDefault);
 
     public IReadOnlyDictionary<HotkeyAction, HotkeyBinding> Hotkeys
     {
@@ -302,9 +323,34 @@ internal sealed record ShellSettings(
         var duplicate = Hotkeys
             .GroupBy(pair => pair.Value.DisplayName, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault(group => group.Count() > 1);
-        return duplicate is null
+        if (duplicate is not null)
+        {
+            return $"快捷键 {duplicate.Key} 被重复用于{string.Join("、", duplicate.Select(pair => ActionName(pair.Key)))}。";
+        }
+
+        // 0.1.27：界面快捷键也要有效、且彼此/与全局键不重复——同一组合
+        // 同时命中两个动作是最典型的改绑事故。
+        var interfaceKeys = new (string Name, HotkeyBinding Binding)[]
+        {
+            ("切换当前模型", InterfaceModelHotkey),
+            ("切换翻译风格", InterfaceStyleHotkey),
+            ("互换源/目标语言", InterfaceSwapHotkey),
+        };
+        foreach (var (name, binding) in interfaceKeys)
+        {
+            if (!binding.IsValid)
+            {
+                return $"{name}的快捷键“{binding.DisplayName}”无效：至少需要包含 Ctrl、Alt 或 Win，并搭配一个普通按键。";
+            }
+        }
+        var allPairs = Hotkeys.Select(pair => (Label: ActionName(pair.Key), pair.Value))
+            .Concat(interfaceKeys.Select(entry => (Label: entry.Name, entry.Binding)));
+        var interfaceDuplicate = allPairs
+            .GroupBy(pair => pair.Item2.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(group => group.Count() > 1);
+        return interfaceDuplicate is null
             ? null
-            : $"快捷键 {duplicate.Key} 被重复用于{string.Join("、", duplicate.Select(pair => ActionName(pair.Key)))}。";
+            : $"快捷键 {interfaceDuplicate.Key} 被重复用于{string.Join("、", interfaceDuplicate.Select(pair => pair.Label))}。";
     }
 
     internal static string ActionName(HotkeyAction action) => action switch
@@ -501,8 +547,18 @@ internal static class ShellSettingsStore
                 Enum.TryParse<FreeEngineProvider>(persisted.FreeEngineProvider, ignoreCase: true, out var freeProvider)
                     ? freeProvider
                     : FreeEngineProvider.Google,
-                // 0.1.25：旧文件没有该字段 → false，默认关闭诊断上传。
-                persisted.IssueUploadConsent ?? false);
+            // 0.1.25：旧文件没有该字段 → false，默认关闭诊断上传。
+            persisted.IssueUploadConsent ?? false,
+            // 0.1.27：界面快捷键缺失 → 默认组合。
+            persisted.InterfaceModelHotkey is not null
+                ? HotkeyBinding.Parse(persisted.InterfaceModelHotkey, defaults.InterfaceModelHotkey)
+                : defaults.InterfaceModelHotkey,
+            persisted.InterfaceStyleHotkey is not null
+                ? HotkeyBinding.Parse(persisted.InterfaceStyleHotkey, defaults.InterfaceStyleHotkey)
+                : defaults.InterfaceStyleHotkey,
+            persisted.InterfaceSwapHotkey is not null
+                ? HotkeyBinding.Parse(persisted.InterfaceSwapHotkey, defaults.InterfaceSwapHotkey)
+                : defaults.InterfaceSwapHotkey);
 
             lock (CacheLock)
             {
@@ -617,7 +673,10 @@ internal static class ShellSettingsStore
             settings.HasCompletedOnboarding,
             settings.QuickSearchHotkey.Serialize(),
             settings.FreeEngineProvider.ToString(),
-            settings.IssueUploadConsent);
+            settings.IssueUploadConsent,
+            settings.InterfaceModelHotkey.Serialize(),
+            settings.InterfaceStyleHotkey.Serialize(),
+            settings.InterfaceSwapHotkey.Serialize());
 
         // Write through a temporary file so a crash mid-write cannot leave the
         // user without settings on the next launch: exclusive-access write,
@@ -666,5 +725,8 @@ internal static class ShellSettingsStore
         bool? HasCompletedOnboarding = null,
         string? QuickSearchHotkey = null,
         string? FreeEngineProvider = null,
-        bool? IssueUploadConsent = null);
+        bool? IssueUploadConsent = null,
+        string? InterfaceModelHotkey = null,
+        string? InterfaceStyleHotkey = null,
+        string? InterfaceSwapHotkey = null);
 }

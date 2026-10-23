@@ -286,7 +286,10 @@ public sealed record SettingsFormSnapshot(
     string Theme,
     RouteDraftSnapshot Route,
     bool CloseToTray = true,
-    string QuickSearchHotkey = "")
+    string QuickSearchHotkey = "",
+    string InterfaceModelHotkey = "",
+    string InterfaceStyleHotkey = "",
+    string InterfaceSwapHotkey = "")
 {
     public static SettingsFormSnapshot Create(
         string? selectionHotkey,
@@ -302,7 +305,10 @@ public sealed record SettingsFormSnapshot(
         string? theme,
         RouteDraftSnapshot route,
         bool closeToTray = true,
-        string? quickSearchHotkey = null)
+        string? quickSearchHotkey = null,
+        string? interfaceModelHotkey = null,
+        string? interfaceStyleHotkey = null,
+        string? interfaceSwapHotkey = null)
     {
         return new SettingsFormSnapshot(
             selectionHotkey ?? string.Empty,
@@ -318,7 +324,10 @@ public sealed record SettingsFormSnapshot(
             theme ?? "System",
             route,
             closeToTray,
-            quickSearchHotkey ?? string.Empty);
+            quickSearchHotkey ?? string.Empty,
+            interfaceModelHotkey ?? string.Empty,
+            interfaceStyleHotkey ?? string.Empty,
+            interfaceSwapHotkey ?? string.Empty);
     }
 
     public string Serialize() => string.Join('\u001f',
@@ -335,5 +344,8 @@ public sealed record SettingsFormSnapshot(
         Theme,
         Route.Serialize(),
         CloseToTray ? "1" : "0",
-        QuickSearchHotkey);
+        QuickSearchHotkey,
+        InterfaceModelHotkey,
+        InterfaceStyleHotkey,
+        InterfaceSwapHotkey);
 }

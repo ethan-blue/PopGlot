@@ -488,6 +488,13 @@ pub enum ProviderStreamEvent {
     TextDelta(String),
     /// A final text delta and provider completion carried by one SSE frame.
     TextDeltaCompleted(String),
+    /// The provider ended the turn early: the protocol finished, but the
+    /// content is NOT complete (`finish_reason=length` / `content_filter`).
+    /// The final delta, when the truncation frame carries one, is preserved.
+    Truncated {
+        delta: String,
+        reason: &'static str,
+    },
     Usage {
         input: Option<u64>,
         output: Option<u64>,
@@ -1033,7 +1040,7 @@ impl ProviderClient {
         }
         let mut decoder = SseDecoder::default();
         let mut assembler = TextFirstAssembler::new(prompt.delimiter.clone());
-        let mut completed = false;
+        let mut completion = StreamCompletion::default();
         let mut total_bytes = 0_usize;
         let mut stream = response.bytes_stream();
         loop {
@@ -1073,20 +1080,20 @@ impl ProviderClient {
                     &mut assembler,
                     on_delta,
                     emitted,
-                    &mut completed,
+                    &mut completion,
                 )?;
-                if completed || cancellation.is_cancelled() {
+                if completion.completed || cancellation.is_cancelled() {
                     break;
                 }
             }
             if cancellation.is_cancelled() {
                 return Err(cancelled_error());
             }
-            if completed {
+            if completion.completed {
                 break;
             }
         }
-        if !completed {
+        if !completion.completed {
             for event in decoder
                 .finish()
                 .map_err(|error| invalid_response(format!("SSE 解码失败：{error}")))?
@@ -1098,9 +1105,9 @@ impl ProviderClient {
                     &mut assembler,
                     on_delta,
                     emitted,
-                    &mut completed,
+                    &mut completion,
                 )?;
-                if completed {
+                if completion.completed {
                     break;
                 }
             }
@@ -1111,11 +1118,14 @@ impl ProviderClient {
             *emitted = true;
         }
         let assembly = assembler.finish();
-        let mut result = stream_result(assembly, !completed);
-        if !completed {
-            result
+        let incomplete = !completion.completed || completion.truncated.is_some();
+        let mut result = stream_result(assembly, incomplete);
+        match (completion.truncated, incomplete) {
+            (Some(reason), _) => result.warnings.push(reason.to_owned()),
+            (None, true) => result
                 .warnings
-                .push("SSE 流在协议完成事件前正常结束；译文可能不完整。".to_owned());
+                .push("SSE 流在协议完成事件前正常结束；译文可能不完整。".to_owned()),
+            (None, false) => {}
         }
         Ok(TranslationResponse {
             result,
@@ -1407,10 +1417,24 @@ fn parse_openai_chat_stream_event(
         .pointer("/choices/0/delta/content")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let finished = value
+    let finish_reason = value
         .pointer("/choices/0/finish_reason")
-        .and_then(Value::as_str)
-        .is_some();
+        .and_then(Value::as_str);
+    // 0.1.27：finish_reason=length/content_filter 是真实截断。旧逻辑只看
+    // 字段存在性，把截断当正常完成——译文被悄悄截短还不提示。截断帧常带
+    // 最后一段 delta，必须一并保留。
+    let truncation = match finish_reason {
+        Some("length") => Some("模型输出达到长度上限，译文可能被截断。"),
+        Some("content_filter") => Some("内容被提供方安全策略截断。"),
+        _ => None,
+    };
+    if let Some(reason) = truncation {
+        return Ok(Some(ProviderStreamEvent::Truncated {
+            delta: delta.to_owned(),
+            reason,
+        }));
+    }
+    let finished = finish_reason.is_some();
     if !delta.is_empty() {
         return Ok(Some(if finished {
             ProviderStreamEvent::TextDeltaCompleted(delta.to_owned())
@@ -1969,7 +1993,7 @@ fn process_provider_stream_event<F>(
     assembler: &mut TextFirstAssembler,
     on_delta: &mut F,
     emitted: &mut bool,
-    completed: &mut bool,
+    completion: &mut StreamCompletion,
 ) -> Result<(), ProviderError>
 where
     F: FnMut(&str),
@@ -1988,13 +2012,36 @@ where
                 on_delta(&visible);
                 *emitted = true;
             }
-            *completed = true;
+            completion.completed = true;
         }
-        Some(ProviderStreamEvent::Completed) => *completed = true,
+        Some(ProviderStreamEvent::Truncated { delta, reason }) => {
+            // 协议层面“完成”但要继续读完最后一帧：截断帧携带的 delta 先入
+            // 汇编器，再把会话标记为截断（completed=true 停止读取，避免后续
+            // [DONE] 覆盖截断事实）。
+            if !delta.is_empty() {
+                let visible = assembler.push(&delta);
+                if !visible.is_empty() {
+                    on_delta(&visible);
+                    *emitted = true;
+                }
+            }
+            completion.completed = true;
+            completion.truncated = Some(reason);
+        }
+        Some(ProviderStreamEvent::Completed) => completion.completed = true,
         Some(ProviderStreamEvent::ProviderError(error)) => return Err(error),
         Some(ProviderStreamEvent::Usage { .. }) | None => {}
     }
     Ok(())
+}
+
+/// Stream-loop completion state: protocol completion plus an independent
+/// truncation fact (`finish_reason=length` etc. completes the protocol while
+/// the content stays incomplete).
+#[derive(Default)]
+struct StreamCompletion {
+    completed: bool,
+    truncated: Option<&'static str>,
 }
 
 fn stream_result(
@@ -2338,6 +2385,32 @@ mod tests {
             parse_openai_chat_stream_event(data),
             Ok(Some(ProviderStreamEvent::Completed))
         );
+    }
+
+    #[test]
+    fn chat_stream_finish_reason_length_is_truncation_not_completion() {
+        // 0.1.27：finish_reason=length 表示真实截断——旧逻辑只看字段存在性，
+        // 截断被当正常完成。截断帧携带的最后一段 delta 必须保留。
+        let data = r#"{"choices":[{"delta":{"content":"被截断的尾段"},"finish_reason":"length"}]}"#;
+        match parse_openai_chat_stream_event(data) {
+            Ok(Some(ProviderStreamEvent::Truncated { delta, reason })) => {
+                assert_eq!(delta, "被截断的尾段");
+                assert!(reason.contains("长度上限"));
+            }
+            other => panic!("expected Truncated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn chat_stream_finish_reason_content_filter_is_truncation() {
+        let data = r#"{"choices":[{"delta":{},"finish_reason":"content_filter"}]}"#;
+        match parse_openai_chat_stream_event(data) {
+            Ok(Some(ProviderStreamEvent::Truncated { delta, reason })) => {
+                assert_eq!(delta, "");
+                assert!(reason.contains("截断"));
+            }
+            other => panic!("expected Truncated, got {other:?}"),
+        }
     }
 
     #[test]

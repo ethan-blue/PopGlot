@@ -1212,7 +1212,7 @@
         <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
         <Setter Property="FontSize" Value="13" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-        <Setter Property="Padding" Value="10,8" />
+        <Setter Property="Padding" Value="10,5" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="ToolTip" Value="{Binding RelativeSource={RelativeSource Self}, Path=Content}" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
@@ -1223,7 +1223,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="ComboBoxItem">
                     <Border x:Name="Surface" Background="Transparent" CornerRadius="{StaticResource ControlRadius}"
-                            Margin="4,1" Padding="{TemplateBinding Padding}"
+                            Margin="3,1" Padding="{TemplateBinding Padding}"
                             SnapsToDevicePixels="True">
                         <ContentPresenter VerticalAlignment="Center" />
                     </Border>
