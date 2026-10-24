@@ -1220,7 +1220,10 @@ impl TranslationProvider for OpenAiChatProvider {
     }
 
     fn parse(&self, response: &[u8]) -> Result<TranslationResult, ProviderError> {
-        parse_translation_json(&openai_chat_content(response)?)
+        let value = parse_json(response)?;
+        let mut result = parse_translation_json(openai_chat_content(&value)?)?;
+        apply_openai_chat_completion(&value, &mut result);
+        Ok(result)
     }
 
     fn parse_stream_fallback(
@@ -1228,10 +1231,10 @@ impl TranslationProvider for OpenAiChatProvider {
         response: &[u8],
         delimiter: &str,
     ) -> Result<TranslationResult, ProviderError> {
-        Ok(parse_text_first_fallback(
-            &openai_chat_content(response)?,
-            delimiter,
-        ))
+        let value = parse_json(response)?;
+        let mut result = parse_text_first_fallback(openai_chat_content(&value)?, delimiter);
+        apply_openai_chat_completion(&value, &mut result);
+        Ok(result)
     }
 
     fn prepare_stream(
@@ -1420,14 +1423,7 @@ fn parse_openai_chat_stream_event(
     let finish_reason = value
         .pointer("/choices/0/finish_reason")
         .and_then(Value::as_str);
-    // 0.1.27：finish_reason=length/content_filter 是真实截断。旧逻辑只看
-    // 字段存在性，把截断当正常完成——译文被悄悄截短还不提示。截断帧常带
-    // 最后一段 delta，必须一并保留。
-    let truncation = match finish_reason {
-        Some("length") => Some("模型输出达到长度上限，译文可能被截断。"),
-        Some("content_filter") => Some("内容被提供方安全策略截断。"),
-        _ => None,
-    };
+    let truncation = openai_chat_truncation_reason(&value);
     if let Some(reason) = truncation {
         return Ok(Some(ProviderStreamEvent::Truncated {
             delta: delta.to_owned(),
@@ -2241,12 +2237,29 @@ pub fn gemini_stream_endpoint(endpoint: &str) -> Result<String, ProviderError> {
     Ok(result)
 }
 
-fn openai_chat_content(response: &[u8]) -> Result<String, ProviderError> {
-    parse_json(response)?
+fn openai_chat_content(value: &Value) -> Result<&str, ProviderError> {
+    value
         .pointer("/choices/0/message/content")
         .and_then(Value::as_str)
-        .map(str::to_owned)
         .ok_or_else(|| invalid_response("Chat Completions 响应缺少 choices[0].message.content。"))
+}
+
+fn openai_chat_truncation_reason(value: &Value) -> Option<&'static str> {
+    match value
+        .pointer("/choices/0/finish_reason")
+        .and_then(Value::as_str)
+    {
+        Some("length") => Some("模型输出达到长度上限，译文可能被截断。"),
+        Some("content_filter") => Some("内容被提供方安全策略截断。"),
+        _ => None,
+    }
+}
+
+fn apply_openai_chat_completion(value: &Value, result: &mut TranslationResult) {
+    if let Some(reason) = openai_chat_truncation_reason(value) {
+        result.is_partial = true;
+        result.warnings.push(reason.to_owned());
+    }
 }
 
 fn openai_responses_content(response: &[u8]) -> Result<String, ProviderError> {

@@ -929,6 +929,49 @@ async fn openai_json_stream_fallback_preserves_body_without_or_with_bad_trailer(
     }
 }
 
+#[tokio::test]
+async fn openai_json_fallback_preserves_finish_reason_integrity() {
+    for (finish_reason, incomplete) in [
+        (Some("length"), true),
+        (Some("content_filter"), true),
+        (Some("stop"), false),
+        (None, false),
+    ] {
+        let mut choice = serde_json::json!({"message": {"content": "已返回的译文片段"}});
+        if let Some(reason) = finish_reason {
+            choice["finish_reason"] = serde_json::json!(reason);
+        }
+        let server = SseServer::start_multi(vec![SseFlow::RawHttp {
+            status: 200,
+            body: serde_json::json!({"choices": [choice]}).to_string(),
+            delay: Duration::ZERO,
+        }]);
+        let config = sse_settings(ProviderType::OpenAiCompatible, &server);
+        let mut deltas = Vec::new();
+        let response = client()
+            .execute_stream(
+                provider_for(config.provider_type).as_ref(),
+                &config,
+                "stream-key",
+                "json-fallback-completion",
+                &TranslationRequest::text("hello", LanguagePair::new("auto", "zh-CN")),
+                Some("PGMETA_json_completion_012345"),
+                &CancellationToken::new(),
+                |delta| deltas.push(delta.to_owned()),
+            )
+            .await
+            .expect("HTTP 200 application/json fallback");
+        assert_eq!(response.result.is_partial, incomplete, "{finish_reason:?}");
+        assert_eq!(response.result.translated_text, "已返回的译文片段");
+        assert_eq!(deltas.concat(), response.result.translated_text);
+        assert_eq!(
+            server.requests().len(),
+            1,
+            "truncation must not trigger a hidden retry"
+        );
+    }
+}
+
 async fn collect_stream(
     provider_type: ProviderType,
     server: &SseServer,
