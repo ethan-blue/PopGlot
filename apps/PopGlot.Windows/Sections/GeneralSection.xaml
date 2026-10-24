@@ -3,53 +3,16 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:PopGlot.Windows">
     <UserControl.Resources>
-        <Style x:Key="ThemeSwatch" TargetType="RadioButton">
-            <Setter Property="Margin" Value="0,0,8,0" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="RadioButton">
-                        <Border x:Name="Chrome" Padding="6,6,6,5" CornerRadius="8"
-                                BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1"
-                                Background="{DynamicResource SurfaceBrush}"
-                                SnapsToDevicePixels="True">
-                            <ContentPresenter HorizontalAlignment="Center" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-                                <Setter TargetName="Chrome" Property="BorderThickness" Value="2" />
-                                <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource AccentSoftBrush}" />
-                            </Trigger>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentBorderBrush}" />
-                            </Trigger>
-                            <MultiTrigger>
-                                <MultiTrigger.Conditions>
-                                    <Condition Property="IsChecked" Value="True" />
-                                    <Condition Property="IsMouseOver" Value="True" />
-                                </MultiTrigger.Conditions>
-                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-                                <Setter TargetName="Chrome" Property="BorderThickness" Value="2" />
-                                <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource AccentSoftBrush}" />
-                            </MultiTrigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
+        <Style x:Key="ThemeSwatch" TargetType="RadioButton" BasedOn="{StaticResource {x:Type RadioButton}}">
+            <Setter Property="Margin" Value="0,0,14,0" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
     </UserControl.Resources>
 
-    <!-- Card-grouped desktop settings -->
     <StackPanel>
-        <TextBlock Text="通用" Style="{StaticResource PageTitle}" Margin="0,0,0,10" />
-
         <!-- ==================== 外观与启动 ==================== -->
         <TextBlock Text="外观与启动" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
-        <Border Background="{DynamicResource SurfaceMutedBrush}"
-                BorderThickness="0" CornerRadius="{StaticResource CardRadius}"
-                Padding="12" Margin="0,0,0,16">
+        <Border Padding="0" Margin="0,0,0,16">
             <StackPanel>
                 <Grid x:Name="ThemeRowGrid">
                     <Grid.ColumnDefinitions>
@@ -72,39 +35,19 @@
                                      Style="{StaticResource ThemeSwatch}"
                                      AutomationProperties.Name="系统主题"
                                      Click="ThemeChoice_Click">
-                            <StackPanel Width="44">
-                                <Grid Width="36" Height="22" HorizontalAlignment="Center">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <Border Background="#F4F6F8" CornerRadius="3,0,0,3" />
-                                    <Border Grid.Column="1" Background="#181B22" CornerRadius="0,3,3,0" />
-                                </Grid>
-                                <TextBlock Text="系统" FontSize="11" HorizontalAlignment="Center" Margin="0,4,0,0" />
-                            </StackPanel>
+                            <TextBlock Text="系统" />
                         </RadioButton>
                         <RadioButton x:Name="ThemeLightChoice" GroupName="AppTheme" Tag="Light"
                                      Style="{StaticResource ThemeSwatch}"
                                      AutomationProperties.Name="浅色主题"
                                      Click="ThemeChoice_Click">
-                            <StackPanel Width="44">
-                                <Border Width="36" Height="22" CornerRadius="3" Background="#F4F6F8" HorizontalAlignment="Center">
-                                    <Border Width="16" Height="3" Background="#5563B8" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="4,5,0,0" />
-                                </Border>
-                                <TextBlock Text="浅色" FontSize="11" HorizontalAlignment="Center" Margin="0,4,0,0" />
-                            </StackPanel>
+                            <TextBlock Text="浅色" />
                         </RadioButton>
                         <RadioButton x:Name="ThemeDarkChoice" GroupName="AppTheme" Tag="Dark"
                                      Style="{StaticResource ThemeSwatch}" Margin="0"
                                      AutomationProperties.Name="深色主题"
                                      Click="ThemeChoice_Click">
-                            <StackPanel Width="44">
-                                <Border Width="36" Height="22" CornerRadius="3" Background="#181B22" HorizontalAlignment="Center">
-                                    <Border Width="16" Height="3" Background="#7C89D9" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="4,5,0,0" />
-                                </Border>
-                                <TextBlock Text="深色" FontSize="11" HorizontalAlignment="Center" Margin="0,4,0,0" />
-                            </StackPanel>
+                            <TextBlock Text="深色" />
                         </RadioButton>
                     </StackPanel>
                     <ComboBox x:Name="ThemeComboBox" Grid.Column="1" Grid.Row="0" VerticalAlignment="Center"
@@ -117,7 +60,7 @@
                     </ComboBox>
                 </Grid>
 
-                <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" Margin="0,12" SnapsToDevicePixels="True" Opacity="0.7" />
+                <Border Style="{StaticResource SettingsDivider}" Margin="0,8" />
 
                 <Grid x:Name="StartupRowGrid">
                     <Grid.ColumnDefinitions>
@@ -151,7 +94,7 @@
                     </StackPanel>
                 </Grid>
 
-                <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" Margin="0,12" SnapsToDevicePixels="True" Opacity="0.7" />
+                <Border Style="{StaticResource SettingsDivider}" Margin="0,8" />
 
                 <Grid x:Name="CloseToTrayRowGrid">
                     <Grid.ColumnDefinitions>
@@ -168,7 +111,7 @@
                                   Style="{StaticResource ToggleSwitch}" />
                 </Grid>
 
-                <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" Margin="0,12" SnapsToDevicePixels="True" Opacity="0.7" />
+                <Border Style="{StaticResource SettingsDivider}" Margin="0,8" />
 
                 <Grid x:Name="OnboardingRowGrid">
                     <Grid.ColumnDefinitions>
@@ -177,7 +120,7 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="新手引导" Style="{StaticResource RowTitle}" />
-                        <TextBlock Text="初次使用时的快速功能引导介绍" Style="{StaticResource RowHint}" />
+                        <TextBlock Text="重新查看快速上手" Style="{StaticResource RowHint}" />
                     </StackPanel>
                     <Button x:Name="RestartOnboardingButton" Grid.Column="1"
                             Content="重新显示引导"
@@ -189,7 +132,7 @@
                             Click="RestartOnboarding_Click" />
                 </Grid>
 
-                <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" Margin="0,12" SnapsToDevicePixels="True" Opacity="0.7" />
+                <Border Style="{StaticResource SettingsDivider}" Margin="0,8" />
 
                 <!-- C25 离线帮助入口：本机文档，不联网。 -->
                 <Grid x:Name="HelpRowGrid">
@@ -215,9 +158,7 @@
 
         <!-- ==================== 浮窗行为 ==================== -->
         <TextBlock Text="浮窗行为" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
-        <Border Background="{DynamicResource SurfaceMutedBrush}"
-                BorderThickness="0" CornerRadius="{StaticResource CardRadius}"
-                Padding="12" Margin="0,0,0,16">
+        <Border Padding="0" Margin="0,0,0,16">
             <StackPanel>
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -234,7 +175,7 @@
                                   Style="{StaticResource ToggleSwitch}" />
                 </Grid>
 
-                <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" Margin="0,12" SnapsToDevicePixels="True" Opacity="0.7" />
+                <Border Style="{StaticResource SettingsDivider}" Margin="0,8" />
 
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -243,7 +184,7 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="自动复制译文" Style="{StaticResource RowTitle}" />
-                        <TextBlock Text="翻译完成后自动将译文结果复制到剪贴板" Style="{StaticResource RowHint}" />
+                        <TextBlock Text="翻译完成后复制到剪贴板" Style="{StaticResource RowHint}" />
                     </StackPanel>
                     <ToggleButton x:Name="AutoCopyToggle"
                                   AutomationProperties.Name="译后自动复制" Grid.Column="1"
@@ -255,9 +196,7 @@
 
         <!-- ==================== 翻译规则 ==================== -->
         <TextBlock Text="翻译规则" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
-        <Border Background="{DynamicResource SurfaceMutedBrush}"
-                BorderThickness="0" CornerRadius="{StaticResource CardRadius}"
-                Padding="12" Margin="0,0,0,16">
+        <Border Padding="0" Margin="0,0,0,16">
             <StackPanel>
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -266,7 +205,7 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="补充说明" Style="{StaticResource RowTitle}" />
-                        <TextBlock Text="翻译时若存在词法、语境或歧义，附带简明解析" Style="{StaticResource RowHint}" />
+                        <TextBlock Text="附带简明的词法、语境与歧义解析" Style="{StaticResource RowHint}" />
                     </StackPanel>
                     <ToggleButton x:Name="IncludeExplanationToggle" Grid.Column="1"
                                   AutomationProperties.Name="显示详细解析"
@@ -274,7 +213,7 @@
                                   Style="{StaticResource ToggleSwitch}" />
                 </Grid>
 
-                <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" Margin="0,12" SnapsToDevicePixels="True" Opacity="0.7" />
+                <Border Style="{StaticResource SettingsDivider}" Margin="0,8" />
 
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -283,7 +222,7 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="保护代码与变量" Style="{StaticResource RowTitle}" />
-                        <TextBlock Text="识别代码标识符与变量名，避免被翻译改写" Style="{StaticResource RowHint}" />
+                        <TextBlock Text="避免改写代码标识符与变量名" Style="{StaticResource RowHint}" />
                     </StackPanel>
                     <ToggleButton x:Name="ProtectTokensToggle" Grid.Column="1"
                             AutomationProperties.Name="保留代码与变量名原文"

@@ -1,13 +1,14 @@
-use crate::adapter::openai::OpenAIStreamer;
+use super::OpenAIStreamer;
 use crate::adapter::{Adapter, AdapterKind, ServiceType, WebRequestData};
 use crate::chat::{
-	ChatOptionsSet, ChatRequest, ChatResponse, ChatStream, ChatStreamResponse, MessageContent, StopReason, ToolCall,
+	ChatOptionsSet, ChatRequest, ChatResponse, ChatStream, ChatStreamResponse, ContentPart, MessageContent, StopReason,
+	ToolCall,
 };
 use crate::resolver::{AuthData, Endpoint};
-use crate::webc::{EventSourceStream, WebResponse};
+use crate::webc::StreamRequest as RequestBuilder;
+use crate::webc::{EventSourceStream, WebClient, WebResponse};
 use crate::{Error, Result};
 use crate::{ModelIden, ServiceTarget};
-use reqwest::RequestBuilder;
 use serde::Deserialize;
 use serde_json::Value;
 use value_ext::JsonValueExt;
@@ -21,21 +22,26 @@ impl OpenAIAdapter {
 impl Adapter for OpenAIAdapter {
 	const DEFAULT_API_KEY_ENV_NAME: Option<&'static str> = Some(Self::API_KEY_DEFAULT_ENV_NAME);
 
-	fn default_auth() -> AuthData {
+	fn default_auth(_kind: AdapterKind) -> AuthData {
 		match Self::DEFAULT_API_KEY_ENV_NAME {
 			Some(env_name) => AuthData::from_env(env_name),
 			None => AuthData::None,
 		}
 	}
 
-	fn default_endpoint() -> Endpoint {
+	fn default_endpoint(_kind: AdapterKind) -> Endpoint {
 		const BASE_URL: &str = "https://api.openai.com/v1/";
 		Endpoint::from_static(BASE_URL)
 	}
 
 	/// Note: Currently returns the common models (see above)
-	async fn all_model_names(kind: AdapterKind, endpoint: Endpoint, auth: AuthData) -> Result<Vec<String>> {
-		OpenAIAdapter::list_model_names_for_end_target(kind, endpoint, auth).await
+	async fn all_model_names(
+		kind: AdapterKind,
+		endpoint: Endpoint,
+		auth: AuthData,
+		web_client: &WebClient,
+	) -> Result<Vec<String>> {
+		OpenAIAdapter::list_model_names_for_end_target(kind, endpoint, auth, web_client).await
 	}
 
 	fn get_service_url(model: &ModelIden, service_type: ServiceType, endpoint: Endpoint) -> Result<String> {
@@ -96,6 +102,34 @@ impl Adapter for OpenAIAdapter {
 				})
 				.map(|s| s.trim().to_string());
 
+			// -- Capture reasoning_details as Custom parts, verbatim (OpenRouter)
+			// OpenRouter returns the provider's own reasoning blocks — signed text
+			// (Anthropic), encrypted content (OpenAI), summaries — as a `reasoning_details`
+			// array beside the plaintext `reasoning`, and requires that array back
+			// verbatim and in order for a multi-turn tool round trip to keep the
+			// model's continuity token. Each entry is carried as a `Custom` part, the
+			// same way an unrecognised Anthropic block is, so nothing in it is lost;
+			// the request side echoes them into `reasoning_details` again. They lead
+			// the content, ahead of the text and tool calls, which is the order they
+			// were produced in.
+			if let Ok(Some(details)) = first_choice.x_take::<Option<Vec<Value>>>("/message/reasoning_details") {
+				for detail in details.into_iter().filter(|detail| detail.is_object()) {
+					content.push(ContentPart::from_custom(detail, Some(model_iden.clone())));
+				}
+			}
+
+			// Mistral reasoning models return `content` as typed chunks, with the
+			// reasoning in `thinking` chunks
+			if let Some(content_value) = first_choice.pointer_mut("/message/content")
+				&& let Value::Array(chunks) = content_value
+			{
+				let (text, reasoning) = super::adapter_shared::split_content_chunks(chunks);
+				if reasoning_content.is_none() {
+					reasoning_content = reasoning.map(|r| r.trim().to_string());
+				}
+				*content_value = text.map(Value::String).unwrap_or(Value::Null);
+			}
+
 			// -- Push eventual text message
 			if let Ok(Some(mut text_content)) = first_choice.x_take::<Option<String>>("/message/content") {
 				text_content = text_content.trim().to_string();
@@ -143,7 +177,8 @@ impl Adapter for OpenAIAdapter {
 	) -> Result<ChatStreamResponse> {
 		let event_source = EventSourceStream::new(reqwest_builder);
 		let openai_stream = OpenAIStreamer::new(event_source, model_iden.clone(), options_sets);
-		let chat_stream = ChatStream::from_inter_stream(openai_stream);
+		let frame_tap = openai_stream.frame_tap();
+		let chat_stream = ChatStream::from_inter_stream(openai_stream).with_frame_tap(frame_tap);
 
 		Ok(ChatStreamResponse {
 			model_iden,
@@ -310,5 +345,102 @@ mod tests {
 			.expect("chat response");
 
 		assert_eq!(response.stop_reason, None);
+	}
+
+	/// Mistral's reasoning models answer with `content` as typed chunks (shape
+	/// captured from a live `mistral-large-4` response). The text must still come
+	/// through, and the `thinking` chunk becomes `reasoning_content`.
+	#[test]
+	fn test_to_chat_response_splits_mistral_thinking_chunks() {
+		let web_response = WebResponse {
+			status: StatusCode::OK,
+			body: serde_json::json!({
+				"id": "7043ccd4",
+				"model": "mistral-large-4",
+				"usage": {"prompt_tokens": 10, "completion_tokens": 554, "total_tokens": 564, "prompt_tokens_details": {"cached_tokens": 0}},
+				"choices": [{
+					"finish_reason": "stop",
+					"message": {
+						"role": "assistant",
+						"tool_calls": null,
+						"content": [
+							{"type": "thinking", "thinking": [{"type": "text", "text": "17 x 23 = 391."}], "closed": true},
+							{"type": "text", "text": "No, 391 = 17 x 23."}
+						]
+					}
+				}]
+			}),
+		};
+		let model = ModelIden::new(AdapterKind::Mistral, "mistral-large-4");
+
+		let response =
+			OpenAIAdapter::to_chat_response(model, web_response, ChatOptionsSet::default()).expect("chat response");
+
+		assert_eq!(response.first_text(), Some("No, 391 = 17 x 23."));
+		assert_eq!(response.reasoning_content.as_deref(), Some("17 x 23 = 391."));
+	}
+
+	/// OpenRouter returns the provider's own reasoning blocks — signed text,
+	/// encrypted content, summaries — as `reasoning_details` beside the
+	/// plaintext `reasoning`, and needs them back verbatim on the next turn.
+	/// Each entry becomes a `Custom` part, ahead of the text and tool calls,
+	/// tagged with the model; the plaintext still lands in `reasoning_content`.
+	#[test]
+	fn test_to_chat_response_captures_reasoning_details_as_custom_parts() {
+		// -- Setup & Fixtures
+		let web_response = WebResponse {
+			status: StatusCode::OK,
+			body: serde_json::json!({
+				"id": "gen-test",
+				"model": "anthropic/claude-sonnet-4-6",
+				"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+				"choices": [{
+					"finish_reason": "tool_calls",
+					"message": {
+						"role": "assistant",
+						"content": "",
+						"reasoning": "Read the file first.",
+						"reasoning_details": [
+							{"type": "reasoning.text", "text": "Read the file first.", "signature": "sig-1", "format": "anthropic-claude-v1", "index": 0},
+							{"type": "reasoning.encrypted", "data": "opaque-bytes", "format": "openai-responses-v1", "index": 1}
+						],
+						"tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\":\"/runbook\"}"}}]
+					}
+				}]
+			}),
+		};
+		let model = ModelIden::new(AdapterKind::OpenRouter, "anthropic/claude-sonnet-4-6");
+
+		// -- Exec
+		let response =
+			OpenAIAdapter::to_chat_response(model, web_response, ChatOptionsSet::default()).expect("chat response");
+
+		// -- Check
+		assert_eq!(response.reasoning_content.as_deref(), Some("Read the file first."));
+		let parts = response.content.parts();
+		let kinds: Vec<&str> = parts
+			.iter()
+			.map(|part| match part {
+				ContentPart::Custom(custom) => custom.typ().unwrap_or("custom"),
+				ContentPart::ToolCall(_) => "tool_call",
+				ContentPart::Text(_) => "text",
+				_ => "other",
+			})
+			.collect();
+		assert_eq!(
+			kinds,
+			["reasoning.text", "reasoning.encrypted", "tool_call"],
+			"every entry, in order, ahead of the tool call; an empty content string adds no text part"
+		);
+		let ContentPart::Custom(signed) = &parts[0] else {
+			panic!("first part is the signed block");
+		};
+		assert_eq!(signed.data()["signature"], "sig-1");
+		assert_eq!(signed.data()["format"], "anthropic-claude-v1");
+		assert_eq!(
+			signed.model_iden.as_ref().map(|m| m.model_name.to_string()).as_deref(),
+			Some("anthropic/claude-sonnet-4-6"),
+			"tagged with the model that produced it"
+		);
 	}
 }

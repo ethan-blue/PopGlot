@@ -3,23 +3,23 @@
 //! Requires the `bedrock-sigv4` Cargo feature.
 
 use crate::adapter::adapters::bedrock::converse::{build_converse_payload, parse_converse_response};
-use crate::adapter::adapters::bedrock::shared::{BEDROCK_RUNTIME_HOST_PREFIX, async_stream_bytes, build_service_url};
-use crate::adapter::adapters::bedrock::sigv4::{cached_region, get_credentials, sign_request};
+use crate::adapter::adapters::bedrock::shared::{
+	BEDROCK_RUNTIME_HOST_PREFIX, DEFAULT_REGION, async_stream_bytes, build_service_url, region_from_env,
+};
+use crate::adapter::adapters::bedrock::sigv4::{get_credentials, profile_from_auth, sign_request};
 use crate::adapter::adapters::bedrock::streamer::BedrockStreamer;
 use crate::adapter::{Adapter, AdapterKind, ServiceType, WebRequestData};
 use crate::chat::{ChatOptionsSet, ChatRequest, ChatResponse, ChatStream, ChatStreamResponse};
 use crate::resolver::{AuthData, Endpoint};
-use crate::webc::WebResponse;
+use crate::webc::StreamRequest as RequestBuilder;
+use crate::webc::{WebClient, WebResponse};
 use crate::{Error, ModelIden, Result, ServiceTarget};
-use reqwest::RequestBuilder;
 
 pub struct BedrockSigv4Adapter;
 
 impl BedrockSigv4Adapter {
 	fn resolve_region() -> String {
-		std::env::var("AWS_REGION")
-			.or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
-			.unwrap_or_else(|_| "us-east-1".to_string())
+		region_from_env().unwrap_or_else(|| DEFAULT_REGION.to_string())
 	}
 
 	pub(super) fn endpoint_for_region(region: &str) -> String {
@@ -30,17 +30,23 @@ impl BedrockSigv4Adapter {
 impl Adapter for BedrockSigv4Adapter {
 	const DEFAULT_API_KEY_ENV_NAME: Option<&'static str> = None;
 
-	fn default_endpoint() -> Endpoint {
+	fn default_endpoint(_kind: AdapterKind) -> Endpoint {
 		let region = Self::resolve_region();
 		Endpoint::from_owned(Self::endpoint_for_region(&region))
 	}
 
-	fn default_auth() -> AuthData {
-		// Credentials come from the AWS default chain at request time.
+	fn default_auth(_kind: AdapterKind) -> AuthData {
+		// Credentials come from the AWS chain at request time; a profile can be selected per client
+		// via `ProviderConfig`/`AuthData`, which reaches us as `ServiceTarget::auth`.
 		AuthData::None
 	}
 
-	async fn all_model_names(_kind: AdapterKind, _endpoint: Endpoint, _auth: AuthData) -> Result<Vec<String>> {
+	async fn all_model_names(
+		_kind: AdapterKind,
+		_endpoint: Endpoint,
+		_auth: AuthData,
+		_web_client: &WebClient,
+	) -> Result<Vec<String>> {
 		Ok(crate::adapter::adapters::bedrock::shared::curated_model_names())
 	}
 
@@ -54,17 +60,14 @@ impl Adapter for BedrockSigv4Adapter {
 		chat_req: ChatRequest,
 		options_set: ChatOptionsSet<'_, '_>,
 	) -> Result<WebRequestData> {
-		let ServiceTarget {
-			endpoint,
-			auth: _,
-			model,
-		} = target;
+		let ServiceTarget { endpoint, auth, model } = target;
 
-		// 1. Resolve credentials (cached). Only truly async on the first call per process.
-		let cached = tokio_block_on(get_credentials())?;
+		// 1. Resolve the selected AWS profile (if any) and its credentials, refreshing if needed.
+		let profile = profile_from_auth(&auth)?;
+		let cached = tokio_block_on(get_credentials(profile.as_deref()))?;
 
-		// 2. Determine region. Respect custom endpoint from ServiceTargetResolver.
-		let endpoint = override_endpoint_region(endpoint, cached_region(&cached));
+		// 2. Align the default endpoint with the region we sign for.
+		let endpoint = override_endpoint_region(endpoint, &cached.region);
 
 		// 3. Build the Converse JSON payload.
 		let payload = build_converse_payload(&model, chat_req, options_set)?;
@@ -74,7 +77,7 @@ impl Adapter for BedrockSigv4Adapter {
 
 		// 5. Sign the request — we serialize the body for the payload hash.
 		let body_bytes = serde_json::to_vec(&payload)?;
-		let headers = sign_request(&cached.creds, cached_region(&cached), &url, &body_bytes)?;
+		let headers = sign_request(&cached.creds, &cached.region, &url, &body_bytes)?;
 
 		Ok(WebRequestData { url, headers, payload })
 	}
@@ -124,19 +127,67 @@ impl Adapter for BedrockSigv4Adapter {
 	}
 }
 
-/// If the Endpoint's base URL is the default template with a placeholder region, substitute the
-/// cached region. If the user supplied a custom endpoint, leave it alone.
-fn override_endpoint_region(endpoint: Endpoint, cached_region: &str) -> Endpoint {
-	let base = endpoint.base_url();
-	if base.contains("bedrock-runtime..amazonaws.com") || base == "https://bedrock-runtime..amazonaws.com/" {
-		Endpoint::from_owned(BedrockSigv4Adapter::endpoint_for_region(cached_region))
+/// Rebuilds the default endpoint for the region we sign for (which may come from
+/// `~/.aws/config`); a user-supplied endpoint is left alone.
+fn override_endpoint_region(endpoint: Endpoint, signed_region: &str) -> Endpoint {
+	let env_default = BedrockSigv4Adapter::endpoint_for_region(&BedrockSigv4Adapter::resolve_region());
+	if endpoint.base_url() == env_default {
+		Endpoint::from_owned(BedrockSigv4Adapter::endpoint_for_region(signed_region))
 	} else {
 		endpoint
 	}
 }
 
-/// Synchronously run a future on the current Tokio runtime. The adapter trait is sync; the
-/// credential cache only blocks on the very first call per process.
+/// Run a future to completion on the current Tokio runtime; the adapter trait is sync, so this
+/// blocks the calling worker thread.
 fn tokio_block_on<F: std::future::Future>(fut: F) -> F::Output {
 	tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	/// A region that differs from the ambient `AWS_REGION`, to keep the test deterministic.
+	fn region_different_from_env() -> &'static str {
+		if BedrockSigv4Adapter::resolve_region() == "eu-west-1" {
+			"us-west-2"
+		} else {
+			"eu-west-1"
+		}
+	}
+
+	/// The URL must target the region we sign for, else the signature carries one region while
+	/// the Host header points at another (`SignatureDoesNotMatch`).
+	#[test]
+	fn request_url_targets_the_region_we_sign_for() {
+		let signing_region = region_different_from_env();
+		let model = ModelIden::new(
+			AdapterKind::BedrockSigv4,
+			"us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+		);
+
+		let endpoint = BedrockSigv4Adapter::default_endpoint(AdapterKind::BedrockSigv4);
+		let endpoint = override_endpoint_region(endpoint, signing_region);
+		let url = BedrockSigv4Adapter::get_service_url(&model, ServiceType::Chat, endpoint)
+			.expect("the Bedrock Converse URL should build");
+
+		assert!(
+			url.contains(&format!("bedrock-runtime.{signing_region}.amazonaws.com")),
+			"request URL region != signing region; SigV4 would fail with SignatureDoesNotMatch. \
+			 signing_region={signing_region} url={url}"
+		);
+	}
+
+	/// A user-supplied endpoint must not be rewritten.
+	#[test]
+	fn user_supplied_endpoint_is_left_alone() {
+		let custom = Endpoint::from_static("https://vpce-0123.bedrock-runtime.eu-west-1.vpce.amazonaws.com/");
+		let endpoint = override_endpoint_region(custom, "us-east-1");
+
+		assert_eq!(
+			endpoint.base_url(),
+			"https://vpce-0123.bedrock-runtime.eu-west-1.vpce.amazonaws.com/"
+		);
+	}
 }

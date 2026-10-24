@@ -1,12 +1,12 @@
+use crate::webc::{StreamRequest as RequestBuilder, StreamResponse as Response};
 use bytes::Bytes;
-use futures::stream::TryStreamExt;
 use futures::{Future, Stream};
-use reqwest::{RequestBuilder, Response};
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::error::{BoxError, Error as GenaiError};
+use crate::webc::FrameTap;
 
 /// WebStream is a simple web stream implementation that splits the stream messages by a given delimiter.
 /// - It is intended to be a pragmatic solution for services that do not adhere to the `text/event-stream` format and content type.
@@ -28,6 +28,10 @@ pub struct WebStream {
 	// When a multi-byte character is split across TCP/HTTP chunk boundaries,
 	// the trailing bytes are carried over to be prepended to the next chunk.
 	utf8_carry: Vec<u8>,
+	// Feeds the user `ChatFrameSink`, when one is configured.
+	// Only set for the delimited modes; in `Sse` mode the `EventSourceStream` wrapper taps
+	// instead, so the sink sees `(event, data)` rather than the undecoded event block.
+	frame_tap: Option<FrameTap>,
 }
 
 pub enum StreamMode {
@@ -49,7 +53,24 @@ impl WebStream {
 			partial_message: None,
 			remaining_messages: None,
 			utf8_carry: Vec::new(),
+			frame_tap: None,
 		}
+	}
+
+	pub fn with_frame_tap(mut self, frame_tap: Option<FrameTap>) -> Self {
+		self.frame_tap = frame_tap;
+		self
+	}
+
+	pub fn frame_tap(&self) -> Option<FrameTap> {
+		self.frame_tap.clone()
+	}
+
+	fn emit(&mut self, message: String) -> Poll<Option<Result<String, BoxError>>> {
+		if let Some(frame_tap) = self.frame_tap.as_mut() {
+			frame_tap.on_frame(None, &message);
+		}
+		Poll::Ready(Some(Ok(message)))
 	}
 
 	pub fn new_with_sse(reqwest_builder: RequestBuilder) -> Self {
@@ -61,6 +82,7 @@ impl WebStream {
 			partial_message: None,
 			remaining_messages: None,
 			utf8_carry: Vec::new(),
+			frame_tap: None,
 		}
 	}
 }
@@ -72,10 +94,9 @@ impl Stream for WebStream {
 		let this = self.get_mut();
 
 		// -- First, we check if we have any remaining messages to send.
-		if let Some(ref mut remaining_messages) = this.remaining_messages
-			&& let Some(msg) = remaining_messages.pop_front()
-		{
-			return Poll::Ready(Some(Ok(msg)));
+		let remaining_message = this.remaining_messages.as_mut().and_then(|msgs| msgs.pop_front());
+		if let Some(msg) = remaining_message {
+			return this.emit(msg);
 		}
 
 		// -- Then execute the web poll and processing loop
@@ -90,6 +111,9 @@ impl Stream for WebStream {
 							// For error responses, we need to read the body to get the error message
 							// Store a future that reads the body and returns an error
 							let error_future = async move {
+								// Capture the headers while the response is still in hand
+								// (e.g., `retry-after`, `retry-after-ms`, `x-should-retry` for retry layers)
+								let headers = response.headers().clone();
 								let body = response
 									.text()
 									.await
@@ -98,12 +122,13 @@ impl Stream for WebStream {
 									status,
 									canonical_reason: status.canonical_reason().unwrap_or("Unknown").to_string(),
 									body,
+									headers: Box::new(headers),
 								}))
 							};
 							this.response_future = Some(Box::pin(error_future));
 							continue;
 						}
-						let bytes_stream = response.bytes_stream().map_err(|e| Box::new(e) as BoxError);
+						let bytes_stream = response.bytes_stream();
 						this.bytes_stream = Some(Box::pin(bytes_stream));
 						this.response_future = None;
 					}
@@ -129,19 +154,23 @@ impl Stream for WebStream {
 							Err(e) => {
 								if e.error_len().is_some() {
 									// Actual invalid UTF-8 (not just incomplete) — fatal error.
-									return Poll::Ready(Some(Err(
-										Box::new(String::from_utf8(raw).unwrap_err()) as BoxError
-									)));
+									this.bytes_stream = None;
+									let error = match decode_with_partial(this.partial_message.take(), raw) {
+										Err(error) => Box::new(error) as BoxError,
+										Ok(_) => Box::new(e) as BoxError,
+									};
+									return Poll::Ready(Some(Err(error)));
 								}
 								e.valid_up_to()
 							}
 						};
 
-						// Carry over incomplete trailing bytes for the next chunk.
-						this.utf8_carry = raw[valid_up_to..].to_vec();
+						// Preserve any incomplete trailing UTF-8 bytes for the next chunk.
+						let (valid, carry) = raw.split_at(valid_up_to);
+						this.utf8_carry = carry.to_vec();
 
-						// We already validated raw[..valid_up_to] is valid UTF-8 above.
-						let buff_string = String::from_utf8(raw[..valid_up_to].to_vec()).unwrap();
+						// Convert the valid prefix into an owned UTF-8 string.
+						let buff_string = std::str::from_utf8(valid).map_err(|e| Box::new(e) as BoxError)?.to_owned();
 
 						// -- Iterate through the parts
 						let buff_response = match this.stream_mode {
@@ -173,26 +202,37 @@ impl Stream for WebStream {
 
 						// -- If we have a first message, we have to send it.
 						if let Some(first_message) = first_message.take() {
-							return Poll::Ready(Some(Ok(first_message)));
+							return this.emit(first_message);
 						} else {
 							continue;
 						}
 					}
 					Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
 					Poll::Ready(None) => {
-						if let Some(partial) = this.partial_message.take()
+						// The byte stream is done; never poll it again.
+						this.bytes_stream = None;
+						let carry = std::mem::take(&mut this.utf8_carry);
+						let partial = if carry.is_empty() {
+							this.partial_message.take()
+						} else {
+							// A truncated multi-byte sequence cannot be completed anymore.
+							match decode_with_partial(this.partial_message.take(), carry) {
+								Ok(partial) => Some(partial),
+								Err(error) => return Poll::Ready(Some(Err(Box::new(error)))),
+							}
+						};
+						if let Some(partial) = partial
 							&& !partial.is_empty()
 						{
-							return Poll::Ready(Some(Ok(partial)));
+							return this.emit(partial);
 						}
-						this.bytes_stream = None;
 					}
 					Poll::Pending => return Poll::Pending,
 				}
 			}
 
 			if let Some(reqwest_builder) = this.reqwest_builder.take() {
-				let fut = async move { reqwest_builder.send().await.map_err(|e| Box::new(e) as BoxError) };
+				let fut = async move { reqwest_builder.send().await };
 				this.response_future = Some(Box::pin(fut));
 				continue;
 			}
@@ -264,3 +304,20 @@ fn process_buff_string_delimited(
 		candidate_message,
 	})
 }
+
+/// Joins the undelivered partial message with the raw undecoded bytes and decodes them.
+/// On failure, the returned `FromUtf8Error` owns every undelivered byte, so no input is lost.
+/// Note: in `Sse` mode, the partial message already has CR/LF normalized to LF.
+fn decode_with_partial(partial_message: Option<String>, raw: Vec<u8>) -> Result<String, std::string::FromUtf8Error> {
+	let mut bytes = partial_message.map(String::into_bytes).unwrap_or_default();
+	bytes.extend_from_slice(&raw);
+	String::from_utf8(bytes)
+}
+
+// region:    --- Tests
+
+#[cfg(test)]
+#[path = "web_stream_tests.rs"]
+mod tests;
+
+// endregion: --- Tests

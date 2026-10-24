@@ -114,7 +114,7 @@ internal static class TextRouteMenu
         var current = ReadCurrent();
         var activeId = current.Profile?.Id;
         var shell = ShellSettingsStore.Load();
-        menu.Items.Add(Header("模型 · 风格与要点"));
+        menu.Items.Add(Header("模型"));
         foreach (var profile in config.Profiles.Where(profile => profile.SupportsText))
         {
             var id = profile.Id;
@@ -123,7 +123,7 @@ internal static class TextRouteMenu
             item.Click += (_, _) => selectProfile(id);
             menu.Items.Add(item);
         }
-        menu.Items.Add(Header("公共翻译"));
+        menu.Items.Add(Header("内置"));
         var freeSelected = current.IsFree;
         foreach (var provider in new[] { FreeEngineProvider.Google, FreeEngineProvider.MyMemory })
         {
@@ -226,7 +226,7 @@ internal static class TextRouteMenu
 
     private static string FreeDetail(FreeEngineProvider provider) => provider switch
     {
-        FreeEngineProvider.MyMemory => "公共翻译 · 仅文字\n发送至 api.mymemory.translated.net；需先授权。",
-        _ => "公共翻译 · 仅文字\n发送至 translate.googleapis.com / clients5.google.com；需先授权。",
+        FreeEngineProvider.MyMemory => "免配置 · 仅文字\n发送至 api.mymemory.translated.net；需先授权。",
+        _ => "免配置 · 仅文字\n发送至 translate.googleapis.com / clients5.google.com；需先授权。",
     };
 }

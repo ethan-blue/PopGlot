@@ -1,18 +1,18 @@
 //! API DOC: <https://github.com/ollama/ollama/blob/main/docs/api.md>
 
-use super::adapter_shared::OllamaRequestParts;
+use super::{OllamaRequestParts, OllamaStreamer};
 use crate::Headers;
 use crate::Result;
-use crate::adapter::ollama::OllamaStreamer;
 use crate::adapter::{Adapter, AdapterKind, ServiceType, WebRequestData};
 use crate::chat::{
-	ChatOptionsSet, ChatRequest, ChatResponse, ChatStream, ChatStreamResponse, MessageContent, StopReason, ToolCall,
+	ChatOptionsSet, ChatRequest, ChatResponse, ChatStream, ChatStreamResponse, MessageContent, ReasoningEffort,
+	StopReason, ToolCall,
 };
 use crate::embed::{EmbedResponse, Embedding};
 use crate::resolver::{AuthData, Endpoint};
-use crate::webc::WebResponse;
+use crate::webc::StreamRequest as RequestBuilder;
+use crate::webc::{WebClient, WebResponse};
 use crate::{ModelIden, ServiceTarget};
-use reqwest::RequestBuilder;
 use serde_json::{Value, json};
 use value_ext::JsonValueExt;
 
@@ -23,20 +23,25 @@ pub struct OllamaAdapter;
 impl Adapter for OllamaAdapter {
 	const DEFAULT_API_KEY_ENV_NAME: Option<&'static str> = None;
 
-	fn default_endpoint() -> Endpoint {
+	fn default_endpoint(_kind: AdapterKind) -> Endpoint {
 		const BASE_URL: &str = "http://localhost:11434/";
 		Endpoint::from_static(BASE_URL)
 	}
 
-	fn default_auth() -> AuthData {
+	fn default_auth(_kind: AdapterKind) -> AuthData {
 		match Self::DEFAULT_API_KEY_ENV_NAME {
 			Some(env_name) => AuthData::from_env(env_name),
 			None => AuthData::from_single("ollama"),
 		}
 	}
 
-	async fn all_model_names(adapter_kind: AdapterKind, endpoint: Endpoint, _auth: AuthData) -> Result<Vec<String>> {
-		Self::list_model_names(adapter_kind, endpoint, Headers::default()).await
+	async fn all_model_names(
+		adapter_kind: AdapterKind,
+		endpoint: Endpoint,
+		_auth: AuthData,
+		web_client: &WebClient,
+	) -> Result<Vec<String>> {
+		Self::list_model_names(adapter_kind, endpoint, Headers::default(), web_client).await
 	}
 
 	fn get_service_url(_model_iden: &ModelIden, service_type: ServiceType, endpoint: Endpoint) -> Result<String> {
@@ -85,23 +90,34 @@ impl Adapter for OllamaAdapter {
 
 		let mut payload = json!({
 			"model": model_name,
-			"messages": messages,
 			"stream": stream,
 		});
 
-		if !options.as_object().unwrap().is_empty() {
+		if options.as_object().is_some_and(|o| !o.is_empty()) {
 			payload.x_insert("options", options)?;
 		}
 
+		// -- Tools (before messages)
 		if let Some(tools) = tools {
 			payload.x_insert("tools", tools)?;
 		}
+
+		// -- Messages (after tools)
+		payload.x_insert("messages", messages)?;
 
 		if let Some(format) = chat_options.response_format() {
 			// Note: Ollama's API uses "format": "json" for its JSON mode, so we set that if the chat options specify json mode.
 			if matches!(format, crate::chat::ChatResponseFormat::JsonMode) {
 				payload.x_insert("format", "json")?;
 			}
+		}
+
+		// -- Reasoning (`think`)
+		// Ollama's `think` is a top-level body param (like `format`, not inside `options`) and
+		// accepts a boolean (enable/disable) or a string level ("low" | "medium" | "high" | "max")
+		// for supported models. See https://docs.ollama.com/api/chat#body-think-one-of-0
+		if let Some(reasoning_effort) = chat_options.reasoning_effort() {
+			payload.x_insert("think", Self::into_think_value(reasoning_effort))?;
 		}
 
 		// -- Headers
@@ -187,8 +203,9 @@ impl Adapter for OllamaAdapter {
 			model_iden.clone(),
 			options_set,
 		);
+		let frame_tap = streamer.frame_tap();
 		Ok(ChatStreamResponse {
-			stream: ChatStream::from_inter_stream(streamer),
+			stream: ChatStream::from_inter_stream(streamer).with_frame_tap(frame_tap),
 			model_iden,
 		})
 	}
@@ -257,3 +274,27 @@ impl Adapter for OllamaAdapter {
 }
 
 // endregion: --- Adapter Impl
+
+// region:    --- Reasoning Mapping
+
+impl OllamaAdapter {
+	/// Maps genai's `ReasoningEffort` to Ollama's `think` body value.
+	///
+	/// Ollama's `think` accepts a boolean (enable/disable) or a string level
+	/// ("low" | "medium" | "high" | "max") for supported models. Ollama has no
+	/// "minimal" level, so `Minimal` maps to "low"; `XHigh`/`Max` both map to "max";
+	/// `Budget` maps to `true` (Ollama has no token-budget knob, so thinking runs
+	/// at the model's default level).
+	fn into_think_value(effort: &ReasoningEffort) -> Value {
+		match effort {
+			ReasoningEffort::Zero => json!(false),
+			ReasoningEffort::Minimal | ReasoningEffort::Low => json!("low"),
+			ReasoningEffort::Medium => json!("medium"),
+			ReasoningEffort::High => json!("high"),
+			ReasoningEffort::XHigh | ReasoningEffort::Max => json!("max"),
+			ReasoningEffort::Budget(_) => json!(true),
+		}
+	}
+}
+
+// endregion: --- Reasoning Mapping

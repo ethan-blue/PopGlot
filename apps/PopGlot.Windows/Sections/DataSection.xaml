@@ -5,7 +5,7 @@
 
     <!-- Compact desktop property list -->
     <StackPanel Margin="0,6,0,0">
-        <TextBlock Text="本地存储" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
+        <TextBlock Text="本地存储" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
 
         <Grid Style="{StaticResource SettingsRow}">
             <Grid.ColumnDefinitions>
@@ -23,7 +23,7 @@
                           Style="{StaticResource ToggleSwitch}" />
         </Grid>
 
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
+        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,6" />
 
         <Grid Style="{StaticResource SettingsRow}">
             <Grid.ColumnDefinitions>
@@ -32,8 +32,8 @@
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="清空翻译历史" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}"
-                           Text="移除本地全部翻译历史记录；清空后支持短时撤销" />
+                <TextBlock Style="{StaticResource RowHint}" Text="清空全部历史，支持短时撤销"
+                           ToolTip="移除本地全部翻译历史记录；清空后支持短时撤销。" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
             <Button x:Name="UndoHistoryButton" Content="撤销" Margin="0,0,8,0"
@@ -48,7 +48,7 @@
             </StackPanel>
         </Grid>
 
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
+        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,6" />
 
         <Grid Style="{StaticResource SettingsRow}">
             <Grid.ColumnDefinitions>
@@ -57,8 +57,8 @@
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="清空生词本" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}"
-                           Text="移除本地收藏的全部生词条目；清空后支持短时撤销" />
+                <TextBlock Style="{StaticResource RowHint}" Text="清空全部生词，支持短时撤销"
+                           ToolTip="移除本地收藏的全部生词条目；清空后支持短时撤销。" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
             <Button x:Name="UndoVocabularyButton" Content="撤销" Margin="0,0,8,0"
@@ -73,9 +73,9 @@
             </StackPanel>
         </Grid>
 
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,16" />
+        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
 
-        <TextBlock Text="数据备份与恢复" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
+        <TextBlock Text="备份与恢复" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
 
         <Grid Style="{StaticResource SettingsRow}">
             <Grid.ColumnDefinitions>
@@ -84,8 +84,8 @@
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="导出数据备份" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap" Margin="0,4,12,0"
-                           Text="导出本地历史、生词本与非敏感设置（JSON 格式，不含密钥）" />
+                <TextBlock Style="{StaticResource RowHint}" Text="历史、生词与非敏感设置 · 不含密钥"
+                           ToolTip="导出本地历史、生词本与非敏感设置为 JSON 文件，不含密钥。" />
             </StackPanel>
             <Button x:Name="ExportBackupButton" Grid.Column="1" Content="导出备份"
                     VerticalAlignment="Center"
@@ -94,7 +94,7 @@
                     Click="ExportBackup_Click" />
         </Grid>
 
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
+        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,6" />
 
         <Grid Style="{StaticResource SettingsRow}">
             <Grid.ColumnDefinitions>
@@ -103,8 +103,8 @@
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="恢复数据备份" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap" Margin="0,4,12,0"
-                           Text="从备份文件还原历史与配置；覆盖前自动创建本地还原快照" />
+                <TextBlock Style="{StaticResource RowHint}" Text="覆盖前自动保留本地还原快照"
+                           ToolTip="从备份文件还原历史与配置；覆盖前自动创建本地还原快照。" />
             </StackPanel>
             <Button x:Name="ImportBackupButton" Grid.Column="1" Content="恢复备份"
                     VerticalAlignment="Center"
@@ -113,9 +113,9 @@
                     Click="ImportBackup_Click" />
         </Grid>
 
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,16" />
+        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
 
-        <TextBlock Text="排障与诊断" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
+        <TextBlock Text="排障诊断" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
 
         <Grid Style="{StaticResource SettingsRow}">
             <Grid.ColumnDefinitions>
@@ -124,8 +124,8 @@
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="导出排障诊断包" Style="{StaticResource RowTitle}" />
-                <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap" Margin="0,4,12,0"
-                           Text="导出脱敏的系统版本、运行日志与诊断信息（不含翻译原文、译文或密钥）" />
+                <TextBlock Style="{StaticResource RowHint}" Text="脱敏系统信息与日志 · 不含翻译或密钥"
+                           ToolTip="导出脱敏的系统版本、运行日志与诊断信息，不含翻译原文、译文或密钥。" />
             </StackPanel>
             <Button x:Name="ExportDiagnosticsButton" Grid.Column="1" Content="导出诊断"
                     VerticalAlignment="Center"

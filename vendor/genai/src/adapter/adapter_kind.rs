@@ -1,38 +1,13 @@
-use crate::adapter::adapters::aihubmix::AihubmixAdapter;
+use super::macros::adapter_kind_str_maps;
+use crate::adapter::Adapter as _;
+use crate::adapter::adapters;
 use crate::adapter::adapters::baidu::BAIDU_CODING_ANTHROPIC_NAMESPACE;
 use crate::adapter::adapters::baidu::BAIDU_CODING_OPENAI_NAMESPACE;
-use crate::adapter::adapters::bedrock::BedrockApiAdapter;
-use crate::adapter::adapters::github_copilot::GithubCopilotAdapter;
-use crate::adapter::adapters::minimax::MinimaxAdapter;
-use crate::adapter::adapters::ollama::OllamaAdapter;
-use crate::adapter::adapters::ollama_cloud::OllamaCloudAdapter;
-use crate::adapter::adapters::open_router::OpenRouterAdapter;
-use crate::adapter::adapters::openai_resp::OpenAIRespAdapter;
-use crate::adapter::adapters::opencode_go::OpenCodeGoAdapter;
-use crate::adapter::adapters::together::TogetherAdapter;
-use crate::adapter::adapters::zai::ZaiAdapter;
-use crate::adapter::aliyun::AliyunAdapter;
-use crate::adapter::anthropic::AnthropicAdapter;
-use crate::adapter::baidu::BaiduAdapter;
-use crate::adapter::bigmodel::BigModelAdapter;
-use crate::adapter::cohere::CohereAdapter;
-use crate::adapter::deepseek::DeepSeekAdapter;
-use crate::adapter::fireworks::FireworksAdapter;
-use crate::adapter::gemini::GeminiAdapter;
-use crate::adapter::groq::GroqAdapter;
-use crate::adapter::mimo::MimoAdapter;
-use crate::adapter::moonshot::MoonshotAdapter;
-use crate::adapter::nebius::NebiusAdapter;
-use crate::adapter::openai::OpenAIAdapter;
-use crate::adapter::vertex::VertexAdapter;
-use crate::adapter::xai::XaiAdapter;
-use crate::adapter::{Adapter as _, zai};
+use crate::adapter::adapters::openai::OpenAIModel;
+use crate::adapter::adapters::zai;
 use crate::{ModelName, Result};
 use derive_more::Display;
 use serde::{Deserialize, Serialize};
-
-#[cfg(feature = "bedrock-sigv4")]
-use crate::adapter::adapters::bedrock::BedrockSigv4Adapter;
 
 /// AdapterKind is an enum that represents the different types of adapters that can be used to interact with the API.
 ///
@@ -47,6 +22,11 @@ pub enum AdapterKind {
 
 	/// Gemini adapter supports gemini native protocol. e.g., support thinking budget.
 	Gemini,
+
+	/// Gemini Interactions API.
+	///
+	/// Reachable via the `gemini_ix::` namespace (or `gemini_interactions::`), and the default adapter for `gemini-4-argon` models.
+	GeminiIx,
 
 	/// Anthopric native protocol as well
 	Anthropic,
@@ -63,6 +43,9 @@ pub enum AdapterKind {
 	/// For AIHubMix (Mostly use OpenAI)
 	Aihubmix,
 
+	/// For kimi
+	Kimi,
+
 	/// For Mimo (Mostly use OpenAI)
 	Mimo,
 
@@ -78,6 +61,9 @@ pub enum AdapterKind {
 	/// For DeepSeek (Mostly use OpenAI)
 	DeepSeek,
 
+	/// For Mistral AI (Mostly use OpenAI)
+	Mistral,
+
 	/// For ZAI (Mostly use OpenAI)
 	Zai,
 
@@ -86,6 +72,9 @@ pub enum AdapterKind {
 
 	/// For aliyun (Mostly use OpenAI)
 	Aliyun,
+
+	/// For QwenCloud, aliyun international
+	QwenCloud,
 
 	/// For baidu (Mostly use OpenAI)
 	Baidu,
@@ -98,6 +87,9 @@ pub enum AdapterKind {
 
 	/// For Ollama Cloud (ollama.com) - uses native Ollama protocol with Bearer auth
 	OllamaCloud,
+
+	/// Omlx adapter - OpenAI-compatible with reasoning model chat_template_kwargs injection
+	Omlx,
 
 	/// Google Vertex AI (Model Garden). Supports Gemini and Claude models via publishers/google and publishers/anthropic.
 	/// Uses namespace routing: `vertex::gemini-2.5-flash`, `vertex::claude-sonnet-4-6`
@@ -117,7 +109,8 @@ pub enum AdapterKind {
 	BedrockApi,
 
 	/// AWS Bedrock Converse API, authenticated via SigV4 + the AWS credential chain
-	/// (env, profile, SSO, IMDS, AssumeRole).
+	/// (env, profile, SSO, IMDS, AssumeRole). `AuthData` carries an AWS profile name
+	/// (`Key`/`FromEnv`/`MultiKeys`); `None` follows `AWS_PROFILE`, else `default`.
 	/// Namespace: `bedrock_sigv4::anthropic.claude-sonnet-4-5-20250929-v1:0`.
 	/// Requires the `bedrock-sigv4` Cargo feature.
 	#[cfg(feature = "bedrock-sigv4")]
@@ -128,151 +121,80 @@ pub enum AdapterKind {
 	/// Uses `OPEN_ROUTER_API_KEY`.
 	OpenRouter,
 
+	/// Atlas Cloud: OpenAI-compatible gateway for many hosted models.
+	/// Namespace: `atlascloud::qwen/qwen3.5-flash`.
+	/// Uses `ATLASCLOUD_API_KEY`.
+	AtlasCloud,
+
+	/// Requesty: OpenAI-compatible gateway for many providers (OpenAI, Anthropic, Google, etc.).
+	/// Namespace: `requesty::openai/gpt-4o-mini`, `requesty::anthropic/claude-sonnet-4-5`.
+	/// Uses `REQUESTY_API_KEY`.
+	Requesty,
+
+	/// API Route: OpenAI-compatible gateway, selected via the `api_route::` namespace.
+	/// Examples: `api_route::gpt-6.1-sol`, `api_route::claude-fable-5-1`.
+	/// Uses `API_ROUTE_API_KEY`.
+	ApiRoute,
+
+	/// Heabsy: OpenAI-compatible inference API for open models, selected via the `heabsy::` namespace.
+	/// Example: `heabsy::qwen38`. Website: <https://heabsy.com/platform>.
+	/// Uses `HEABSY_API_KEY`. Embeddings are not supported.
+	Heabsy,
+
 	/// For MiniMax (Anthropic-compatible protocol)
 	MiniMax,
+
+	/// Those are the Custom Adapter triggered by the `genai_` prefix namespaced
+	/// e.g. `genai_1::gemma-4-26b-a4b-it-4bit` this will resolve endpoint, ... from env
+	/// `GENAI_1_ENDPOINT`: required, e.g. `https://127.0.0.1:8000/v1`
+	/// `GENAI_1_API_KEY`: optional, e.g. `welcome`
+	/// For now, default to the "OpenAI" protocol, but will be able to set later.
+	#[display("genai_{_0}")]
+	Custom(u8),
 }
 
-/// Serialization/Parse implementations
-impl AdapterKind {
-	/// Serialize to a static str
-	pub fn as_str(&self) -> &'static str {
-		match self {
-			AdapterKind::OpenAI => "OpenAI",
-			AdapterKind::OpenAIResp => "OpenAIResp",
-			AdapterKind::Gemini => "Gemini",
-			AdapterKind::Anthropic => "Anthropic",
-			AdapterKind::Fireworks => "Fireworks",
-			AdapterKind::Together => "Together",
-			AdapterKind::Groq => "Groq",
-			AdapterKind::Aihubmix => "AIHubMix",
-			AdapterKind::Mimo => "Mimo",
-			AdapterKind::Moonshot => "Moonshot",
-			AdapterKind::Nebius => "Nebius",
-			AdapterKind::Xai => "xAi",
-			AdapterKind::DeepSeek => "DeepSeek",
-			AdapterKind::Zai => "Zai",
-			AdapterKind::BigModel => "BigModel",
-			AdapterKind::Aliyun => "Aliyun",
-			AdapterKind::Baidu => "Baidu",
-			AdapterKind::Cohere => "Cohere",
-			AdapterKind::Ollama => "Ollama",
-			AdapterKind::OllamaCloud => "OllamaCloud",
-			AdapterKind::Vertex => "Vertex",
-			AdapterKind::GithubCopilot => "GithubCopilot",
-			AdapterKind::OpenCodeGo => "OpenCodeGo",
-			AdapterKind::BedrockApi => "BedrockApi",
-			#[cfg(feature = "bedrock-sigv4")]
-			AdapterKind::BedrockSigv4 => "BedrockSigv4",
-			AdapterKind::OpenRouter => "OpenRouter",
-			AdapterKind::MiniMax => "Minimax",
-		}
-	}
+// region:    --- str & default_key_env_name impl (via macro)
 
-	/// Serialize to a lowercase static str
-	pub fn as_lower_str(&self) -> &'static str {
-		match self {
-			AdapterKind::OpenAI => "openai",
-			AdapterKind::OpenAIResp => "openai_resp",
-			AdapterKind::Gemini => "gemini",
-			AdapterKind::Anthropic => "anthropic",
-			AdapterKind::Fireworks => "fireworks",
-			AdapterKind::Together => "together",
-			AdapterKind::Groq => "groq",
-			AdapterKind::Aihubmix => "aihubmix",
-			AdapterKind::Mimo => "mimo",
-			AdapterKind::Moonshot => "moonshot",
-			AdapterKind::Nebius => "nebius",
-			AdapterKind::Xai => "xai",
-			AdapterKind::DeepSeek => "deepseek",
-			AdapterKind::Zai => "zai",
-			AdapterKind::BigModel => "bigmodel",
-			AdapterKind::Aliyun => "aliyun",
-			AdapterKind::Baidu => "baidu",
-			AdapterKind::Cohere => "cohere",
-			AdapterKind::Ollama => "ollama",
-			AdapterKind::OllamaCloud => "ollama_cloud",
-			AdapterKind::Vertex => "vertex",
-			AdapterKind::GithubCopilot => "github_copilot",
-			AdapterKind::OpenCodeGo => "opencode_go",
-			AdapterKind::BedrockApi => "bedrock_api",
-			#[cfg(feature = "bedrock-sigv4")]
-			AdapterKind::BedrockSigv4 => "bedrock_sigv4",
-			AdapterKind::OpenRouter => "open_router",
-			AdapterKind::MiniMax => "minimax",
-		}
-	}
-
-	pub fn from_lower_str(name: &str) -> Option<Self> {
-		match name {
-			"openai" => Some(AdapterKind::OpenAI),
-			"openai_resp" => Some(AdapterKind::OpenAIResp),
-			"gemini" => Some(AdapterKind::Gemini),
-			"anthropic" => Some(AdapterKind::Anthropic),
-			"fireworks" => Some(AdapterKind::Fireworks),
-			"together" => Some(AdapterKind::Together),
-			"groq" => Some(AdapterKind::Groq),
-			"aihubmix" => Some(AdapterKind::Aihubmix),
-			"mimo" => Some(AdapterKind::Mimo),
-			"moonshot" => Some(AdapterKind::Moonshot),
-			"nebius" => Some(AdapterKind::Nebius),
-			"xai" => Some(AdapterKind::Xai),
-			"deepseek" => Some(AdapterKind::DeepSeek),
-			"zai" => Some(AdapterKind::Zai),
-			"bigmodel" => Some(AdapterKind::BigModel),
-			"aliyun" => Some(AdapterKind::Aliyun),
-			"baidu" => Some(AdapterKind::Baidu),
-			"cohere" => Some(AdapterKind::Cohere),
-			"ollama" => Some(AdapterKind::Ollama),
-			"ollama_cloud" => Some(AdapterKind::OllamaCloud),
-			"vertex" => Some(AdapterKind::Vertex),
-			"github_copilot" => Some(AdapterKind::GithubCopilot),
-			"opencode_go" => Some(AdapterKind::OpenCodeGo),
-			"bedrock_api" => Some(AdapterKind::BedrockApi),
-			#[cfg(feature = "bedrock-sigv4")]
-			"bedrock_sigv4" => Some(AdapterKind::BedrockSigv4),
-			"open_router" => Some(AdapterKind::OpenRouter),
-			"minimax" => Some(AdapterKind::MiniMax),
-			_ => None,
-		}
-	}
+// The single source of truth for the string maps: one row per variant.
+adapter_kind_str_maps! {
+	OpenAI             => "OpenAI",             "openai",              adapters::all_adapters::OpenAIAdapter;
+	OpenAIResp         => "OpenAIResp",         "openai_resp",         adapters::all_adapters::OpenAIRespAdapter;
+	Gemini             => "Gemini",             "gemini",              adapters::all_adapters::GeminiAdapter;
+	GeminiIx           => "GeminiIx",           "gemini_ix",           adapters::all_adapters::GeminiIxAdapter;
+	Anthropic          => "Anthropic",          "anthropic",           adapters::all_adapters::AnthropicAdapter;
+	Fireworks          => "Fireworks",          "fireworks",           adapters::all_adapters::FireworksAdapter;
+	Together           => "Together",           "together",            adapters::all_adapters::TogetherAdapter;
+	Groq               => "Groq",               "groq",                adapters::all_adapters::GroqAdapter;
+	Aihubmix           => "Aihubmix",           "aihubmix",            adapters::all_adapters::AihubmixAdapter;
+	Kimi               => "Kimi",               "kimi",                adapters::all_adapters::KimiAdapter;
+	Mimo               => "Mimo",               "mimo",                adapters::all_adapters::MimoAdapter;
+	Moonshot           => "Moonshot",           "moonshot",            adapters::all_adapters::MoonshotAdapter;
+	Nebius             => "Nebius",             "nebius",              adapters::all_adapters::NebiusAdapter;
+	Xai                => "Xai",                "xai",                 adapters::all_adapters::XaiAdapter;
+	DeepSeek           => "DeepSeek",           "deepseek",            adapters::all_adapters::DeepSeekAdapter;
+	Mistral            => "Mistral",            "mistral",             adapters::all_adapters::MistralAdapter;
+	Zai                => "Zai",                "zai",                 adapters::all_adapters::ZaiAdapter;
+	BigModel           => "BigModel",           "bigmodel",            adapters::all_adapters::BigModelAdapter;
+	Aliyun             => "Aliyun",             "aliyun",              adapters::all_adapters::AliyunAdapter;
+	QwenCloud          => "QwenCloud",          "qwen_cloud",          adapters::all_adapters::QwenCloudAdapter;
+	Baidu              => "Baidu",              "baidu",               adapters::all_adapters::BaiduAdapter;
+	Cohere             => "Cohere",             "cohere",              adapters::all_adapters::CohereAdapter;
+	Ollama             => "Ollama",             "ollama",              adapters::all_adapters::OllamaAdapter;
+	OllamaCloud        => "OllamaCloud",        "ollama_cloud",        adapters::all_adapters::OllamaCloudAdapter;
+	Omlx               => "Omlx",               "omlx",                adapters::all_adapters::OmlxAdapter;
+	Vertex             => "Vertex",             "vertex",              adapters::all_adapters::VertexAdapter;
+	GithubCopilot      => "GithubCopilot",      "github_copilot",      adapters::all_adapters::GithubCopilotAdapter;
+	OpenCodeGo         => "OpenCodeGo",         "opencode_go",         adapters::all_adapters::OpenCodeGoAdapter;
+	BedrockApi         => "BedrockApi",         "bedrock_api",         adapters::all_adapters::BedrockApiAdapter;
+	OpenRouter         => "OpenRouter",         "open_router",         adapters::all_adapters::OpenRouterAdapter;
+	AtlasCloud         => "AtlasCloud",         "atlascloud",          adapters::all_adapters::AtlasCloudAdapter;
+	Requesty           => "Requesty",           "requesty",            adapters::all_adapters::RequestyAdapter;
+	ApiRoute           => "ApiRoute",           "api_route",           adapters::all_adapters::ApiRouteAdapter;
+	Heabsy             => "Heabsy",             "heabsy",              adapters::all_adapters::HeabsyAdapter;
+	MiniMax            => "MiniMax",            "minimax",             adapters::all_adapters::MiniMaxAdapter;
 }
 
-/// Utilities
-impl AdapterKind {
-	/// Get the default key environment variable name for the adapter kind.
-	pub fn default_key_env_name(&self) -> Option<&'static str> {
-		match self {
-			AdapterKind::OpenAI => OpenAIAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::OpenAIResp => OpenAIRespAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::Gemini => GeminiAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::Anthropic => AnthropicAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::Fireworks => FireworksAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::Together => TogetherAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::Groq => GroqAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::Aihubmix => AihubmixAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::Mimo => MimoAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::Moonshot => MoonshotAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::Nebius => NebiusAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::Xai => XaiAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::DeepSeek => DeepSeekAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::Zai => ZaiAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::BigModel => BigModelAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::Aliyun => AliyunAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::Baidu => BaiduAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::Cohere => CohereAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::Ollama => OllamaAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::OllamaCloud => OllamaCloudAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::Vertex => VertexAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::GithubCopilot => GithubCopilotAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::OpenCodeGo => OpenCodeGoAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::BedrockApi => BedrockApiAdapter::DEFAULT_API_KEY_ENV_NAME,
-			#[cfg(feature = "bedrock-sigv4")]
-			AdapterKind::BedrockSigv4 => BedrockSigv4Adapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::OpenRouter => OpenRouterAdapter::DEFAULT_API_KEY_ENV_NAME,
-			AdapterKind::MiniMax => MinimaxAdapter::DEFAULT_API_KEY_ENV_NAME,
-		}
-	}
-}
+// endregion: --- str & default_key_env_name impl (via macro)
 
 /// From Model implementations
 impl AdapterKind {
@@ -290,6 +212,7 @@ impl AdapterKind {
 	///  - Zhipu      - starts_with "glm"
 	///  - Cohere     - starts_with "command"
 	///  - Ollama     - For anything else
+	///  - GeminiIx   - starts_with "gemini-4-argon"
 	///
 	/// Other Some adapters have to have model name namespaced to be used,
 	/// - e.g., for together.ai `together::meta-llama/Llama-3-8b-chat-hf`
@@ -320,19 +243,22 @@ impl AdapterKind {
 			|| model.starts_with("text-embedding")
 		// migh be a little generic on this one
 		{
-			if model.starts_with("gpt-5")
-				|| (model.starts_with("gpt") && (model.contains("codex") || model.contains("pro")))
-			{
+			let openai_model = OpenAIModel::from(model);
+			if openai_model.is_resp_model() {
 				Ok(Self::OpenAIResp)
 			} else {
 				Ok(Self::OpenAI)
 			}
+		} else if model.starts_with("gemini-4-argon") {
+			Ok(Self::GeminiIx)
 		} else if model.starts_with("gemini") {
 			Ok(Self::Gemini)
 		} else if model.starts_with("claude") {
 			Ok(Self::Anthropic)
 		} else if model.contains("fireworks") {
 			Ok(Self::Fireworks)
+		} else if model.starts_with("kimi-") {
+			Ok(Self::Kimi)
 		} else if model.starts_with("mimo-") {
 			Ok(Self::Mimo)
 		} else if model.starts_with("command") || model.starts_with("embed-") {
@@ -347,6 +273,8 @@ impl AdapterKind {
 			Ok(Self::Moonshot)
 		} else if model.starts_with("MiniMax-") || model.starts_with("minimax-") {
 			Ok(Self::MiniMax)
+		} else if model.starts_with("omlx-") {
+			Ok(Self::Omlx)
 		}
 		// For now, fallback to Ollama
 		else {
@@ -355,9 +283,7 @@ impl AdapterKind {
 	}
 }
 
-// region:    --- Support
-
-/// Inner api to return
+/// Inner api to return an adatper type from an eventual namespaced model (e.g., `zai::glm-5.2`)
 impl AdapterKind {
 	pub(crate) fn from_model_namespace(model: &str) -> Option<Self> {
 		let (namespace, _) = ModelName::split_as_namespace_and_name(model);
@@ -373,7 +299,6 @@ impl AdapterKind {
 		} else if namespace == BAIDU_CODING_OPENAI_NAMESPACE || namespace == BAIDU_CODING_ANTHROPIC_NAMESPACE {
 			Some(Self::Baidu)
 		}
-		//
 		// -- Otherwise, no adapter from namespace, because no matching namespace
 		else {
 			None
@@ -381,4 +306,80 @@ impl AdapterKind {
 	}
 }
 
-// endregion: --- Support
+// region:    --- Tests
+
+#[cfg(test)]
+mod tests {
+	type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
+	use super::*;
+
+	#[test]
+	fn test_adapter_kind_all_round_trips_lower_str() -> Result<()> {
+		// -- Exec & Check
+		for kind in AdapterKind::all() {
+			let lower = kind.as_lower_str();
+			assert_eq!(AdapterKind::from_lower_str(lower), Some(*kind), "for '{lower}'");
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn test_adapter_kind_all_has_no_duplicates() -> Result<()> {
+		// -- Setup & Fixtures
+		let all = AdapterKind::all();
+
+		// -- Exec
+		let unique: std::collections::HashSet<_> = all.iter().collect();
+
+		// -- Check
+		assert_eq!(unique.len(), all.len());
+
+		Ok(())
+	}
+
+	#[test]
+	fn test_adapter_kind_all_excludes_custom() -> Result<()> {
+		// -- Check
+		assert!(!AdapterKind::all().iter().any(|kind| matches!(kind, AdapterKind::Custom(_))));
+
+		Ok(())
+	}
+
+	#[test]
+	fn test_adapter_kind_from_model_openai_routing() -> Result<()> {
+		// -- Exec & Check
+		// Models routing to OpenAIResp
+		assert_eq!(AdapterKind::from_model("gpt-6-astra")?, AdapterKind::OpenAIResp);
+		assert_eq!(AdapterKind::from_model("gpt-5")?, AdapterKind::OpenAIResp);
+		assert_eq!(AdapterKind::from_model("gpt-5-mini")?, AdapterKind::OpenAIResp);
+		assert_eq!(AdapterKind::from_model("gpt-4o-codex")?, AdapterKind::OpenAIResp);
+		assert_eq!(AdapterKind::from_model("gpt-4o-pro")?, AdapterKind::OpenAIResp);
+
+		// Models routing to OpenAI
+		assert_eq!(AdapterKind::from_model("gpt-4o-mini")?, AdapterKind::OpenAI);
+		assert_eq!(AdapterKind::from_model("gpt-4-0613")?, AdapterKind::OpenAI);
+		assert_eq!(AdapterKind::from_model("chatgpt-4o-latest")?, AdapterKind::OpenAI);
+		assert_eq!(AdapterKind::from_model("codex-cushman-001")?, AdapterKind::OpenAI);
+		assert_eq!(AdapterKind::from_model("o3-mini")?, AdapterKind::OpenAI);
+		assert_eq!(AdapterKind::from_model("o1-preview")?, AdapterKind::OpenAI);
+		assert_eq!(AdapterKind::from_model("text-embedding-3-small")?, AdapterKind::OpenAI);
+
+		// Fallback to Ollama
+		assert_eq!(AdapterKind::from_model("gpt-oss-120b")?, AdapterKind::Ollama);
+
+		// Explicit namespaces
+		assert_eq!(
+			AdapterKind::from_model("openai_resp::gpt-4o-mini")?,
+			AdapterKind::OpenAIResp
+		);
+		assert_eq!(AdapterKind::from_model("openai::gpt-6-astra")?, AdapterKind::OpenAI);
+		assert_eq!(
+			AdapterKind::from_model("anthropic::claude-sonnet-4-5")?,
+			AdapterKind::Anthropic
+		);
+
+		Ok(())
+	}
+}

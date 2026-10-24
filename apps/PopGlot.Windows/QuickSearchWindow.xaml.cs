@@ -14,7 +14,7 @@ public partial class QuickSearchWindow : Window
     private readonly VocabularyStore _vocabulary;
     private readonly TranslationCoordinator _coordinator;
     private readonly EventHandler _themeChangedHandler;
-    private readonly Action? _openSettings;
+    private readonly Action<string?>? _openSettings;
     private readonly QuickSearchState _state = new();
     private readonly DispatcherTimer _debounceTimer = new()
     {
@@ -124,7 +124,7 @@ public partial class QuickSearchWindow : Window
         }));
     }
 
-    internal QuickSearchWindow(HistoryStore history, VocabularyStore vocabulary, Action? openSettings = null)
+    internal QuickSearchWindow(HistoryStore history, VocabularyStore vocabulary, Action<string?>? openSettings = null)
     {
         _history = history;
         _vocabulary = vocabulary;
@@ -885,7 +885,7 @@ public partial class QuickSearchWindow : Window
     }
 
     internal System.Windows.Controls.ContextMenu BuildTextRouteMenu() =>
-        TextRouteMenu.Create(id => _ = SwitchProfileRouteAsync(id), SwitchPublicRouteAsync, OpenSettings);
+        TextRouteMenu.Create(id => _ = SwitchProfileRouteAsync(id), SwitchPublicRouteAsync, () => OpenSettings("Provider"));
 
     private void RouteSelector_Click(object sender, RoutedEventArgs e)
     {
@@ -1073,8 +1073,7 @@ public partial class QuickSearchWindow : Window
         var menu = TranslationStyleMenu.Build(
             styleChosen: template => _ = ChooseStyleAsync(template),
             reportStatus: message => FooterStatus.Text = message,
-            // 管理提示词 reuses the existing open-settings callback chain.
-            managePrompts: OpenSettings);
+            managePrompts: () => OpenSettings("Prompt"));
         if (menu is null)
         {
             return;
@@ -1097,11 +1096,11 @@ public partial class QuickSearchWindow : Window
         }
     }
 
-    internal void OpenSettings()
+    internal void OpenSettings(string? page = null)
     {
         if (_openSettings is not null)
         {
-            _openSettings.Invoke();
+            _openSettings.Invoke(page);
             return;
         }
 
@@ -1111,7 +1110,7 @@ public partial class QuickSearchWindow : Window
             {
                 if (w is MainWindow main && main.OpenSettings is not null)
                 {
-                    main.OpenSettings.Invoke();
+                    main.OpenSettings.Invoke(page);
                     return;
                 }
             }
@@ -1120,13 +1119,17 @@ public partial class QuickSearchWindow : Window
             {
                 var settingsWindow = Application.Current.Windows.OfType<SettingsWindow>().FirstOrDefault()
                     ?? new SettingsWindow(ShellSettingsStore.Load(), _history, _vocabulary);
+                if (page is not null) settingsWindow.ShowPage(page);
                 // The XAML is Manual: without convergence this fallback would
                 // open at the shell's cascade position with no work-area clamp.
                 WindowPositioner.ConvergeFirstShow(settingsWindow);
                 settingsWindow.Show();
                 settingsWindow.Activate();
             }
-            catch { }
+            catch (Exception exception)
+            {
+                FooterStatus.Text = $"无法打开设置：{exception.Message}";
+            }
         }
     }
 

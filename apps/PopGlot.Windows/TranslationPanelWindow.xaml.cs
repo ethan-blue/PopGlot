@@ -46,7 +46,7 @@ public partial class TranslationPanelWindow : Window
     private readonly Rect _anchorPixels;
     private readonly VocabularyStore? _vocabulary;
     private readonly Func<ShellSettings> _shellSettings;
-    private readonly Action? _openSettings;
+    private readonly Action<string?>? _openSettings;
     // The fifth argument is the session's REAL state: expanding must never
     // upgrade an unfinished panel result to a Completed one in the workbench.
     private readonly Action<string, string?, string?, string?, TranslationSessionState>? _openInMain;
@@ -106,7 +106,7 @@ public partial class TranslationPanelWindow : Window
         Rect anchorPixels,
         HistoryStore history,
         Func<ShellSettings> shellSettings,
-        Action? openSettings = null,
+        Action<string?>? openSettings = null,
         Action<string, string?, string?, string?, TranslationSessionState>? openInMain = null,
         VocabularyStore? vocabulary = null)
     {
@@ -1854,10 +1854,9 @@ public partial class TranslationPanelWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(StarToggle, (string)StarToggle.ToolTip);
     }
 
-    private void SettingsButton_Click(object sender, RoutedEventArgs e)
-    {
-        _openSettings?.Invoke();
-    }
+    private void SettingsButton_Click(object sender, RoutedEventArgs e) => _openSettings?.Invoke(null);
+
+    private void OpenEngineSettings_Click(object sender, RoutedEventArgs e) => _openSettings?.Invoke("Provider");
 
     // ================= Global translation-style selector =================
 
@@ -1903,7 +1902,7 @@ public partial class TranslationPanelWindow : Window
     }
 
     internal System.Windows.Controls.ContextMenu BuildTextRouteMenu() =>
-        TextRouteMenu.Create(id => _ = SwitchProfileRouteAsync(id), SwitchPublicRouteAsync, () => SettingsButton_Click(this, new RoutedEventArgs()));
+        TextRouteMenu.Create(id => _ = SwitchProfileRouteAsync(id), SwitchPublicRouteAsync, () => _openSettings?.Invoke("Provider"));
 
     private void RouteSelector_Click(object sender, RoutedEventArgs e)
     {
@@ -2009,8 +2008,7 @@ public partial class TranslationPanelWindow : Window
         var menu = TranslationStyleMenu.Build(
             styleChosen: template => _ = ChooseStyleAsync(template),
             reportStatus: message => StatusText.Text = message,
-            // 管理提示词 reuses the panel's existing open-settings callback.
-            managePrompts: () => SettingsButton_Click(this, new RoutedEventArgs()));
+            managePrompts: () => _openSettings?.Invoke("Prompt"));
         if (menu is null)
         {
             return;

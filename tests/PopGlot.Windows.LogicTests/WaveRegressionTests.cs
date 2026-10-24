@@ -2614,84 +2614,36 @@ internal static class WaveRegressionTests
         }
     }
 
-    /// <summary>
-    /// Each of the five hotkey recorders must announce its ROW's function,
-    /// carry the real recording contract as HelpText, and behave exactly as
-    /// that HelpText promises: clicking starts recording, and a real Escape
-    /// key event cancels it (falling back to the stop path the Esc branch
-    /// calls when no key seam exists).
-    /// </summary>
-    public static void HotkeyRecordersAnnounceRowFunctionAndHowToRecord()
+    public static void HotkeyRecordingEscapePreservesBinding()
     {
         EnsureApp();
         var section = new ShortcutsSection();
-        var recorders = new (HotkeyRecorder Recorder, string Row)[]
-        {
-            (section.SelectionHotkey, "划词翻译"),
-            (section.ScreenshotHotkey, "截图翻译"),
-            (section.QuickSearchHotkey, "极速查词快捷键"),
-            (section.CloseHotkey, "关闭浮窗"),
-            (section.ShowWindowHotkey, "打开主窗口快捷键"),
-        };
-        // A real window gives the recorders a PresentationSource so the real
-        // Esc key path can be exercised below.
+        var recorder = section.SelectionHotkey;
+        var saved = new HotkeyBinding(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x57);
+        recorder.BindingValue = saved;
         var host = new Window
         {
-            Content = section,
-            Width = 800,
-            Height = 500,
-            ShowActivated = false,
-            ShowInTaskbar = false,
-            WindowStyle = WindowStyle.None,
+            Content = section, Width = 640, Height = 460,
+            ShowActivated = false, ShowInTaskbar = false, WindowStyle = WindowStyle.None,
         };
         try
         {
             host.Show();
-            PumpUntil(Task.CompletedTask);
             PumpOnce();
-
-            foreach (var (recorder, row) in recorders)
+            typeof(HotkeyRecorder).GetMethod("OnClick", NonPublicInstance)!.Invoke(recorder, null);
+            True(recorder.IsRecording, "click starts recording");
+            var source = PresentationSource.FromDependencyObject(recorder)
+                ?? throw new InvalidOperationException("shown recorder requires a presentation source");
+            var escape = new KeyEventArgs(Keyboard.PrimaryDevice!, source, 0, Key.Escape)
             {
-                Equal(row, AutomationProperties.GetName(recorder),
-                    $"{recorder.Name} must announce the function of its row");
-                Equal("点击后按下组合键完成录制，Esc 取消录制", AutomationProperties.GetHelpText(recorder),
-                    $"{recorder.Name} must state the real recording contract");
-
-                // The HelpText must not be a lie: exercise the REAL methods the
-                // click and Esc paths use.
-                InvokePrivate(recorder, "StartRecording");
-                True(recorder.IsRecording, "starting a recording must enter the recording state");
-                Equal("按下组合键…", (string)recorder.Content!, "recording names the wait for the combination");
-
-                var keySource = PresentationSource.FromDependencyObject(recorder);
-                if (keySource is not null)
-                {
-                    // The recorder sits in a shown window, so this hand-built
-                    // KeyEventArgs is a real seam. RoutedEvent must be set: the
-                    // Esc branch marks the args Handled, which validates it.
-                    var escape = new KeyEventArgs(Keyboard.PrimaryDevice!, keySource, 0, Key.Escape)
-                    {
-                        RoutedEvent = Keyboard.PreviewKeyDownEvent,
-                    };
-                    typeof(HotkeyRecorder)
-                        .GetMethod("OnPreviewKeyDown", NonPublicInstance)!
-                        .Invoke(recorder, new object?[] { escape });
-                }
-                else
-                {
-                    // No safe KeyEventArgs seam: fall back to the same stop
-                    // method the Esc branch itself calls.
-                    InvokePrivate(recorder, "StopRecording");
-                }
-                True(!recorder.IsRecording, "Esc during recording must cancel it, as the HelpText promises");
-                Equal(recorder.BindingValue?.DisplayName ?? "未设置", (string)recorder.Content!,
-                    "cancelling restores the binding label");
-            }
+                RoutedEvent = Keyboard.PreviewKeyDownEvent,
+            };
+            recorder.RaiseEvent(escape);
+            True(escape.Handled && !recorder.IsRecording, "Escape cancels recording");
+            Equal(saved, recorder.BindingValue, "cancelling must not change the binding");
+            Equal(saved.DisplayName, (string)recorder.Content!, "cancelling restores the saved combination");
         }
-        finally
-        {
-            host.Close();
-        }
+        finally { host.Close(); }
     }
 
     /// <summary>

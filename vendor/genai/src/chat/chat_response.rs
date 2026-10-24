@@ -1,9 +1,8 @@
-//! Types for chat responses. `ChatStream` is defined separately.
-
 use serde::{Deserialize, Serialize};
+use serde_with::skip_serializing_none;
 
 use crate::ModelIden;
-use crate::chat::{ChatStream, MessageContent, ToolCall, Usage};
+use crate::chat::{ChatMessage, ChatStream, MessageContent, ToolCall, Usage};
 
 // region:    --- StopReason
 
@@ -99,6 +98,7 @@ impl std::fmt::Display for StopReason {
 // region:    --- ChatResponse
 
 /// Response returned by a non-streaming chat request.
+#[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatResponse {
 	/// Message content returned by the assistant.
@@ -117,14 +117,13 @@ pub struct ChatResponse {
 	/// Set explicitly by construction code; no implicit defaulting at the type level.
 	pub provider_model_iden: ModelIden,
 
-	/// Normalised stop reason (see [`StopReason`]).
+	/// Normalized provider stop reason.
 	pub stop_reason: Option<StopReason>,
 
 	/// Token usage reported by the provider.
 	pub usage: Usage,
 
-	/// IMPORTANT: (since 0.5.3) This is populated at the client.exec_chat when the options capture_raw_body is set to true
-	/// Raw response body (only if asked via options.capture_raw_body)
+	/// Raw response body when raw-body capture is enabled.
 	pub captured_raw_body: Option<serde_json::Value>,
 
 	/// Response ID for stateful sessions (OpenAI Responses API).
@@ -134,7 +133,7 @@ pub struct ChatResponse {
 }
 
 impl ChatResponse {
-	/// Set response_id (builder pattern for adapter construction).
+	/// Sets the response ID returned for stateful continuation.
 	pub fn with_response_id(mut self, id: Option<String>) -> Self {
 		self.response_id = id;
 		self
@@ -153,24 +152,38 @@ impl ChatResponse {
 		self.content.into_first_text()
 	}
 
-	/// Returns all text segments (first per content item).
+	/// Returns all text segments.
 	pub fn texts(&self) -> Vec<&str> {
 		self.content.texts()
 	}
 
-	/// Consumes self and returns all text segments (first per content item).
+	/// Consumes the response and returns all text segments.
 	pub fn into_texts(self) -> Vec<String> {
 		self.content.into_texts()
 	}
 
-	/// Returns all captured tool calls.
+	/// Returns all tool calls in the response content.
 	pub fn tool_calls(&self) -> Vec<&ToolCall> {
 		self.content.tool_calls()
 	}
 
-	/// Consumes self and returns all captured tool calls.
+	/// Consumes the response and returns all tool calls.
 	pub fn into_tool_calls(self) -> Vec<ToolCall> {
 		self.content.into_tool_calls()
+	}
+
+	/// Consume the response and build an assistant message for a tool-use handoff.
+	/// Provider continuation metadata and all assistant content are retained.
+	pub fn into_assistant_message_for_tool_use(self) -> Option<ChatMessage> {
+		if self.content.tool_calls().is_empty() {
+			return None;
+		}
+		let contains_reasoning = self.content.contains_reasoning_content();
+		let mut message = ChatMessage::assistant(self.content);
+		if !contains_reasoning {
+			message = message.with_reasoning_content(self.reasoning_content);
+		}
+		Some(message)
 	}
 }
 

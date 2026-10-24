@@ -1002,7 +1002,7 @@ public partial class App : Application
         trace?.Mark(TracePoint.WindowConstructionStarted);
         _mainWindow = new MainWindow(_shellSettings, _history.Value, _vocabulary.Value)
         {
-            OpenSettings = () => ShowSettings(),
+            OpenSettings = page => ShowSettings(page: page),
             OpenAddEngineFlow = () => ShowSettings(startAddEngineFlow: true),
             RouteChanged = () => _activeQuickSearch?.RefreshRouteSelection(),
             NotifyTray = (title, message) => Notify(title, message, Forms.ToolTipIcon.Info),
@@ -1053,7 +1053,7 @@ public partial class App : Application
         return window;
     }
 
-    private void ShowSettings(bool startAddEngineFlow = false)
+    internal void ShowSettings(bool startAddEngineFlow = false, string? page = null)
     {
         // A transient translation/capture surface must not remain behind a
         // newly opened settings window. Settings belongs to the main window,
@@ -1078,6 +1078,10 @@ public partial class App : Application
         if (startAddEngineFlow)
         {
             window.ShowProviderAddFlow();
+        }
+        else if (page is not null)
+        {
+            window.ShowPage(page);
         }
     }
 
@@ -1434,7 +1438,7 @@ public partial class App : Application
             anchorPixels,
             _history.Value,
             () => ShellSettingsStore.Load(),
-            () => ShowSettings(),
+            page => ShowSettings(page: page),
             OpenInMainWindow,
             _vocabulary.Value);
         trace?.Mark(TracePoint.WindowConstructionEnded);
@@ -1490,7 +1494,7 @@ public partial class App : Application
             // (panel/overlay teardown, owner, first-show convergence); without
             // it QuickSearch falls back to a bare SettingsWindow.
             trace?.Mark(TracePoint.WindowConstructionStarted);
-            _activeQuickSearch = new QuickSearchWindow(_history.Value, _vocabulary.Value, () => ShowSettings())
+            _activeQuickSearch = new QuickSearchWindow(_history.Value, _vocabulary.Value, page => ShowSettings(page: page))
             {
                 RouteChanged = () => _mainWindow?.RefreshEngineStatus(),
             };

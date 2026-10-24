@@ -1,7 +1,7 @@
 # PopGlot
 
 [![Windows](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D4)](https://github.com/ethan-blue/PopGlot/releases)
-[![Version](https://img.shields.io/badge/version-0.1.27-5B67B5)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.1.30-5B67B5)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-3D8B6E)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/ethan-blue/PopGlot/ci.yml?branch=main&label=CI)](https://github.com/ethan-blue/PopGlot/actions)
 
@@ -40,7 +40,7 @@ The selection panel sits next to the cursor. The translation stays; the note sit
 
 ![划词浮窗](docs/images/panel-dark.png)
 
-主题在「设置 → 通用」，三张色样是跟随系统、浅色、深色。点下去马上换外观，按保存后下次启动还用这一项。下图是设置里的翻译引擎页，不是主题页。
+主题在「设置 → 通用」，可选跟随系统、浅色或深色；点击立即预览，保存后保留。下图是隔离示例数据的引擎页实际窗口渲染。
 
 Appearance is under Settings → General: system, light, or dark. The picture below is the engine page, not the theme page.
 
@@ -51,7 +51,7 @@ Appearance is under Settings → General: system, light, or dark. The picture be
 1. 解压后运行 `PopGlot.exe`。窗口不自动弹出，图标在任务栏通知区域。
 2. 选中一段英文，按 `Ctrl+Alt+W`。
 3. 若还没有自己的引擎，到「设置 → 隐私与数据」允许免费线路。未允许时不会发出请求。
-4. 要换模型：设置 → 翻译引擎 → 添加引擎。填地址和密钥，测试连接，再设为默认。
+4. 要换模型：设置 → 引擎 → 添加引擎。填地址和密钥，测试连接，再在底部切换器中选用。
 
 Run `PopGlot.exe`. It stays in the tray. Allow the free engine under Settings → Privacy before the first request, or add your own engine.
 
@@ -85,9 +85,9 @@ Run `PopGlot.exe`. It stays in the tray. Allow the free engine under Settings �
 
 ## 下载
 
-**0.1.29** 在界面与快捷键打磨基础上补齐普通 JSON 响应的截断识别：非 SSE 回退同样保留输出长度上限与内容过滤原因，不把部分译文当成完成。发布状态与附件以 [Releases](https://github.com/ethan-blue/PopGlot/releases) 为准。
+**0.1.30** 紧凑界面迭代：设置按使用顺序组织，快捷键在默认窗口一屏可见，资料库搜索缩为工具栏输入框；移除重复标题、装饰徽标和大块留白。后台请求构造库升级至固定稳定版 genai 0.7.1，传输与安全策略保持由 PopGlot 管理。发布状态与附件以 [Releases](https://github.com/ethan-blue/PopGlot/releases) 为准。
 
-[下载 PopGlot 0.1.29](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.29/PopGlot-v0.1.29-win-x64.zip)
+[下载 PopGlot 0.1.30](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.30/PopGlot-v0.1.30-win-x64.zip)
 
 每一版的发布页都用同一个样子：标题是 `PopGlot 版本号`，页上直接写这一版改了什么，并附上 zip 和 `.sha256`。不用再点进另一份说明。
 
@@ -99,8 +99,8 @@ Run `PopGlot.exe`. It stays in the tray. Allow the free engine under Settings �
 文件名始终是 `PopGlot-v版本号-win-x64.zip`。校验：
 
 ```powershell
-(Get-FileHash -Path .\PopGlot-v0.1.29-win-x64.zip -Algorithm SHA256).Hash.ToLower()
-Get-Content .\PopGlot-v0.1.29-win-x64.zip.sha256
+(Get-FileHash -Path .\PopGlot-v0.1.30-win-x64.zip -Algorithm SHA256).Hash.ToLower()
+Get-Content .\PopGlot-v0.1.30-win-x64.zip.sha256
 ```
 
 全部发布页在 [Releases](https://github.com/ethan-blue/PopGlot/releases)。

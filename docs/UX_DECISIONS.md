@@ -9,6 +9,8 @@
 - [Microsoft UI Automation TextPattern](https://learn.microsoft.com/en-us/dotnet/framework/ui-automation/ui-automation-textpattern-overview)：UIA 取词依赖目标控件实现对应模式，不能承诺覆盖全部桌面应用。
 - [Windows 几何与排版](https://learn.microsoft.com/en-us/windows/apps/design/signature-experiences/geometry)、[层级](https://learn.microsoft.com/en-us/windows/apps/design/signature-experiences/layering)：使用系统字体、稳定间距、少量圆角和两层表面；强调色只用于状态与主操作。
 - [PowerToys 开源仓库](https://github.com/microsoft/PowerToys) 采用 MIT 许可证。本项目只借鉴“每屏遮罩、快捷键触发、OCR 适配层”的公开思路，没有复制其实现。
+- [Pot 快捷键设置](https://github.com/pot-app/pot-desktop/blob/master/src/window/Config/pages/Hotkey/index.jsx)：功能名旁直接录制组合键，不逐项堆长说明；仅参考公开交互，没有移植其实现。
+- [VS Code 快捷键表格与键盘导航](https://code.visualstudio.com/docs/configure/accessibility/accessibility)：统一属性行与可操作的输入项，而非多套卡片样式。
 
 ## 已落地决策
 
@@ -29,7 +31,7 @@
 ### 4. 主窗口工作台与独立设置窗口解耦，提供同级快捷入口
 
 主窗口收敛为专注日常使用的生产力工作台，侧栏精简为两大核心视图：**翻译**（双栏输入与对照）与**资料库**（生词本与历史记录的 Master–Detail）。主窗口侧栏底部新增同级「设置」入口，便于快速调出设置窗口。
-全部配置解耦至独立的 **SettingsWindow**（设置窗口），划分为 **翻译引擎 / 表达方式 / 通用 / 快捷键 / 隐私与数据** 五个专区（侧栏单选导航，v0.1.6 起表达方式独立成区）。设置窗口打开时默认直达「翻译引擎」专区；设置页采用分组标题 + 扁平设置行 + 发丝分隔线，去除多余嵌套卡片；日常修改即时保存或在窗口内草稿解决，日常流程零系统 MessageBox。
+全部配置位于独立 **SettingsWindow**，按 **通用 → 快捷键 → 引擎 → 提示词 → 隐私与数据** 排列，默认打开通用；服务错误、提示词管理和添加引擎入口仍直达所需页。默认窗口 760×500 DIP，最小 640×460；使用短分组标题、扁平属性行和一致分隔线，不重复侧栏名称。普通修改由窗口内保存/放弃处理，不弹系统 MessageBox。
 
 ### 5. 服务页采用「列表 ⇄ 编辑」切换架构，草稿内联守卫与纯值比对
 
@@ -53,6 +55,15 @@
 
 - 提供 `Speed`（极速）、`Balanced`（均衡）、`Quality`（高质）推荐偏好，辅助用户快速选择合适的大模型。
 - 推荐基于 Provider 目录事实、模型家族启发式规则与本地基准测试；无确凿证据的模型明确显示为未知（Unknown），严守“未知模型不虚构能力”的产品契约。
+
+### 9. 密度服从操作，而不是装饰
+
+- 同一概念只说一次：菜单分组使用「模型 / 内置」，说明放在悬停提示；不以「模型·风格与要点」重复介绍能力。
+- 快捷键默认窗口一屏可见，宽窗并列全局/窗口内两组；窄窗顺序排列，所有行同样的标签、录制框、分隔线。长组合在框内省略，悬停可读完整组合。
+- 工作台和资料库不再重复导航标题。搜索是资料库工具栏的一部分，不另占整行大输入框；删除撤销提示与内容各占一行。
+- 来源目录使用普通列表式按钮，自定义来源与官方预设同等呈现，不做强调色大卡、首字母假商标或多余徽标。
+- 提示词正文按内容高度呈现且可选择复制；修订/描述通过信息图标查阅。页面切换清掉无关的普通提示，未处理的警告和错误不因换页消失。
+
 
 ## 明确限制
 

@@ -1,11 +1,11 @@
+use super::AnthropicStreamer;
 use crate::ModelIden;
-use crate::adapter::anthropic::AnthropicStreamer;
 use crate::adapter::{Adapter, AdapterKind, ServiceType, WebRequestData};
 use crate::chat::{ChatOptionsSet, ChatRequest, ChatResponse, ChatStream, ChatStreamResponse};
 use crate::resolver::{AuthData, Endpoint};
-use crate::webc::{EventSourceStream, WebResponse};
+use crate::webc::StreamRequest as RequestBuilder;
+use crate::webc::{EventSourceStream, WebClient, WebResponse};
 use crate::{Result, ServiceTarget};
-use reqwest::RequestBuilder;
 
 pub struct AnthropicAdapter;
 
@@ -16,20 +16,25 @@ impl AnthropicAdapter {
 impl Adapter for AnthropicAdapter {
 	const DEFAULT_API_KEY_ENV_NAME: Option<&'static str> = Some(Self::API_KEY_DEFAULT_ENV_NAME);
 
-	fn default_endpoint() -> Endpoint {
+	fn default_endpoint(_kind: AdapterKind) -> Endpoint {
 		const BASE_URL: &str = "https://api.anthropic.com/v1/";
 		Endpoint::from_static(BASE_URL)
 	}
 
-	fn default_auth() -> AuthData {
+	fn default_auth(_kind: AdapterKind) -> AuthData {
 		match Self::DEFAULT_API_KEY_ENV_NAME {
 			Some(env_name) => AuthData::from_env(env_name),
 			None => AuthData::None,
 		}
 	}
 
-	async fn all_model_names(kind: AdapterKind, endpoint: Endpoint, auth: AuthData) -> Result<Vec<String>> {
-		Self::list_model_names_for_end_target(kind, endpoint, auth).await
+	async fn all_model_names(
+		kind: AdapterKind,
+		endpoint: Endpoint,
+		auth: AuthData,
+		web_client: &WebClient,
+	) -> Result<Vec<String>> {
+		Self::list_model_names_for_end_target(kind, endpoint, auth, web_client).await
 	}
 
 	fn get_service_url(_model: &ModelIden, service_type: ServiceType, endpoint: Endpoint) -> Result<String> {
@@ -67,7 +72,8 @@ impl Adapter for AnthropicAdapter {
 	) -> Result<ChatStreamResponse> {
 		let event_source = EventSourceStream::new(reqwest_builder);
 		let anthropic_stream = AnthropicStreamer::new(event_source, model_iden.clone(), options_set);
-		let chat_stream = ChatStream::from_inter_stream(anthropic_stream);
+		let frame_tap = anthropic_stream.frame_tap();
+		let chat_stream = ChatStream::from_inter_stream(anthropic_stream).with_frame_tap(frame_tap);
 		Ok(ChatStreamResponse {
 			model_iden,
 			stream: chat_stream,

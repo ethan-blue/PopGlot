@@ -1,18 +1,19 @@
+use super::AnthropicAdapter;
+use super::ant_model::{AnthropicMaxTokens, AnthropicModel, AnthropicModelCapabilities};
 use crate::Result;
+use crate::adapter::adapters::anthropic::ant_reasoning::insert_anthropic_reasoning;
 use crate::adapter::adapters::support::get_api_key;
-use crate::adapter::anthropic::AnthropicAdapter;
 use crate::adapter::{Adapter, AdapterKind, ServiceType, WebRequestData};
 use crate::chat::{
 	Binary, BinarySource, CacheControl, CacheCreationDetails, ChatOptionsSet, ChatRequest, ChatResponse,
-	ChatResponseFormat, ChatRole, ContentPart, MessageContent, PromptTokensDetails, ReasoningEffort, StopReason, Tool,
-	ToolCall, ToolChoice, ToolConfig, ToolName, Usage,
+	ChatResponseFormat, ChatRole, CompletionTokensDetails, ContentPart, JsonSchemaDialect, MessageContent,
+	PromptTokensDetails, ReasoningEffort, StopReason, Tool, ToolCall, ToolChoice, ToolConfig, ToolName, Usage,
+	sanitize_json_schema,
 };
 use crate::resolver::{AuthData, Endpoint};
-use crate::webc::WebResponse;
+use crate::webc::{WebClient, WebResponse};
 use crate::{Headers, ModelIden};
 use serde_json::{Map, Value, json};
-use std::sync::OnceLock;
-use tracing::info;
 use tracing::warn;
 use value_ext::JsonValueExt;
 
@@ -30,6 +31,7 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 // fall back
 pub(in crate::adapter::adapters) const MAX_TOKENS_64K: u32 = 64000; // claude-opus-4-5 claude-sonnet... (4 and above), claude-haiku..., claude-3-7-sonnet,
 // custom
+pub(in crate::adapter::adapters) const MAX_TOKENS_128K: u32 = 128000; // claude-opus-4-8 fable mythos
 pub(in crate::adapter::adapters) const MAX_TOKENS_32K: u32 = 32000; // claude-opus-4
 pub(in crate::adapter::adapters) const MAX_TOKENS_8K: u32 = 8192; // claude-3-5-sonnet, claude-3-5-haiku
 pub(in crate::adapter::adapters) const MAX_TOKENS_4K: u32 = 4096; // claude-3-opus, claude-3-haiku
@@ -39,25 +41,25 @@ impl AnthropicAdapter {
 	/// Resolves the max_tokens value for an Anthropic model, using the user-provided
 	/// value if set, or a model-appropriate default.
 	pub(in crate::adapter::adapters) fn resolve_max_tokens(model_name: &str, options_set: &ChatOptionsSet) -> u32 {
-		options_set.max_tokens().unwrap_or_else(|| {
+		let capabilities = AnthropicModel::parse(model_name).capabilities();
+		Self::resolve_max_tokens_for_capabilities(&capabilities, options_set)
+	}
+
+	fn resolve_max_tokens_for_capabilities(
+		capabilities: &AnthropicModelCapabilities,
+		options_set: &ChatOptionsSet,
+	) -> u32 {
+		options_set.max_tokens().unwrap_or({
 			// most likely models used, so put first. Also a little wider with `claude-sonnet` (since name from version 4)
-			if model_name.contains("claude-sonnet")
-				|| model_name.contains("claude-haiku")
-				|| model_name.contains("claude-3-7-sonnet")
-				|| model_name.contains("claude-opus-4-5")
-			{
-				MAX_TOKENS_64K
-			} else if model_name.contains("claude-opus-4") {
-				MAX_TOKENS_32K
-			} else if model_name.contains("claude-3-5") {
-				MAX_TOKENS_8K
-			} else if model_name.contains("3-opus") || model_name.contains("3-haiku") {
-				MAX_TOKENS_4K
+			match capabilities.max_tokens {
+				// TODO: Opus 4.8 should be here as well
+				AnthropicMaxTokens::Tokens128K => MAX_TOKENS_128K,
+				AnthropicMaxTokens::Tokens64K => MAX_TOKENS_64K,
+				AnthropicMaxTokens::Tokens32K => MAX_TOKENS_32K,
+				AnthropicMaxTokens::Tokens8K => MAX_TOKENS_8K,
+				AnthropicMaxTokens::Tokens4K => MAX_TOKENS_4K,
 			}
 			// for now, fall back on the 64K by default (might want to be more conservative)
-			else {
-				MAX_TOKENS_64K
-			}
 		})
 	}
 
@@ -68,6 +70,17 @@ impl AnthropicAdapter {
 		let cache_creation_input_tokens: i32 = usage_value.x_take("cache_creation_input_tokens").unwrap_or(0);
 		let cache_read_input_tokens: i32 = usage_value.x_take("cache_read_input_tokens").unwrap_or(0);
 		let completion_tokens: i32 = usage_value.x_take("output_tokens").ok().unwrap_or(0);
+		// Anthropic reports the thinking share of `output_tokens` as
+		// `output_tokens_details.thinking_tokens` (adaptive thinking). It maps to
+		// `completion_tokens_details.reasoning_tokens`, the field the OpenAI and Gemini
+		// adapters fill, so the split reads the same across adapters. `output_tokens`
+		// already includes it, so `completion_tokens` needs no normalization.
+		let thinking_tokens = usage_value
+			.get("output_tokens_details")
+			.and_then(|details| details.get("thinking_tokens"))
+			.and_then(Value::as_i64)
+			.map(|tokens| tokens as i32)
+			.filter(|&tokens| tokens > 0);
 
 		// Parse cache_creation breakdown if present (TTL-specific breakdown)
 		let cache_creation_details = usage_value.get("cache_creation").and_then(parse_cache_creation_details);
@@ -97,8 +110,12 @@ impl AnthropicAdapter {
 			prompt_tokens_details,
 
 			completion_tokens: Some(completion_tokens),
-			// for now, None for Anthropic
-			completion_tokens_details: None,
+			completion_tokens_details: thinking_tokens.map(|reasoning_tokens| CompletionTokensDetails {
+				accepted_prediction_tokens: None,
+				rejected_prediction_tokens: None,
+				reasoning_tokens: Some(reasoning_tokens),
+				audio_tokens: None,
+			}),
 
 			total_tokens: Some(total_tokens),
 		}
@@ -107,7 +124,8 @@ impl AnthropicAdapter {
 	/// Takes the GenAI ChatMessages and constructs the System string and JSON Messages for Anthropic.
 	/// - Will push the `ChatRequest.system` and system message to `AnthropicRequestParts.system`
 	pub(in crate::adapter::adapters) fn into_anthropic_request_parts(
-		chat_req: ChatRequest,
+		mut chat_req: ChatRequest,
+		request_cache_control: Option<CacheControl>,
 	) -> Result<AnthropicRequestParts> {
 		let mut messages: Vec<Value> = Vec::new();
 		// (content, cache_control)
@@ -122,9 +140,17 @@ impl AnthropicAdapter {
 			systems.push((system, None));
 		}
 
+		// Track explicit message-level breakpoints so request-level cache_control can defer to them.
+		let mut has_msg_cache = false;
+
 		// -- Process the messages
 		for msg in chat_req.messages {
 			let cache_control = msg.options.and_then(|o| o.cache_control);
+			// Any explicit message cache_control (incl. System-role, part of the static prefix)
+			// counts as a breakpoint; request-level placement (below) defers to it.
+			if cache_control.is_some() {
+				has_msg_cache = true;
+			}
 
 			// Check TTL ordering constraint
 			if let Some(ref cc) = cache_control {
@@ -135,8 +161,8 @@ impl AnthropicAdapter {
 					CacheControl::Ephemeral1h | CacheControl::Ephemeral24h => {
 						if seen_5m_cache {
 							warn!(
-								"Anthropic cache TTL ordering violation: Ephemeral1h appears after Ephemeral/Ephemeral5m. \
-								1-hour cache entries must appear before 5-minute cache entries. \
+								"Anthropic cache TTL ordering violation: a longer-TTL entry (Ephemeral1h/Ephemeral24h) appears after Ephemeral/Ephemeral5m. \
+								Longer-TTL cache entries must appear before shorter (5-minute) entries. \
 								See: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#mixing-different-ttls"
 							);
 						}
@@ -225,8 +251,7 @@ impl AnthropicAdapter {
 								}
 								ContentPart::ThoughtSignature(_) => {}
 								ContentPart::ReasoningContent(_) => {}
-								// Custom are ignored for this logic
-								ContentPart::Custom(_) => {}
+								ContentPart::Custom(custom_part) => values.push(custom_part.data),
 							}
 						}
 						let values = apply_cache_control_to_parts(cache_control.as_ref(), values);
@@ -239,8 +264,77 @@ impl AnthropicAdapter {
 					let mut values: Vec<Value> = Vec::new();
 					let mut has_tool_use = false;
 					let mut has_text = false;
+					let mut thought_signatures: Vec<String> = Vec::new();
+					let mut reasoning_contents: Vec<String> = Vec::new();
+					// The thinking blocks in the order they came: `None` for the next signed
+					// block, `Some(block)` for one kept as a custom part (`redacted_thinking`,
+					// or a block passed through as is).
+					let mut thinking_blocks: Vec<Option<Value>> = Vec::new();
+					let mut other_parts: Vec<ContentPart> = Vec::new();
 
 					for part in msg.content {
+						match part {
+							ContentPart::ThoughtSignature(signature) => {
+								thought_signatures.push(signature);
+								thinking_blocks.push(None);
+							}
+							ContentPart::ReasoningContent(reasoning) => reasoning_contents.push(reasoning),
+							ContentPart::Custom(custom_part) if is_thinking_block(&custom_part.data) => {
+								thinking_blocks.push(Some(custom_part.data));
+							}
+							other => other_parts.push(other),
+						}
+					}
+
+					// `ToolCall.thought_signatures` is a convenience mirror. Use it only when
+					// canonical message content does not already carry signatures.
+					if thought_signatures.is_empty()
+						&& let Some(mirrored) = other_parts.iter().find_map(|part| match part {
+							ContentPart::ToolCall(tool_call) => tool_call.thought_signatures.clone(),
+							_ => None,
+						}) {
+						// The mirror keeps no position, so its blocks lead.
+						thinking_blocks = std::iter::repeat_n(None, mirrored.len()).chain(thinking_blocks).collect();
+						thought_signatures = mirrored;
+					}
+
+					// Anthropic only accepts a thinking block when it carries both its reasoning
+					// text and the matching signature, so the two lists must line up one-to-one.
+					//
+					// They can legitimately fail to line up: a conversation carried over from a
+					// provider that returns unsigned reasoning (OpenAI, DeepSeek, ...), or an
+					// assistant message built by hand with `.with_reasoning_content(..)`. Pairing
+					// by position anyway would sign the wrong text, which Anthropic rejects, so
+					// drop the thinking blocks and send the rest of the message instead.
+					if reasoning_contents.len() == thought_signatures.len() {
+						// Anthropic requires every thinking block before text/tool-use blocks,
+						// and gets them back in the order they came.
+						let mut signed =
+							reasoning_contents
+								.into_iter()
+								.zip(thought_signatures)
+								.map(|(thinking, signature)| {
+									json!({
+										"type": "thinking",
+										"thinking": thinking,
+										"signature": signature,
+									})
+								});
+						for block in thinking_blocks {
+							values.extend(block.or_else(|| signed.next()));
+						}
+					} else if !reasoning_contents.is_empty() || !thought_signatures.is_empty() {
+						tracing::warn!(
+							reasoning_count = reasoning_contents.len(),
+							signature_count = thought_signatures.len(),
+							"anthropic - assistant message has unpaired reasoning content and thought signatures; \
+							 omitting thinking blocks from this message"
+						);
+						// A block kept as a custom part needs no pairing, so it still goes back.
+						values.extend(thinking_blocks.into_iter().flatten());
+					}
+
+					for part in other_parts {
 						match part {
 							ContentPart::Text(text) => {
 								has_text = true;
@@ -267,10 +361,8 @@ impl AnthropicAdapter {
 							// Unsupported for assistant role in Anthropic message content
 							ContentPart::Binary(_) => {}
 							ContentPart::ToolResponse(_) => {}
-							ContentPart::ThoughtSignature(_) => {}
-							ContentPart::ReasoningContent(_) => {}
-							// Custom are ignored for this logic
-							ContentPart::Custom(_) => {}
+							ContentPart::ThoughtSignature(_) | ContentPart::ReasoningContent(_) => {}
+							ContentPart::Custom(custom_part) => values.push(custom_part.data),
 						}
 					}
 
@@ -294,18 +386,40 @@ impl AnthropicAdapter {
 				ChatRole::Tool => {
 					let mut values: Vec<Value> = Vec::new();
 					for part in msg.content {
-						if let ContentPart::ToolResponse(tool_response) = part {
-							values.push(json!({
-								"type": "tool_result",
-								"content": tool_response.content,
-								"tool_use_id": tool_response.call_id,
-							}));
+						match part {
+							ContentPart::ToolResponse(tool_response) => {
+								values.push(json!({
+									"type": "tool_result",
+									"content": tool_response.content,
+									"tool_use_id": tool_response.call_id,
+								}));
+							}
+							ContentPart::Custom(custom_part) => values.push(custom_part.data),
+							_ => {}
 						}
 					}
 					if !values.is_empty() {
 						let values = apply_cache_control_to_parts(cache_control.as_ref(), values);
 						messages.push(json!({"role": "user", "content": values}));
 					}
+				}
+			}
+		}
+
+		// -- Request-level cache control (Approach B): with no explicit breakpoint, auto-mark the
+		// static prefix — the last system block (caches tools+system), else the last tool; no-op otherwise.
+		if let Some(req_cc) = request_cache_control {
+			let has_tool_cache = chat_req
+				.tools
+				.as_ref()
+				.map(|tools| tools.iter().any(|t| t.cache_control.is_some()))
+				.unwrap_or(false);
+
+			if !has_msg_cache && !has_tool_cache {
+				if let Some(last_system) = systems.last_mut() {
+					last_system.1 = Some(req_cc);
+				} else if let Some(last_tool) = chat_req.tools.as_mut().and_then(|tools| tools.last_mut()) {
+					last_tool.cache_control = Some(req_cc);
 				}
 			}
 		}
@@ -365,6 +479,14 @@ impl AnthropicAdapter {
 		chat_req: ChatRequest,
 		options_set: ChatOptionsSet<'_, '_>,
 	) -> Result<WebRequestData> {
+		let response_schema = options_set.response_format().and_then(|format| match format {
+			ChatResponseFormat::JsonSpec(spec) => Some(sanitize_json_schema(
+				&spec.schema,
+				JsonSchemaDialect::AnthropicStructured,
+			)),
+			ChatResponseFormat::JsonMode => None,
+		});
+
 		// -- api_key
 		let api_key = get_api_key(auth, &model)?;
 
@@ -382,45 +504,31 @@ impl AnthropicAdapter {
 			system,
 			messages,
 			tools,
-		} = Self::into_anthropic_request_parts(chat_req)?;
+		} = Self::into_anthropic_request_parts(chat_req, options_set.cache_control().cloned())?;
 
 		// -- Extract Model Name and Reasoning
 		let (_, raw_model_name) = model.model_name.namespace_and_name();
 
 		// -- Reasoning Budget
 		let (model_name, computed_reasoning_effort) = match (raw_model_name, options_set.reasoning_effort()) {
-			// No explicity reasoning_effor, try to infer from model name suffix (supports -zero)
+			// No explicity reasoning_effor, try to infer from model name suffix (supports -zero and -none)
 			(model, None) => {
 				// let model_name: &str = &model.model_name;
-				if let Some((prefix, last)) = raw_model_name.rsplit_once('-') {
-					let reasoning = match last {
-						"zero" => None,
-						"None" => Some(ReasoningEffort::Low),
-						"minimal" => Some(ReasoningEffort::Low),
-						"low" => Some(ReasoningEffort::Low),
-						"medium" => Some(ReasoningEffort::Medium),
-						"high" => Some(ReasoningEffort::High),
-						"xhigh" => Some(ReasoningEffort::XHigh),
-						"max" => Some(ReasoningEffort::Max),
-						_ => None,
-					};
-					// create the model name if there was a `-..` reasoning suffix
-					let model = if reasoning.is_some() { prefix } else { model };
-
-					(model, reasoning)
-				} else {
-					(model, None)
-				}
+				let (reasoning, model_name) = ReasoningEffort::from_model_name(model);
+				// 'zero' is canonical; 'none' is backward-compat alias
+				// create the model name if there was a `-..` reasoning suffix
+				(model_name, reasoning)
 			}
 			// If reasoning effort, turn the low, medium, budget ones into Budget
 			(model, Some(effort)) => (model, Some(effort.clone())),
 		};
+		let anthropic_model = AnthropicModel::parse(model_name);
+		let capabilities = anthropic_model.capabilities();
 
 		// -- Build the basic payload
 		let stream = matches!(service_type, ServiceType::ChatStream);
 		let mut payload = json!({
-			"model": model_name.to_string(),
-			"messages": messages,
+			"model": anthropic_model.normalized_name.to_string(),
 			"stream": stream
 		});
 
@@ -428,6 +536,7 @@ impl AnthropicAdapter {
 			payload.x_insert("system", system)?;
 		}
 
+		// -- Tools (before messages)
 		if let Some(tools) = tools {
 			payload.x_insert("/tools", tools)?;
 		}
@@ -435,30 +544,33 @@ impl AnthropicAdapter {
 			payload.x_insert("tool_choice", tool_choice)?;
 		}
 
+		// -- Messages (after tools)
+		payload.x_insert("messages", messages)?;
+
 		// -- Set the reasoning effort
 		// Both reasoning effort and structured-output format write into `output_config`.
 		// Build a shared map so both contributions end up in the same object.
 		let mut output_config: Map<String, Value> = Map::new();
 
 		if let Some(computed_reasoning_effort) = computed_reasoning_effort {
-			insert_anthropic_reasoning(&mut payload, &mut output_config, model_name, &computed_reasoning_effort)?;
-		}
-
-		if let Some(cache_control) = options_set.cache_control() {
-			info!(
-				"Anthropic request-level cache_control '{cache_control:?}' is currently ignored. Use message-level cache_control instead."
-			);
+			let capture_reasoning_content = options_set.capture_reasoning_content().unwrap_or_default();
+			insert_anthropic_reasoning(
+				&mut payload,
+				&mut output_config,
+				&capabilities,
+				&computed_reasoning_effort,
+				capture_reasoning_content,
+			)?;
 		}
 
 		// -- Add supported ChatOptions
-		if let Some(ChatResponseFormat::JsonSpec(st_json)) = options_set.response_format() {
+		if let Some(schema) = response_schema {
 			// https://platform.claude.com/docs/en/build-with-claude/structured-outputs#json-outputs
-			// Note: Anthropic's json_schema format does not use a schema name; JsonSpec.name is intentionally omitted.
 			output_config.insert(
 				"format".to_string(),
 				json!({
 					"type": "json_schema",
-					"schema": st_json.schema_with_additional_properties_false(),
+					"schema": schema,
 				}),
 			);
 		}
@@ -476,11 +588,15 @@ impl AnthropicAdapter {
 			payload.x_insert("stop_sequences", options_set.stop_sequences())?;
 		}
 
-		let max_tokens = Self::resolve_max_tokens(model_name, &options_set);
+		let max_tokens = Self::resolve_max_tokens_for_capabilities(&capabilities, &options_set);
 		payload.x_insert("max_tokens", max_tokens)?; // required for Anthropic
 
 		if let Some(top_p) = options_set.top_p() {
 			payload.x_insert("top_p", top_p)?;
+		}
+
+		if let Some(extra_body) = options_set.extra_body() {
+			payload.x_merge(extra_body.clone())?;
 		}
 
 		Ok(WebRequestData { url, headers, payload })
@@ -516,6 +632,7 @@ impl AnthropicAdapter {
 		let json_content_items: Vec<Value> = body.x_take("content")?;
 
 		let mut reasoning_content: Vec<String> = Vec::new();
+		let mut thought_signatures: Vec<String> = Vec::new();
 
 		for mut item in json_content_items {
 			let typ: String = item.x_take("type")?;
@@ -524,7 +641,14 @@ impl AnthropicAdapter {
 					let part = ContentPart::from_text(item.x_take::<String>("text")?);
 					content.push(part);
 				}
-				"thinking" => reasoning_content.push(item.x_take("thinking")?),
+				"thinking" => {
+					let reasoning: String = item.x_take("thinking")?;
+					let signature: String = item.x_take("signature")?;
+					reasoning_content.push(reasoning.clone());
+					thought_signatures.push(signature.clone());
+					content.push(ContentPart::ThoughtSignature(signature));
+					content.push(ContentPart::ReasoningContent(reasoning));
+				}
 				"tool_use" => {
 					let call_id = item.x_take::<String>("id")?;
 					let fn_name = item.x_take::<String>("name")?;
@@ -546,6 +670,14 @@ impl AnthropicAdapter {
 					content.push(ContentPart::from_custom(item, Some(model_iden.clone())))
 				}
 			}
+		}
+
+		if !thought_signatures.is_empty()
+			&& let Some(tool_call) = content.iter_mut().find_map(|part| match part {
+				ContentPart::ToolCall(tool_call) => Some(tool_call),
+				_ => None,
+			}) {
+			tool_call.thought_signatures = Some(thought_signatures.clone());
 		}
 
 		let reasoning_content = if !reasoning_content.is_empty() {
@@ -570,6 +702,7 @@ impl AnthropicAdapter {
 		kind: AdapterKind,
 		endpoint: Endpoint,
 		auth: AuthData,
+		web_client: &WebClient,
 	) -> Result<Vec<String>> {
 		// -- url
 		let base_url = endpoint.base_url();
@@ -587,8 +720,7 @@ impl AnthropicAdapter {
 			.unwrap_or_default();
 
 		// -- Exec request
-		let web_c = crate::webc::WebClient::default();
-		let mut res = web_c
+		let mut res = web_client
 			.do_get(&url, &headers)
 			.await
 			.map_err(|webc_error| crate::Error::WebAdapterCall {
@@ -615,6 +747,9 @@ impl AnthropicAdapter {
 			description,
 			schema,
 			config,
+			cache_control,
+			eager_input_streaming,
+			strict,
 			..
 		} = tool;
 
@@ -657,11 +792,27 @@ impl AnthropicAdapter {
 				}
 			}
 		} else {
+			let schema = if strict == Some(true) {
+				schema.map(|schema| sanitize_json_schema(&schema, JsonSchemaDialect::AnthropicStructured))
+			} else {
+				schema
+			};
 			tool_value.x_insert("input_schema", schema)?;
+			if let Some(strict) = strict {
+				tool_value.x_insert("strict", strict)?;
+			}
 			if let Some(description) = description {
 				// TODO: need to handle error
 				let _ = tool_value.x_insert("description", description);
 			}
+			// Anthropic fine-grained tool streaming (GA): opt-in per tool.
+			if eager_input_streaming == Some(true) {
+				let _ = tool_value.x_insert("eager_input_streaming", true);
+			}
+		}
+
+		if let Some(cc) = cache_control {
+			let _ = tool_value.x_insert("cache_control", cache_control_to_json(&cc));
 		}
 
 		Ok(tool_value)
@@ -673,141 +824,6 @@ pub(in crate::adapter) struct AnthropicRequestParts {
 	pub messages: Vec<Value>,
 	pub tools: Option<Vec<Value>>,
 }
-
-// region:    --- Reasoning Support
-
-const REASONING_LOW: u32 = 1024;
-const REASONING_MEDIUM: u32 = 8000;
-const REASONING_HIGH: u32 = 24000;
-
-// NOTE: These are opt-ins for now and can become defaults once support is broader.
-// See effort doc: https://platform.claude.com/docs/en/build-with-claude/effort
-const SUPPORT_EFFORT_MODELS: &[&str] = &["claude-opus-4-6", "claude-sonnet-4-6", "claude-opus-4-5"];
-const SUPPORT_REASONING_MAX_MODELS: &[&str] = &["claude-opus-4-6"];
-// See adaptive thinking doc: https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking
-const SUPPORT_ADAPTIVE_THINK_MODELS: &[&str] = &["claude-opus-4-6", "claude-sonnet-4-6"];
-
-fn has_model(model_prefixes: &[&str], model_name: &str) -> bool {
-	model_prefixes.iter().any(|prefix| model_name.contains(prefix))
-}
-
-fn insert_anthropic_reasoning(
-	payload: &mut Value,
-	output_config: &mut Map<String, Value>,
-	model_name: &str,
-	effort: &ReasoningEffort,
-) -> Result<()> {
-	let mut budget: Option<u32> = None;
-	let support_effort = supports_anthropic_effort(model_name);
-	let support_reasoning_max = supports_anthropic_reasoning_max(model_name);
-	let support_adaptive = supports_anthropic_adaptive_thinking(model_name);
-	let support_xhigh = is_opus_4_7_or_higher(model_name);
-
-	// Models that support effort use it as the primary reasoning control.
-	if support_effort {
-		let effort = match effort {
-			ReasoningEffort::Minimal => "low",
-			ReasoningEffort::Low => "low",
-			ReasoningEffort::Medium => "medium",
-			ReasoningEffort::High => "high",
-			ReasoningEffort::XHigh if support_xhigh => "xhigh",
-			ReasoningEffort::Max | ReasoningEffort::XHigh if support_reasoning_max => "max",
-			ReasoningEffort::Max if support_xhigh => "max",
-			ReasoningEffort::XHigh => "high",
-			ReasoningEffort::Max => "high",
-			// Preserve explicit budget tokens for the adaptive thinking payload below.
-			ReasoningEffort::Budget(val) => {
-				budget = Some(*val);
-				""
-			}
-			ReasoningEffort::None => "",
-		};
-
-		// Emit the effort into the shared output_config map when present.
-		if !effort.is_empty() {
-			output_config.insert("effort".to_string(), json!(effort));
-		}
-	}
-
-	// Adaptive-thinking models use a `thinking` object, optionally with budget tokens.
-	if support_adaptive {
-		let thinking = match budget {
-			Some(budget) => json!({
-						"type": "adaptive",
-						"budget_tokens": budget // if None, should be ok.
-			}),
-			None => json!({
-				"type": "adaptive"}),
-		};
-
-		// Let the model choose adaptive thinking behavior, honoring an explicit budget when set.
-		payload.x_insert("thinking", thinking)?;
-	}
-
-	// Older models still use the legacy `thinking.enabled + budget_tokens` shape.
-	if !support_effort {
-		let thinking_budget = match effort {
-			ReasoningEffort::None => None,
-			ReasoningEffort::Budget(budget) => Some(*budget),
-			ReasoningEffort::Low | ReasoningEffort::Minimal => Some(REASONING_LOW),
-			ReasoningEffort::Medium => Some(REASONING_MEDIUM),
-			ReasoningEffort::High | ReasoningEffort::Max | ReasoningEffort::XHigh => Some(REASONING_HIGH),
-		};
-
-		if let Some(thinking_budget) = thinking_budget {
-			payload.x_insert(
-				"thinking",
-				json!({
-					"type": "enabled",
-					"budget_tokens": thinking_budget
-				}),
-			)?;
-		}
-	}
-
-	Ok(())
-}
-
-fn supports_anthropic_effort(model_name: &str) -> bool {
-	has_model(SUPPORT_EFFORT_MODELS, model_name) || is_opus_4_7_or_higher(model_name)
-}
-
-fn supports_anthropic_reasoning_max(model_name: &str) -> bool {
-	has_model(SUPPORT_REASONING_MAX_MODELS, model_name) || is_opus_4_7_or_higher(model_name)
-}
-
-fn supports_anthropic_adaptive_thinking(model_name: &str) -> bool {
-	has_model(SUPPORT_ADAPTIVE_THINK_MODELS, model_name) || is_opus_4_7_or_higher(model_name)
-}
-
-// endregion: --- Reasoning Support
-
-// region:    --- Model Name Support
-
-/// Returns true when the given model name looks like a Claude Opus model with
-/// version >= 4.7 (e.g. `claude-opus-4-7`, `claude-opus-5-0`, ...).
-///
-/// The regex is unanchored and tolerates arbitrary prefixes/suffixes around the
-/// core `claude-opus-<major>-<minor>` portion. Any parse or regex failure is
-/// treated as a conservative `false`.
-fn is_opus_4_7_or_higher(model_name: &str) -> bool {
-	static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-	let re = RE.get_or_init(|| regex::Regex::new(r"claude-opus-(\d+)-(\d+)").ok());
-	let Some(re) = re.as_ref() else {
-		return false;
-	};
-	let Some(caps) = re.captures(model_name) else {
-		return false;
-	};
-	let major = caps.get(1).and_then(|m| m.as_str().parse::<u32>().ok());
-	let minor = caps.get(2).and_then(|m| m.as_str().parse::<u32>().ok());
-	match (major, minor) {
-		(Some(major), Some(minor)) => (major, minor) >= (4, 7),
-		_ => false,
-	}
-}
-
-// endregion: --- Model Name Support
 
 // region:    --- Support
 
@@ -828,6 +844,7 @@ fn cache_control_to_json(cache_control: &CacheControl) -> Value {
 		CacheControl::Ephemeral1h => {
 			json!({"type": "ephemeral", "ttl": "1h"})
 		}
+		// Anthropic's max ephemeral TTL is 1h, so 24h clamps to 1h (see CacheControl::Ephemeral24h docs).
 		CacheControl::Ephemeral24h => {
 			json!({"type": "ephemeral", "ttl": "1h"})
 		}
@@ -881,13 +898,11 @@ fn apply_cache_control_to_parts(cache_control: Option<&CacheControl>, parts: Vec
 	let mut parts = parts;
 	if let Some(cc) = cache_control
 		&& !parts.is_empty()
+		&& let Some(last_value) = parts.last_mut()
 	{
-		let len = parts.len();
-		if let Some(last_value) = parts.get_mut(len - 1) {
-			// NOTE: For now, if it fails, then, no cache
-			let _ = last_value.x_insert("cache_control", cache_control_to_json(cc));
-			// TODO: Should warn
-		}
+		// NOTE: For now, if it fails, then, no cache
+		let _ = last_value.x_insert("cache_control", cache_control_to_json(cc));
+		// TODO: Should warn
 	}
 	parts
 }
@@ -904,177 +919,21 @@ fn anthropic_tool_choice(tool_choice: Option<&ToolChoice>) -> Option<Value> {
 	}
 }
 
+/// A thinking block kept as a custom part: `redacted_thinking`, as both the streamed and
+/// the non-streamed response keep it, or a `thinking` block passed through as is.
+fn is_thinking_block(data: &Value) -> bool {
+	matches!(
+		data.get("type").and_then(Value::as_str),
+		Some("thinking" | "redacted_thinking")
+	)
+}
+
 // endregion: --- Support
 
 // region:    --- Tests
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-	use crate::ServiceTarget;
-	use crate::adapter::{Adapter, ServiceType};
-	use crate::chat::{ChatOptions, ChatRequest, JsonSpec, Tool, ToolChoice};
-	use crate::resolver::AuthData;
-
-	/// Regression guard: when both `reasoning_effort` and `JsonSpec` response format are set
-	/// on a model that uses the `output_config` effort API (e.g. `claude-sonnet-4-6`), both
-	/// `effort` and `format` must appear inside the same `output_config` JSON object.
-	#[test]
-	fn test_output_config_merges_effort_and_format() {
-		let chat_options = ChatOptions {
-			reasoning_effort: Some(ReasoningEffort::High),
-			response_format: Some(ChatResponseFormat::JsonSpec(JsonSpec::new(
-				"anthropic_ignores_name", // NOTE: Anthropic doesn't recognize a "name" field
-				json!({"type": "object", "properties": {}}),
-			))),
-			..Default::default()
-		};
-
-		let model_iden = ModelIden::new(AdapterKind::Anthropic, "claude-sonnet-4-6");
-		let target = ServiceTarget {
-			endpoint: AnthropicAdapter::default_endpoint(),
-			auth: AuthData::from_single("test-key"),
-			model: model_iden,
-		};
-		let options_set = ChatOptionsSet::default().with_chat_options(Some(&chat_options));
-
-		let result = AnthropicAdapter::to_web_request_data(
-			target,
-			ServiceType::Chat,
-			ChatRequest::from_user("hello"),
-			options_set,
-		);
-
-		let web_req = result.expect("to_web_request_data should succeed");
-		let output_config = web_req.payload.get("output_config").expect("output_config must be present");
-
-		assert_eq!(
-			output_config.get("effort").and_then(|v| v.as_str()),
-			Some("high"),
-			"effort must be present in output_config"
-		);
-		assert_eq!(
-			output_config.get("format").and_then(|f| f.get("type")).and_then(|v| v.as_str()),
-			Some("json_schema"),
-			"format.type must be present in output_config"
-		);
-	}
-
-	#[test]
-	fn test_opus_4_7_uses_adaptive_thinking() {
-		let chat_options = ChatOptions {
-			reasoning_effort: Some(ReasoningEffort::Medium),
-			..Default::default()
-		};
-		let options_set = ChatOptionsSet::default().with_chat_options(Some(&chat_options));
-		let target = ServiceTarget {
-			endpoint: AnthropicAdapter::default_endpoint(),
-			auth: AuthData::from_single("test-key"),
-			model: ModelIden::new(AdapterKind::Anthropic, "claude-opus-4-7"),
-		};
-
-		let web_req = AnthropicAdapter::to_web_request_data(
-			target,
-			ServiceType::Chat,
-			ChatRequest::from_user("hello"),
-			options_set,
-		)
-		.expect("to_web_request_data should succeed");
-
-		assert_eq!(web_req.payload["thinking"], json!({"type": "adaptive"}));
-		assert_eq!(web_req.payload["output_config"]["effort"], json!("medium"));
-	}
-
-	#[test]
-	fn test_tool_choice_required_serialized_on_anthropic_payload() {
-		let chat_options = ChatOptions::default().with_tool_choice(ToolChoice::Required);
-		let options_set = ChatOptionsSet::default().with_chat_options(Some(&chat_options));
-		let target = ServiceTarget {
-			endpoint: AnthropicAdapter::default_endpoint(),
-			auth: AuthData::from_single("test-key"),
-			model: ModelIden::new(AdapterKind::Anthropic, "claude-sonnet-4-6"),
-		};
-		let chat_req = ChatRequest::from_user("weather").with_tools(vec![Tool::new("get_weather")]);
-
-		let web_req = AnthropicAdapter::to_web_request_data(target, ServiceType::Chat, chat_req, options_set)
-			.expect("to_web_request_data should succeed");
-
-		assert_eq!(web_req.payload["tool_choice"], json!({"type": "any"}));
-	}
-
-	#[test]
-	fn test_cache_control_to_json_ephemeral() {
-		let result = cache_control_to_json(&CacheControl::Ephemeral);
-		assert_eq!(result, json!({"type": "ephemeral"}));
-	}
-
-	#[test]
-	fn test_cache_control_to_json_ephemeral_5m() {
-		let result = cache_control_to_json(&CacheControl::Ephemeral5m);
-		assert_eq!(result, json!({"type": "ephemeral", "ttl": "5m"}));
-	}
-
-	#[test]
-	fn test_cache_control_to_json_memory() {
-		let result = cache_control_to_json(&CacheControl::Memory);
-		assert_eq!(result, json!({"type": "ephemeral"}));
-	}
-
-	#[test]
-	fn test_cache_control_to_json_ephemeral_1h() {
-		let result = cache_control_to_json(&CacheControl::Ephemeral1h);
-		assert_eq!(result, json!({"type": "ephemeral", "ttl": "1h"}));
-	}
-
-	#[test]
-	fn test_cache_control_to_json_ephemeral_24h() {
-		let result = cache_control_to_json(&CacheControl::Ephemeral24h);
-		assert_eq!(result, json!({"type": "ephemeral", "ttl": "1h"}));
-	}
-
-	#[test]
-	fn test_parse_cache_creation_details_with_both_ttls() {
-		let cache_creation = json!({
-			"ephemeral_5m_input_tokens": 456,
-			"ephemeral_1h_input_tokens": 100
-		});
-		let result = parse_cache_creation_details(&cache_creation);
-		assert!(result.is_some());
-		let details = result.unwrap();
-		assert_eq!(details.ephemeral_5m_tokens, Some(456));
-		assert_eq!(details.ephemeral_1h_tokens, Some(100));
-	}
-
-	#[test]
-	fn test_parse_cache_creation_details_with_5m_only() {
-		let cache_creation = json!({
-			"ephemeral_5m_input_tokens": 456
-		});
-		let result = parse_cache_creation_details(&cache_creation);
-		assert!(result.is_some());
-		let details = result.unwrap();
-		assert_eq!(details.ephemeral_5m_tokens, Some(456));
-		assert_eq!(details.ephemeral_1h_tokens, None);
-	}
-
-	#[test]
-	fn test_parse_cache_creation_details_with_1h_only() {
-		let cache_creation = json!({
-			"ephemeral_1h_input_tokens": 100
-		});
-		let result = parse_cache_creation_details(&cache_creation);
-		assert!(result.is_some());
-		let details = result.unwrap();
-		assert_eq!(details.ephemeral_5m_tokens, None);
-		assert_eq!(details.ephemeral_1h_tokens, Some(100));
-	}
-
-	#[test]
-	fn test_parse_cache_creation_details_empty() {
-		let cache_creation = json!({});
-		let result = parse_cache_creation_details(&cache_creation);
-		assert!(result.is_none());
-	}
-}
+#[path = "adapter_shared_tests.rs"]
+mod tests;
 
 // endregion: --- Tests

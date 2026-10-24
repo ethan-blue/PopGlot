@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:PopGlot.Windows"
         xmlns:sections="clr-namespace:PopGlot.Windows.Sections"
-        Title="设置" Width="960" Height="700" MinWidth="680" MinHeight="480"
+        Title="设置" Width="760" Height="500" MinWidth="640" MinHeight="460"
         Icon="/PopGlot;component/Assets/PopGlot-v5.ico"
         Background="{DynamicResource CanvasBrush}" Foreground="{DynamicResource TextPrimaryBrush}"
         WindowStartupLocation="Manual">
@@ -45,25 +45,22 @@
                 </StackPanel>
 
                 <StackPanel Grid.Row="1" Margin="0,12,0,0">
-                    <TextBlock Text="偏好设置" Style="{StaticResource Metadata}"
-                               Foreground="{DynamicResource TextTertiaryBrush}"
-                               FontSize="11" FontWeight="SemiBold" Margin="8,0,0,8" />
-                    <RadioButton x:Name="NavProvider" Style="{StaticResource NavButton}"
-                                 GroupName="SettingsNav" IsChecked="True" Content="翻译引擎"
-                                 local:Ui.Icon="{StaticResource IconProvider}"
-                                 Checked="SubNav_Checked" Tag="Provider" Margin="0,2" />
-                    <RadioButton x:Name="NavPrompt" Style="{StaticResource NavButton}"
-                                 GroupName="SettingsNav" Content="提示词与风格"
-                                 local:Ui.Icon="{StaticResource IconStyle}"
-                                 Checked="SubNav_Checked" Tag="Prompt" Margin="0,2" />
                     <RadioButton x:Name="NavGeneral" Style="{StaticResource NavButton}"
-                                 GroupName="SettingsNav" Content="通用"
+                                 GroupName="SettingsNav" IsChecked="True" Content="通用"
                                  local:Ui.Icon="{StaticResource IconSettings}"
                                  Checked="SubNav_Checked" Tag="General" Margin="0,2" />
                     <RadioButton x:Name="NavShortcuts" Style="{StaticResource NavButton}"
                                  GroupName="SettingsNav" Content="快捷键"
                                  local:Ui.Icon="{StaticResource IconKeyboard}"
                                  Checked="SubNav_Checked" Tag="Shortcuts" Margin="0,2" />
+                    <RadioButton x:Name="NavProvider" Style="{StaticResource NavButton}"
+                                 GroupName="SettingsNav" Content="引擎"
+                                 local:Ui.Icon="{StaticResource IconProvider}"
+                                 Checked="SubNav_Checked" Tag="Provider" Margin="0,2" />
+                    <RadioButton x:Name="NavPrompt" Style="{StaticResource NavButton}"
+                                 GroupName="SettingsNav" Content="提示词"
+                                 local:Ui.Icon="{StaticResource IconStyle}"
+                                 Checked="SubNav_Checked" Tag="Prompt" Margin="0,2" />
                     <RadioButton x:Name="NavPrivacy" Style="{StaticResource NavButton}"
                                  GroupName="SettingsNav" Content="隐私与数据"
                                  local:Ui.Icon="{StaticResource IconShield}"
@@ -103,9 +100,9 @@
             <!-- Scrollable settings & provider engine view -->
             <Grid Grid.Row="1">
                 <ScrollViewer x:Name="SettingsScroll"
-                              VerticalScrollBarVisibility="Auto" Padding="28,14,32,16">
+                              VerticalScrollBarVisibility="Auto" Padding="14,10,14,12">
                     <Grid>
-                        <sections:GeneralSection x:Name="GeneralSection" Visibility="Collapsed" />
+                        <sections:GeneralSection x:Name="GeneralSection" />
                         <sections:ShortcutsSection x:Name="ShortcutsSection" Visibility="Collapsed" />
                         <Grid x:Name="PrivacyPageHost" Visibility="Collapsed">
                             <StackPanel>
@@ -116,15 +113,14 @@
                     </Grid>
                 </ScrollViewer>
                 <sections:ServicesSection x:Name="ProviderSection"
-                                          Margin="28,14,32,16" />
+                                          Margin="14,10,14,12" Visibility="Collapsed" />
                 <sections:PromptSection x:Name="PromptSectionHost"
-                                        Margin="28,14,32,16" Visibility="Collapsed" />
+                                        Margin="14,10,14,12" Visibility="Collapsed" />
             </Grid>
 
             <!-- Fixed action bar: status dot on the left, save/revert actions on the right -->
             <Border Grid.Row="2" Background="{DynamicResource SidebarBrush}"
-                    BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
-                    Padding="24,10">
+                    Padding="14,8">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />

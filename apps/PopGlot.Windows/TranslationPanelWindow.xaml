@@ -169,7 +169,7 @@
                                     Width="Auto" MinWidth="32" Height="26" Padding="6,0" Margin="0,0,6,0"
                                     AutomationProperties.Name="文字翻译风格"
                                     ToolTipService.ShowOnDisabled="True"
-                                    ToolTip="文字翻译风格（点击切换）"
+                                    ToolTip="风格（点击切换）"
                                     Click="StyleSelector_Click">
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                     <Path Width="12" Height="12" Stretch="Uniform"
@@ -437,7 +437,7 @@
                                     <Button x:Name="ErrorSettingsButton" Grid.Column="1" Style="{StaticResource GhostButton}"
                                             Content="打开设置" Padding="8,3" FontSize="11.5" Margin="8,0,0,0"
                                             VerticalAlignment="Center" Visibility="Collapsed"
-                                            Click="SettingsButton_Click" />
+                                            Click="OpenEngineSettings_Click" />
                                 </Grid>
                             </StackPanel>
 

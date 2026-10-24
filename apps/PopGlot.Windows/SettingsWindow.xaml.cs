@@ -70,6 +70,9 @@ public partial class SettingsWindow : Window
     /// </summary>
     private bool _policyReadFailed;
 
+    private string _currentPage = string.Empty;
+    private StatusTone _statusTone = StatusTone.Info;
+
     /// <summary>True while the form differs from the saved baseline.</summary>
     internal bool IsDirty => _state == SettingsEditState.Dirty;
 
@@ -114,7 +117,7 @@ public partial class SettingsWindow : Window
         HookDirtyTracking();
         LoadAll(reloadShellSettings: false);
         _loading = false;
-        ShowPage("Provider");
+        ShowPage("General");
 
         ThemeService.ApplyWindowChrome(this);
         ThemeService.ThemeChanged += _themeChangedHandler;
@@ -583,11 +586,11 @@ public partial class SettingsWindow : Window
 
         var page = tag switch
         {
-            "General" => "General",
+            "Provider" => "Provider",
             "Shortcuts" => "Shortcuts",
             "Privacy" => "Privacy",
             "Prompt" => "Prompt",
-            _ => "Provider",
+            _ => "General",
         };
 
         // The sidebar rail must stay in lock-step with the page actually
@@ -654,15 +657,18 @@ public partial class SettingsWindow : Window
         SettingsScroll?.ScrollToTop();
         UpdateSaveBar();
         UpdateResponsiveLayout(ActualWidth);
+        var pageChanged = _currentPage != page;
+        _currentPage = page;
+        if (pageChanged && _state == SettingsEditState.Clean &&
+            _statusTone is not (StatusTone.Warning or StatusTone.Error))
+            SetStatus("就绪", StatusTone.Info);
     }
 
     /// <summary>
-    /// Unified breakpoint (< 700 DIP client area): stacks form fields vertically
-    /// so API Key inputs and test buttons on 680 DIP minimum width never crowd or clip.
-    /// The provider editor is NOT driven here: its compact state follows the
-    /// DetailGrid content width inside <see cref="ServicesSection"/> alone — the
-    /// window only supplies a one-shot fallback hint for the never-laid-out
-    /// case, so the two criteria can no longer overwrite each other.
+    /// Derives usable page width even before a hidden page has been measured.
+    /// At the 640 DIP minimum, pages have about 440 DIP before a scrollbar.
+    /// Prompt field pairs stack below 560 DIP; short general rows stay aligned.
+    /// The provider editor owns its measured-content breakpoint independently.
     /// </summary>
     private void UpdateResponsiveLayout(double windowWidth)
     {
@@ -674,8 +680,11 @@ public partial class SettingsWindow : Window
         // report zero or its previous width when navigation changes. Derive
         // the available content width from the current window instead.
         var contentWidth = windowWidth - sidebarWidth - SettingsScroll.Padding.Left - SettingsScroll.Padding.Right;
-        var compact = contentWidth < 700;
-        GeneralSection?.SetCompact(compact);
+        var compact = contentWidth < 560;
+        GeneralSection?.SetCompact(contentWidth < 400);
+        // Use the page width, not the scroll viewport: a scrollbar must not
+        // keep the shortcut groups stacked after the window widens again.
+        ShortcutsSection?.SetCompact(compact);
         ProviderSection?.SetWindowWidthHint(windowWidth);
         PromptSectionHost?.SetCompact(compact);
     }
@@ -987,6 +996,7 @@ public partial class SettingsWindow : Window
 
     private void SetStatus(string message, StatusTone tone)
     {
+        _statusTone = tone;
         StatusTextBlock.Text = message;
         var resourceKey = tone switch
         {

@@ -8,6 +8,17 @@ public partial class ShortcutsSection : System.Windows.Controls.UserControl
         InitializeComponent();
     }
 
+    internal void SetCompact(bool stacked)
+    {
+        ShortcutGutter.Width = new System.Windows.GridLength(stacked ? 0 : 24);
+        ShortcutRightColumn.Width = stacked
+            ? new System.Windows.GridLength(0)
+            : new System.Windows.GridLength(1, System.Windows.GridUnitType.Star);
+        System.Windows.Controls.Grid.SetColumn(InterfaceShortcutGroup, stacked ? 0 : 2);
+        System.Windows.Controls.Grid.SetRow(InterfaceShortcutGroup, stacked ? 1 : 0);
+        InterfaceShortcutGroup.Margin = new System.Windows.Thickness(0, stacked ? 12 : 0, 0, 0);
+    }
+
     // ================= Public accessors for MainWindow =================
 
     internal HotkeyRecorder SelectionHotkey => SelectionHotkeyRecorder;

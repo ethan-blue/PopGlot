@@ -203,6 +203,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
         _detailWidthReported = true;
         SetCompact(e.NewSize.Width < 680);
+        PlacePresetColumns(e.NewSize.Width < 440);
     }
 
     private void ApplyEditorLayout()
@@ -219,10 +220,6 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         PlacePair(EndpointFieldsGrid, TextEndpointPanel, VisionEndpointPanel, compact);
         PlacePair(AdvancedDetailsGrid, HeadersPanel, CapabilitiesPanel, compact);
 
-        // Compact 纵向节奏收紧：680 DIP（产品最小窗宽）下，首屏必须把
-        // 「使用模型」卡片的推荐偏好单选行完整放进滚动视口，否则固定底
-        // 部操作栏会压住半行单选内容，看起来像被遮挡。这里只在窄态收紧
-        // 间距，宽态布局保持原样。
         EditorHeaderGrid.Margin = new Thickness(2, 0, 2, 8);
         ConnectionCard.Margin = new Thickness(0, 0, 0, 10);
         ModelCard.Margin = new Thickness(0, 0, 0, 10);
@@ -249,13 +246,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             KeyActionsPanel.Margin = new Thickness(0);
         }
 
-        PlacePresetColumns(compact);
     }
 
     /// <summary>
-    /// Wide catalogues use two columns. Under 680 DIP the right column drops
-    /// under the left one, and the custom-card arrow drops under the title so
-    /// the badge cannot sit on top of 「接入 →」.
+    /// The catalogue stays two-column while each source has room; below
+    /// 440 DIP the second column follows the first in a separate row.
     /// </summary>
     private void PlacePresetColumns(bool compact)
     {
@@ -267,23 +262,15 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             Grid.SetColumn(PresetColumnRight, 0);
             Grid.SetRow(PresetColumnRight, 1);
             PresetColumnRight.Margin = new Thickness(0, 8, 0, 0);
-            Grid.SetColumn(CustomPresetArrow, 0);
-            Grid.SetRow(CustomPresetArrow, 1);
-            CustomPresetArrow.Margin = new Thickness(0, 8, 4, 0);
-            CustomPresetArrow.HorizontalAlignment = HorizontalAlignment.Left;
         }
         else
         {
             PresetLeftColumn.Width = new GridLength(1, GridUnitType.Star);
-            PresetGutter.Width = new GridLength(16);
+            PresetGutter.Width = new GridLength(12);
             PresetRightColumn.Width = new GridLength(1, GridUnitType.Star);
             Grid.SetColumn(PresetColumnRight, 2);
             Grid.SetRow(PresetColumnRight, 0);
             PresetColumnRight.Margin = new Thickness(0);
-            Grid.SetColumn(CustomPresetArrow, 1);
-            Grid.SetRow(CustomPresetArrow, 0);
-            CustomPresetArrow.Margin = new Thickness(8, 0, 4, 0);
-            CustomPresetArrow.HorizontalAlignment = HorizontalAlignment.Stretch;
         }
     }
 
@@ -1385,7 +1372,6 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     {
         var title = string.IsNullOrWhiteSpace(name) ? "新引擎" : name.Trim();
         EditorProviderTitle.Text = title;
-        EditorProviderBadge.Text = title[..1].ToUpperInvariant();
         var protocol = providerType switch
         {
             ProviderType.AnthropicMessages => "Anthropic Messages",

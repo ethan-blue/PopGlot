@@ -45,7 +45,7 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
     private bool _compact;
 
     /// <summary>
-    /// Stacks form fields vertically when the settings window narrows below 700 DIP.
+    /// Stacks theme and startup controls only when less than 400 DIP is available.
     /// </summary>
     internal void SetCompact(bool compact)
     {

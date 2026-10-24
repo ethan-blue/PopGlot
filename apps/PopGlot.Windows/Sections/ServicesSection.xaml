@@ -3,12 +3,15 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:PopGlot.Windows">
     <UserControl.Resources>
-        <Style x:Key="ProviderPresetButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Style x:Key="ProviderPresetButton" TargetType="Button" BasedOn="{StaticResource GhostButton}">
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-            <Setter Property="Padding" Value="12,10" />
-            <Setter Property="MinHeight" Value="62" />
-            <Setter Property="Margin" Value="0,0,0,8" />
+            <Setter Property="Padding" Value="10,6" />
+            <Setter Property="MinHeight" Value="48" />
+            <Setter Property="Margin" Value="0,0,0,2" />
             <Setter Property="FontWeight" Value="Normal" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
+            <Setter Property="BorderThickness" Value="0,0,0,1" />
         </Style>
         <Style x:Key="ServiceListItem" TargetType="ListBoxItem">
             <Setter Property="Padding" Value="0" />
@@ -143,11 +146,8 @@
         </Grid.RowDefinitions>
 
         <Grid Grid.Row="0">
-            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-            <StackPanel>
-                <TextBlock x:Name="ProviderPageTitle" Text="翻译引擎" Style="{StaticResource PageTitle}" Margin="0,0,0,10" />
-            </StackPanel>
-            <WrapPanel Grid.Row="1" HorizontalAlignment="Left" Margin="0,0,0,10">
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <WrapPanel Grid.Row="0" HorizontalAlignment="Left" Margin="0,0,0,10">
                 <Button x:Name="ChooseAnotherProviderButton" Content="← 选择来源" Visibility="Collapsed"
                         Style="{StaticResource GhostButton}" Padding="10,5" Margin="0,0,8,0"
                         Click="ChooseAnotherProvider_Click" />
@@ -156,7 +156,7 @@
                 <Button x:Name="AddEngineHeaderButton" Content="添加引擎"
                         Style="{StaticResource PrimaryButton}" Padding="16,8" Click="AddProfile_Click" />
             </WrapPanel>
-            <Border x:Name="DraftGuardBar" Grid.Row="2" Visibility="Collapsed" Margin="0,0,0,10" Padding="12,10" CornerRadius="{DynamicResource CardRadius}"
+            <Border x:Name="DraftGuardBar" Grid.Row="1" Visibility="Collapsed" Margin="0,0,0,10" Padding="12,10" CornerRadius="{DynamicResource CardRadius}"
                     Background="{DynamicResource WarningSoftBrush}" BorderBrush="{DynamicResource WarningBrush}" BorderThickness="1">
                 <StackPanel>
                     <TextBlock x:Name="DraftGuardText" FontWeight="SemiBold" TextWrapping="Wrap"
@@ -261,12 +261,41 @@
                     <ScrollViewer x:Name="EditorScroll" Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,8,16">
                         <StackPanel>
                             <StackPanel x:Name="PresetsPanel" Visibility="Collapsed">
-                                <TextBlock Text="选择来源" Style="{StaticResource SectionTitle}" Margin="0,0,0,12" />
-                                <Button x:Name="ChatGptSourceButton" Style="{StaticResource ProviderPresetButton}" Click="ChatGptSource_Click"
-                                        ToolTip="官方浏览器授权；内容直接发送到 OpenAI，并使用所选 ChatGPT 计划的额度。无需 CLI 或 API Key。">
-                                    <StackPanel><TextBlock Text="ChatGPT" FontWeight="SemiBold"/><TextBlock Text="官方账号直连 · 无需 CLI" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,3,0,0"/></StackPanel>
-                                </Button>
-                                <Border Style="{StaticResource EditorSectionCard}" BorderThickness="1" Margin="0,0,0,12">
+                                <TextBlock Text="选择来源" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
+                                <!-- 0.1.30：目录统一为一张双列网格，去除特化大卡、
+                                     徽标药丸与「接入 →」装饰——所有来源同等呈现。 -->
+                                <Grid x:Name="PresetColumns" Margin="0,0,0,12">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition x:Name="PresetLeftColumn" Width="*"/>
+                                        <ColumnDefinition x:Name="PresetGutter" Width="12"/>
+                                        <ColumnDefinition x:Name="PresetRightColumn" Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel x:Name="PresetColumnLeft">
+                                        <Button x:Name="ChatGptSourceButton" Style="{StaticResource ProviderPresetButton}" Click="ChatGptSource_Click"
+                                                ToolTip="官方浏览器授权；内容直接发送到 OpenAI，并使用所选 ChatGPT 计划的额度。无需 CLI 或 API Key。">
+                                            <StackPanel><TextBlock Text="ChatGPT" FontWeight="SemiBold"/><TextBlock Text="官方账号直连 · 无需 Key" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel>
+                                        </Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="openai" AutomationProperties.Name="OpenAI 预设" Click="Preset_Click"><StackPanel><TextBlock Text="OpenAI" FontWeight="SemiBold"/><TextBlock Text="GPT · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="gemini" AutomationProperties.Name="Google Gemini 预设" Click="Preset_Click"><StackPanel><TextBlock Text="Google Gemini" FontWeight="SemiBold"/><TextBlock Text="Gemini · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="zhipu" AutomationProperties.Name="智谱 GLM 预设" Click="Preset_Click"><StackPanel><TextBlock Text="智谱 GLM" FontWeight="SemiBold"/><TextBlock Text="国内服务 · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                    </StackPanel>
+                                    <StackPanel x:Name="PresetColumnRight" Grid.Column="2">
+                                        <Button x:Name="CustomPresetButton" Style="{StaticResource ProviderPresetButton}" Tag="custom" Click="Preset_Click"
+                                                ToolTip="任何 OpenAI 兼容接口：自建服务、中转或代理。">
+                                            <StackPanel><TextBlock Text="自定义兼容" FontWeight="SemiBold"/><TextBlock Text="OpenAI 兼容 · 自建或中转" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel>
+                                        </Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="deepseek" AutomationProperties.Name="DeepSeek 预设" Click="Preset_Click"><StackPanel><TextBlock Text="DeepSeek" FontWeight="SemiBold"/><TextBlock Text="文字翻译 · 官方接口" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="claude" AutomationProperties.Name="Anthropic Claude 预设" Click="Preset_Click"><StackPanel><TextBlock Text="Anthropic Claude" FontWeight="SemiBold"/><TextBlock Text="Messages · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="ollama" AutomationProperties.Name="Ollama（本地）预设" Click="Preset_Click"><StackPanel><TextBlock Text="Ollama（本地）" FontWeight="SemiBold"/><TextBlock Text="本机运行 · 无需 Key" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="litellm" AutomationProperties.Name="LiteLLM Proxy 预设" Click="Preset_Click"><StackPanel><TextBlock Text="LiteLLM Proxy" FontWeight="SemiBold"/><TextBlock Text="统一代理 · OpenAI 兼容" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                    </StackPanel>
+                                </Grid>
+
+                                <Border Style="{StaticResource EditorSectionCard}" BorderThickness="1">
                                     <StackPanel>
                                         <WrapPanel Margin="0,0,0,8">
                                             <TextBlock Text="本机工具" Style="{StaticResource EditorSectionTitle}" VerticalAlignment="Center" Margin="0,0,10,0"/>
@@ -295,63 +324,6 @@
                                         <TextBlock Text="Antigravity 可通过 OMP 的动态登录列表连接。" Style="{StaticResource Caption}" TextWrapping="Wrap"/>
                                     </StackPanel>
                                 </Border>
-
-                                <!-- Prominent Custom / Relay preset card -->
-                                <Button x:Name="CustomPresetButton" Style="{StaticResource ProviderPresetButton}" Tag="custom" Click="Preset_Click"
-                                        Margin="0,0,0,12" BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1.5"
-                                        Background="{DynamicResource AccentSoftBrush}">
-                                    <Grid x:Name="CustomPresetGrid">
-                                        <Grid.ColumnDefinitions>
-                                             <ColumnDefinition Width="*" />
-                                             <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <Grid.RowDefinitions>
-                                             <RowDefinition Height="Auto" />
-                                             <RowDefinition Height="Auto" />
-                                        </Grid.RowDefinitions>
-                                        <StackPanel VerticalAlignment="Center">
-                                            <WrapPanel x:Name="CustomPresetTitleRow" Orientation="Horizontal">
-                                                <TextBlock Text="自定义兼容引擎" FontWeight="SemiBold" FontSize="13"
-                                                           Foreground="{DynamicResource TextPrimaryBrush}" />
-                                                <Border Style="{StaticResource StatusPill}"
-                                                        Background="{DynamicResource SurfaceRaisedBrush}"
-                                                        BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1"
-                                                        Margin="8,0,0,0" Padding="6,1" VerticalAlignment="Center">
-                                                    <TextBlock Text="自建或第三方引擎" FontSize="11"
-                                                               Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold" />
-                                                </Border>
-                                            </WrapPanel>
-                                        </StackPanel>
-                                        <TextBlock x:Name="CustomPresetArrow" Grid.Column="1" Text="接入 →" VerticalAlignment="Center" FontWeight="SemiBold"
-                                                   Foreground="{DynamicResource AccentBrush}" Margin="8,0,4,0" />
-                                    </Grid>
-                                </Button>
-
-                                <TextBlock Text="标准服务商预设" FontSize="13" FontWeight="SemiBold"
-                                           Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,10" />
-
-                                <Grid x:Name="PresetColumns">
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition x:Name="PresetLeftColumn" Width="*"/>
-                                        <ColumnDefinition x:Name="PresetGutter" Width="16"/>
-                                        <ColumnDefinition x:Name="PresetRightColumn" Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel x:Name="PresetColumnLeft">
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="openai" AutomationProperties.Name="OpenAI 预设" Click="Preset_Click"><StackPanel><TextBlock Text="OpenAI" FontWeight="SemiBold"/><TextBlock Text="GPT · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="gemini" AutomationProperties.Name="Google Gemini 预设" Click="Preset_Click"><StackPanel><TextBlock Text="Google Gemini" FontWeight="SemiBold"/><TextBlock Text="Gemini · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="zhipu" AutomationProperties.Name="智谱 GLM 预设" Click="Preset_Click"><StackPanel><TextBlock Text="智谱 GLM" FontWeight="SemiBold"/><TextBlock Text="国内服务 · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
-                                    </StackPanel>
-                                    <StackPanel x:Name="PresetColumnRight" Grid.Column="2">
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="deepseek" AutomationProperties.Name="DeepSeek 预设" Click="Preset_Click"><StackPanel><TextBlock Text="DeepSeek" FontWeight="SemiBold"/><TextBlock Text="文字翻译 · 官方接口" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="claude" AutomationProperties.Name="Anthropic Claude 预设" Click="Preset_Click"><StackPanel><TextBlock Text="Anthropic Claude" FontWeight="SemiBold"/><TextBlock Text="Messages · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="ollama" AutomationProperties.Name="Ollama（本地）预设" Click="Preset_Click"><StackPanel><TextBlock Text="Ollama（本地）" FontWeight="SemiBold"/><TextBlock Text="本机运行 · 无需 Key" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="litellm" AutomationProperties.Name="LiteLLM Proxy 预设" Click="Preset_Click"><StackPanel><TextBlock Text="LiteLLM Proxy" FontWeight="SemiBold"/><TextBlock Text="统一代理 · OpenAI 兼容" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
-                                    </StackPanel>
-                                </Grid>
                             </StackPanel>
                             <StackPanel x:Name="CliConnectionsPanel" Visibility="Collapsed" MaxWidth="820" HorizontalAlignment="Stretch">
                                 <TextBlock x:Name="ConnectionSourceTitle" Style="{StaticResource PageTitle}" TextTrimming="CharacterEllipsis" Margin="2,0,2,4"/>
@@ -441,22 +413,12 @@
                                 </StackPanel>
                             </StackPanel>
 
-                            <!-- 宽度上限 900：设置窗 960 下表单不再明显窄于
-                                 可用区，两侧大空白消失；超宽屏仍居中限宽。 -->
                             <StackPanel x:Name="ConfigFormPanel" MaxWidth="820" HorizontalAlignment="Stretch">
                                 <Grid x:Name="EditorHeaderGrid" Margin="2,0,2,8">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions><ColumnDefinition Width="44"/><ColumnDefinition Width="13"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                        <Border Width="44" Height="44" CornerRadius="12" Background="{DynamicResource AccentSoftBrush}"
-                                                BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1">
-                                            <TextBlock x:Name="EditorProviderBadge" Text="S" FontSize="14.5" FontWeight="Bold"
-                                                       Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                        </Border>
-                                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
-                                            <TextBlock x:Name="EditorProviderTitle" Text="连接引擎" Style="{StaticResource PageTitle}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
-                                            <TextBlock x:Name="EditorProviderMeta" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                                        </StackPanel>
-                                    </Grid>
+                                    <StackPanel>
+                                        <TextBlock x:Name="EditorProviderTitle" Text="连接引擎" Style="{StaticResource SectionTitle}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                                        <TextBlock x:Name="EditorProviderMeta" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                                    </StackPanel>
                                 </Grid>
 
                                 <Border x:Name="ConnectionCard" Style="{StaticResource EditorSectionCard}">

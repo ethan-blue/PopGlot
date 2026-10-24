@@ -14,7 +14,6 @@ getrandom.workspace = true
 popglot-domain = { path = "../popglot-domain" }
 regex.workspace = true
 reqwest.workspace = true
-reqwest13.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

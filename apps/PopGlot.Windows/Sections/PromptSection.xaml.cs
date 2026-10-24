@@ -211,30 +211,25 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             ?? _templates.FirstOrDefault(t => string.Equals(t.Id, FaithfulId, StringComparison.Ordinal));
         if (active is not null)
         {
-            ActiveKindText.Text = active.IsBuiltIn ? "内置" : "自定义";
-            ActiveTemplateName.Text = active.Name;
+            ActiveTemplateName.Text = active.IsBuiltIn ? "指令" : active.Name;
             ActiveTemplateDescription.Text = string.IsNullOrWhiteSpace(active.Description)
                 ? "（无说明）"
                 : active.Description;
-            ActiveTemplateMeta.Text = $"{(active.IsBuiltIn ? "系统预置风格" : "自定义规则")} · 修订版本 {active.Revision}";
             ActiveTemplateInstruction.Text = active.Instruction;
             var isFaithfulDefault = string.Equals(active.Id, FaithfulId, StringComparison.Ordinal);
-            ActiveDefaultBadge.Visibility = isFaithfulDefault
-                ? Visibility.Visible
-                : Visibility.Collapsed;
+            ActiveTemplateMeta.Text = $"{(active.Enabled ? "使用中" : "已停用")} · {(isFaithfulDefault ? "系统默认" : active.IsBuiltIn ? "内置风格" : "自定义规则")} · 修订 {active.Revision}";
             ActiveResetDefaultButton.Visibility = isFaithfulDefault
                 ? Visibility.Collapsed
                 : Visibility.Visible;
-            ActiveInUseBadge.Visibility = active.Enabled ? Visibility.Visible : Visibility.Collapsed;
             ActiveEditButton.Visibility = active.IsBuiltIn ? Visibility.Collapsed : Visibility.Visible;
             var hasDomain = !string.IsNullOrWhiteSpace(active.Domain);
             var hasAudience = !string.IsNullOrWhiteSpace(active.Audience);
             if (hasDomain || hasAudience)
             {
                 ActiveDomainAudiencePanel.Visibility = Visibility.Visible;
-                ActiveDomainBadge.Visibility = hasDomain ? Visibility.Visible : Visibility.Collapsed;
+                ActiveDomainText.Visibility = hasDomain ? Visibility.Visible : Visibility.Collapsed;
                 ActiveDomainText.Text = hasDomain ? $"领域：{active.Domain}" : string.Empty;
-                ActiveAudienceBadge.Visibility = hasAudience ? Visibility.Visible : Visibility.Collapsed;
+                ActiveAudienceText.Visibility = hasAudience ? Visibility.Visible : Visibility.Collapsed;
                 ActiveAudienceText.Text = hasAudience ? $"受众：{active.Audience}" : string.Empty;
             }
             else
@@ -1132,8 +1127,8 @@ public partial class PromptSection : System.Windows.Controls.UserControl
     }
 
     /// <summary>
-    /// Stacks the field pairs vertically below the settings window's 700 DIP
-    /// breakpoint so nothing crowds or overlaps on narrow windows.
+    /// Stacks field pairs below 560 DIP of usable page width. At the window's
+    /// minimum width, counters and editors retain the full ~420 DIP scroll width.
     /// </summary>
     internal void SetCompact(bool compact)
     {
@@ -1149,13 +1144,13 @@ public partial class PromptSection : System.Windows.Controls.UserControl
             NameDescriptionGrid.RowDefinitions[1].Height = GridLength.Auto;
             Grid.SetColumn(DescriptionPanel, 0);
             Grid.SetRow(DescriptionPanel, 1);
-            DescriptionPanel.Margin = new Thickness(0, 14, 0, 0);
+            DescriptionPanel.Margin = new Thickness(0, 10, 0, 0);
 
             DomainAudienceGrid.ColumnDefinitions[1].Width = new GridLength(0);
             DomainAudienceGrid.RowDefinitions[1].Height = GridLength.Auto;
             Grid.SetColumn(AudiencePanel, 0);
             Grid.SetRow(AudiencePanel, 1);
-            AudiencePanel.Margin = new Thickness(0, 14, 0, 0);
+            AudiencePanel.Margin = new Thickness(0, 10, 0, 0);
         }
         else
         {

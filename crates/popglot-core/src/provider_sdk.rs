@@ -11,11 +11,11 @@ use crate::provider::{
     validate_model_path_segment,
 };
 use base64::Engine as _;
+use genai::adapter::AdapterKind;
 use genai::chat::{
     Binary, ChatMessage, ChatOptions, ChatRequest, ChatResponseFormat, ContentPart, ReasoningEffort,
 };
 use genai::resolver::{AuthData, Endpoint};
-use genai::{Client, adapter::AdapterKind};
 use genai::{ModelIden, ServiceTarget};
 use popglot_domain::ProviderSettings;
 use popglot_domain::ProviderType;
@@ -63,9 +63,10 @@ pub(crate) fn prepare(
     );
     let user = user_message(kind, &request.input, text)?;
     let mut options = ChatOptions::default().with_max_tokens(output_token_limit(request));
-    // Explicit value suppresses SDK suffix inference; remove the resulting wire
-    // option below so arbitrary gateway IDs never acquire reasoning settings.
-    options.reasoning_effort = Some(ReasoningEffort::None);
+    // A supplied SDK value prevents suffix inference. Zero is not Option::None
+    // and does not prescribe gateway behavior: all generated reasoning controls
+    // are removed below before the payload reaches PopGlot's transport.
+    options.reasoning_effort = Some(ReasoningEffort::Zero);
     if matches!(
         kind,
         ProviderType::OpenAiCompatible | ProviderType::GeminiGenerateContent
@@ -100,6 +101,9 @@ pub(crate) fn prepare(
         object.remove("reasoning_effort");
         object.remove("reasoning");
         object.remove("thinking");
+        // Cache policy is not a product setting. New SDK defaults for native
+        // OpenAI model names must not add options to arbitrary gateways.
+        object.remove("prompt_cache_options");
     }
     if let Some(config) = body
         .get_mut("generationConfig")
@@ -172,7 +176,7 @@ fn user_message(
 }
 
 /// The reviewed SDK version. Keep this in sync with the exact Cargo pin.
-pub const GENAI_VERSION: &str = "0.6.5";
+pub const GENAI_VERSION: &str = "0.7.1";
 
 /// Maps `PopGlot`'s user-selected protocol to exactly one SDK adapter.
 ///
@@ -189,32 +193,31 @@ pub const fn adapter_kind(provider_type: ProviderType) -> AdapterKind {
     }
 }
 
-/// Builds an adapter-bound SDK client over a caller-owned HTTP client.
-///
-/// The caller remains responsible for applying `PopGlot`'s redirect, TLS and
-/// timeout policy to `http_client`. Binding the adapter prevents `genai` from
-/// guessing a protocol from a model suffix or namespace.
-#[must_use]
-pub fn build_bound_client(provider_type: ProviderType, http_client: reqwest13::Client) -> Client {
-    Client::builder()
-        .with_reqwest(http_client)
-        .with_adapter_kind(adapter_kind(provider_type))
-        .build()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn production_requests_preserve_gateway_ids_and_do_not_infer_reasoning() {
+    fn production_requests_preserve_gateway_ids_without_unconfigured_sdk_options() {
         for kind in [
             ProviderType::OpenAiCompatible,
             ProviderType::OpenAiResponses,
             ProviderType::AnthropicMessages,
             ProviderType::GeminiGenerateContent,
         ] {
-            for model in ["custom-model-high", "vendor::custom-model-low"] {
+            let native_models: &[&str] = match kind {
+                ProviderType::OpenAiCompatible | ProviderType::OpenAiResponses => {
+                    &["gpt-5.6-high", "gpt-6-astra", "vendor::gpt-6-astra-zero"]
+                }
+                ProviderType::AnthropicMessages => {
+                    &["claude-sonnet-5", "claude-haiku-5", "claude-opus-4-8-zero"]
+                }
+                ProviderType::GeminiGenerateContent => &["gemini-3-pro-zero", "gemini-4-argon"],
+            };
+            for model in ["custom-model-high", "vendor::custom-model-low"]
+                .into_iter()
+                .chain(native_models.iter().copied())
+            {
                 let settings = ProviderSettings {
                     provider_type: kind,
                     text_model: model.to_owned(),
@@ -250,6 +253,8 @@ mod tests {
                     assert!(prepared.body.get("reasoning").is_none());
                     assert!(prepared.body.get("reasoning_effort").is_none());
                     assert!(prepared.body.get("thinking").is_none());
+                    assert!(prepared.body.get("prompt_cache_options").is_none());
+                    assert!(prepared.body["output_config"].get("effort").is_none());
                     assert!(
                         prepared.body["generationConfig"]
                             .get("thinkingConfig")
@@ -297,18 +302,41 @@ mod tests {
         );
         assert_eq!(output_token_limit(&request), 1_200);
 
-        for (kind, pointer) in [
-            (ProviderType::OpenAiCompatible, "/max_tokens"),
-            (ProviderType::OpenAiResponses, "/max_output_tokens"),
-            (ProviderType::AnthropicMessages, "/max_tokens"),
+        for (kind, model, pointer) in [
+            (
+                ProviderType::OpenAiCompatible,
+                "custom-model",
+                "/max_tokens",
+            ),
+            (
+                ProviderType::OpenAiCompatible,
+                "gpt-5.6-high",
+                "/max_completion_tokens",
+            ),
+            (
+                ProviderType::OpenAiCompatible,
+                "gpt-6-astra",
+                "/max_completion_tokens",
+            ),
+            (
+                ProviderType::OpenAiResponses,
+                "gpt-6-astra",
+                "/max_output_tokens",
+            ),
+            (
+                ProviderType::AnthropicMessages,
+                "claude-opus-4-8",
+                "/max_tokens",
+            ),
             (
                 ProviderType::GeminiGenerateContent,
+                "gemini-3-pro-zero",
                 "/generationConfig/maxOutputTokens",
             ),
         ] {
             let settings = ProviderSettings {
                 provider_type: kind,
-                text_model: "custom-model".to_owned(),
+                text_model: model.to_owned(),
                 text_endpoint: if kind == ProviderType::GeminiGenerateContent {
                     "/v1beta/models/{model}:generateContent".to_owned()
                 } else {
@@ -323,6 +351,9 @@ mod tests {
                 prepared.body.pointer(pointer).and_then(Value::as_u64),
                 Some(1_200)
             );
+            if pointer == "/max_completion_tokens" {
+                assert!(prepared.body.get("max_tokens").is_none());
+            }
         }
     }
 
@@ -438,23 +469,6 @@ mod tests {
                 "{kind:?} encoded {} bytes for the maximum image",
                 serialized.len()
             );
-        }
-    }
-
-    #[test]
-    fn bound_clients_build_with_popglot_owned_transport() {
-        let http_client = reqwest13::Client::builder()
-            .redirect(reqwest13::redirect::Policy::none())
-            .build()
-            .expect("test HTTP client should build");
-
-        for provider_type in [
-            ProviderType::OpenAiCompatible,
-            ProviderType::OpenAiResponses,
-            ProviderType::AnthropicMessages,
-            ProviderType::GeminiGenerateContent,
-        ] {
-            let _client = build_bound_client(provider_type, http_client.clone());
         }
     }
 }

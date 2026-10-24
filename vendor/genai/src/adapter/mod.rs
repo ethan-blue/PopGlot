@@ -9,14 +9,15 @@
 
 // region:    --- Modules
 
+mod macros;
+
 mod adapter_kind;
 mod adapter_types;
 mod adapters;
 mod dispatcher;
-mod dispatcher_macros;
 
 // -- Flatten (private, crate, public)
-use adapters::*;
+// use adapters::*;
 
 pub(crate) use adapter_types::*;
 pub(crate) use dispatcher::*;
@@ -36,6 +37,10 @@ pub fn prepare_payload(
         target, service, request,
         crate::chat::ChatOptionsSet::default().with_chat_options(Some(options)),
     ).map(|request| request.payload)
+}
+
+pub mod gemini_ix {
+	pub use super::adapters::gemini_ix::{EnrichedEvent, GroundingToolCount, UrlCitation};
 }
 
 // -- Crate modules

@@ -1,6 +1,6 @@
 use crate::chat::{CompletionTokensDetails, PromptTokensDetails, Usage};
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, skip_serializing_none};
+use serde_with::skip_serializing_none;
 
 /// Normalized token usage across providers (OpenAI-compatible).
 ///
@@ -11,7 +11,6 @@ use serde_with::{serde_as, skip_serializing_none};
 /// - Gemini: `candidatesTokenCount` excludes "thoughts" (reasoning) tokens. We normalize:
 ///   `output_tokens = candidatesTokenCount + thoughts_token_count`, and
 ///   `output_tokens_details.reasoning_tokens = thoughts_token_count`.
-#[serde_as]
 #[skip_serializing_none]
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct RespUsage {
@@ -41,14 +40,13 @@ impl RespUsage {
 	}
 }
 
-#[serde_as]
 #[skip_serializing_none]
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct InputTokensDetails {
 	/// Anthropic: `cache_creation_input_tokens`.
 	/// Tokens used to build the cache (not yet cached). These may incur a small surcharge; subsequent requests benefit via `cached_tokens`.
 	#[serde(default, deserialize_with = "crate::support::zero_as_none")]
-	pub cache_creation_tokens: Option<i32>,
+	pub cache_write_tokens: Option<i32>,
 	/// Anthropic: `cache_read_input_tokens`.
 	#[serde(default, deserialize_with = "crate::support::zero_as_none")]
 	pub cached_tokens: Option<i32>,
@@ -59,11 +57,10 @@ pub struct InputTokensDetails {
 impl InputTokensDetails {
 	/// True if all fields are `None`.
 	pub fn is_empty(&self) -> bool {
-		self.cache_creation_tokens.is_none() && self.cached_tokens.is_none() && self.audio_tokens.is_none()
+		self.cache_write_tokens.is_none() && self.cached_tokens.is_none() && self.audio_tokens.is_none()
 	}
 }
 
-#[serde_as]
 #[skip_serializing_none]
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct OutputTokensDetails {
@@ -92,7 +89,7 @@ impl OutputTokensDetails {
 impl From<InputTokensDetails> for PromptTokensDetails {
 	fn from(value: InputTokensDetails) -> Self {
 		PromptTokensDetails {
-			cache_creation_tokens: value.cache_creation_tokens,
+			cache_creation_tokens: value.cache_write_tokens,
 			cache_creation_details: None,
 			cached_tokens: value.cached_tokens,
 			audio_tokens: value.audio_tokens,
@@ -124,3 +121,34 @@ impl From<RespUsage> for Usage {
 }
 
 // endregion: --- Intos
+
+// region:    --- Tests
+
+#[cfg(test)]
+mod tests {
+	use super::RespUsage;
+	use crate::chat::Usage;
+	use serde_json::json;
+
+	#[test]
+	fn test_resp_usage_deserializes_openai_cache_write_tokens() -> Result<(), serde_json::Error> {
+		let usage: RespUsage = serde_json::from_value(json!({
+			"input_tokens_details": {
+				"cache_write_tokens": 77
+			}
+		}))?;
+		let normalized: Usage = usage.into();
+
+		assert_eq!(
+			normalized
+				.prompt_tokens_details
+				.as_ref()
+				.and_then(|details| details.cache_creation_tokens),
+			Some(77)
+		);
+
+		Ok(())
+	}
+}
+
+// endregion: --- Tests

@@ -2,12 +2,22 @@
 
 use crate::adapter::{AdapterKind, ServiceType};
 use crate::resolver::Endpoint;
+use crate::webc::StreamRequest as RequestBuilder;
 use crate::{Error, ModelIden, Result};
-use reqwest::RequestBuilder;
 
 /// The hostname prefix for the Bedrock runtime endpoint. Regions are interpolated between this
 /// prefix and `.amazonaws.com`.
 pub(super) const BEDROCK_RUNTIME_HOST_PREFIX: &str = "bedrock-runtime";
+
+/// Region used when neither `aws-config` nor the environment provides one.
+pub(super) const DEFAULT_REGION: &str = "us-east-1";
+
+/// Region from the environment: `AWS_REGION`, else `AWS_DEFAULT_REGION`.
+pub(super) fn region_from_env() -> Option<String> {
+	std::env::var("AWS_REGION")
+		.ok()
+		.or_else(|| std::env::var("AWS_DEFAULT_REGION").ok())
+}
 
 /// Curated snapshot of model IDs. Dynamic listing requires the `bedrock` (control plane) API,
 /// not `bedrock-runtime`, so we return a hard-coded list here.
@@ -85,26 +95,24 @@ fn async_stream_once(
 		crate::error::BoxError,
 	>,
 > + Send {
-	use futures::StreamExt;
 	futures::stream::once(async move {
-		let resp = reqwest_builder
-			.send()
-			.await
-			.map_err(|e| Box::new(e) as crate::error::BoxError)?;
+		let resp = reqwest_builder.send().await?;
 		let status = resp.status();
 		if !status.is_success() {
+			// Capture the headers while the response is still in hand
+			// (e.g., `retry-after`, `retry-after-ms`, `x-should-retry` for retry layers)
+			let headers = resp.headers().clone();
 			let body = resp.text().await.unwrap_or_default();
 			let err = crate::Error::HttpError {
 				status,
 				canonical_reason: status.canonical_reason().unwrap_or("Unknown").to_string(),
 				body,
+				headers: Box::new(headers),
 			};
 			return Err(Box::new(err) as crate::error::BoxError);
 		}
 		let bytes: futures::stream::BoxStream<'static, std::result::Result<bytes::Bytes, crate::error::BoxError>> =
-			resp.bytes_stream()
-				.map(|r| r.map_err(|e| Box::new(e) as crate::error::BoxError))
-				.boxed();
+			resp.bytes_stream();
 		Ok(bytes)
 	})
 }

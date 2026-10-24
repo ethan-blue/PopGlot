@@ -401,7 +401,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     internal Button StarButton => TranslateStarButton;
     internal Button FreeEngineEntryButton => EnableFreeEngineButton;
     internal Button OfflineUsageEntryButton => ViewOfflineUsageButton;
-    internal Action? OpenSettings { get; set; }
+    internal Action<string?>? OpenSettings { get; set; }
 
 
     /// <summary>
@@ -1339,15 +1339,13 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         UpdateStarVisualState(starred);
     }
 
-    private void OpenSettings_Click(object sender, RoutedEventArgs e)
+    private void OpenSettings_Click(object sender, RoutedEventArgs e) => OpenSettingsPage("Provider");
+
+    private void OpenSettingsPage(string page)
     {
-        if (OpenSettings is not null)
-        {
-            OpenSettings.Invoke();
-            return;
-        }
         var main = Window.GetWindow(this) as MainWindow ?? Application.Current?.MainWindow as MainWindow;
-        main?.OpenSettings?.Invoke();
+        var navigate = OpenSettings ?? main?.OpenSettings;
+        navigate?.Invoke(page);
     }
 
     /// <summary>
@@ -1618,7 +1616,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         var menu = TranslationStyleMenu.Build(
             styleChosen: template => _ = ChooseStyleAsync(template),
             reportStatus: message => TranslateStatus.Text = message,
-            managePrompts: () => OpenSettings_Click(this, new RoutedEventArgs()));
+            managePrompts: () => OpenSettingsPage("Prompt"));
         if (menu is null)
         {
             return;

@@ -1,5 +1,5 @@
-use crate::adapter::adapters::support::{StreamerCapturedData, StreamerOptions};
-use crate::adapter::gemini::{GeminiAdapter, GeminiChatResponse};
+use super::{GeminiAdapter, GeminiChatResponse};
+use crate::adapter::adapters::support::{StreamerCapturedData, StreamerOptions, new_frame_tap};
 use crate::adapter::inter_stream::{InterStreamEnd, InterStreamEvent};
 use crate::chat::{ChatOptionsSet, StopReason, ToolCall};
 use crate::webc::{Event, EventSourceStream};
@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use super::GeminiChatContent;
+use super::{GeminiPart, GeminiPartData};
 
 use std::collections::VecDeque;
 
@@ -26,13 +26,20 @@ pub struct GeminiStreamer {
 
 impl GeminiStreamer {
 	pub fn new(inner: EventSourceStream, model_iden: ModelIden, options_set: ChatOptionsSet<'_, '_>) -> Self {
+		let frame_tap = new_frame_tap(&model_iden, &options_set);
+
 		Self {
-			inner,
+			inner: inner.with_frame_tap(frame_tap),
 			done: false,
 			options: StreamerOptions::new(model_iden, options_set),
 			captured_data: Default::default(),
 			pending_events: VecDeque::new(),
 		}
+	}
+
+	/// Clones the frame tap (if any), so `ChatStream` can fire the terminal sink hooks.
+	pub fn frame_tap(&self) -> Option<crate::webc::FrameTap> {
+		self.inner.frame_tap()
 	}
 
 	/// Build the terminal `InterStreamEvent::End` from captured state and queue it.
@@ -45,6 +52,7 @@ impl GeminiStreamer {
 			captured_reasoning_content: self.captured_data.reasoning_content.take(),
 			captured_tool_calls: self.captured_data.tool_calls.take(),
 			captured_thought_signatures: self.captured_data.thought_signatures.take(),
+			captured_thought_blocks: None,
 			captured_response_id: None,
 		};
 		self.pending_events.push_back(InterStreamEvent::End(inter_stream_end));
@@ -119,17 +127,22 @@ impl futures::Stream for GeminiStreamer {
 					let mut stream_text_content: String = String::new();
 					let mut stream_reasoning_content: Option<String> = None;
 					let mut stream_tool_calls: Vec<ToolCall> = Vec::new();
-					let mut stream_thought: Option<String> = None;
+					let mut stream_thoughts: Vec<String> = Vec::new();
 
-					for g_content_item in content {
-						match g_content_item {
-							GeminiChatContent::Reasoning(reasoning) => stream_reasoning_content = Some(reasoning),
-							GeminiChatContent::Text(text) => stream_text_content.push_str(&text),
-							GeminiChatContent::Binary(_) => {
+					for GeminiPart {
+						data,
+						thought_signature,
+					} in content
+					{
+						stream_thoughts.extend(thought_signature);
+						match data {
+							GeminiPartData::Reasoning(reasoning) => stream_reasoning_content = Some(reasoning),
+							GeminiPartData::Text(text) => stream_text_content.push_str(&text),
+							GeminiPartData::Binary(_) => {
 								// For now, we do not stream binary content.
 							}
-							GeminiChatContent::ToolCall(tool_call) => stream_tool_calls.push(tool_call),
-							GeminiChatContent::ThoughtSignature(thought) => stream_thought = Some(thought),
+							// Carries its own signature in `thought_signatures`.
+							GeminiPartData::ToolCall(tool_call) => stream_tool_calls.push(tool_call),
 						}
 					}
 
@@ -141,11 +154,11 @@ impl futures::Stream for GeminiStreamer {
 
 					// -- Queue Events. Priority: Thought -> Reasoning -> Text -> ToolCall
 
-					if let Some(thought) = stream_thought {
-						match self.captured_data.thought_signatures {
-							Some(ref mut thoughts) => thoughts.push(thought.clone()),
-							None => self.captured_data.thought_signatures = Some(vec![thought.clone()]),
-						}
+					for thought in stream_thoughts {
+						self.captured_data
+							.thought_signatures
+							.get_or_insert_with(Vec::new)
+							.push(thought.clone());
 						self.pending_events.push_back(InterStreamEvent::ThoughtSignatureChunk(thought));
 					}
 

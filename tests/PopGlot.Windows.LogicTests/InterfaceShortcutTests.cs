@@ -3,6 +3,9 @@ using System.Reflection;
 using System.Windows;
 using System.Windows.Input;
 using PopGlot.Windows.Services;
+using System.Globalization;
+using System.Windows.Controls;
+using System.Windows.Media;
 
 namespace PopGlot.Windows.LogicTests;
 
@@ -95,7 +98,7 @@ internal static partial class Program
                 ShowInTaskbar = false,
             };
             var openedSettings = 0;
-            window.OpenSettings = () => openedSettings++;
+            window.OpenSettings = _ => openedSettings++;
             window.Show();
             window.Dispatcher.Invoke(() =>
             {
@@ -149,6 +152,65 @@ internal static partial class Program
             InterfaceKeys.Apply(previous);
             ShellSettingsStore.InvalidateCache();
             Directory.Delete(directory, true);
+        }
+    }
+
+    private static void ShortcutRowsStayReadableAcrossSettingsResize()
+    {
+        EnsureApplication();
+        var path = Path.Combine(TestIsolation.Root, $"shortcut-layout-{Guid.NewGuid():N}.json");
+        var settings = ShellSettings.Default with
+        {
+            SelectionHotkey = new(HotkeyBinding.ModControl | HotkeyBinding.ModAlt | HotkeyBinding.ModShift | HotkeyBinding.ModWin, 0xA6),
+        };
+        var window = new SettingsWindow(settings, new HistoryStore(path))
+        {
+            ShowActivated = false,
+            ShowInTaskbar = false,
+        };
+        try
+        {
+            window.Show();
+            window.ShowPage("Shortcuts");
+            var section = window.ShortcutsSection;
+            var recorders = FindLogicalDescendants<HotkeyRecorder>(section).ToArray();
+            var bindings = recorders.Select(recorder => recorder.BindingValue).ToArray();
+            var normalWidth = window.Width;
+            var normalHeight = window.Height;
+            foreach (var (width, height) in new[]
+            {
+                (normalWidth, normalHeight),
+                (window.MinWidth, window.MinHeight),
+                (normalWidth, normalHeight),
+            })
+            {
+                window.Width = width;
+                window.Height = height;
+                FlushDispatcher(2);
+                window.UpdateLayout();
+                True(section.SelectionHotkey.IsVisible, "shortcut recording stays available after resizing");
+                for (var index = 0; index < recorders.Length; index++)
+                {
+                    var recorder = recorders[index];
+                    var row = (Grid)recorder.Parent;
+                    var label = row.Children.OfType<TextBlock>().Single();
+                    var labelBounds = label.TransformToAncestor(row).TransformBounds(new Rect(label.RenderSize));
+                    var keyBounds = recorder.TransformToAncestor(row).TransformBounds(new Rect(recorder.RenderSize));
+                    True(labelBounds.Right <= keyBounds.Left + 0.5, "shortcut label cannot cover its recorder");
+                    var text = new FormattedText(label.Text, CultureInfo.CurrentUICulture, label.FlowDirection,
+                        new Typeface(label.FontFamily, label.FontStyle, label.FontWeight, label.FontStretch),
+                        label.FontSize, label.Foreground, VisualTreeHelper.GetDpi(label).PixelsPerDip);
+                    True(label.ActualWidth + 0.5 >= text.Width, "the action name must fit without ellipsis");
+                    Equal(bindings[index], recorder.BindingValue, "resizing cannot change a shortcut");
+                }
+                if (width == normalWidth)
+                    True(window.SettingsScroll.ScrollableHeight < 1, "all shortcuts fit the default settings viewport");
+            }
+        }
+        finally
+        {
+            window.Close();
+            if (File.Exists(path)) File.Delete(path);
         }
     }
 }

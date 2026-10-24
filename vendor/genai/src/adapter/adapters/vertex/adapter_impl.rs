@@ -1,12 +1,12 @@
+use crate::adapter::adapters::anthropic::{AnthropicAdapter, AnthropicRequestParts};
+use crate::adapter::adapters::gemini::GeminiAdapter;
 use crate::adapter::adapters::support::get_api_key;
-use crate::adapter::anthropic::{AnthropicAdapter, AnthropicRequestParts};
-use crate::adapter::gemini::GeminiAdapter;
 use crate::adapter::{Adapter, AdapterKind, ServiceType, WebRequestData};
 use crate::chat::{ChatOptionsSet, ChatRequest, ChatResponse, ChatStreamResponse};
 use crate::resolver::{AuthData, Endpoint};
-use crate::webc::WebResponse;
+use crate::webc::StreamRequest as RequestBuilder;
+use crate::webc::{WebClient, WebResponse};
 use crate::{Error, Headers, ModelIden, Result, ServiceTarget};
-use reqwest::RequestBuilder;
 use serde_json::json;
 use tracing::warn;
 use value_ext::JsonValueExt;
@@ -54,7 +54,7 @@ impl VertexPublisher {
 impl Adapter for VertexAdapter {
 	const DEFAULT_API_KEY_ENV_NAME: Option<&'static str> = Some(Self::API_KEY_DEFAULT_ENV_NAME);
 
-	fn default_endpoint() -> Endpoint {
+	fn default_endpoint(_kind: AdapterKind) -> Endpoint {
 		let project_id = std::env::var("VERTEX_PROJECT_ID").unwrap_or_else(|_| {
 			warn!("VERTEX_PROJECT_ID env var is not set; Vertex AI requests will use a malformed URL");
 			String::new()
@@ -69,14 +69,19 @@ impl Adapter for VertexAdapter {
 		};
 		Endpoint::from_owned(base_url)
 	}
-	fn default_auth() -> AuthData {
+	fn default_auth(_kind: AdapterKind) -> AuthData {
 		match Self::DEFAULT_API_KEY_ENV_NAME {
 			Some(env_name) => AuthData::from_env(env_name),
 			None => AuthData::None,
 		}
 	}
 
-	async fn all_model_names(_kind: AdapterKind, _endpoint: Endpoint, _auth: AuthData) -> Result<Vec<String>> {
+	async fn all_model_names(
+		_kind: AdapterKind,
+		_endpoint: Endpoint,
+		_auth: AuthData,
+		_web_client: &WebClient,
+	) -> Result<Vec<String>> {
 		Ok(vec![
 			"gemini-2.5-pro".to_string(),
 			"gemini-2.5-flash".to_string(),
@@ -246,13 +251,12 @@ impl VertexAdapter {
 			system,
 			messages,
 			tools,
-		} = AnthropicAdapter::into_anthropic_request_parts(chat_req)?;
+		} = AnthropicAdapter::into_anthropic_request_parts(chat_req, options_set.cache_control().cloned())?;
 
 		// Vertex Anthropic: model is in URL, not body; anthropic_version goes in body
 		let stream = matches!(service_type, ServiceType::ChatStream);
 		let mut payload = json!({
 			"anthropic_version": VERTEX_ANTHROPIC_VERSION,
-			"messages": messages,
 			"stream": stream,
 		});
 
@@ -260,9 +264,13 @@ impl VertexAdapter {
 			payload.x_insert("system", system)?;
 		}
 
+		// -- Tools (before messages)
 		if let Some(tools) = tools {
 			payload.x_insert("/tools", tools)?;
 		}
+
+		// -- Messages (after tools)
+		payload.x_insert("messages", messages)?;
 
 		if let Some(temperature) = options_set.temperature() {
 			payload.x_insert("temperature", temperature)?;

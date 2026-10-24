@@ -1,13 +1,13 @@
+use crate::adapter::adapters::anthropic::{AnthropicAdapter, AnthropicRequestParts};
+use crate::adapter::adapters::openai::OpenAIAdapter;
 use crate::adapter::adapters::support::get_api_key;
-use crate::adapter::anthropic::{AnthropicAdapter, AnthropicRequestParts};
-use crate::adapter::openai::OpenAIAdapter;
 use crate::adapter::{Adapter, AdapterKind, ServiceType, WebRequestData};
 use crate::chat::{ChatOptionsSet, ChatRequest, ChatResponse, ChatStreamResponse};
 use crate::embed::{EmbedOptionsSet, EmbedRequest, EmbedResponse};
 use crate::resolver::{AuthData, Endpoint};
-use crate::webc::WebResponse;
+use crate::webc::StreamRequest as RequestBuilder;
+use crate::webc::{WebClient, WebResponse};
 use crate::{Error, Headers, ModelIden, Result, ServiceTarget};
-use reqwest::RequestBuilder;
 use serde_json::json;
 use value_ext::JsonValueExt;
 
@@ -44,19 +44,24 @@ impl OpenCodeGoModelKind {
 impl Adapter for OpenCodeGoAdapter {
 	const DEFAULT_API_KEY_ENV_NAME: Option<&'static str> = Some(Self::API_KEY_DEFAULT_ENV_NAME);
 
-	fn default_auth() -> AuthData {
+	fn default_auth(_kind: AdapterKind) -> AuthData {
 		match Self::DEFAULT_API_KEY_ENV_NAME {
 			Some(env_name) => AuthData::from_env(env_name),
 			None => AuthData::None,
 		}
 	}
 
-	fn default_endpoint() -> Endpoint {
+	fn default_endpoint(_kind: AdapterKind) -> Endpoint {
 		Endpoint::from_static("https://opencode.ai/zen/go/v1/")
 	}
 
-	async fn all_model_names(kind: AdapterKind, endpoint: Endpoint, auth: AuthData) -> Result<Vec<String>> {
-		OpenAIAdapter::list_model_names_for_end_target(kind, endpoint, auth).await
+	async fn all_model_names(
+		kind: AdapterKind,
+		endpoint: Endpoint,
+		auth: AuthData,
+		web_client: &WebClient,
+	) -> Result<Vec<String>> {
+		OpenAIAdapter::list_model_names_for_end_target(kind, endpoint, auth, web_client).await
 	}
 
 	fn get_service_url(model: &ModelIden, _service_type: ServiceType, endpoint: Endpoint) -> Result<String> {
@@ -95,12 +100,11 @@ impl Adapter for OpenCodeGoAdapter {
 					system,
 					messages,
 					tools,
-				} = AnthropicAdapter::into_anthropic_request_parts(chat_req)?;
+				} = AnthropicAdapter::into_anthropic_request_parts(chat_req, options_set.cache_control().cloned())?;
 
 				let stream = matches!(service_type, ServiceType::ChatStream);
 				let mut payload = json!({
 					"model": model_name,
-					"messages": messages,
 					"stream": stream,
 				});
 
@@ -108,9 +112,13 @@ impl Adapter for OpenCodeGoAdapter {
 					payload.x_insert("system", system)?;
 				}
 
+				// -- Tools (before messages)
 				if let Some(tools) = tools {
 					payload.x_insert("tools", tools)?;
 				}
+
+				// -- Messages (after tools)
+				payload.x_insert("messages", messages)?;
 
 				if let Some(temperature) = options_set.temperature() {
 					payload.x_insert("temperature", temperature)?;
@@ -205,7 +213,7 @@ mod tests {
 
 	fn test_target(model_name: &str) -> ServiceTarget {
 		ServiceTarget {
-			endpoint: OpenCodeGoAdapter::default_endpoint(),
+			endpoint: OpenCodeGoAdapter::default_endpoint(AdapterKind::OpenCodeGo),
 			auth: AuthData::from_single("test-key"),
 			model: ModelIden::new(AdapterKind::OpenCodeGo, model_name),
 		}

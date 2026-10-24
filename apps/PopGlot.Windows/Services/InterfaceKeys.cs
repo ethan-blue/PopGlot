@@ -94,10 +94,10 @@ internal static class InterfaceKeys
         Hint("NavSettingsButton", "设置", SettingsHotkey);
         Hint("SettingsButton", "设置", SettingsHotkey);
         Hint("RouteSelectorButton", "切换模型", ModelHotkey);
-        Hint("StyleSelectorButton", "切换翻译风格", StyleHotkey);
-        Hint("SwapLangButton", "交换语言方向", SwapHotkey);
-        Hint("TranslateSwapButton", "交换语言方向", SwapHotkey);
-        Hint("LangBadgeButton", "交换语言方向", SwapHotkey);
+        Hint("StyleSelectorButton", "切换风格", StyleHotkey);
+        Hint("SwapLangButton", "互换语言", SwapHotkey);
+        Hint("TranslateSwapButton", "互换语言", SwapHotkey);
+        Hint("LangBadgeButton", "互换语言", SwapHotkey);
         Hint("TranslateButton", "发起翻译", TranslateHotkey);
         var speechAction = TtsService.IsSpeaking ? "停止朗读" : "朗读译文";
         Hint("TranslateResultSpeakButton", speechAction, SpeakHotkey);

@@ -7,19 +7,16 @@
 
     <!-- Compact desktop property list -->
     <StackPanel>
-        <TextBlock Text="隐私与数据" Style="{StaticResource PageTitle}" Margin="0,0,0,14" />
-
-        <!-- Plain language privacy commitment card -->
-        <Border Style="{StaticResource InlineCard}" Margin="0,0,0,16" Padding="14,12">
+        <Border Margin="0,0,0,12">
             <StackPanel>
                 <TextBlock Text="翻译内容由你发起处理，不持续监听剪贴板或屏幕。" Style="{StaticResource Caption}" TextWrapping="Wrap" />
-                <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap" LineHeight="17"
+                <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap" LineHeight="17"
                            Text="联网翻译会发送文本，图片直译获准后才上传截图；账号登录与续期、云端朗读，以及你启用的诊断上报也会联网。凭据在本机存储；本地 OCR 不上传截图。" />
             </StackPanel>
         </Border>
 
         <!-- Primary security controls -->
-        <TextBlock Text="常用隐私设置" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
+        <TextBlock Text="隐私保护" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
 
         <Grid Style="{StaticResource SettingsRow}">
             <Grid.ColumnDefinitions>
@@ -51,11 +48,12 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="允许读取截图内容" Style="{StaticResource RowTitle}" />
-                <TextBlock Text="允许截图翻译分析画面中的文字与排版布局" Style="{StaticResource RowHint}" />
+                <TextBlock Text="允许上传截图" Style="{StaticResource RowTitle}" />
+                <TextBlock Text="视觉识别与图片直译会发送截图" Style="{StaticResource RowHint}"
+                           ToolTip="仅在使用视觉模型识别文字或直接翻译图片时上传截图；本地 OCR 不上传。" />
             </StackPanel>
             <ToggleButton x:Name="AllowImageUploadToggle"
-                          AutomationProperties.Name="允许读取截图内容" Grid.Column="1"
+                          AutomationProperties.Name="允许上传截图" Grid.Column="1"
                           VerticalAlignment="Center"
                           Style="{StaticResource ToggleSwitch}"
                           Checked="ProviderGate_Changed" Unchecked="ProviderGate_Changed" />
@@ -82,64 +80,19 @@
 
         <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
 
-        <TextBlock Text="问题反馈" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
-        <Border Style="{StaticResource InlineCard}" Margin="0,0,0,14" Padding="14,12">
-            <StackPanel>
-                <Button x:Name="ReportIssueButton" Content="在浏览器中报告问题"
-                        Style="{StaticResource GhostButton}" HorizontalAlignment="Left" Padding="10,5"
-                        AutomationProperties.Name="在浏览器中报告问题"
-                        ToolTip="打开 GitHub Issues；无需令牌，不会自动附加或上传数据。"
-                        Click="ReportIssue_Click" />
-                <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,10" TextWrapping="Wrap"
-                           Text="无需令牌；由你检查并提交内容，不自动附加诊断。" />
-                <Expander Header="可选：自动上传崩溃诊断">
-                    <StackPanel Margin="0,10,0,0">
-                        <CheckBox x:Name="IssueUploadConsentToggle"
-                                  AutomationProperties.Name="允许崩溃时上传脱敏诊断到 GitHub"
-                                  Checked="IssueUploadConsent_Changed" Unchecked="IssueUploadConsent_Changed">
-                            <TextBlock Text="允许上传脱敏崩溃诊断" TextWrapping="Wrap" />
-                        </CheckBox>
-                        <TextBlock Style="{StaticResource Caption}" Margin="20,4,0,8" TextWrapping="Wrap"
-                                   Text="默认关闭。仅发送版本、系统信息与脱敏堆栈，不含翻译、截图或凭据；取消勾选即可停用。" />
-                        <PasswordBox x:Name="IssueUploadPatBox" Style="{StaticResource FormPasswordBox}"
-                                     local:Ui.Placeholder="留空保留" AutomationProperties.Name="GitHub 访问令牌"
-                                     PasswordChanged="IssueUploadPat_PasswordChanged" />
-                        <WrapPanel Margin="0,6,0,0">
-                            <Button x:Name="IssueUploadPatClearButton" Content="清除令牌" Margin="0,0,6,4" Padding="10,5"
-                                    Style="{StaticResource GhostButton}" AutomationProperties.Name="清除已保存的 GitHub 令牌"
-                                    Click="IssueUploadPatClear_Click" />
-                            <Button x:Name="IssueUploadTestButton" Content="发送测试诊断" Margin="0,0,6,4" Padding="10,5"
-                                    Style="{StaticResource GhostButton}" AutomationProperties.Name="发送测试诊断到 GitHub"
-                                    ToolTipService.ShowOnDisabled="True"
-                                    ToolTip="需同意上传并保存具有目标仓库 Issues 写权限的细粒度令牌。"
-                                    Click="IssueUploadTest_Click" />
-                            <Button x:Name="IssueUploadPatHelpButton" Content="创建细粒度令牌" Margin="0,0,0,4" Padding="10,5"
-                                    Style="{StaticResource GhostButton}" AutomationProperties.Name="打开 GitHub 细粒度令牌生成页"
-                                    ToolTip="仅授权目标仓库的 Issues: Read and write；无需广泛 repo 权限。"
-                                    Click="IssueUploadPatHelp_Click" />
-                        </WrapPanel>
-                        <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap"
-                                   Text="仅授权目标仓库的 Issues 读写；无仓库权限请用浏览器反馈。令牌保存在 Windows 凭据管理器，留空保留。" />
-                        <TextBlock x:Name="IssueUploadStatusText" Margin="0,8,0,0" TextWrapping="Wrap"
-                                   FontSize="12" LineHeight="17" Foreground="{DynamicResource TextSecondaryBrush}" />
-                    </StackPanel>
-                </Expander>
-            </StackPanel>
-        </Border>
 
         <!-- Route status card -->
-        <Border x:Name="RouteCard" Visibility="Collapsed" Style="{StaticResource InlineCard}" Margin="0,6,0,14" Padding="12,10">
+        <Border x:Name="RouteCard" Visibility="Collapsed" Margin="0,0,0,12" Padding="0,8"
+                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,1">
             <StackPanel>
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                <WrapPanel Margin="0,0,0,6">
                     <TextBlock x:Name="RouteCardTitle" Text="当前实际线路" Style="{StaticResource FieldLabel}"
                                Margin="0,0,8,0" VerticalAlignment="Center" />
-                    <Border x:Name="RouteBadge" Style="{StaticResource StatusPill}"
-                            Padding="7,2" Background="{DynamicResource AccentSoftBrush}"
-                            BorderBrush="{DynamicResource AccentBorderBrush}">
+                    <Border x:Name="RouteBadge">
                         <TextBlock x:Name="RouteBadgeText" FontSize="11" FontWeight="SemiBold"
                                    Foreground="{DynamicResource AccentBrush}" Text="本地 OCR" />
                     </Border>
-                </StackPanel>
+                </WrapPanel>
                 <TextBlock x:Name="RoutePreviewText" TextWrapping="Wrap"
                            FontSize="12" LineHeight="17"
                            Foreground="{DynamicResource TextSecondaryBrush}" />
@@ -149,8 +102,8 @@
             </StackPanel>
         </Border>
 
-            <StackPanel Margin="0,12,0,12">
-                <TextBlock Text="云端翻译" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
+            <StackPanel Margin="0,0,0,12">
+                <TextBlock Text="云端翻译" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
 
                 <Grid Style="{StaticResource SettingsRow}">
                     <Grid.ColumnDefinitions>
@@ -227,15 +180,55 @@
                 <TextBlock Text="本机文字识别" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
                 <TextBlock x:Name="OcrStatusText" Margin="0,0,0,8" TextWrapping="Wrap"
                            Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" />
-                <Border Background="{DynamicResource InputBrush}" CornerRadius="{StaticResource ControlRadius}"
-                        BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
-                        Padding="6" Margin="0,0,0,8">
-                    <ListBox x:Name="OcrLanguagesListBox" MaxHeight="120"
-                             IsHitTestVisible="False" />
-                </Border>
+                <ListBox x:Name="OcrLanguagesListBox" MaxHeight="120" Margin="0,0,0,8"
+                         BorderThickness="0" Background="Transparent" IsHitTestVisible="False"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
                 <TextBlock Style="{StaticResource Caption}">
                     <Run Text='缺少语言包：Windows 设置 → 时间和语言 → 语言和区域 → 语言选项 → 光学字符识别' />
                 </TextBlock>
             </StackPanel>
+        <TextBlock Text="问题反馈" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
+        <Border Margin="0,0,0,12">
+            <StackPanel>
+                <Button x:Name="ReportIssueButton" Content="在浏览器中报告问题"
+                        Style="{StaticResource GhostButton}" HorizontalAlignment="Left" Padding="10,5"
+                        AutomationProperties.Name="在浏览器中报告问题"
+                        ToolTip="打开 GitHub Issues；无需令牌，不会自动附加或上传数据。"
+                        Click="ReportIssue_Click" />
+                <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,10" TextWrapping="Wrap"
+                           Text="无需令牌；由你检查并提交内容，不自动附加诊断。" />
+                <StackPanel>
+                        <CheckBox x:Name="IssueUploadConsentToggle"
+                                  AutomationProperties.Name="允许崩溃时上传脱敏诊断到 GitHub"
+                                  Checked="IssueUploadConsent_Changed" Unchecked="IssueUploadConsent_Changed">
+                            <TextBlock Text="允许上传脱敏崩溃诊断" TextWrapping="Wrap" />
+                        </CheckBox>
+                        <TextBlock Style="{StaticResource Caption}" Margin="20,4,0,8" TextWrapping="Wrap"
+                                   Text="默认关闭。仅发送版本、系统信息与脱敏堆栈，不含翻译、截图或凭据；取消勾选即可停用。" />
+                        <TextBlock Text="GitHub 访问令牌" Style="{StaticResource FieldLabel}" />
+                        <PasswordBox x:Name="IssueUploadPatBox" Style="{StaticResource FormPasswordBox}"
+                                     local:Ui.Placeholder="留空保留已存令牌" AutomationProperties.Name="GitHub 访问令牌"
+                                     PasswordChanged="IssueUploadPat_PasswordChanged" />
+                        <WrapPanel Margin="0,6,0,0">
+                            <Button x:Name="IssueUploadPatClearButton" Content="清除令牌" Margin="0,0,6,4" Padding="10,5"
+                                    Style="{StaticResource GhostButton}" AutomationProperties.Name="清除已保存的 GitHub 令牌"
+                                    Click="IssueUploadPatClear_Click" />
+                            <Button x:Name="IssueUploadTestButton" Content="发送测试诊断" Margin="0,0,6,4" Padding="10,5"
+                                    Style="{StaticResource GhostButton}" AutomationProperties.Name="发送测试诊断到 GitHub"
+                                    ToolTipService.ShowOnDisabled="True"
+                                    ToolTip="需同意上传并保存具有目标仓库 Issues 写权限的细粒度令牌。"
+                                    Click="IssueUploadTest_Click" />
+                            <Button x:Name="IssueUploadPatHelpButton" Content="创建细粒度令牌" Margin="0,0,0,4" Padding="10,5"
+                                    Style="{StaticResource GhostButton}" AutomationProperties.Name="打开 GitHub 细粒度令牌生成页"
+                                    ToolTip="仅授权目标仓库的 Issues: Read and write；无需广泛 repo 权限。"
+                                    Click="IssueUploadPatHelp_Click" />
+                        </WrapPanel>
+                        <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap"
+                                   Text="令牌保存在 Windows 凭据管理器。仅需目标仓库的 Issues 读写权限；无权限请用浏览器反馈。" />
+                        <TextBlock x:Name="IssueUploadStatusText" Margin="0,8,0,0" TextWrapping="Wrap"
+                                   FontSize="12" LineHeight="17" Foreground="{DynamicResource TextSecondaryBrush}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
     </StackPanel>
 </UserControl>

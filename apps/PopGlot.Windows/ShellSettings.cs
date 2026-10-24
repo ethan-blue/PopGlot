@@ -355,7 +355,7 @@ internal sealed record ShellSettings(
         var interfaceKeys = new (string Name, HotkeyBinding Binding)[]
         {
             ("切换当前模型", InterfaceModelHotkey),
-            ("切换翻译风格", InterfaceStyleHotkey),
+            ("切换风格", InterfaceStyleHotkey),
             ("互换源/目标语言", InterfaceSwapHotkey),
             ("打开工作台", InterfaceWorkbenchHotkey),
             ("打开资料库", InterfaceLibraryHotkey),

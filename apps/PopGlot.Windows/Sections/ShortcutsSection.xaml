@@ -2,204 +2,123 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:PopGlot.Windows">
-
-    <!-- Compact desktop property list -->
+    <UserControl.Resources>
+        <Style x:Key="ShortcutRow" TargetType="Border">
+            <Setter Property="Padding" Value="0,4" />
+            <Setter Property="BorderThickness" Value="0,0,0,1" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
+        </Style>
+        <Style x:Key="ShortcutLabel" TargetType="TextBlock" BasedOn="{StaticResource RowTitle}">
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Margin" Value="0,0,10,0" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+        <Style x:Key="ShortcutRecorder" TargetType="local:HotkeyRecorder" BasedOn="{StaticResource GhostButton}">
+            <Setter Property="Height" Value="28" />
+            <Setter Property="MinHeight" Value="28" />
+            <Setter Property="Width" Value="170" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="8,0" />
+            <Setter Property="Background" Value="{DynamicResource InputBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="ContentTemplate">
+                <Setter.Value>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}" TextTrimming="CharacterEllipsis" ToolTip="{Binding}" />
+                    </DataTemplate>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="AutomationProperties.HelpText" Value="点击后按下组合键，Esc 取消录制" />
+            <Setter Property="ToolTip" Value="点击后按下组合键，Esc 取消录制" />
+        </Style>
+    </UserControl.Resources>
     <StackPanel>
-        <Grid Margin="0,0,0,14">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <TextBlock Text="快捷键" Style="{StaticResource PageTitle}" VerticalAlignment="Center" />
-            <Button x:Name="ResetDefaultsButton" Grid.Column="1"
-                    Content="恢复默认快捷键"
-                    Style="{StaticResource GhostButton}"
-                    Click="ResetDefaultsButton_Click"
-                    AutomationProperties.Name="恢复默认快捷键" />
+        <Grid Margin="0,0,0,10">
+            <TextBlock Text="点击组合键修改" Style="{StaticResource Caption}" VerticalAlignment="Center" />
+            <Button x:Name="ResetDefaultsButton" Style="{StaticResource IconButton}"
+                    local:Ui.Icon="{StaticResource IconRetry}" Width="28" Height="28" HorizontalAlignment="Right"
+                    AutomationProperties.Name="恢复默认快捷键" ToolTip="恢复默认快捷键"
+                    Click="ResetDefaultsButton_Click" />
         </Grid>
-
-        <TextBlock Text="全局快捷键" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
-
-        <Grid Style="{StaticResource SettingsRow}">
+        <Grid x:Name="ShortcutGroups">
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="200" MinWidth="200" />
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition x:Name="ShortcutGutter" Width="24"/>
+                <ColumnDefinition x:Name="ShortcutRightColumn" Width="*"/>
             </Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="划词翻译" Style="{StaticResource RowTitle}" />
-                <TextBlock Text="选中文本后按下快捷键，在光标旁呼出翻译浮窗" Style="{StaticResource RowHint}" />
+            <StackPanel>
+                <TextBlock Text="全局" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" ToolTip="在任何应用中可用" />
+                <Border Style="{StaticResource ShortcutRow}"><Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="划词翻译" Style="{StaticResource ShortcutLabel}"/>
+                    <local:HotkeyRecorder x:Name="SelectionHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}" AutomationProperties.Name="划词翻译"/>
+                </Grid></Border>
+                <Border Style="{StaticResource ShortcutRow}"><Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="截图翻译" Style="{StaticResource ShortcutLabel}"/>
+                    <local:HotkeyRecorder x:Name="ScreenshotHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}" AutomationProperties.Name="截图翻译"/>
+                </Grid></Border>
+                <Border Style="{StaticResource ShortcutRow}"><Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="极速查词" Style="{StaticResource ShortcutLabel}"/>
+                    <local:HotkeyRecorder x:Name="QuickSearchHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}" AutomationProperties.Name="极速查词快捷键"/>
+                </Grid></Border>
+                <Border Style="{StaticResource ShortcutRow}"><Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="打开主窗口" Style="{StaticResource ShortcutLabel}"/>
+                    <local:HotkeyRecorder x:Name="ShowWindowHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}" AutomationProperties.Name="打开主窗口快捷键"/>
+                </Grid></Border>
+                <Border Style="{StaticResource ShortcutRow}"><Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="关闭浮窗" Style="{StaticResource ShortcutLabel}"/>
+                    <local:HotkeyRecorder x:Name="CloseHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}" AutomationProperties.Name="关闭浮窗"/>
+                </Grid></Border>
             </StackPanel>
-            <local:HotkeyRecorder x:Name="SelectionHotkeyRecorder" Grid.Column="1"
-                                  Height="34" VerticalAlignment="Center"
-                                  AutomationProperties.Name="划词翻译"
-                                  AutomationProperties.HelpText="点击后按下组合键完成录制，Esc 取消录制" />
-        </Grid>
-
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
-
-        <Grid Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="200" MinWidth="200" />
-            </Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="截图翻译" Style="{StaticResource RowTitle}" />
-                <TextBlock Text="截取屏幕任意区域，自动识别画面文本并翻译" Style="{StaticResource RowHint}" />
+            <StackPanel x:Name="InterfaceShortcutGroup" Grid.Column="2">
+                <TextBlock Text="窗口内" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" ToolTip="PopGlot 窗口聚焦时可用" />
+                <Border Style="{StaticResource ShortcutRow}"><Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="切换模型" Style="{StaticResource ShortcutLabel}"/>
+                    <local:HotkeyRecorder x:Name="InterfaceModelHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}" AutomationProperties.Name="切换当前模型快捷键"/>
+                </Grid></Border>
+                <Border Style="{StaticResource ShortcutRow}"><Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="切换风格" Style="{StaticResource ShortcutLabel}"/>
+                    <local:HotkeyRecorder x:Name="InterfaceStyleHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}" AutomationProperties.Name="切换翻译风格快捷键"/>
+                </Grid></Border>
+                <Border Style="{StaticResource ShortcutRow}"><Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="互换语言" Style="{StaticResource ShortcutLabel}"/>
+                    <local:HotkeyRecorder x:Name="InterfaceSwapHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}" AutomationProperties.Name="互换源目标语言快捷键"/>
+                </Grid></Border>
+                <Border Style="{StaticResource ShortcutRow}"><Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="发起翻译" Style="{StaticResource ShortcutLabel}"/>
+                    <local:HotkeyRecorder x:Name="InterfaceTranslateHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}" AutomationProperties.Name="发起翻译快捷键"/>
+                </Grid></Border>
+                <Border Style="{StaticResource ShortcutRow}"><Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="朗读译文" Style="{StaticResource ShortcutLabel}"/>
+                    <local:HotkeyRecorder x:Name="InterfaceSpeakHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}" AutomationProperties.Name="朗读译文快捷键"/>
+                </Grid></Border>
+                <Border Style="{StaticResource ShortcutRow}"><Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="打开工作台" Style="{StaticResource ShortcutLabel}"/>
+                    <local:HotkeyRecorder x:Name="InterfaceWorkbenchHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}" AutomationProperties.Name="打开工作台快捷键"/>
+                </Grid></Border>
+                <Border Style="{StaticResource ShortcutRow}"><Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="打开资料库" Style="{StaticResource ShortcutLabel}"/>
+                    <local:HotkeyRecorder x:Name="InterfaceLibraryHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}" AutomationProperties.Name="打开资料库快捷键"/>
+                </Grid></Border>
+                <Border Style="{StaticResource ShortcutRow}"><Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="打开设置" Style="{StaticResource ShortcutLabel}"/>
+                    <local:HotkeyRecorder x:Name="InterfaceSettingsHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}" AutomationProperties.Name="打开设置快捷键"/>
+                </Grid></Border>
             </StackPanel>
-            <local:HotkeyRecorder x:Name="ScreenshotHotkeyRecorder" Grid.Column="1"
-                                  Height="34" VerticalAlignment="Center"
-                                  AutomationProperties.Name="截图翻译"
-                                  AutomationProperties.HelpText="点击后按下组合键完成录制，Esc 取消录制" />
         </Grid>
-
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
-
-        <Grid Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="200" MinWidth="200" />
-            </Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="极速查词" Style="{StaticResource RowTitle}" />
-                <TextBlock Text="居中呼出聚焦搜索栏，支持即时输入与流式翻译" Style="{StaticResource RowHint}" />
-            </StackPanel>
-            <local:HotkeyRecorder x:Name="QuickSearchHotkeyRecorder" Grid.Column="1"
-                                  Height="34" VerticalAlignment="Center"
-                                  AutomationProperties.Name="极速查词快捷键"
-                                  AutomationProperties.HelpText="点击后按下组合键完成录制，Esc 取消录制" />
-        </Grid>
-
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
-
-        <Grid Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="200" MinWidth="200" />
-            </Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="关闭浮窗" Style="{StaticResource RowTitle}" />
-                <TextBlock Text="快速关闭当前处于活动状态的翻译浮窗" Style="{StaticResource RowHint}" />
-            </StackPanel>
-            <local:HotkeyRecorder x:Name="CloseHotkeyRecorder" Grid.Column="1"
-                                  Height="34" VerticalAlignment="Center"
-                                  AutomationProperties.Name="关闭浮窗"
-                                  AutomationProperties.HelpText="点击后按下组合键完成录制，Esc 取消录制" />
-        </Grid>
-
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
-
-        <Grid Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="200" MinWidth="200" />
-            </Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="打开主窗口" Style="{StaticResource RowTitle}" />
-                <TextBlock Text="展开完整双栏工作台、生词本与详细设置" Style="{StaticResource RowHint}" />
-            </StackPanel>
-            <local:HotkeyRecorder x:Name="ShowWindowHotkeyRecorder" Grid.Column="1"
-                                  Height="34" VerticalAlignment="Center"
-                                  AutomationProperties.Name="打开主窗口快捷键"
-                                  AutomationProperties.HelpText="点击后按下组合键完成录制，Esc 取消录制" />
-        </Grid>
-
-
-        <TextBlock Text="界面快捷键（应用内）" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
-
-        <Grid Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="200" MinWidth="200" />
-            </Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="切换当前模型" Style="{StaticResource RowTitle}" />
-                <TextBlock Text="在悬浮窗、极速查词或工作台内打开模型切换菜单" Style="{StaticResource RowHint}" />
-            </StackPanel>
-            <local:HotkeyRecorder x:Name="InterfaceModelHotkeyRecorder" Grid.Column="1"
-                                  Height="34" VerticalAlignment="Center"
-                                  AutomationProperties.Name="切换当前模型快捷键"
-                                  AutomationProperties.HelpText="点击后按下组合键完成录制，Esc 取消录制" />
-        </Grid>
-
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
-
-        <Grid Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="200" MinWidth="200" />
-            </Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="切换翻译风格" Style="{StaticResource RowTitle}" />
-                <TextBlock Text="在准确 / 自然 / 正式与自定义模板间切换" Style="{StaticResource RowHint}" />
-            </StackPanel>
-            <local:HotkeyRecorder x:Name="InterfaceStyleHotkeyRecorder" Grid.Column="1"
-                                  Height="34" VerticalAlignment="Center"
-                                  AutomationProperties.Name="切换翻译风格快捷键"
-                                  AutomationProperties.HelpText="点击后按下组合键完成录制，Esc 取消录制" />
-        </Grid>
-
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
-
-        <Grid Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="200" MinWidth="200" />
-            </Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="互换源/目标语言" Style="{StaticResource RowTitle}" />
-                <TextBlock Text="一键交换当前翻译方向" Style="{StaticResource RowHint}" />
-            </StackPanel>
-            <local:HotkeyRecorder x:Name="InterfaceSwapHotkeyRecorder" Grid.Column="1"
-                                  Height="34" VerticalAlignment="Center"
-                                  AutomationProperties.Name="互换源目标语言快捷键"
-                                  AutomationProperties.HelpText="点击后按下组合键完成录制，Esc 取消录制" />
-        </Grid>
-
-        <Grid Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="200" />
-            </Grid.ColumnDefinitions>
-            <TextBlock Text="打开工作台" Style="{StaticResource RowTitle}" VerticalAlignment="Center" />
-            <local:HotkeyRecorder x:Name="InterfaceWorkbenchHotkeyRecorder" Grid.Column="1" Height="34"
-                                  AutomationProperties.Name="打开工作台快捷键" />
-        </Grid>
-        <Grid Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="200" />
-            </Grid.ColumnDefinitions>
-            <TextBlock Text="打开资料库" Style="{StaticResource RowTitle}" VerticalAlignment="Center" />
-            <local:HotkeyRecorder x:Name="InterfaceLibraryHotkeyRecorder" Grid.Column="1" Height="34"
-                                  AutomationProperties.Name="打开资料库快捷键" />
-        </Grid>
-        <Grid Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="200" />
-            </Grid.ColumnDefinitions>
-            <TextBlock Text="打开设置" Style="{StaticResource RowTitle}" VerticalAlignment="Center" />
-            <local:HotkeyRecorder x:Name="InterfaceSettingsHotkeyRecorder" Grid.Column="1" Height="34"
-                                  AutomationProperties.Name="打开设置快捷键" />
-        </Grid>
-        <Grid Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="200" />
-            </Grid.ColumnDefinitions>
-            <TextBlock Text="发起翻译" Style="{StaticResource RowTitle}" VerticalAlignment="Center" />
-            <local:HotkeyRecorder x:Name="InterfaceTranslateHotkeyRecorder" Grid.Column="1" Height="34"
-                                  AutomationProperties.Name="发起翻译快捷键" />
-        </Grid>
-        <Grid Style="{StaticResource SettingsRow}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="200" />
-            </Grid.ColumnDefinitions>
-            <TextBlock Text="朗读译文" Style="{StaticResource RowTitle}" VerticalAlignment="Center" />
-            <local:HotkeyRecorder x:Name="InterfaceSpeakHotkeyRecorder" Grid.Column="1" Height="34"
-                                  AutomationProperties.Name="朗读译文快捷键" />
-        </Grid>
-        <TextBlock Text="Esc 与文本编辑快捷键保持不变" Style="{StaticResource RowHint}" Margin="0,8,0,0" />
     </StackPanel>
 </UserControl>

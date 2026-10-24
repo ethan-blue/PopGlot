@@ -1,11 +1,12 @@
 use crate::adapter::AdapterKind;
 use crate::chat::ChatOptions;
 use crate::resolver::{
-	AuthResolver, IntoAuthResolverFn, IntoModelMapperFn, IntoServiceTargetResolverFn, ModelMapper,
+	AuthResolver, IntoAuthResolverFn, IntoModelMapperFn, IntoServiceTargetResolverFn, ModelMapper, ProviderConfig,
 	ServiceTargetResolver,
 };
 use crate::webc::WebClient;
 use crate::{Client, ClientConfig, WebConfig};
+use crate::{Error, Result};
 use std::sync::Arc;
 
 /// Builder for `Client`.
@@ -108,11 +109,41 @@ impl ClientBuilder {
 		client_config.adapter_kind = Some(adapter_kind);
 		self
 	}
+
+	/// Append the endpoint and/or auth for one adapter kind.
+	///
+	/// Call once per provider this Client should reach; each call adds to
+	/// the list rather than replacing it:
+	///
+	/// ```rust
+	/// # use genai::Client;
+	/// # use genai::adapter::AdapterKind;
+	/// # use genai::resolver::{AuthData, Endpoint};
+	/// let client = Client::builder()
+	///     .append_provider_config(
+	///         AdapterKind::OpenAI,
+	///         (Endpoint::from_static("https://gateway.internal/v1/"), AuthData::from_env("GATEWAY_KEY")),
+	///     )
+	///     .append_provider_config(AdapterKind::Ollama, Endpoint::from_static("http://localhost:11434/v1/"))
+	///     .build();
+	/// ```
+	///
+	/// Precedence, lowest to highest: the adapter's built-in default, then
+	/// this configuration, then the resolvers.
+	pub fn append_provider_config(
+		mut self,
+		adapter_kind: AdapterKind,
+		provider_config: impl Into<ProviderConfig>,
+	) -> Self {
+		let config = self.config.take().unwrap_or_default();
+		self.config = Some(config.append_provider_config(adapter_kind, provider_config));
+		self
+	}
 }
 
 impl ClientBuilder {
 	/// Build a `Client`.
-	pub fn build(self) -> Client {
+	pub fn build(self) -> Result<Client> {
 		let config = self.config.unwrap_or_default();
 
 		// Create WebClient based on configuration
@@ -121,20 +152,26 @@ impl ClientBuilder {
 			web_client
 		} else if let Some(req_config) = config.web_config() {
 			// Create WebClient with reqwest configuration
-			let mut builder = reqwest::Client::builder();
-			builder = req_config.apply_to_builder(builder);
-			let reqwest_client = builder.build().expect("Failed to build reqwest client");
-			WebClient::from_reqwest_client(reqwest_client)
+			let mut reqwest_builder = reqwest::Client::builder();
+			reqwest_builder = req_config.apply_to_builder(reqwest_builder);
+			WebClient::from_reqwest_client(build_reqwest(reqwest_builder)?)
 		} else {
 			// Use default WebClient with performance optimizations
 			let default_config = super::web_config::WebConfig::default();
-			let mut builder = reqwest::Client::builder();
-			builder = default_config.apply_to_builder(builder);
-			let reqwest_client = builder.build().expect("Failed to build reqwest client");
-			WebClient::from_reqwest_client(reqwest_client)
+			let mut reqwest_builder = reqwest::Client::builder();
+			reqwest_builder = default_config.apply_to_builder(reqwest_builder);
+			WebClient::from_reqwest_client(build_reqwest(reqwest_builder)?)
 		};
 
 		let inner = super::ClientInner { web_client, config };
-		Client { inner: Arc::new(inner) }
+
+		Ok(Client { inner: Arc::new(inner) })
 	}
+}
+
+fn build_reqwest(reqwest_builder: reqwest::ClientBuilder) -> Result<reqwest::Client> {
+	let reqwest_client = reqwest_builder
+		.build()
+		.map_err(|e| Error::ClientBuildFail { cause: e.to_string() })?;
+	Ok(reqwest_client)
 }

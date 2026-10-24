@@ -7,19 +7,19 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- Two-level toolbar: actions never compete with the search text. -->
+        <!-- 0.1.30：单行工具栏——去重复大标题；搜索改为紧凑内嵌图标输入框。 -->
         <Grid Grid.Row="0" Margin="0,0,0,10">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="240" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="资料库" Style="{StaticResource PageTitle}"
-                           VerticalAlignment="Center" Margin="0,0,12,0" />
                 <RadioButton x:Name="ModeHistory" Style="{StaticResource SegmentButton}"
                              GroupName="LibraryMode" IsChecked="True" Content="历史"
                              Checked="Mode_Checked" Tag="History" />
@@ -28,7 +28,19 @@
                              Checked="Mode_Checked" Tag="Vocabulary" />
             </StackPanel>
 
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+            <Grid x:Name="LibrarySearchHost" Grid.Column="2" Margin="0,0,8,0">
+                <TextBox x:Name="LibrarySearchBox"
+                         Height="28" MinHeight="28" VerticalAlignment="Center" VerticalContentAlignment="Center"
+                         Style="{StaticResource FormTextBox}" local:Ui.ContentPadding="28,0,8,0"
+                         AutomationProperties.Name="搜索历史与生词"
+                         local:Ui.Placeholder="搜索原文或译文"
+                         TextChanged="LibrarySearch_TextChanged" />
+                <Path Width="12" Height="12" Stretch="Uniform" IsHitTestVisible="False"
+                      Data="{StaticResource IconSearch}" HorizontalAlignment="Left" Margin="9,0,0,0"
+                      Fill="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center" />
+            </Grid>
+
+            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
                 <Button x:Name="RetryVocabularyButton" Style="{StaticResource IconButton}"
                         local:Ui.Icon="{StaticResource IconRetry}" Margin="0,0,4,0"
                         Visibility="Collapsed"
@@ -45,12 +57,8 @@
                         ToolTip="清空当前列表" AutomationProperties.Name="清空当前列表"
                         Click="ClearCurrent_Click" />
             </StackPanel>
-            <TextBox x:Name="LibrarySearchBox" Grid.Row="1" Margin="0,8,0,0"
-                     Style="{StaticResource FormTextBox}"
-                     AutomationProperties.Name="搜索历史与生词"
-                     local:Ui.Placeholder="搜索原文或译文"
-                     TextChanged="LibrarySearch_TextChanged" />
-            <StackPanel Grid.Row="2">
+        </Grid>
+        <StackPanel Grid.Row="1">
             <Border x:Name="LibraryUndoBar" Margin="0,8,0,0" Padding="10,6"
                     Visibility="Collapsed"
                     Background="{DynamicResource SurfaceRaisedBrush}"
@@ -104,10 +112,9 @@
                 </Grid>
             </Border>
             </StackPanel>
-        </Grid>
 
         <!-- ==================== Master–Detail Surface ==================== -->
-        <Border Grid.Row="1" Background="{DynamicResource SurfaceBrush}"
+        <Border Grid.Row="2" Background="{DynamicResource SurfaceBrush}"
                 BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
                 CornerRadius="{StaticResource CardRadius}">
             <Grid x:Name="LibrarySplitGrid" SizeChanged="LibrarySplitGrid_SizeChanged">

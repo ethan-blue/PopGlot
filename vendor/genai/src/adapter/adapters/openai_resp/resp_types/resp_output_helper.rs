@@ -44,10 +44,59 @@ impl ContentPart {
 
 				parts.push(tool_call.into());
 			}
+			ItemType::CustomToolCall => {
+				let fn_name = item_value.x_remove::<String>("name")?;
+				let call_id = item_value.x_remove::<String>("call_id")?;
+				let input = item_value.x_remove::<String>("input")?;
+				parts.push(
+					ToolCall {
+						call_id,
+						fn_name,
+						fn_arguments: Value::String(input),
+						thought_signatures: None,
+					}
+					.into(),
+				);
+			}
+			ItemType::Reasoning => {
+				if let Ok(encrypted) = item_value.x_remove::<String>("encrypted_content")
+					&& !encrypted.is_empty()
+				{
+					parts.push(ContentPart::ThoughtSignature(encrypted));
+				}
+			}
 		}
 
 		Ok(parts)
 	}
+}
+
+pub fn extract_resp_reasoning_texts(item_value: &Value) -> Vec<String> {
+	let mut texts = Vec::new();
+	if item_value.x_get_str("type").ok() != Some("reasoning") {
+		return texts;
+	}
+	if let Some(summary) = item_value.get("summary").and_then(Value::as_array) {
+		for entry in summary {
+			if entry.x_get_str("type").ok() == Some("summary_text")
+				&& let Ok(text) = entry.x_get_str("text")
+				&& !text.is_empty()
+			{
+				texts.push(text.to_string());
+			}
+		}
+	}
+	if let Some(content) = item_value.get("content").and_then(Value::as_array) {
+		for entry in content {
+			if entry.x_get_str("type").ok() == Some("reasoning_text")
+				&& let Ok(text) = entry.x_get_str("text")
+				&& !text.is_empty()
+			{
+				texts.push(text.to_string());
+			}
+		}
+	}
+	texts
 }
 
 // region:    --- Support Type
@@ -56,6 +105,8 @@ impl ContentPart {
 enum ItemType {
 	Message,
 	FunctionCall,
+	CustomToolCall,
+	Reasoning,
 }
 
 impl ItemType {
@@ -64,9 +115,36 @@ impl ItemType {
 		match typ {
 			"message" => Some(ItemType::Message),
 			"function_call" => Some(ItemType::FunctionCall),
+			"custom_tool_call" => Some(ItemType::CustomToolCall),
+			"reasoning" => Some(ItemType::Reasoning),
 			_ => None,
 		}
 	}
 }
 
 // endregion: --- Support Type
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn decodes_custom_tool_call_as_raw_string_input() {
+		let parts = ContentPart::from_resp_output_item(serde_json::json!({
+			"type": "custom_tool_call",
+			"call_id": "call_patch",
+			"name": "apply_patch",
+			"input": "*** Begin Patch\n*** End Patch\n",
+		}))
+		.unwrap();
+		let ContentPart::ToolCall(call) = &parts[0] else {
+			panic!("expected a tool call");
+		};
+		assert_eq!(call.call_id, "call_patch");
+		assert_eq!(call.fn_name, "apply_patch");
+		assert_eq!(
+			call.fn_arguments,
+			Value::String("*** Begin Patch\n*** End Patch\n".to_string())
+		);
+	}
+}

@@ -149,9 +149,6 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         RouteBadgeText.Text = pipeline;
         RoutePreviewText.Text = route.ExplanationZh;
         var warning = route.MayUploadImage || route.ScreenshotPipeline == ScreenshotPipeline.Unavailable;
-        RouteCard.SetResourceReference(Border.BackgroundProperty, warning ? "WarningSoftBrush" : "SurfaceMutedBrush");
-        RouteBadge.SetResourceReference(Border.BackgroundProperty, warning ? "WarningSoftBrush" : "AccentSoftBrush");
-        RouteBadge.SetResourceReference(Border.BorderBrushProperty, warning ? "WarningBrush" : "AccentBorderBrush");
         RouteBadgeText.SetResourceReference(TextBlock.ForegroundProperty, warning ? "WarningBrush" : "AccentBrush");
     }
 

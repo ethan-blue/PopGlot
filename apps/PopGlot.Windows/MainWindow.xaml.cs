@@ -80,7 +80,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Entry point into SettingsWindow, wired by App.</summary>
-    internal Action? OpenSettings { get; set; }
+    internal Action<string?>? OpenSettings { get; set; }
     internal Action? RouteChanged { get; set; }
 
     // ================= Stable Normal size across DPI changes =================
@@ -220,7 +220,7 @@ public partial class MainWindow : Window
     // The sidebar entry is the one settings entry of the main window; the
     // old footer duplicate was removed so "打开设置" names exactly one control.
     private void NavSettingsButton_Click(object sender, RoutedEventArgs e) =>
-        OpenSettings?.Invoke();
+        OpenSettings?.Invoke(null);
 
     private void MainWindow_KeyDown(object sender, KeyEventArgs e)
     {
@@ -233,7 +233,7 @@ public partial class MainWindow : Window
         switch (action)
         {
             case Services.InterfaceAction.Settings:
-                OpenSettings?.Invoke();
+                OpenSettings?.Invoke(null);
                 return true;
             case Services.InterfaceAction.Workbench:
             case Services.InterfaceAction.Library:
@@ -623,7 +623,7 @@ public partial class MainWindow : Window
     }
 
     private static string EngineSwitcherHint(string? detail) =>
-        $"{detail}\n切换引擎 ({InterfaceKeys.ModelHotkey.DisplayName}) · 模型支持风格与要点";
+        $"{detail}\n切换模型 ({InterfaceKeys.ModelHotkey.DisplayName})";
 
     private bool IsActiveRouteFreeEngine()
     {
@@ -720,7 +720,7 @@ public partial class MainWindow : Window
         menu.Items.Add(new Separator());
         var manage = new MenuItem { Header = "管理引擎" };
         System.Windows.Automation.AutomationProperties.SetName(manage, "管理引擎");
-        manage.Click += (_, _) => OpenSettings?.Invoke();
+        manage.Click += (_, _) => OpenSettings?.Invoke("Provider");
         menu.Items.Add(manage);
         var reprobe = new MenuItem { Header = "检测公共翻译" };
         System.Windows.Automation.AutomationProperties.SetName(reprobe, "重新检测免费引擎");
@@ -1190,7 +1190,7 @@ internal static class TranslationStyleMenu
     /// source: <see cref="ApplyTo"/> always uses this constant, surfaces no
     /// longer pass their own copy.
     /// </summary>
-    internal const string SupportedToolTip = "翻译风格（点击切换）";
+    internal const string SupportedToolTip = "风格（点击切换）";
 
     internal const string UnknownToolTip = "无法确认风格支持，请检查当前模型";
 
@@ -1497,7 +1497,7 @@ internal static class TranslationStyleMenu
             if (styleName is not null)
             {
                 var descPart = string.IsNullOrWhiteSpace(styleDesc) ? string.Empty : $" · {styleDesc}";
-                message = $"当前风格：{styleName}{descPart}\n点击切换翻译风格 ({Services.InterfaceKeys.StyleHotkey.DisplayName})";
+                message = $"当前风格：{styleName}{descPart}\n点击切换风格 ({Services.InterfaceKeys.StyleHotkey.DisplayName})";
             }
             else
             {
