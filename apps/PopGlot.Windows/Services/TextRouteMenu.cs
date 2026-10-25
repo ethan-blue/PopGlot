@@ -68,8 +68,8 @@ internal static class TextRouteMenu
 
                 // Health/evidence honesty: only a matching test outcome produces green (Success)
                 // or red (Error). Untested or configuration-changed endpoints stay neutral (Info).
-                var credentialAvailable = keyPresent || ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl);
-                var currentFingerprint = ProfileVerification.EvidenceFingerprint(profile, credentialAvailable);
+                var currentFingerprint = ProfileVerification.EvidenceFingerprint(
+                    profile, ProfileVerification.CredentialAvailable(profile));
                 var validEvidence = !string.IsNullOrWhiteSpace(profile.LastTestFingerprint) &&
                     string.Equals(profile.LastTestFingerprint, currentFingerprint, StringComparison.Ordinal);
 

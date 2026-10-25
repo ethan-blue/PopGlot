@@ -8785,6 +8785,70 @@ internal static partial class Program
                 window.RefreshEngineStatus();
                 Equal(window.FindResource("TextSecondaryBrush"), dot.Background,
                     "modified configuration invalidates evidence and falls back to neutral");
+                // 5. Managed CLI profile: canonical fingerprint uses credentialAvailable=false
+                var cliProfile = new ProviderProfile
+                {
+                    Id = "p-cli", Name = "Codex CLI", ExecutionKind = PopGlot.Windows.Services.AiConnections.EngineExecutionKindNames.CodexAppServer,
+                    TextModel = "gpt-4o",
+                    CliConnection = new()
+                    {
+                        ExecutablePath = Environment.ProcessPath!,
+                        ExpectedVersion = PopGlot.Windows.Services.AiConnections.CliLauncher.ReferenceToolVersion(PopGlot.Windows.Services.AiConnections.EngineExecutionKind.CodexAppServer),
+                        ModelId = "gpt-4o",
+                        UpstreamProviderId = "openai-codex",
+                        Enabled = true,
+                    }
+                };
+                config.Profiles = [cliProfile];
+                config.ActiveProfileId = cliProfile.Id;
+                ProfileManager.Save(config);
+                ProfileManager.BumpRevision();
+                window.RefreshEngineStatus();
+                Equal(window.FindResource("TextSecondaryBrush"), dot.Background,
+                    "untested CLI profile must be neutral");
+
+                cliProfile.LastTestOutcome = "ok";
+                cliProfile.LastTestedAtUtc = DateTime.UtcNow;
+                cliProfile.LastTestFingerprint = ProfileVerification.EvidenceFingerprint(cliProfile, false);
+                ProfileManager.Save(config);
+                ProfileManager.BumpRevision();
+                window.RefreshEngineStatus();
+                Equal(window.FindResource("SuccessBrush"), dot.Background,
+                    "verified working CLI profile must turn green");
+
+                // 6. Direct ChatGPT profile: canonical fingerprint uses credentialAvailable=false
+                var account = PopGlot.Windows.Services.AiConnections.ChatGptAccountStore.SaveValidated(
+                    "oaiapp_fixture", "subject-fixture", "Fixture account",
+                    new("fixture-access", "fixture-refresh", "dummy.jwt.token", "resource.invoke chatgpt.tokens.use.direct", DateTimeOffset.UtcNow.AddHours(1), DateTimeOffset.UtcNow, Guid.NewGuid().ToString("N")),
+                    null);
+                var accountId = account.Id;
+                var directProfile = new ProviderProfile
+                {
+                    Id = "p-direct", Name = "ChatGPT Direct", ExecutionKind = PopGlot.Windows.Services.AiConnections.EngineExecutionKindNames.ChatGptDirect,
+                    TextModel = "gpt-4o",
+                    DirectConnection = new()
+                    {
+                        AccountId = accountId,
+                        ModelId = "gpt-4o",
+                        Enabled = true,
+                    }
+                };
+                config.Profiles = [directProfile];
+                config.ActiveProfileId = directProfile.Id;
+                ProfileManager.Save(config);
+                ProfileManager.BumpRevision();
+                window.RefreshEngineStatus();
+                Equal(window.FindResource("TextSecondaryBrush"), dot.Background,
+                    "untested direct profile must be neutral");
+
+                directProfile.LastTestOutcome = "ok";
+                directProfile.LastTestedAtUtc = DateTime.UtcNow;
+                directProfile.LastTestFingerprint = ProfileVerification.EvidenceFingerprint(directProfile, false);
+                ProfileManager.Save(config);
+                ProfileManager.BumpRevision();
+                window.RefreshEngineStatus();
+                Equal(window.FindResource("SuccessBrush"), dot.Background,
+                    "verified working direct profile must turn green");
             }
             finally
             {
