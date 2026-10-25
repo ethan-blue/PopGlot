@@ -172,7 +172,7 @@ internal static class TranslateSectionReducer
                 IsTranslateButtonEnabled = true,
                 AreResultActionsEnabled = true,
                 BadgeText = session.PipelineLabel ?? "完成",
-                StatusText = TranslationElapsedText.ForMilliseconds(session.Timing.TotalElapsedMs),
+                StatusText = TranslationElapsedText.ForTiming(session.Timing),
                 ExplanationText = explanation,
                 ProtectedTerms = session.ProtectedTerms,
                 IsExplanationVisible = notes.Count > 0,
@@ -194,7 +194,7 @@ internal static class TranslateSectionReducer
                 IsTranslateButtonEnabled = true,
                 AreResultActionsEnabled = false,
                 BadgeText = "内容不完整",
-                StatusText = $"内容不完整 · {TranslationElapsedText.ForMilliseconds(session.Timing.TotalElapsedMs)}",
+                StatusText = $"内容不完整 · {TranslationElapsedText.ForTiming(session.Timing)}",
                 ExplanationText = explanation,
                 ProtectedTerms = session.ProtectedTerms,
                 IsExplanationVisible = notes.Count > 0,
@@ -353,6 +353,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         _languageChangeSuspended = false;
         ApplyState(_currentState);
         RefreshStyleSelector();
+        UpdateSummaryCapabilityVisuals();
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -365,6 +366,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         UpdateServiceAvailability();
         RefreshStarState();
         RefreshStyleSelector();
+        UpdateSummaryCapabilityVisuals();
         RefreshRestoreSessionAffordance();
         _sessionStorePollTimer.Start();
     }
@@ -387,6 +389,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         _vocabulary = vocabulary;
         RefreshFreeEngineEntryVisibility();
         RefreshStyleSelector();
+        UpdateSummaryCapabilityVisuals();
     }
 
     // ================= Public accessors for MainWindow =================
@@ -1406,16 +1409,16 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     {
         if (ShowSummaryChoice is null) return;
         var capability = _coordinator?.EvaluateSummaryCapability() ?? RouteCapabilityService.EvaluateCurrent();
+        var isPublicRoute = capability.RouteKind == RouteKind.FreeEngine;
         var canSummarize = capability.State is RouteCapabilityState.Available or RouteCapabilityState.Unknown;
+        var shouldShow = !isPublicRoute && (canSummarize || _holdingSummary);
         ShowSummaryChoice.IsEnabled = canSummarize || _holdingSummary;
         if (!canSummarize && _summaryLifecycle.IsRunning)
         {
             CancelSummary();
         }
-        var isPublicRoute = capability.RouteKind == RouteKind.FreeEngine;
         if (isPublicRoute && _holdingSummary) ShowTranslationReading();
-        ShowSummaryChoice.Visibility = isPublicRoute ? Visibility.Collapsed : Visibility.Visible;
-        if (isPublicRoute) ShowSummaryChoice.IsEnabled = false;
+        ShowSummaryChoice.Visibility = shouldShow ? Visibility.Visible : Visibility.Collapsed;
         ShowSummaryChoice.ToolTip = capability.State switch
         {
             RouteCapabilityState.Unsupported => capability.Reason,
@@ -1605,29 +1608,14 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
     private void StyleSelector_Click(object sender, RoutedEventArgs e)
     {
-        // One click = next style; the full list stays one right-click away.
-        // Most users only ever need 准确/自然/正式.
-        var next = TranslationStyleMenu.NextTemplate();
-        if (next is null)
-        {
-            TranslateStatus.Text = "暂无可用风格";
-            return;
-        }
-        _ = ChooseStyleAsync(next);
-    }
-
-    private void StyleSelector_RightClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
-    {
-        e.Handled = true;
+        if (sender is not Button button) return;
         RefreshStyleSelector();
         var menu = TranslationStyleMenu.Build(
             styleChosen: template => _ = ChooseStyleAsync(template),
             reportStatus: message => TranslateStatus.Text = message,
             managePrompts: () => OpenSettingsPage("Prompt"));
-        if (menu is not null)
-        {
-            TranslationStyleMenu.Show(StyleSelectorButton, menu);
-        }
+        if (menu is null) return;
+        TranslationStyleMenu.Show(button, menu);
     }
 
 

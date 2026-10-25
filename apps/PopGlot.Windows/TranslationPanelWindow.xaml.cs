@@ -965,7 +965,7 @@ public partial class TranslationPanelWindow : Window
         _translationSession = session;
         _translationBadge = session.PipelineLabel ?? "翻译";
         // 0.1.27：页脚不再拼引擎名，只保留用时与截图隐私事实。
-        _translationRoute = TranslationElapsedText.ForMilliseconds(session.Timing.TotalElapsedMs);
+        _translationRoute = TranslationElapsedText.ForTiming(session.Timing);
         if (session.InputSource == TranslationInputSource.Screenshot)
             _translationRoute += session.ImageUploaded ? " · 图片已进入视觉请求" : " · 图片未上传";
         _translationStatus = string.IsNullOrWhiteSpace(pipelineNote)
@@ -1324,7 +1324,7 @@ public partial class TranslationPanelWindow : Window
         {
             footerParts.Add(session.ImageUploaded ? "图片已进入视觉请求" : "图片未上传");
         }
-        footerParts.Add(TranslationElapsedText.ForMilliseconds(totalMs));
+        footerParts.Add(TranslationElapsedText.ForTiming(session.Timing));
         SetRouteText(string.Join(" · ", footerParts));
         StatusText.Text = string.IsNullOrWhiteSpace(pipelineNote)
             ? TranslationSessionStateText.Describe(TranslationSessionState.Completed)
@@ -1992,36 +1992,21 @@ public partial class TranslationPanelWindow : Window
         }
         var isPublicRoute = capability.RouteKind == RouteKind.FreeEngine;
         if (isPublicRoute && _holdingSummary) ShowStoredTranslation();
-        ShowSummaryChoice.Visibility = isPublicRoute ? Visibility.Collapsed : Visibility.Visible;
-        if (isPublicRoute) ShowSummaryChoice.IsEnabled = false;
+        var shouldShow = !isPublicRoute && (canSummarize || _holdingSummary);
+        ShowSummaryChoice.Visibility = shouldShow ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void StyleSelector_Click(object sender, RoutedEventArgs e)
     {
-        // One click = next style; the full list stays one right-click away.
-        var next = TranslationStyleMenu.NextTemplate();
-        if (next is null)
-        {
-            StatusText.Text = "暂无可用风格";
-            return;
-        }
-        _ = ChooseStyleAsync(next);
-    }
-
-    private void StyleSelector_RightClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
-    {
-        e.Handled = true;
+        if (sender is not Button button) return;
         RefreshStyleSelector();
         var menu = TranslationStyleMenu.Build(
             styleChosen: template => _ = ChooseStyleAsync(template),
             reportStatus: message => StatusText.Text = message,
             managePrompts: () => _openSettings?.Invoke("Prompt"));
-        if (menu is not null)
-        {
-            TranslationStyleMenu.Show(StyleSelectorButton, menu);
-        }
+        if (menu is null) return;
+        TranslationStyleMenu.Show(button, menu);
     }
-
 
     private async Task ChooseStyleAsync(PromptTemplateDto template)
     {

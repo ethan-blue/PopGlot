@@ -208,7 +208,7 @@ internal sealed class QuickSearchState
             CanStar = true;
             // 0.1.27 文案减法：引擎名不再进状态行（产品即 PopGlot/OMP，
             // 徽标已指明引擎），只保留面向用户的秒级用时。
-            StatusText = TranslationElapsedText.ForMilliseconds(session.Timing.TotalElapsedMs);
+            StatusText = TranslationElapsedText.ForTiming(session.Timing);
             RefreshHints();
             return true;
         }
@@ -240,7 +240,7 @@ internal sealed class QuickSearchState
             CanStar = false;
             StatusText = partialError is not null
                 ? $"{partialError}（部分内容已保留）"
-                : $"译文不完整 · {TranslationElapsedText.ForMilliseconds(session.Timing.TotalElapsedMs)}";
+                : $"译文不完整 · {TranslationElapsedText.ForTiming(session.Timing)}";
             RefreshHints();
             return true;
         }

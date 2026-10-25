@@ -1063,30 +1063,15 @@ public partial class QuickSearchWindow : Window
 
     private void StyleSelector_Click(object sender, RoutedEventArgs e)
     {
-        // One click = next style; the full list stays one right-click away.
-        var next = TranslationStyleMenu.NextTemplate();
-        if (next is null)
-        {
-            FooterStatus.Text = "暂无可用风格";
-            return;
-        }
-        _ = ChooseStyleAsync(next);
-    }
-
-    private void StyleSelector_RightClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
-    {
-        e.Handled = true;
+        if (sender is not Button button) return;
         RefreshStyleSelector();
         var menu = TranslationStyleMenu.Build(
             styleChosen: template => _ = ChooseStyleAsync(template),
             reportStatus: message => FooterStatus.Text = message,
             managePrompts: () => OpenSettings("Prompt"));
-        if (menu is not null)
-        {
-            TranslationStyleMenu.Show(StyleSelectorButton, menu);
-        }
+        if (menu is null) return;
+        TranslationStyleMenu.Show(button, menu);
     }
-
 
     private async Task ChooseStyleAsync(PromptTemplateDto template)
     {

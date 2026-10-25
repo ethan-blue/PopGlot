@@ -1056,7 +1056,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     internal static (string Text, StatusTone Tone) DescribeProfileState(
         bool isLocal, bool hasKey, string? outcome)
     {
-        if (isLocal && outcome is null or "ok")
+        if (isLocal && outcome == "ok")
+        {
+            return ("本地服务 · 可用", StatusTone.Success);
+        }
+        if (isLocal && outcome is null)
         {
             return ("本地服务", StatusTone.Info);
         }

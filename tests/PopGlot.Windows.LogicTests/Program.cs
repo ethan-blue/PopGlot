@@ -452,7 +452,7 @@ internal static partial class Program
             ("core reading controls carry exact automation names", WaveRegressionTests.CoreReadingControlsCarryExactAutomationNames),
             ("shortcut recording Escape preserves the saved binding", WaveRegressionTests.HotkeyRecordingEscapePreservesBinding),
             ("backspace unbinds a shortcut and says so", WaveRegressionTests.HotkeyBackspaceUnbindsShortcut),
-            ("style click cycles to the next enabled template", WaveRegressionTests.StyleClickCyclesToNextEnabledTemplate),
+            ("style template advances and wraps in store order", WaveRegressionTests.StyleClickCyclesToNextEnabledTemplate),
             ("help window renders packaged offline articles and honest fallbacks", WaveRegressionTests.HelpWindowRendersPackagedArticles));
 
         // E3 follow-ups: high-contrast seam and PerMonitorV2 DPI robustness.

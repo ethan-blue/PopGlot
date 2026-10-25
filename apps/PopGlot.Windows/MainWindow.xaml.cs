@@ -1522,7 +1522,7 @@ internal static class TranslationStyleMenu
             if (styleName is not null)
             {
                 var descPart = string.IsNullOrWhiteSpace(styleDesc) ? string.Empty : $" · {styleDesc}";
-                message = $"当前风格：{styleName}{descPart}\n点击切到下一个 · 右键看全部 ({Services.InterfaceKeys.StyleHotkey.DisplayName})";
+                message = $"当前风格：{styleName}{descPart}\n点击选择风格 ({Services.InterfaceKeys.StyleHotkey.DisplayName})";
             }
             else
             {

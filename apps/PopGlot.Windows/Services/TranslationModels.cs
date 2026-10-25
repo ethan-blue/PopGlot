@@ -226,6 +226,19 @@ internal static class TranslationElapsedText
             ? "用时 < 0.1 秒"
             : $"用时 {elapsed / 1000.0:F1} 秒";
     }
+
+    public static string ForTiming(TranslationSessionTiming? timing)
+    {
+        if (timing is null) return "用时 < 0.1 秒";
+        var total = Math.Max(0, timing.TotalElapsedMs);
+        var totalSec = total / 1000.0;
+        if (timing.FirstDeltaMs > 0 && timing.TotalElapsedMs >= timing.FirstDeltaMs + 100)
+        {
+            var firstSec = timing.FirstDeltaMs / 1000.0;
+            return $"总计 {totalSec:F1}s · 首字 {firstSec:F1}s";
+        }
+        return total < 100 ? "用时 < 0.1 秒" : $"用时 {totalSec:F1} 秒";
+    }
 }
 
 /// <summary>

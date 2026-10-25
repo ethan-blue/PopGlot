@@ -173,10 +173,19 @@ internal static partial class Program
             window.Show();
             window.ShowPage("Shortcuts");
             var section = window.ShortcutsSection;
-            var recorders = FindLogicalDescendants<HotkeyRecorder>(section).ToArray();
-            var bindings = recorders.Select(recorder => recorder.BindingValue).ToArray();
             var normalWidth = window.Width;
             var normalHeight = window.Height;
+            // Verify that the default fool-proof view (common shortcuts only) fits without any scrolling
+            FlushDispatcher(2);
+            window.UpdateLayout();
+            True(window.SettingsScroll.ScrollableHeight < 1, "default common shortcuts fit the settings viewport without scrolling");
+
+            // Expand more shortcuts to test all 13 bindings across sizes
+            section.MoreExpander.IsExpanded = true;
+            FlushDispatcher(2);
+            window.UpdateLayout();
+            var recorders = FindLogicalDescendants<HotkeyRecorder>(section).ToArray();
+            var bindings = recorders.Select(recorder => recorder.BindingValue).ToArray();
             foreach (var (width, height) in new[]
             {
                 (normalWidth, normalHeight),
@@ -203,8 +212,8 @@ internal static partial class Program
                     True(label.ActualWidth + 0.5 >= text.Width, "the action name must fit without ellipsis");
                     Equal(bindings[index], recorder.BindingValue, "resizing cannot change a shortcut");
                 }
-                if (width == normalWidth)
-                    True(window.SettingsScroll.ScrollableHeight < 1, "all shortcuts fit the default settings viewport");
+                if (width == normalWidth && !section.MoreExpander.IsExpanded)
+                    True(window.SettingsScroll.ScrollableHeight < 1, "default shortcuts fit the settings viewport");
             }
         }
         finally

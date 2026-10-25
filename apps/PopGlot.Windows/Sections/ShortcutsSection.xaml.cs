@@ -18,6 +18,8 @@ public partial class ShortcutsSection : System.Windows.Controls.UserControl
         System.Windows.Controls.Grid.SetRow(InterfaceShortcutGroup, stacked ? 1 : 0);
         InterfaceShortcutGroup.Margin = new System.Windows.Thickness(0, stacked ? 12 : 0, 0, 0);
     }
+    internal System.Windows.Controls.Expander MoreExpander => MoreShortcutsExpander;
+
 
     // ================= Public accessors for MainWindow =================
 

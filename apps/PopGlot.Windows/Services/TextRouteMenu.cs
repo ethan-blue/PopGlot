@@ -62,17 +62,17 @@ internal static class TextRouteMenu
                 var permitted = capability.IsLocal || settings.NetworkEnabled && !settings.SafeDevMode;
                 var ready = permitted && ProfileManager.IsTextEngineExecutable(profile);
                 return (ShortName(profile), Detail(profile, ModelName(profile)), profile, false,
-                    ready ? StatusTone.Info : StatusTone.Warning);
+                    ready ? StatusTone.Success : StatusTone.Warning);
             }
         }
         else if (!config.PreferFreeEngine && settings.TargetsLocalRuntime)
             return ("本机模型", settings.TextModel, null, false,
-                settings.TextIsConfigured ? StatusTone.Info : StatusTone.Warning);
+                settings.TextIsConfigured ? StatusTone.Success : StatusTone.Warning);
         var allowed = shell.FreeEngineConsent == FreeEngineConsent.Allowed && settings.NetworkEnabled && !settings.SafeDevMode;
         var selected = config.PreferFreeEngine || allowed;
         return (selected ? FreeName(shell.FreeEngineProvider) : "选择模型",
             selected ? FreeDetail(shell.FreeEngineProvider) : "选择文字模型；不会自动提交请求。",
-            null, selected, allowed ? StatusTone.Info : StatusTone.Warning);
+            null, selected, allowed ? StatusTone.Success : StatusTone.Warning);
     }
     internal static string ShortName(ProviderProfile profile) => profile.ResolvedExecutionKind switch
     {
