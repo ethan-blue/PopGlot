@@ -53,26 +53,62 @@ internal static class TextRouteMenu
         var profile = config.TryGetActiveProfile();
         if (profile is not null)
         {
-            var key = profile.ExecutionFacts.IsManagedExecution ? null :
-                CredentialStore.HasApiKey(ProfileManager.ResolveCredentialTargetFor(profile)) ? KeyPresent : null;
+            var keyPresent = profile.ExecutionFacts.IsManagedExecution || CredentialStore.HasApiKey(ProfileManager.ResolveCredentialTargetFor(profile));
+            var key = profile.ExecutionFacts.IsManagedExecution ? null : (keyPresent ? KeyPresent : null);
             var capability = TranslationCoordinator.ResolveTextRouteCapability(
                 profile.ToProviderSettings(settings), key, settings, profile);
             if (capability.HasConfiguredProvider)
             {
                 var permitted = capability.IsLocal || settings.NetworkEnabled && !settings.SafeDevMode;
                 var ready = permitted && ProfileManager.IsTextEngineExecutable(profile);
-                return (ShortName(profile), Detail(profile, ModelName(profile)), profile, false,
-                    ready ? StatusTone.Success : StatusTone.Warning);
+                if (!ready)
+                {
+                    return (ShortName(profile), Detail(profile, ModelName(profile)), profile, false, StatusTone.Warning);
+                }
+
+                // Health/evidence honesty: only a matching test outcome produces green (Success)
+                // or red (Error). Untested or configuration-changed endpoints stay neutral (Info).
+                var credentialAvailable = keyPresent || ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl);
+                var currentFingerprint = ProfileVerification.EvidenceFingerprint(profile, credentialAvailable);
+                var validEvidence = !string.IsNullOrWhiteSpace(profile.LastTestFingerprint) &&
+                    string.Equals(profile.LastTestFingerprint, currentFingerprint, StringComparison.Ordinal);
+
+                StatusTone tone;
+                if (validEvidence && profile.LastTestOutcome == "ok")
+                {
+                    tone = StatusTone.Success;
+                }
+                else if (validEvidence && !string.IsNullOrWhiteSpace(profile.LastTestOutcome))
+                {
+                    tone = StatusTone.Error;
+                }
+                else
+                {
+                    tone = StatusTone.Info;
+                }
+
+                return (ShortName(profile), Detail(profile, ModelName(profile)), profile, false, tone);
             }
         }
         else if (!config.PreferFreeEngine && settings.TargetsLocalRuntime)
             return ("本机模型", settings.TextModel, null, false,
-                settings.TextIsConfigured ? StatusTone.Success : StatusTone.Warning);
+                settings.TextIsConfigured ? StatusTone.Info : StatusTone.Warning);
         var allowed = shell.FreeEngineConsent == FreeEngineConsent.Allowed && settings.NetworkEnabled && !settings.SafeDevMode;
         var selected = config.PreferFreeEngine || allowed;
-        return (selected ? FreeName(shell.FreeEngineProvider) : "选择模型",
-            selected ? FreeDetail(shell.FreeEngineProvider) : "选择文字模型；不会自动提交请求。",
-            null, selected, allowed ? StatusTone.Success : StatusTone.Warning);
+        if (!selected || !allowed)
+        {
+            return ("选择模型", "选择文字模型；不会自动提交请求。", null, false, StatusTone.Warning);
+        }
+
+        // For free engine, tone reflects probed reachability evidence.
+        var freeTone = StatusTone.Info;
+        if (FreeTranslateService.HasHealthResultFor(shell.FreeEngineProvider))
+        {
+            var health = FreeTranslateService.LastHealthFor(shell.FreeEngineProvider);
+            freeTone = health.Ok ? StatusTone.Success : StatusTone.Warning;
+        }
+
+        return (FreeName(shell.FreeEngineProvider), FreeDetail(shell.FreeEngineProvider), null, true, freeTone);
     }
     internal static string ShortName(ProviderProfile profile) => profile.ResolvedExecutionKind switch
     {

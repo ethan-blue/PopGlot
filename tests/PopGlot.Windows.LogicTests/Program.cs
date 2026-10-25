@@ -375,6 +375,7 @@ internal static partial class Program
             ("no route at all keeps the add-engine CTA and never claims ready", UnconfiguredCtaShowsWithNoRoute),
             ("incomplete profiles never masquerade as configured", IncompleteProfilesKeepCtaVisible),
             ("a configured engine hides the guide and the footer shows its short name", ConfiguredEngineStateIsHonest),
+            ("footer route tone follows evidence lifecycle from untested to success to failure and change", FooterRouteToneFollowsEvidenceLifecycle),
             ("routing entry is unique to the footer switcher", RoutingEntryIsUniqueToFooterSwitcher),
             ("the CTA click lands inside the add-engine flow", CtaClickLandsInsideAddEngineFlow),
             ("the empty service list cannot cover the add-first-engine button", EmptyServiceListLeavesAddButtonClickable),
@@ -8710,6 +8711,80 @@ internal static partial class Program
                 True(!summary.Text.Contains("未检测") && !summary.Text.Contains("截图会发送到") &&
                     !summary.Text.Contains("本地 OCR"),
                     "the resident footer must not concatenate health/privacy notes");
+            }
+            finally
+            {
+                window.Close();
+            }
+        }
+        finally
+        {
+            ProfileManager.ResetForTests();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Health/Evidence honesty: the footer dot must NEVER show green without valid
+    /// health evidence. Untested is neutral (gray), tested-ok is green, tested-fail
+    /// is red, and configuration changes invalidate the evidence back to neutral.
+    /// </summary>
+    private static void FooterRouteToneFollowsEvidenceLifecycle()
+    {
+        var (section, dir) = NewIsolatedTranslateSection();
+        try
+        {
+            var profile = new ProviderProfile
+            {
+                Id = "p-evidence", Name = "证据引擎", SupportsText = true, TextModel = "gpt-4o",
+                ApiBaseUrl = "https://api.openai.com/v1", CredentialTarget = "PopGlot/provider/p-evidence",
+            };
+            var config = new CoreProductConfig
+            {
+                Profiles = [profile],
+                ActiveProfileId = profile.Id,
+            };
+            ProfileManager.Save(config);
+            ProfileManager.ApplyActiveToCore(config);
+            CredentialStore.SaveApiKey("sk-test-evidence", "PopGlot/provider/p-evidence");
+            ProfileManager.BumpRevision();
+
+            var history = new HistoryStore(Path.Combine(dir, "history.json"));
+            var window = new MainWindow(ShellSettings.Default, history, null);
+            try
+            {
+                // 1. Untested: merely configured, no health evidence -> tone is Info (gray, never green!)
+                window.RefreshEngineStatus();
+                var dot = (Border)window.FindName("EngineDot")!;
+                Equal(window.FindResource("TextSecondaryBrush"), dot.Background,
+                    "untested endpoint must have neutral tone, never green without evidence");
+
+                // 2. Success: valid matching test outcome -> tone is Success (green!)
+                var fingerprint = ProfileVerification.EvidenceFingerprint(profile, true);
+                profile.LastTestOutcome = "ok";
+                profile.LastTestedAtUtc = DateTime.UtcNow;
+                profile.LastTestFingerprint = fingerprint;
+                ProfileManager.Save(config);
+                ProfileManager.BumpRevision();
+                window.RefreshEngineStatus();
+                Equal(window.FindResource("SuccessBrush"), dot.Background,
+                    "verified working endpoint must turn green");
+
+                // 3. Failure: test failure outcome -> tone is Error (red!)
+                profile.LastTestOutcome = "endpoint";
+                ProfileManager.Save(config);
+                ProfileManager.BumpRevision();
+                window.RefreshEngineStatus();
+                Equal(window.FindResource("DangerBrush"), dot.Background,
+                    "failing endpoint must turn red");
+
+                // 4. Configuration-changed: modified endpoint invalidates fingerprint -> falls back to neutral
+                profile.TextModel = "gpt-4o-modified";
+                ProfileManager.Save(config);
+                ProfileManager.BumpRevision();
+                window.RefreshEngineStatus();
+                Equal(window.FindResource("TextSecondaryBrush"), dot.Background,
+                    "modified configuration invalidates evidence and falls back to neutral");
             }
             finally
             {
