@@ -744,6 +744,14 @@ public partial class MainWindow : Window
                 return (success, message);
             });
             SetStatus(ok ? "已切换" : error, ok ? StatusTone.Success : StatusTone.Error);
+            if (ok)
+            {
+                var text = TranslateSection.InputBox.Text?.Trim();
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    _ = TranslateSection.TranslateAsync();
+                }
+            }
         }
         catch (Exception exception)
         {
@@ -798,6 +806,14 @@ public partial class MainWindow : Window
                 return (success, message);
             });
             SetStatus(ok ? "已切换" : error, ok ? StatusTone.Success : StatusTone.Error);
+            if (ok)
+            {
+                var text = TranslateSection.InputBox.Text?.Trim();
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    _ = TranslateSection.TranslateAsync();
+                }
+            }
         }
         catch (Exception exception)
         {

@@ -1086,6 +1086,7 @@ public partial class QuickSearchWindow : Window
         {
             RefreshStyleSelector();
         }
+        // The switch takes effect on the next Enter query, preserving the active view.
     }
 
     internal void OpenSettings(string? page = null)

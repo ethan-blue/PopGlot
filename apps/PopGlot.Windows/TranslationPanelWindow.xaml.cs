@@ -1944,11 +1944,7 @@ public partial class TranslationPanelWindow : Window
     private async Task ChangeTextRouteAsync(Func<(bool Ok, string Error)> change)
     {
         if (_switchingRoute) return;
-        if (_gate.Stage is TranslationPanelStage.Streaming or TranslationPanelStage.Finalizing)
-        {
-            StatusText.Text = "翻译进行中，稍后切换";
-            return;
-        }
+        CancelOperation();
         _switchingRoute = true;
         if (RouteSelectorButton is not null) RouteSelectorButton.IsEnabled = false;
         StatusText.Text = "正在切换…";
@@ -1957,8 +1953,12 @@ public partial class TranslationPanelWindow : Window
             var result = await Task.Run(change);
             if (result.Ok)
             {
-                var hasText = !string.IsNullOrWhiteSpace(SourceInputBox.Text);
-                StatusText.Text = hasText ? "已切换模型（按 Enter 或 Ctrl+R 生效）" : "已切换模型";
+                StatusText.Text = "已切换模型";
+                var text = SourceInputBox.Text?.Trim();
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    _ = RetranslateCurrentTextAsync();
+                }
             }
             else
             {
@@ -2010,9 +2010,6 @@ public partial class TranslationPanelWindow : Window
 
     private async Task ChooseStyleAsync(PromptTemplateDto template)
     {
-        // Optimistic label; repainted from the authoritative state if the
-        // persist fails. Nothing is re-translated and nothing in flight is
-        // cancelled — the switch lands with the next request only.
         StyleSelectorLabel.Text = TranslationStyleMenu.ShortLabel(template);
         var applied = await TranslationStyleMenu.SwitchActiveTemplateAsync(
             template.Id,
@@ -2021,6 +2018,24 @@ public partial class TranslationPanelWindow : Window
         {
             RefreshStyleSelector();
         }
+        else
+        {
+            var text = SourceInputBox.Text?.Trim();
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                _ = RetranslateCurrentTextAsync();
+            }
+        }
+    }
+
+    private async Task RetranslateCurrentTextAsync()
+    {
+        var text = SourceInputBox.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(text)) return;
+        _screenshot = null;
+        _retry = (token, ep) => TranslateTextAsync(text, token, ep);
+        var styleNotice = NotifyStyleBeforeTranslate();
+        await RunOperationAsync((cancellation, ep) => TranslateTextAsync(text, cancellation, ep), styleNotice);
     }
 
     /// <summary>

@@ -969,7 +969,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         }
     }
 
-    private async Task TranslateAsync()
+    internal async Task TranslateAsync()
     {
         if (_coordinator is null) return;
         SyncLanguagePair();
@@ -1621,9 +1621,6 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
     private async Task ChooseStyleAsync(PromptTemplateDto template)
     {
-        // Optimistic label; reverted from the authoritative state if the
-        // persist fails. Nothing is re-translated and nothing in flight is
-        // cancelled — the switch lands with the next request only.
         StyleSelectorLabel.Text = TranslationStyleMenu.ShortLabel(template);
         var applied = await TranslationStyleMenu.SwitchActiveTemplateAsync(
             template.Id,
@@ -1631,6 +1628,14 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         if (!applied)
         {
             RefreshStyleSelector();
+        }
+        else
+        {
+            var text = TranslateInput.Text?.Trim();
+            if (!string.IsNullOrWhiteSpace(text) && _currentState.Phase is TranslateUiPhase.Idle or TranslateUiPhase.Completed or TranslateUiPhase.Partial)
+            {
+                _ = TranslateAsync();
+            }
         }
     }
 
