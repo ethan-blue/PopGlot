@@ -8914,24 +8914,30 @@ internal static partial class Program
         CancellationToken tokenB = default;
         int streamACalls = 0;
         int streamBCalls = 0;
+        string? modelAtStreamA = null;
+        string? modelAtStreamB = null;
         TranslationStreamBuffer? bufferA = null;
         TranslationStreamBuffer? bufferB = null;
 
         executor.OnStreamText = (key, source, srcLang, tgtLang, sessionId, epoch, cancellationToken) =>
         {
-            if (streamACalls == 0)
+            // The fixture is driven by the route actually resolved for THIS
+            // request, never by call order: a retranslation that still used
+            // engine A would label itself A and fail the B assertions below.
+            var resolvedProfile = ProfileManager.ResolveRoutes().Text!.Profile;
+            if (resolvedProfile.Id == profileA.Id)
             {
                 streamACalls++;
+                modelAtStreamA = resolvedProfile.TextModel;
                 tokenA = cancellationToken;
                 bufferA = new TranslationStreamBuffer(sessionId, sessionId, epoch);
                 bufferA.TryAppend("Stream A initial text");
                 streamAStarted.TrySetResult(true);
                 return new TranslationStreamSession(bufferA, tcsA.Task);
             }
-            else
-            {
-                streamBCalls++;
-                tokenB = cancellationToken;
+            streamBCalls++;
+            modelAtStreamB = resolvedProfile.TextModel;
+            tokenB = cancellationToken;
                 bufferB = new TranslationStreamBuffer(sessionId, sessionId, epoch);
                 bufferB.TryAppend("Stream B result text");
                 bufferB.Complete();
@@ -8940,7 +8946,6 @@ internal static partial class Program
                     new ProviderDiagnostics("p-b", ProviderType.OpenAiCompatible, "https://api.example.com/v1", 1, 200, 100)));
                 streamBStarted.TrySetResult(true);
                 return new TranslationStreamSession(bufferB, tcsB.Task);
-            }
         };
 
         var panel = new TranslationPanelWindow(
@@ -8968,9 +8973,16 @@ internal static partial class Program
             True(panel.RouteSelectorButton.IsEnabled, "RouteSelectorButton must remain enabled during streaming");
             True(panel.StreamTextBox.Text.Contains("Stream A initial text"), "panel must render initial text from Stream A");
 
-            // Switch to profile B via route menu
-            var menu = panel.BuildTextRouteMenu();
-            var itemB = menu.Items.OfType<MenuItem>().Single(item => item.Tag is string tag && tag == profileB.Id);
+            // Switch to profile B through the REAL selector button: a click
+            // must open the switching menu in place, and choosing the item
+            // from that menu is the exact user path.
+            panel.RouteSelectorButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            FlushDispatcher(2);
+            var menu = (ContextMenu?)typeof(TranslationPanelWindow)
+                .GetField("_routeMenu", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(panel);
+            True(menu is { IsOpen: true }, "clicking the route button must open the switching menu");
+            var itemB = menu!.Items.OfType<MenuItem>().Single(item => item.Tag is string tag && tag == profileB.Id);
             itemB.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             FlushDispatcher(2);
 
@@ -8980,7 +8992,15 @@ internal static partial class Program
             // Stream B must start
             SpinUntil(() => streamBStarted.Task.IsCompleted, "stream B must start");
             FlushDispatcher(2);
+            Equal(1, streamACalls, "stream A must have started exactly once");
             Equal(1, streamBCalls, "Stream B must start exactly once");
+            // The two streams must have carried DIFFERENT request identities,
+            // resolved from the selected profile at each request's start —
+            // proving the retranslation really used engine B, not A.
+            Equal("model-a", modelAtStreamA, "the first stream must run on engine A's model");
+            Equal("model-b", modelAtStreamB, "the retranslation must run on engine B's model");
+            Equal("model-b", CoreBridge.GetSettings().TextModel,
+                "the core settings must already point at engine B's model for the next request");
 
             // Late stream A callbacks must not repaint
             bufferA!.TryAppend("LATE DELTA FROM STREAM A SHOULD NEVER APPEAR");
