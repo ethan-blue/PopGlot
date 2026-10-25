@@ -177,7 +177,7 @@
                     <TextBox x:Name="SourceInputBox" Grid.Row="0" Style="{StaticResource FlatTextBox}"
                              FontSize="14" TextWrapping="Wrap" AcceptsReturn="True"
                              MinHeight="36" MaxHeight="86" VerticalScrollBarVisibility="Auto"
-                             local:Ui.Placeholder="输入文本，Enter 翻译，Shift+Enter 换行"
+                             local:Ui.Placeholder="输入文本，Ctrl+Enter 翻译，Enter 换行"
                              AutomationProperties.Name="翻译原文输入框"
                              TextChanged="SourceInputBox_TextChanged"
                              KeyDown="SourceInputBox_KeyDown" />
@@ -465,28 +465,22 @@
                 </Grid>
 
                 <!-- Footer Status Bar (Row 3, pinned to the bottom) -->
+                <!-- Footer Status Bar: natural flowing alignment without giant gaps -->
                 <Grid Grid.Row="3" Margin="2,8,2,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <Grid VerticalAlignment="Center">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <Border x:Name="StatusDot" Width="6" Height="6" CornerRadius="3"
                                 Background="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center" />
-                        <TextBlock x:Name="StatusText" Grid.Column="1" Style="{StaticResource Metadata}" VerticalAlignment="Center"
+                        <TextBlock x:Name="StatusText" Style="{StaticResource Metadata}" VerticalAlignment="Center"
                                    Margin="6,0,0,0"
                                    TextTrimming="CharacterEllipsis"
                                    ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                    AutomationProperties.LiveSetting="Polite"
                                    AutomationProperties.Name="翻译状态" />
-                    </Grid>
-                    <TextBlock x:Name="RouteText" Grid.Column="1" Style="{StaticResource Metadata}" VerticalAlignment="Center"
-                               Margin="12,0,0,0" MaxWidth="280" TextTrimming="CharacterEllipsis"
-                               ToolTip="{Binding RelativeSource={RelativeSource Self}, Path=Text}" />
+                        <TextBlock x:Name="RouteText" Style="{StaticResource Metadata}" VerticalAlignment="Center"
+                                   Margin="8,0,0,0" MaxWidth="360" TextTrimming="CharacterEllipsis"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   ToolTip="{Binding RelativeSource={RelativeSource Self}, Path=Text}" />
+                    </StackPanel>
                 </Grid>
             </Grid>
         </Grid>

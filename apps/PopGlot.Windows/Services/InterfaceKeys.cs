@@ -121,8 +121,8 @@ internal static class InterfaceKeys
         Hint("ResultSpeakBtn", speechAction, SpeakHotkey);
         Hint("SpeakButton", speechAction, SpeakHotkey);
         var translateHint = TranslateHotkey.IsValid
-            ? $"Enter 翻译 · Shift+Enter 换行 · {TranslateHotkey.DisplayName} 翻译"
-            : "Enter 翻译 · Shift+Enter 换行";
+            ? $"{TranslateHotkey.DisplayName} 翻译 · Enter 换行"
+            : "Ctrl+Enter 翻译 · Enter 换行";
         foreach (var name in new[] { "TranslateInput", "SourceInputBox", "SearchBox" })
         {
             if (scope.FindName(name) is FrameworkElement editor)

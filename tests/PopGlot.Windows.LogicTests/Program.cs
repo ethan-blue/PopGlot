@@ -380,7 +380,8 @@ internal static partial class Program
             ("the CTA click lands inside the add-engine flow", CtaClickLandsInsideAddEngineFlow),
             ("the empty service list cannot cover the add-first-engine button", EmptyServiceListLeavesAddButtonClickable),
             ("theme swatch previews even when the saved value already matches", ThemeSwatchPreviewsEvenWhenTheSavedValueAlreadyMatches),
-            ("summary reading does not cancel or cover the translation", SummaryReadingDoesNotCancelOrCoverTheTranslation));
+            ("summary reading does not cancel or cover the translation", SummaryReadingDoesNotCancelOrCoverTheTranslation),
+            ("in-flight route switch cancels old stream and starts new one without late repaints", InFlightRouteSwitchCancelsOldStreamAndStartsNewOne));
         await RunStaAsync("summary late arrival does not overwrite new input or language", SummaryLateArrivalDoesNotOverwriteCurrentSection);
         await RunStaAsync("summary failure isolates and preserves existing translation", SummaryFailurePreservesTranslation);
         await RunStaAsync("connection test discards results after draft edits", ConnectionTestDiscardsStaleResult);
@@ -8862,6 +8863,144 @@ internal static partial class Program
         }
     }
 
+    /// <summary>
+    /// In-flight route switch contract:
+    /// When Stream A is running, the model/route button remains enabled and clickable.
+    /// Clicking to switch from A to B:
+    ///   1. Immediately cancels Stream A's cancellation token;
+    ///   2. Starts Stream B exactly once;
+    ///   3. Any late delta or terminal callbacks from Stream A cannot repaint the UI (epoch-fenced).
+    /// </summary>
+    private static void InFlightRouteSwitchCancelsOldStreamAndStartsNewOne()
+    {
+        ProfileManager.ResetForTests();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-inflight-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        ProfileManager.ConfigPathOverride = Path.Combine(dir, "product-config.json");
+        CoreBridge.Initialize();
+        EnsureApplication();
+
+        var profileA = new ProviderProfile
+        {
+            Id = "p-a", Name = "Engine A", SupportsText = true, TextModel = "model-a",
+            ApiBaseUrl = "https://api.example.com/v1", CredentialTarget = "PopGlot/provider/p-a",
+        };
+        var profileB = new ProviderProfile
+        {
+            Id = "p-b", Name = "Engine B", SupportsText = true, TextModel = "model-b",
+            ApiBaseUrl = "https://api.example.com/v1", CredentialTarget = "PopGlot/provider/p-b",
+        };
+        var config = new CoreProductConfig
+        {
+            Profiles = [profileA, profileB],
+            ActiveProfileId = profileA.Id,
+        };
+        ProfileManager.Save(config);
+        ProfileManager.ApplyActiveToCore(config);
+        CredentialStore.SaveApiKey("sk-test-key-a", "PopGlot/provider/p-a");
+        CredentialStore.SaveApiKey("sk-test-key-b", "PopGlot/provider/p-b");
+        ProfileManager.BumpRevision();
+
+        var history = new HistoryStore(Path.Combine(dir, "history.json"));
+        var vocab = new VocabularyStore(Path.Combine(dir, "vocabulary.json"));
+        var executor = new FakeTranslationExecutor();
+        var coordinator = new TranslationCoordinator(history, vocab, executor: executor);
+
+        var tcsA = new TaskCompletionSource<TranslationResponse>();
+        var tcsB = new TaskCompletionSource<TranslationResponse>();
+        var streamAStarted = new TaskCompletionSource<bool>();
+        var streamBStarted = new TaskCompletionSource<bool>();
+        CancellationToken tokenA = default;
+        CancellationToken tokenB = default;
+        int streamACalls = 0;
+        int streamBCalls = 0;
+        TranslationStreamBuffer? bufferA = null;
+        TranslationStreamBuffer? bufferB = null;
+
+        executor.OnStreamText = (key, source, srcLang, tgtLang, sessionId, epoch, cancellationToken) =>
+        {
+            if (streamACalls == 0)
+            {
+                streamACalls++;
+                tokenA = cancellationToken;
+                bufferA = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+                bufferA.TryAppend("Stream A initial text");
+                streamAStarted.TrySetResult(true);
+                return new TranslationStreamSession(bufferA, tcsA.Task);
+            }
+            else
+            {
+                streamBCalls++;
+                tokenB = cancellationToken;
+                bufferB = new TranslationStreamBuffer(sessionId, sessionId, epoch);
+                bufferB.TryAppend("Stream B result text");
+                bufferB.Complete();
+                tcsB.TrySetResult(new TranslationResponse(
+                    new TranslationResult("Stream B final text", "", "", [], []),
+                    new ProviderDiagnostics("p-b", ProviderType.OpenAiCompatible, "https://api.example.com/v1", 1, 200, 100)));
+                streamBStarted.TrySetResult(true);
+                return new TranslationStreamSession(bufferB, tcsB.Task);
+            }
+        };
+
+        var panel = new TranslationPanelWindow(
+            new Rect(100, 100, 20, 20),
+            history,
+            () => ShellSettings.Default,
+            null, null, vocab,
+            coordinator: coordinator)
+        {
+            ForceClose = true,
+        };
+
+        try
+        {
+            panel.Show();
+            FlushDispatcher(2);
+            panel.SourceInputBox.Text = "Hello world";
+
+            panel.RetryButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            FlushDispatcher(2);
+            SpinUntil(() => streamAStarted.Task.IsCompleted, "stream A must start");
+            FlushDispatcher(2);
+
+            // Assert: RouteSelectorButton is NOT disabled during streaming
+            True(panel.RouteSelectorButton.IsEnabled, "RouteSelectorButton must remain enabled during streaming");
+            True(panel.StreamTextBox.Text.Contains("Stream A initial text"), "panel must render initial text from Stream A");
+
+            // Switch to profile B via route menu
+            var menu = panel.BuildTextRouteMenu();
+            var itemB = menu.Items.OfType<MenuItem>().Single(item => item.Tag is string tag && tag == profileB.Id);
+            itemB.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            FlushDispatcher(2);
+
+            // Stream A must cancel immediately
+            True(tokenA.IsCancellationRequested, "Stream A must be cancelled immediately when switching route");
+
+            // Stream B must start
+            SpinUntil(() => streamBStarted.Task.IsCompleted, "stream B must start");
+            FlushDispatcher(2);
+            Equal(1, streamBCalls, "Stream B must start exactly once");
+
+            // Late stream A callbacks must not repaint
+            bufferA!.TryAppend("LATE DELTA FROM STREAM A SHOULD NEVER APPEAR");
+            tcsA.TrySetResult(new TranslationResponse(
+                new TranslationResult("LATE FINAL A", "", "", [], []),
+                new ProviderDiagnostics("p-a", ProviderType.OpenAiCompatible, "https://api.example.com/v1", 1, 200, 100)));
+            FlushDispatcher(3);
+
+            True(!panel.StreamTextBox.Text.Contains("LATE DELTA"), "late delta from stream A must be dropped");
+            True(!panel.StreamTextBox.Text.Contains("LATE FINAL"), "late final from stream A must be dropped");
+            True(panel.StreamTextBox.Text.Contains("Stream B"), "panel must display Stream B text");
+        }
+        finally
+        {
+            panel.Close();
+            ProfileManager.ResetForTests();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     /// <summary>T5: the footer switcher is the ONLY routing entry.</summary>
     private static void RoutingEntryIsUniqueToFooterSwitcher()
     {
@@ -13571,7 +13710,7 @@ internal static partial class Program
                 .Invoke(section, new object[] { section.InputBox, normalArgs });
             System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
                 System.Windows.Threading.DispatcherPriority.Background, new Action(() => { }));
-            True((bool)normalArgs.Handled, "a normal Enter must be handled and submit even with IME enabled");
+            True(!(bool)normalArgs.Handled, "a plain Enter must stay unhandled so the editor inserts a newline");
         }
         finally
         {

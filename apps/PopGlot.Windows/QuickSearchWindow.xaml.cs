@@ -740,7 +740,7 @@ public partial class QuickSearchWindow : Window
         // 动态快捷键提示：只承诺当前阶段真正可用的操作（流式仅 Esc 取消、
         // 完成含复制/朗读/收藏、partial 只含复制）。
         AutomationProperties.SetHelpText(SearchBox, _state.HintsText);
-        RouteSelectorButton.IsEnabled = !_switchingRoute && _state.Stage is not (QuickSearchUiStage.Streaming or QuickSearchUiStage.Finalizing);
+        RouteSelectorButton.IsEnabled = !_switchingRoute;
 
         if (_state.Stage == QuickSearchUiStage.Failed || _state.PendingNotice is not null && _state.IsPendingNoticeError)
         {
@@ -879,8 +879,7 @@ public partial class QuickSearchWindow : Window
             RouteSelectorLabel.Text = "配置不可用";
             RouteSelectorButton.ToolTip = "无法读取引擎配置，请打开设置检查。";
         }
-        RouteSelectorButton.IsEnabled = !_switchingRoute &&
-            _state.Stage is not (QuickSearchUiStage.Streaming or QuickSearchUiStage.Finalizing);
+        RouteSelectorButton.IsEnabled = !_switchingRoute;
         RefreshStyleSelector();
     }
 

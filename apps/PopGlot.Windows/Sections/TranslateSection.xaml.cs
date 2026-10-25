@@ -435,13 +435,13 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     {
         if (compact)
         {
-            TranslateShortcutHint.Text = "↵ 翻译 · ⇧↵ 换行";
-            TranslateShortcutHint.ToolTip = "Enter 翻译 · Shift+Enter 换行";
+            TranslateShortcutHint.Text = "Ctrl+↵ 翻译 · ↵ 换行";
+            TranslateShortcutHint.ToolTip = "Ctrl+Enter 翻译 · Enter 换行";
             TranslateStatus.MaxWidth = 160;
         }
         else
         {
-            TranslateShortcutHint.Text = "Enter 翻译 · Shift+Enter 换行";
+            TranslateShortcutHint.Text = "Ctrl+Enter 翻译 · Enter 换行";
             TranslateShortcutHint.ToolTip = null;
             TranslateStatus.MaxWidth = 260;
         }
@@ -857,7 +857,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
     private async void TranslateInput_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.None)
+        if (e.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.Control)
         {
             return;
         }
@@ -1632,7 +1632,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         else
         {
             var text = TranslateInput.Text?.Trim();
-            if (!string.IsNullOrWhiteSpace(text) && _currentState.Phase is TranslateUiPhase.Idle or TranslateUiPhase.Completed or TranslateUiPhase.Partial)
+            if (!string.IsNullOrWhiteSpace(text))
             {
                 _ = TranslateAsync();
             }

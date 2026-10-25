@@ -57,7 +57,7 @@
 
             <!-- 0.1.30：侧栏导航已标明「翻译」，页内不再重复大标题。 -->
             <TextBlock x:Name="TranslateShortcutHint" Grid.Column="0"
-                       Text="Enter 翻译 · Shift+Enter 换行"
+                       Text="Ctrl+Enter 翻译 · Enter 换行"
                        Style="{StaticResource Metadata}"
                        Foreground="{DynamicResource TextTertiaryBrush}"
                        HorizontalAlignment="Left" VerticalAlignment="Center"
@@ -191,7 +191,7 @@
 
                              AutomationProperties.Name="翻译原文输入框"
 
-                             AutomationProperties.HelpText="Enter 翻译 · Shift+Enter 换行"
+                             AutomationProperties.HelpText="Ctrl+Enter 翻译 · Enter 换行"
 
                              local:Ui.Placeholder="输入要翻译的文本…"
 

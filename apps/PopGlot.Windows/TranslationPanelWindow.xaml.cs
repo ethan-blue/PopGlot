@@ -108,14 +108,15 @@ public partial class TranslationPanelWindow : Window
         Func<ShellSettings> shellSettings,
         Action<string?>? openSettings = null,
         Action<string, string?, string?, string?, TranslationSessionState>? openInMain = null,
-        VocabularyStore? vocabulary = null)
+        VocabularyStore? vocabulary = null,
+        TranslationCoordinator? coordinator = null)
     {
         _anchorPixels = anchorPixels;
         _vocabulary = vocabulary;
         _shellSettings = shellSettings;
         _openSettings = openSettings;
         _openInMain = openInMain;
-        _coordinator = new TranslationCoordinator(history, vocabulary);
+        _coordinator = coordinator ?? new TranslationCoordinator(history, vocabulary);
 
         InitializeComponent();
         InterfaceKeys.RefreshHints(this);
@@ -828,7 +829,7 @@ public partial class TranslationPanelWindow : Window
             return;
         }
 
-        SourceInputBox.SetValue(Ui.PlaceholderProperty, "输入文本，Enter 翻译，Shift+Enter 换行");
+        SourceInputBox.SetValue(Ui.PlaceholderProperty, "输入文本，Ctrl+Enter 翻译，Enter 换行");
         var recognized = string.IsNullOrWhiteSpace(session.Transcription)
             ? (!string.IsNullOrWhiteSpace(session.SourceText) ? session.SourceText : "（模型未回传识别文本）")
             : session.Transcription;
@@ -1157,10 +1158,10 @@ public partial class TranslationPanelWindow : Window
 
     private void RenderIdle()
     {
-        StatusText.Text = "输入后按 Enter 翻译";
+        StatusText.Text = "输入后按 Ctrl+Enter 翻译";
         Progress.Visibility = Visibility.Collapsed;
         // 空闲态的低对比一次性快捷键提示：进入准备/流式后立即让位给真实状态。
-        SetRouteText("Enter 翻译 · Shift+Enter 换行 · Ctrl+R 重试 · Esc 关闭", idleHint: true);
+        SetRouteText("Ctrl+Enter 翻译 · Enter 换行 · Ctrl+R 重试 · Esc 关闭", idleHint: true);
         StatusDot.SetResourceReference(Border.BackgroundProperty, "TextTertiaryBrush");
         ResultSkeleton.Visibility = Visibility.Collapsed;
         TranslationRichBox.Visibility = Visibility.Collapsed;
@@ -1897,8 +1898,7 @@ public partial class TranslationPanelWindow : Window
             RouteSelectorLabel.Text = "配置不可用";
             RouteSelectorButton.ToolTip = "无法读取引擎配置，请打开设置检查。";
         }
-        RouteSelectorButton.IsEnabled = !_switchingRoute &&
-            _gate.Stage is not (TranslationPanelStage.Streaming or TranslationPanelStage.Finalizing);
+        RouteSelectorButton.IsEnabled = !_switchingRoute;
     }
 
     internal System.Windows.Controls.ContextMenu BuildTextRouteMenu() =>
@@ -2075,12 +2075,12 @@ public partial class TranslationPanelWindow : Window
         _sourceKind = "输入";
         SourceKindLabel.Text = "· 输入";
         RenderIdle();
-        StatusText.Text = "原文已修改，按 Enter 翻译";
+        StatusText.Text = "原文已修改，按 Ctrl+Enter 翻译";
     }
 
     private async void SourceInputBox_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.None)
+        if (e.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.Control)
         {
             return;
         }
@@ -2115,7 +2115,7 @@ public partial class TranslationPanelWindow : Window
         }
         PersistLanguagePair();
         ClearResultForLanguageChange();
-        StatusText.Text = "语言已更新，按 Enter 翻译";
+        StatusText.Text = "语言已更新，按 Ctrl+Enter 翻译";
     }
 
     private void SwapLangButton_Click(object sender, RoutedEventArgs e)
@@ -2157,7 +2157,7 @@ public partial class TranslationPanelWindow : Window
         PersistLanguagePair();
 
         ClearResultForLanguageChange();
-        StatusText.Text = "语言已交换，按 Enter 翻译";
+        StatusText.Text = "语言已交换，按 Ctrl+Enter 翻译";
     }
 
     private void OnLanguagePairChanged(object? sender, EventArgs e)
@@ -2182,7 +2182,7 @@ public partial class TranslationPanelWindow : Window
         }
         finally { _languageChangeSuspended = false; }
         ClearResultForLanguageChange();
-        StatusText.Text = "语言已同步，按 Enter 翻译";
+        StatusText.Text = "语言已同步，按 Ctrl+Enter 翻译";
     }
 
     private void ClearResultForLanguageChange()
