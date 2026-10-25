@@ -29,8 +29,8 @@
                     </DataTemplate>
                 </Setter.Value>
             </Setter>
-            <Setter Property="AutomationProperties.HelpText" Value="点击后按下组合键，Esc 取消录制" />
-            <Setter Property="ToolTip" Value="点击后按下组合键，Esc 取消录制" />
+            <Setter Property="AutomationProperties.HelpText" Value="点击后按下组合键；Esc 取消，退格键停用该快捷键" />
+            <Setter Property="ToolTip" Value="点击后按下组合键；Esc 取消，退格键停用该快捷键" />
         </Style>
     </UserControl.Resources>
     <StackPanel>

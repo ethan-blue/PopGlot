@@ -71,6 +71,11 @@ internal static class InterfaceKeys
 
     private static bool Matches(HotkeyBinding binding, Key key, ModifierKeys modifiers)
     {
+        if (!binding.IsValid)
+        {
+            // Unset bindings never dispatch; the action stays on its UI entry.
+            return false;
+        }
         uint actual = 0;
         if ((modifiers & ModifierKeys.Control) != 0) actual |= HotkeyBinding.ModControl;
         if ((modifiers & ModifierKeys.Alt) != 0) actual |= HotkeyBinding.ModAlt;
@@ -85,16 +90,28 @@ internal static class InterfaceKeys
         {
             if (scope.FindName(name) is FrameworkElement element)
             {
-                element.ToolTip = $"{text} ({binding.DisplayName})";
-                System.Windows.Automation.AutomationProperties.SetAcceleratorKey(element, binding.DisplayName);
+                // An unset binding names no key: the plain label stays honest
+                // instead of advertising "未设置" as a combination.
+                if (binding.IsValid)
+                {
+                    element.ToolTip = $"{text} ({binding.DisplayName})";
+                    System.Windows.Automation.AutomationProperties.SetAcceleratorKey(element, binding.DisplayName);
+                }
+                else
+                {
+                    element.ToolTip = text;
+                }
             }
         }
         Hint("NavTranslate", "工作台", WorkbenchHotkey);
         Hint("NavLibrary", "资料库", LibraryHotkey);
         Hint("NavSettingsButton", "设置", SettingsHotkey);
         Hint("SettingsButton", "设置", SettingsHotkey);
-        Hint("RouteSelectorButton", "切换模型", ModelHotkey);
-        Hint("StyleSelectorButton", "切换风格", StyleHotkey);
+        // Route/style selectors own richer tooltips (route detail, current
+        // style) that already embed the hotkey; only the accelerator key is
+        // set here so two writers never fight over one ToolTip.
+        HintAcceleratorOnly(scope, "RouteSelectorButton", ModelHotkey);
+        HintAcceleratorOnly(scope, "StyleSelectorButton", StyleHotkey);
         Hint("SwapLangButton", "互换语言", SwapHotkey);
         Hint("TranslateSwapButton", "互换语言", SwapHotkey);
         Hint("LangBadgeButton", "互换语言", SwapHotkey);
@@ -103,11 +120,21 @@ internal static class InterfaceKeys
         Hint("TranslateResultSpeakButton", speechAction, SpeakHotkey);
         Hint("ResultSpeakBtn", speechAction, SpeakHotkey);
         Hint("SpeakButton", speechAction, SpeakHotkey);
+        var translateHint = TranslateHotkey.IsValid
+            ? $"Enter 翻译 · Shift+Enter 换行 · {TranslateHotkey.DisplayName} 翻译"
+            : "Enter 翻译 · Shift+Enter 换行";
         foreach (var name in new[] { "TranslateInput", "SourceInputBox", "SearchBox" })
         {
             if (scope.FindName(name) is FrameworkElement editor)
-                System.Windows.Automation.AutomationProperties.SetHelpText(editor,
-                    $"Enter 翻译 · Shift+Enter 换行 · {TranslateHotkey.DisplayName} 翻译");
+                System.Windows.Automation.AutomationProperties.SetHelpText(editor, translateHint);
+        }
+    }
+
+    private static void HintAcceleratorOnly(FrameworkElement scope, string name, HotkeyBinding binding)
+    {
+        if (binding.IsValid && scope.FindName(name) is FrameworkElement element)
+        {
+            System.Windows.Automation.AutomationProperties.SetAcceleratorKey(element, binding.DisplayName);
         }
     }
 }

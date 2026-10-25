@@ -451,6 +451,8 @@ internal static partial class Program
             ("settings maximize button announces the state it will switch to", WaveRegressionTests.SettingsMaximizeAutomationNameFollowsWindowState),
             ("core reading controls carry exact automation names", WaveRegressionTests.CoreReadingControlsCarryExactAutomationNames),
             ("shortcut recording Escape preserves the saved binding", WaveRegressionTests.HotkeyRecordingEscapePreservesBinding),
+            ("backspace unbinds a shortcut and says so", WaveRegressionTests.HotkeyBackspaceUnbindsShortcut),
+            ("style click cycles to the next enabled template", WaveRegressionTests.StyleClickCyclesToNextEnabledTemplate),
             ("help window renders packaged offline articles and honest fallbacks", WaveRegressionTests.HelpWindowRendersPackagedArticles));
 
         // E3 follow-ups: high-contrast seam and PerMonitorV2 DPI robustness.
@@ -885,6 +887,36 @@ internal static partial class Program
 
         var fallback = HotkeyBinding.Parse("NotAKey", HotkeyBinding.ScreenshotDefault);
         Equal(HotkeyBinding.ScreenshotDefault, fallback);
+        var unset = HotkeyBinding.Parse("none", HotkeyBinding.SelectionDefault);
+        Equal(HotkeyBinding.UnsetBinding, unset);
+        True(unset.IsUnset && !unset.IsValid, "the literal none parses to the unset binding");
+        Equal("未设置", unset.DisplayName);
+        Equal("none", unset.Serialize());
+        Equal(HotkeyBinding.UnsetBinding, HotkeyBinding.Parse("未设置", HotkeyBinding.SelectionDefault));
+
+        var unbound = ShellSettings.Default with
+        {
+            SelectionHotkey = HotkeyBinding.UnsetBinding,
+            InterfaceStyleHotkey = HotkeyBinding.UnsetBinding,
+        };
+        True(!unbound.Hotkeys.ContainsKey(HotkeyAction.TranslateSelection),
+            "an unset binding must not reach the registration set");
+        True(unbound.ValidateHotkeys() is null, "leaving a shortcut unset is a valid choice, not a conflict");
+        var unsetPath = Path.Combine(Path.GetTempPath(), $"popglot-shell-none-{Guid.NewGuid():N}.json");
+        try
+        {
+            ShellSettingsStore.Save(unbound, unsetPath);
+            True(File.ReadAllText(unsetPath).Contains("\"SelectionHotkey\": \"none\""),
+                "unset persists as the literal none");
+            var reloaded = ShellSettingsStore.Load(unsetPath);
+            True(reloaded.SelectionHotkey.IsUnset && reloaded.InterfaceStyleHotkey.IsUnset,
+                "unset survives save and reload");
+        }
+        finally
+        {
+            File.Delete(unsetPath);
+        }
+
     }
 
     private static void HotkeyDigitsParseCorrectly()
@@ -7479,12 +7511,6 @@ internal static partial class Program
         Equal(ServicesSection.EvidenceBadgeTier.Unknown, tierUnknown);
         Equal("未声明", ServicesSection.GetEvidenceBadgeText(tierUnknown));
 
-        var (unknownText, unknownBg, unknownFg, unknownBorder) = ServicesSection.ResolveEvidenceBadgeVisualKeys(
-            RecommendationEvidenceSource.FallbackUnknown, false);
-        Equal("未声明", unknownText);
-        Equal("SurfaceMutedBrush", unknownBg);
-        Equal("TextTertiaryBrush", unknownFg);
-        Equal("BorderSubtleBrush", unknownBorder);
 
         // 5. Unknown capability / current model preservation without catalog
         var uncataloguedModel = new ModelDescriptor("custom-enterprise-model", CapabilityState.Unknown, CapabilityState.Unknown, "Fallback");

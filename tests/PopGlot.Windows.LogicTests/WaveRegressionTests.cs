@@ -2646,6 +2646,60 @@ internal static class WaveRegressionTests
         finally { host.Close(); }
     }
 
+    public static void HotkeyBackspaceUnbindsShortcut()
+    {
+        EnsureApp();
+        var section = new ShortcutsSection();
+        var recorder = section.SelectionHotkey;
+        recorder.BindingValue = new HotkeyBinding(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x57);
+        var host = new Window
+        {
+            Content = section, Width = 640, Height = 460,
+            ShowActivated = false, ShowInTaskbar = false, WindowStyle = WindowStyle.None,
+        };
+        try
+        {
+            host.Show();
+            PumpOnce();
+            typeof(HotkeyRecorder).GetMethod("OnClick", NonPublicInstance)!.Invoke(recorder, null);
+            True(recorder.IsRecording, "click starts recording");
+            var source = PresentationSource.FromDependencyObject(recorder)
+                ?? throw new InvalidOperationException("shown recorder requires a presentation source");
+            var backspace = new KeyEventArgs(Keyboard.PrimaryDevice!, source, 0, Key.Back)
+            {
+                RoutedEvent = Keyboard.PreviewKeyDownEvent,
+            };
+            recorder.RaiseEvent(backspace);
+            True(backspace.Handled && !recorder.IsRecording, "Backspace stops recording");
+            Equal(HotkeyBinding.UnsetBinding, recorder.BindingValue, "Backspace must unbind the action");
+            Equal("未设置", (string)recorder.Content!, "the recorder must say the shortcut is unset");
+        }
+        finally { host.Close(); }
+    }
+
+    public static void StyleClickCyclesToNextEnabledTemplate()
+    {
+        var ordered = CoreBridge.ListPromptTemplates().Where(t => t.Enabled).ToList();
+        True(ordered.Count >= 2, "the isolated core must expose the built-in styles");
+        try
+        {
+            PumpUntil(CoreBridge.SetActivePromptTemplateAsync(ordered[0].Id));
+            var next = TranslationStyleMenu.NextTemplate();
+            True(next is not null, "a click must always find the next enabled style");
+            Equal(ordered[1].Id, next!.Id, "one click advances to the next enabled style in store order");
+
+            PumpUntil(CoreBridge.SetActivePromptTemplateAsync(ordered[^1].Id));
+            var wrapped = TranslationStyleMenu.NextTemplate();
+            True(wrapped is not null, "the last style must still have a click target");
+            Equal(ordered[0].Id, wrapped!.Id, "the last enabled style wraps back to the first");
+        }
+        finally
+        {
+            PumpUntil(CoreBridge.SetActivePromptTemplateAsync(null));
+        }
+    }
+
+
     /// <summary>
     /// While SPEAKING, the workbench speak icon's accent must be a live
     /// dynamic resource reference: switching the theme MID-SPEECH repaints the

@@ -562,7 +562,6 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         var dirty = HasEditorChanges(CaptureEditorState(), _editorBaseline);
         var dirtyChanged = _editorDirty != dirty;
         _editorDirty = dirty;
-        UpdateEditorDirtyBadge();
         if (_pendingTestFingerprint is not null)
         {
             var currentFingerprint = TryCurrentDraftFingerprint();
@@ -582,7 +581,6 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     {
         _editorBaseline = CaptureEditorState();
         _editorDirty = false;
-        UpdateEditorDirtyBadge();
         EditorDirtyChanged?.Invoke();
     }
 
@@ -666,9 +664,6 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         MarkEditorDirty();
         RefreshRecommendations();
     }
-
-    private void UpdateEditorDirtyBadge() =>
-        EditorDirtyBadge.Visibility = _editorDirty ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>
     /// Resolves an unsaved draft beside the top return navigation.
@@ -813,7 +808,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             SupportsTextCheckBox.IsChecked = !string.IsNullOrWhiteSpace(profile.TextModel);
             SupportsVisionCheckBox.IsChecked = !string.IsNullOrWhiteSpace(profile.VisionModel);
             AllowInsecureTlsCheckBox.IsChecked = profile.AllowInsecureTls;
-            UpdateEditorIdentity(profile.Name, profile.ProviderType, profile.ApiBaseUrl, profile.IsLocal);
+            UpdateEditorIdentity(profile.Name);
             CustomProtocolGroup.Visibility = Visibility.Visible;
             BaseUrlPanel.Visibility = Visibility.Visible;
             AdvancedGroup.Visibility = Visibility.Visible;
@@ -1367,24 +1362,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     // ================= Presets =================
 
-    private void UpdateEditorIdentity(
-        string? name, ProviderType providerType, string? baseUrl, bool isLocal)
+    private void UpdateEditorIdentity(string? name)
     {
-        var title = string.IsNullOrWhiteSpace(name) ? "新引擎" : name.Trim();
-        EditorProviderTitle.Text = title;
-        var protocol = providerType switch
-        {
-            ProviderType.AnthropicMessages => "Anthropic Messages",
-            ProviderType.GeminiGenerateContent => "Gemini generateContent",
-            ProviderType.OpenAiResponses => "OpenAI Responses",
-            _ => "OpenAI 兼容",
-        };
-        var host = Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri)
-            ? uri.Host
-            : (string.IsNullOrWhiteSpace(baseUrl) ? "等待填写地址" : baseUrl.Trim());
-        EditorProviderMeta.Text = isLocal
-            ? $"本地服务 · {host}"
-            : $"{protocol} · {host}";
+        EditorProviderTitle.Text = string.IsNullOrWhiteSpace(name) ? "新引擎" : name.Trim();
     }
 
     private void Preset_Click(object sender, RoutedEventArgs e)
@@ -1488,7 +1468,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         // 本地判定与保存后的 profile.IsLocal（IsLocalBaseUrl）同一口径，
         // 避免 Ollama/LiteLLM 这类本机预设在添加预览与重开编辑器之间
         // 「本地服务 / OpenAI 兼容」来回变。
-        UpdateEditorIdentity(ServiceNameTextBox.Text, type, baseUrl, ProviderSettings.IsLocalBaseUrl(baseUrl));
+        UpdateEditorIdentity(ServiceNameTextBox.Text);
         UpdateCredentialGating();
         RefreshRecommendations();
         if (_isAdding)
@@ -1756,47 +1736,16 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             textResult.Candidates.Where(c => c.IsEligible).Take(3),
             isVision: false);
 
-        var selectedTextEval = textResult.AllEvaluations.FirstOrDefault(e =>
-            !string.IsNullOrWhiteSpace(currentText) &&
-            string.Equals(e.Model.Id?.Trim(), currentText, StringComparison.OrdinalIgnoreCase))
-            ?? textResult.RecommendedModel;
-
-        UpdateRecommendationReason(
-            TextRecommendationReasonRow,
-            TextRecommendationReasonText,
-            TextEvidenceBadge,
-            TextEvidenceBadgeText,
-            TextEvidenceDot,
-            selectedTextEval);
-
         if (visionResult is null)
         {
             VisionRecommendationChipsPanel.Children.Clear();
-            if (VisionRecommendationReasonRow is not null)
-            {
-                VisionRecommendationReasonRow.Visibility = Visibility.Collapsed;
-            }
             return;
         }
 
-        var currentVision = VisionModelCombo.Text?.Trim();
         PopulateRecommendationChips(
             VisionRecommendationChipsPanel,
             visionResult.Candidates.Where(c => c.IsEligible).Take(3),
             isVision: true);
-
-        var selectedVisionEval = visionResult.AllEvaluations.FirstOrDefault(e =>
-            !string.IsNullOrWhiteSpace(currentVision) &&
-            string.Equals(e.Model.Id?.Trim(), currentVision, StringComparison.OrdinalIgnoreCase))
-            ?? visionResult.RecommendedModel;
-
-        UpdateRecommendationReason(
-            VisionRecommendationReasonRow,
-            VisionRecommendationReasonText,
-            VisionEvidenceBadge,
-            VisionEvidenceBadgeText,
-            VisionEvidenceDot,
-            selectedVisionEval);
     }
 
     private void PopulateRecommendationChips(
@@ -1864,48 +1813,6 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
     }
 
-    private void UpdateRecommendationReason(
-        Grid? reasonRow,
-        TextBlock? reasonText,
-        Border? evidenceBadge,
-        TextBlock? evidenceBadgeText,
-        System.Windows.Shapes.Ellipse? evidenceDot,
-        ModelCandidateEvaluation? evaluation)
-    {
-        if (reasonRow is null || reasonText is null || evidenceBadge is null || evidenceBadgeText is null)
-        {
-            return;
-        }
-
-        if (evaluation is null || string.IsNullOrWhiteSpace(evaluation.PrimaryReason))
-        {
-            reasonRow.Visibility = Visibility.Collapsed;
-            return;
-        }
-
-        reasonRow.Visibility = Visibility.Visible;
-        reasonText.Text = evaluation.PrimaryReason;
-        var traceability = BuildEvidenceTooltip(evaluation);
-        reasonText.ToolTip = traceability;
-        evidenceBadge.ToolTip = traceability;
-        evidenceBadgeText.ToolTip = traceability;
-        UpdateEvidenceBadge(evidenceBadge, evidenceBadgeText, evidenceDot, evaluation.EvidenceSources);
-    }
-
-    private void UpdateEvidenceBadge(
-        Border badgeBorder,
-        TextBlock badgeText,
-        System.Windows.Shapes.Ellipse? evidenceDot,
-        RecommendationEvidenceSource sources)
-    {
-        var (text, _, fgKey, _) = ResolveEvidenceBadgeVisualKeys(sources, hasBenchmarkMetric: false);
-        badgeText.Text = text;
-        badgeBorder.Background = Brushes.Transparent;
-        badgeBorder.BorderBrush = Brushes.Transparent;
-        badgeBorder.BorderThickness = new Thickness(0);
-        badgeText.SetResourceReference(TextBlock.ForegroundProperty, fgKey);
-        evidenceDot?.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, fgKey);
-    }
 
     internal IReadOnlyList<ModelDescriptor> GetCandidateDescriptors()
     {
@@ -1992,19 +1899,6 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         _ => "未声明",
     };
 
-    internal static (string Text, string BackgroundKey, string ForegroundKey, string BorderBrushKey) ResolveEvidenceBadgeVisualKeys(
-        RecommendationEvidenceSource sources,
-        bool hasBenchmarkMetric = false)
-    {
-        var tier = ResolveEvidenceTier(sources, hasBenchmarkMetric);
-        return tier switch
-        {
-            EvidenceBadgeTier.LocalBenchmark => ("本机实测", "SuccessSoftBrush", "SuccessBrush", "SuccessBrush"),
-            EvidenceBadgeTier.CatalogExplicit => ("官方声明", "AccentSoftBrush", "AccentBrush", "AccentBorderBrush"),
-            EvidenceBadgeTier.FamilyHeuristics => ("系列推断", "SurfaceRaisedBrush", "TextSecondaryBrush", "BorderSubtleBrush"),
-            _ => ("未声明", "SurfaceMutedBrush", "TextTertiaryBrush", "BorderSubtleBrush"),
-        };
-    }
 
     private void ResetModelCatalogStatus()
     {
@@ -2737,7 +2631,6 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             _isAdding = false;
             _testOutcomes.Remove(profile.Id);
             _editorDirty = false;
-            UpdateEditorDirtyBadge();
             EditorForm.Visibility = Visibility.Collapsed;
             EditorEmpty.Visibility = Visibility.Visible;
             EditorOpenStateChanged?.Invoke();

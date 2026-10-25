@@ -1605,24 +1605,31 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
     private void StyleSelector_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button button)
+        // One click = next style; the full list stays one right-click away.
+        // Most users only ever need 准确/自然/正式.
+        var next = TranslationStyleMenu.NextTemplate();
+        if (next is null)
         {
+            TranslateStatus.Text = "暂无可用风格";
             return;
         }
-        // Re-probe at open time: the engine may have changed since the last
-        // paint, and the honest state must match the route a new request
-        // would actually take.
+        _ = ChooseStyleAsync(next);
+    }
+
+    private void StyleSelector_RightClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        e.Handled = true;
         RefreshStyleSelector();
         var menu = TranslationStyleMenu.Build(
             styleChosen: template => _ = ChooseStyleAsync(template),
             reportStatus: message => TranslateStatus.Text = message,
             managePrompts: () => OpenSettingsPage("Prompt"));
-        if (menu is null)
+        if (menu is not null)
         {
-            return;
+            TranslationStyleMenu.Show(StyleSelectorButton, menu);
         }
-        TranslationStyleMenu.Show(button, menu);
     }
+
 
     private async Task ChooseStyleAsync(PromptTemplateDto template)
     {

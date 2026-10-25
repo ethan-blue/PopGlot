@@ -1232,6 +1232,31 @@ internal static class TranslationStyleMenu
     }
 
     /// <summary>
+    /// One-click cycle target: the enabled templates in store order, the
+    /// active one advancing by one (wrapping). A one-template store returns
+    /// that template. Null when the store is unreadable or empty.
+    /// </summary>
+    internal static PromptTemplateDto? NextTemplate()
+    {
+        try
+        {
+            var templates = CoreBridge.ListPromptTemplates().Where(t => t.Enabled).ToList();
+            if (templates.Count == 0)
+            {
+                return null;
+            }
+            var activeId = CoreBridge.GetActivePromptTemplate().Id;
+            var index = templates.FindIndex(t => string.Equals(t.Id, activeId, StringComparison.Ordinal));
+            return templates[(index + 1) % templates.Count];
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+
+    /// <summary>
     /// Read-only local probe of the route the next text translation takes,
     /// sharing the coordinator's own provider decision (including the legacy
     /// global TargetsLocalRuntime fallback) via
@@ -1497,7 +1522,7 @@ internal static class TranslationStyleMenu
             if (styleName is not null)
             {
                 var descPart = string.IsNullOrWhiteSpace(styleDesc) ? string.Empty : $" · {styleDesc}";
-                message = $"当前风格：{styleName}{descPart}\n点击切换风格 ({Services.InterfaceKeys.StyleHotkey.DisplayName})";
+                message = $"当前风格：{styleName}{descPart}\n点击切到下一个 · 右键看全部 ({Services.InterfaceKeys.StyleHotkey.DisplayName})";
             }
             else
             {

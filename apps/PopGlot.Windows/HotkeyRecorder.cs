@@ -73,7 +73,7 @@ internal sealed class HotkeyRecorder : Button
     private void StartRecording()
     {
         IsRecording = true;
-        Content = "按下组合键…";
+        Content = "按组合键，退格停用…";
         RecordingStateChanged?.Invoke(this, true);
         Focus();
         Keyboard.Focus(this);
@@ -111,6 +111,17 @@ internal sealed class HotkeyRecorder : Button
         if (key == Key.Escape)
         {
             StopRecording();
+            return;
+        }
+        // Backspace/Delete unbinds the action: "no shortcut" is a first-class
+        // choice for a lightweight tool, not an error state.
+        if (key is Key.Back or Key.Delete)
+        {
+            IsRecording = false;
+            BindingValue = HotkeyBinding.UnsetBinding;
+            Content = "未设置";
+            RecordingStateChanged?.Invoke(this, false);
+            RaiseEvent(new RoutedEventArgs(RecordedEvent, this));
             return;
         }
 

@@ -75,7 +75,7 @@
             <Setter Property="CornerRadius" Value="{StaticResource CardRadius}" />
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
-            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BorderThickness" Value="1" />
         </Style>
         <Style x:Key="EditorTextField" TargetType="TextBox" BasedOn="{StaticResource FormTextBox}">
             <Setter Property="Height" Value="36" />
@@ -130,13 +130,6 @@
                 </Setter.Value>
             </Setter>
         </Style>
-        <Style x:Key="EvidenceBadge" TargetType="Border">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="Margin" Value="0,0,6,0" />
-            <Setter Property="VerticalAlignment" Value="Center" />
-        </Style>
     </UserControl.Resources>
 
     <Grid>
@@ -157,7 +150,7 @@
                         Style="{StaticResource PrimaryButton}" Padding="16,8" Click="AddProfile_Click" />
             </WrapPanel>
             <Border x:Name="DraftGuardBar" Grid.Row="1" Visibility="Collapsed" Margin="0,0,0,10" Padding="12,10" CornerRadius="{DynamicResource CardRadius}"
-                    Background="{DynamicResource WarningSoftBrush}" BorderBrush="{DynamicResource WarningBrush}" BorderThickness="1">
+                    Background="{DynamicResource WarningSoftBrush}" BorderBrush="{DynamicResource WarningBrush}" BorderThickness="1.5">
                 <StackPanel>
                     <TextBlock x:Name="DraftGuardText" FontWeight="SemiBold" TextWrapping="Wrap"
                                Foreground="{DynamicResource WarningBrush}" FontSize="12"/>
@@ -295,7 +288,7 @@
                                     </StackPanel>
                                 </Grid>
 
-                                <Border Style="{StaticResource EditorSectionCard}" BorderThickness="1">
+                                <Border Style="{StaticResource EditorSectionCard}">
                                     <StackPanel>
                                         <WrapPanel Margin="0,0,0,8">
                                             <TextBlock Text="本机工具" Style="{StaticResource EditorSectionTitle}" VerticalAlignment="Center" Margin="0,0,10,0"/>
@@ -326,10 +319,10 @@
                                 </Border>
                             </StackPanel>
                             <StackPanel x:Name="CliConnectionsPanel" Visibility="Collapsed" MaxWidth="820" HorizontalAlignment="Stretch">
-                                <TextBlock x:Name="ConnectionSourceTitle" Style="{StaticResource PageTitle}" TextTrimming="CharacterEllipsis" Margin="2,0,2,4"/>
+                                <TextBlock x:Name="ConnectionSourceTitle" Style="{StaticResource SectionTitle}" TextTrimming="CharacterEllipsis" Margin="2,0,2,4"/>
                                 <TextBlock x:Name="ConnectionSourceDetail" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="2,0,2,10"/>
                                 <StackPanel x:Name="CliToolConnectionPanel" Visibility="Collapsed">
-                                    <Border Style="{StaticResource EditorSectionCard}" BorderThickness="1">
+                                    <Border Style="{StaticResource EditorSectionCard}">
                                         <StackPanel>
                                             <TextBlock Text="连接账号" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,8"/>
                                             <TextBlock x:Name="CliSelectedPathText" TextTrimming="CharacterEllipsis" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,8"/>
@@ -355,7 +348,7 @@
                                             <TextBlock x:Name="CliConnectionStatus" Text="连接后选择模型。" Margin="0,10,0,0" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
                                         </StackPanel>
                                     </Border>
-                                    <Border Style="{StaticResource EditorSectionCard}" BorderThickness="1">
+                                    <Border Style="{StaticResource EditorSectionCard}">
                                         <StackPanel>
                                             <TextBlock Text="文字模型" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,8"/>
                                             <ComboBox x:Name="CliModelCombo" ItemTemplate="{StaticResource ConnectionChoiceTemplate}" HorizontalContentAlignment="Stretch" Style="{StaticResource EditorComboField}"
@@ -372,14 +365,14 @@
                                             </StackPanel>
                                         </StackPanel>
                                     </Border>
-                                    <WrapPanel Margin="12,6,0,0">
+                                    <WrapPanel HorizontalAlignment="Right" Margin="0,6,0,0">
                                         <Button x:Name="CliTestButton" Content="测试翻译" Style="{StaticResource GhostButton}" Click="CliTest_Click" IsEnabled="False" Margin="0,0,8,8" ToolTip="发送 Hello world，会使用所选模型的少量额度。"/>
                                         <Button x:Name="CliSaveButton" Content="保存" Style="{StaticResource GhostButton}" Click="CliSave_Click" IsEnabled="False" Margin="0,0,8,8"/>
                                         <Button x:Name="CliSaveUseButton" Content="保存并使用" Style="{StaticResource PrimaryButton}" Click="CliSave_Click" IsEnabled="False" Margin="0,0,8,8"/>
                                     </WrapPanel>
                                 </StackPanel>
                                 <StackPanel x:Name="ChatGptConnectionPanel" Visibility="Collapsed">
-                                    <Border Style="{StaticResource EditorSectionCard}" BorderThickness="1">
+                                    <Border Style="{StaticResource EditorSectionCard}">
                                         <StackPanel>
                                             <TextBlock Text="连接账号" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,8"/>
                                             <WrapPanel>
@@ -392,7 +385,7 @@
                                         </StackPanel>
                                     </Border>
                                     <StackPanel x:Name="ChatGptAccountDetails" Visibility="Collapsed">
-                                        <Border Style="{StaticResource EditorSectionCard}" BorderThickness="1">
+                                        <Border Style="{StaticResource EditorSectionCard}">
                                             <StackPanel>
                                                 <TextBlock Text="账号与模型" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,8"/>
                                                 <ComboBox x:Name="ChatGptAccountCombo" ItemTemplate="{StaticResource ConnectionChoiceTemplate}" HorizontalContentAlignment="Stretch" Style="{StaticResource EditorComboField}" SelectionChanged="ChatGptAccount_Changed" Margin="0,0,0,10" AutomationProperties.Name="选择 ChatGPT 账号与工作区"/>
@@ -403,7 +396,7 @@
                                                 <ComboBox x:Name="ChatGptModelCombo" ItemTemplate="{StaticResource ConnectionChoiceTemplate}" HorizontalContentAlignment="Stretch" Style="{StaticResource EditorComboField}" SelectionChanged="ChatGptModel_Changed" AutomationProperties.Name="选择 ChatGPT 直连文字模型"/>
                                             </StackPanel>
                                         </Border>
-                                        <WrapPanel Margin="12,6,0,0">
+                                        <WrapPanel HorizontalAlignment="Right" Margin="0,6,0,0">
                                             <Button x:Name="ChatGptTestButton" Content="测试翻译" Style="{StaticResource GhostButton}" Click="ChatGptTest_Click" Margin="0,0,8,8" ToolTip="发送 Hello world，会使用所选 ChatGPT 计划的少量额度。"/>
                                             <Button x:Name="ChatGptSaveButton" Content="保存" Style="{StaticResource GhostButton}" Click="ChatGptSaveUse_Click" Margin="0,0,8,8"/>
                                             <Button x:Name="ChatGptSaveUseButton" Content="保存并使用" Style="{StaticResource PrimaryButton}" Click="ChatGptSaveUse_Click" Margin="0,0,8,8"/>
@@ -417,7 +410,6 @@
                                 <Grid x:Name="EditorHeaderGrid" Margin="2,0,2,8">
                                     <StackPanel>
                                         <TextBlock x:Name="EditorProviderTitle" Text="连接引擎" Style="{StaticResource SectionTitle}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
-                                        <TextBlock x:Name="EditorProviderMeta" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,3,0,0" />
                                     </StackPanel>
                                 </Grid>
 
@@ -512,20 +504,6 @@
                                                           local:Ui.Placeholder="输入模型 ID，或刷新列表"/>
                                                 <!-- Text model recommendation chips -->
                                                 <WrapPanel x:Name="TextRecommendationChipsPanel" Margin="0,8,0,0" />
-                                                <!-- Text model recommendation reason & evidence -->
-                                                <Grid x:Name="TextRecommendationReasonRow" Margin="0,4,0,0" Visibility="Collapsed">
-                                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                                        <Border x:Name="TextEvidenceBadge" Style="{StaticResource EvidenceBadge}">
-                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                                                <Ellipse x:Name="TextEvidenceDot" Width="6" Height="6" VerticalAlignment="Center" Margin="0,0,5,0" />
-                                                                <TextBlock x:Name="TextEvidenceBadgeText" Style="{StaticResource Caption}" />
-                                                            </StackPanel>
-                                                        </Border>
-                                                        <TextBlock x:Name="TextRecommendationReasonText" Style="{StaticResource Caption}"
-                                                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
-                                                                   AutomationProperties.LiveSetting="Polite" />
-                                                    </StackPanel>
-                                                </Grid>
                                             </StackPanel>
                                             <StackPanel x:Name="VisionModelPanel" Grid.Column="2">
                                                 <TextBlock Text="图片模型（可选）" Style="{StaticResource FieldLabel}"/>
@@ -533,20 +511,6 @@
                                                           local:Ui.Placeholder="输入图片模型 ID（可选）"/>
                                                 <!-- Vision model recommendation chips -->
                                                 <WrapPanel x:Name="VisionRecommendationChipsPanel" Margin="0,8,0,0" />
-                                                <!-- Vision model recommendation reason & evidence -->
-                                                <Grid x:Name="VisionRecommendationReasonRow" Margin="0,4,0,0" Visibility="Collapsed">
-                                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                                        <Border x:Name="VisionEvidenceBadge" Style="{StaticResource EvidenceBadge}">
-                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                                                <Ellipse x:Name="VisionEvidenceDot" Width="6" Height="6" VerticalAlignment="Center" Margin="0,0,5,0" />
-                                                                <TextBlock x:Name="VisionEvidenceBadgeText" Style="{StaticResource Caption}" />
-                                                            </StackPanel>
-                                                        </Border>
-                                                        <TextBlock x:Name="VisionRecommendationReasonText" Style="{StaticResource Caption}"
-                                                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
-                                                                   AutomationProperties.LiveSetting="Polite" />
-                                                    </StackPanel>
-                                                </Grid>
                                             </StackPanel>
                                         </Grid>
                                         <CheckBox x:Name="UseTextModelForVisionCheckBox"
@@ -614,11 +578,6 @@
                     <Border x:Name="EditorActionBar" Grid.Row="1" Margin="0,10,0,0" Padding="0,10,0,0" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0">
                         <WrapPanel HorizontalAlignment="Right">
                             <Button x:Name="DeleteServiceButton" Content="删除引擎" Margin="0,0,8,6" Style="{StaticResource DangerButton}" Padding="12,6" Click="DeleteProfile_Click"/>
-                                <Border x:Name="EditorDirtyBadge" Visibility="Collapsed" Style="{StaticResource StatusPill}"
-                                        Background="{DynamicResource WarningSoftBrush}" BorderBrush="{DynamicResource WarningBrush}"
-                                        Padding="8,3" Margin="0,0,8,0" VerticalAlignment="Center">
-                                    <TextBlock Text="未保存的修改" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource WarningBrush}"/>
-                                </Border>
                                 <Button x:Name="CancelEditButton" Content="取消" Style="{StaticResource GhostButton}" Padding="12,6" Click="CancelEdit_Click"/>
                                 <Button x:Name="SaveServiceButton" Content="保存" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}" Padding="16,6" Click="SaveService_Click"/>
                         </WrapPanel>

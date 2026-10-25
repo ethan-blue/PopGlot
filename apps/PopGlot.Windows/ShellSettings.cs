@@ -53,10 +53,23 @@ internal sealed record HotkeyBinding(uint Modifiers, uint VirtualKey)
     public static HotkeyBinding InterfaceSwapDefault => new(ModControl, 0x4C);  // Ctrl+L
     public static HotkeyBinding QuickSearchDefault => new(ModControl | ModAlt, 0x51); // Ctrl+Alt+Q
 
+    /// <summary>
+    /// Explicitly unbound: the action keeps working from its UI entry, just
+    /// without a keyboard combination. Persisted as the literal "none".
+    /// </summary>
+    public static HotkeyBinding UnsetBinding => new(0, 0);
+
+    public bool IsUnset => VirtualKey == 0 && Modifiers == 0;
+
+
     public string DisplayName
     {
         get
         {
+            if (IsUnset)
+            {
+                return "未设置";
+            }
             // Windows writes its own shortcuts Win-first ("Win+Shift+S"), so
             // that order is what users expect to read back.
             var parts = new List<string>(4);
@@ -129,6 +142,11 @@ internal sealed record HotkeyBinding(uint Modifiers, uint VirtualKey)
         }
 
         var text = input.Trim();
+        if (text.Equals("none", StringComparison.OrdinalIgnoreCase) || text == "未设置")
+        {
+            return UnsetBinding;
+        }
+
         var fromLegacy = ParseLegacyId(text);
         if (fromLegacy is not null)
         {
@@ -223,7 +241,7 @@ internal sealed record HotkeyBinding(uint Modifiers, uint VirtualKey)
         _ => null,
     };
 
-    public string Serialize() => DisplayName;
+    public string Serialize() => IsUnset ? "none" : DisplayName;
 }
 
 internal sealed record ShellSettings(
@@ -313,13 +331,20 @@ internal sealed record ShellSettings(
     {
         get
         {
-            var dict = new Dictionary<HotkeyAction, HotkeyBinding>
+            var dict = new Dictionary<HotkeyAction, HotkeyBinding>();
+            void Add(HotkeyAction action, HotkeyBinding binding)
             {
-                [HotkeyAction.TranslateSelection] = SelectionHotkey,
-                [HotkeyAction.CaptureScreen] = ScreenshotHotkey,
-                [HotkeyAction.ClosePanel] = CloseHotkey,
-                [HotkeyAction.QuickSearch] = QuickSearchHotkey,
-            };
+                // An unset binding is a legitimate user choice, not an error:
+                // it simply does not register and stays reachable from the UI.
+                if (binding.IsValid)
+                {
+                    dict[action] = binding;
+                }
+            }
+            Add(HotkeyAction.TranslateSelection, SelectionHotkey);
+            Add(HotkeyAction.CaptureScreen, ScreenshotHotkey);
+            Add(HotkeyAction.ClosePanel, CloseHotkey);
+            Add(HotkeyAction.QuickSearch, QuickSearchHotkey);
             if (ShowWindowHotkey is not null && ShowWindowHotkey.IsValid)
             {
                 dict[HotkeyAction.ShowWindow] = ShowWindowHotkey;
@@ -365,6 +390,10 @@ internal sealed record ShellSettings(
         };
         foreach (var (name, binding) in interfaceKeys)
         {
+            if (binding.IsUnset)
+            {
+                continue;
+            }
             if (!binding.IsValid)
             {
                 return $"{name}的快捷键“{binding.DisplayName}”无效：至少需要包含 Ctrl、Alt 或 Win，并搭配一个普通按键。";
