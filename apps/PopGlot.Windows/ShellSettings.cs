@@ -403,8 +403,13 @@ internal sealed record ShellSettings(
                 return $"{name}的快捷键“{binding.DisplayName}”与固定操作或文本编辑快捷键冲突。";
             }
         }
+        // Unset bindings share the display name “未设置”: they collide with
+        // nothing (the map above already excludes them) and must never be
+        // grouped as a duplicate, or disabling two shortcuts rejects the save.
         var allPairs = Hotkeys.Select(pair => (Label: ActionName(pair.Key), pair.Value))
-            .Concat(interfaceKeys.Select(entry => (Label: entry.Name, entry.Binding)));
+            .Concat(interfaceKeys
+                .Where(entry => !entry.Binding.IsUnset)
+                .Select(entry => (Label: entry.Name, entry.Binding)));
         var interfaceDuplicate = allPairs
             .GroupBy(pair => pair.Item2.DisplayName, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault(group => group.Count() > 1);

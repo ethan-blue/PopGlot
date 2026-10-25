@@ -917,6 +917,52 @@ internal static partial class Program
             File.Delete(unsetPath);
         }
 
+        // Regressions for disabling SEVERAL shortcuts at once: the duplicate
+        // detector once grouped every unset interface binding under the same
+        // “未设置” display name and rejected the whole save.
+        var twoInterfaceUnset = ShellSettings.Default with
+        {
+            InterfaceModelHotkey = HotkeyBinding.UnsetBinding,
+            InterfaceStyleHotkey = HotkeyBinding.UnsetBinding,
+        };
+        True(twoInterfaceUnset.ValidateHotkeys() is null,
+            "disabling two interface shortcuts must not read as a duplicate");
+
+        var allUnset = ShellSettings.Default with
+        {
+            SelectionHotkey = HotkeyBinding.UnsetBinding,
+            ScreenshotHotkey = HotkeyBinding.UnsetBinding,
+            CloseHotkey = HotkeyBinding.UnsetBinding,
+            QuickSearchHotkey = HotkeyBinding.UnsetBinding,
+            ShowWindowHotkey = HotkeyBinding.UnsetBinding,
+            InterfaceModelHotkey = HotkeyBinding.UnsetBinding,
+            InterfaceStyleHotkey = HotkeyBinding.UnsetBinding,
+            InterfaceSwapHotkey = HotkeyBinding.UnsetBinding,
+            InterfaceWorkbenchHotkey = HotkeyBinding.UnsetBinding,
+            InterfaceLibraryHotkey = HotkeyBinding.UnsetBinding,
+            InterfaceSettingsHotkey = HotkeyBinding.UnsetBinding,
+            InterfaceTranslateHotkey = HotkeyBinding.UnsetBinding,
+            InterfaceSpeakHotkey = HotkeyBinding.UnsetBinding,
+        };
+        True(allUnset.ValidateHotkeys() is null, "unbinding every shortcut at once stays valid");
+        True(allUnset.Hotkeys.Count == 0, "a fully unbound set registers nothing");
+        var allUnsetPath = Path.Combine(Path.GetTempPath(), $"popglot-shell-all-none-{Guid.NewGuid():N}.json");
+        try
+        {
+            ShellSettingsStore.Save(allUnset, allUnsetPath);
+            var allReloaded = ShellSettingsStore.Load(allUnsetPath);
+            True(allReloaded.InterfaceModelHotkey.IsUnset && allReloaded.InterfaceStyleHotkey.IsUnset &&
+                 allReloaded.InterfaceSwapHotkey.IsUnset && allReloaded.InterfaceWorkbenchHotkey.IsUnset &&
+                 allReloaded.InterfaceLibraryHotkey.IsUnset && allReloaded.InterfaceSettingsHotkey.IsUnset &&
+                 allReloaded.InterfaceTranslateHotkey.IsUnset && allReloaded.InterfaceSpeakHotkey.IsUnset,
+                "every disabled interface shortcut survives a real save and reload");
+            True(allReloaded.ValidateHotkeys() is null, "the reloaded fully-unbound set stays valid");
+        }
+        finally
+        {
+            File.Delete(allUnsetPath);
+        }
+
     }
 
     private static void HotkeyDigitsParseCorrectly()
