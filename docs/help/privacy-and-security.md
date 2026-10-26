@@ -46,7 +46,7 @@ ChatGPT 直连授权独立保存在本机，由 Windows 加密保护。「断开
 | 自定义翻译风格 | `prompt-templates.json` |
 | 翻译历史 | `history.json` |
 | 生词本 | `vocabulary.json` |
-| 诊断日志 | `diagnostics` 目录 |
+| 诊断日志 | `logs` 目录中的 `crash-日期.log` |
 
 历史最多保留 200 条、90 天、4 MiB。取消或未完成的翻译不入库。常见密钥、密码等特征会被过滤，这种规则检查不能识别所有敏感内容；处理敏感文本前可关闭历史记录。
 
