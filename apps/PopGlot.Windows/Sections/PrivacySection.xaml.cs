@@ -91,13 +91,13 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         {
             RenderRoute(
                 ProfileManager.ResolveRoute(CoreBridge.GetSettings(), WindowsOcrService.IsSupported),
-                "当前实际线路");
+                "当前截图处理方式");
         }
         catch (Exception exception)
         {
             RouteCard.Visibility = Visibility.Visible;
             RouteBadgeText.Text = "未知";
-            RoutePreviewText.Text = $"无法判断线路：{exception.Message}";
+            RoutePreviewText.Text = $"无法读取截图设置：{exception.Message}";
         }
     }
 
@@ -123,15 +123,15 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
             };
             RenderRoute(
                 ProfileManager.ResolveRoute(draft, WindowsOcrService.IsSupported),
-                "保存后预计线路");
-            RouteDraftNote.Text = "保存后线路将按新设置重新评估。";
+                "保存后的截图处理方式");
+            RouteDraftNote.Text = "保存后按新设置处理截图。";
             RouteDraftNote.Visibility = Visibility.Visible;
         }
         catch (Exception exception)
         {
             RouteCard.Visibility = Visibility.Visible;
             RouteBadgeText.Text = "未知";
-            RoutePreviewText.Text = $"无法预估保存后的线路：{exception.Message}";
+            RoutePreviewText.Text = $"无法预览截图设置：{exception.Message}";
         }
     }
 

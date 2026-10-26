@@ -205,7 +205,7 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="补充说明" Style="{StaticResource RowTitle}" />
-                        <TextBlock Text="附带简明的词法、语境与歧义解析" Style="{StaticResource RowHint}" />
+                        <TextBlock Text="在译文下方说明用词与含义" Style="{StaticResource RowHint}" />
                     </StackPanel>
                     <ToggleButton x:Name="IncludeExplanationToggle" Grid.Column="1"
                                   AutomationProperties.Name="显示详细解析"

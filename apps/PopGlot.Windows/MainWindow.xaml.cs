@@ -1183,9 +1183,8 @@ internal enum TranslationStyleSupport
 /// Lists the built-in 准确/自然/正式 styles plus the custom list straight from
 /// the core's prompt store, switches the active template via CoreBridge, and
 /// offers the shared 管理提示词 entry (routed through each surface's existing
-/// open-settings callback). By contract a switch only persists: the NEXT
-/// request picks it up (the coordinator snapshots the template once per
-/// request), nothing in flight is cancelled and nothing is re-translated.
+/// open-settings callback). The helper persists the choice; each surface
+/// then retranslates its current text. Each request snapshots the template.
 /// Source text is never spliced with style instructions anywhere in this shell.
 /// Scope honesty: the template applies to TEXT requests only. 0.1.6 has no
 /// vision-prompt support, so a vision-direct screenshot translation never
@@ -1450,7 +1449,7 @@ internal static class TranslationStyleMenu
     /// <summary>
     /// Persists a style switch off the UI thread and reports the outcome.
     /// Returns false on failure so the caller can repaint the authoritative
-    /// state. Only the next request is affected, by contract.
+    /// state. The caller owns any retranslation of the visible source.
     /// </summary>
     internal static async Task<bool> SwitchActiveTemplateAsync(
         string? templateId,
@@ -1462,7 +1461,7 @@ internal static class TranslationStyleMenu
             var isFree = ProbeNextTextRoute() == TranslationStyleSupport.FreeEngine;
             var active = TryGetActiveTemplate();
             var name = active is not null ? ShortLabel(active) : "风格";
-            ReportOnUi(reportStatus, isFree ? $"已选定「{name}」（切换专属引擎后生效）" : $"已设为「{name}」，下次翻译生效");
+            ReportOnUi(reportStatus, isFree ? $"已选用「{name}」（公共翻译不支持风格）" : $"已选用「{name}」");
             return true;
         }
         catch (Exception exception)
@@ -1615,7 +1614,7 @@ internal static class TranslationStyleMenu
         System.Windows.Automation.AutomationProperties.SetName(item, titleText);
         item.Click += (_, _) =>
         {
-            if (!isActive)
+            if (!string.Equals(TryGetActiveTemplate()?.Id, id, StringComparison.Ordinal))
             {
                 styleChosen(template);
             }

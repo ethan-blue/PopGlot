@@ -1891,7 +1891,7 @@ public partial class TranslationPanelWindow : Window
             var route = TextRouteMenu.ReadCurrent();
             RouteSelectorLabel.Text = route.Label;
             RouteSelectorButton.ToolTip = (route.Detail ?? string.Empty) +
-                $"\n点击切换模型 ({InterfaceKeys.ModelHotkey.DisplayName}) · 下次翻译生效";
+                $"\n点击切换模型 ({InterfaceKeys.ModelHotkey.DisplayName}) · 切换后立即重译";
         }
         catch (Exception)
         {
@@ -1925,7 +1925,7 @@ public partial class TranslationPanelWindow : Window
         catch (Exception)
         {
             _routeMenu = null;
-            StatusText.Text = "无法读取路由，请检查设置。";
+            StatusText.Text = "无法读取引擎配置，请在设置中检查。";
         }
     }
 

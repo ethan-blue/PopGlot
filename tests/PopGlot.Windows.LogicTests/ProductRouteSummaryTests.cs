@@ -65,7 +65,7 @@ internal static partial class Program
         }
     }
 
-    private static void ProductQuickRouteSwitchPreservesReadingAndVision()
+    private static void ProductQuickRouteSwitchRetranslatesAndPreservesVision()
     {
         EnsureApplication();
         var (_, directory) = NewIsolatedTranslateSection();
@@ -75,6 +75,8 @@ internal static partial class Program
         listener.Start();
         var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
         var requestCount = 0;
+        var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishSecond = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var service = Task.Run(async () =>
         {
             for (var index = 0; index < 2; index++)
@@ -89,7 +91,13 @@ internal static partial class Program
                 var marker = System.Text.RegularExpressions.Regex.Match(instructions, @"PGMETA-[a-f0-9-]+").Value;
                 await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"));
-                await WriteSummarySseDeltaAsync(stream, (index == 0 ? "保留的查询结果" : "新路线的查询结果") +
+                if (index == 1)
+                {
+                    await WriteSummarySseDeltaAsync(stream, "新路线");
+                    secondStarted.TrySetResult();
+                    await finishSecond.Task;
+                }
+                await WriteSummarySseDeltaAsync(stream, (index == 0 ? "保留的查询结果" : "的查询结果") +
                     "\n" + marker + "\n{\"detected_source_lang\":\"en\",\"explanation\":\"\",\"warnings\":[]}");
                 await WriteSummaryHttpChunkAsync(stream, "data: [DONE]\n\n"u8.ToArray());
                 await stream.WriteAsync("0\r\n\r\n"u8.ToArray());
@@ -133,19 +141,32 @@ internal static partial class Program
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(window);
             True(menu is { IsOpen: true }, "route switching must open directly from the quick-search surface");
             SaveProductSurface(menu!, "quick-route-menu");
+            var activeItem = menu!.Items.OfType<MenuItem>().Single(candidate => candidate.Tag as string == first.Id);
+            activeItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            FlushDispatcher(2);
+            Equal(1, Volatile.Read(ref requestCount), "choosing the current model must not resend text");
+            Equal(QuickSearchUiStage.Completed, window.State.Stage, "choosing the current model preserves the result");
             var item = menu!.Items.OfType<MenuItem>().Single(candidate => candidate.Tag as string == second.Id);
             item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            // 切换立即生效：选中新路线后用当前输入直接重译（与浮窗、工作台
+            // 同一契约），不再要求用户再按一次 Enter。
             SpinUntil(() => ProfileManager.Load().ActiveProfileId == second.Id && selector.IsEnabled,
                 "selecting a quick-search route must persist and release its busy state");
+            SpinUntil(() => secondStarted.Task.IsCompleted && window.State.AccumulatedText.Length > 0,
+                "the new model must start streaming before completion is released");
+            True(selector.IsEnabled, "the model selector must be usable while the new model is still streaming");
+            Equal(QuickSearchUiStage.Streaming, window.State.Stage);
+            finishSecond.TrySetResult();
+            SpinUntil(() => window.State.Stage is QuickSearchUiStage.Completed or QuickSearchUiStage.Failed,
+                "the route switch must retranslate the current query through the new route");
+            Equal(QuickSearchUiStage.Completed, window.State.Stage, window.State.ErrorMessage ?? "retranslation completed");
+            Equal("新路线的查询结果", window.State.FinalRenderedText);
             Equal("saved query", window.SearchInputBox.Text);
-            Equal("保留的查询结果", window.State.FinalRenderedText);
-            Equal(QuickSearchUiStage.Completed, window.State.Stage,
-                "route selection must not resubmit or relabel the previous result");
             Equal(first.Id, ProfileManager.Load().VisionProfileId, "text selection must preserve the independent image route");
             Equal("text-b", ProfileManager.ResolveRoutes().Text!.Profile.TextModel);
-            Equal("text-b", CoreBridge.GetSettings().TextModel, "the next actual request must use the newly selected model");
-            Equal(blocked, TestIsolation.BlockedPublicSends, "opening and choosing a route never sends source text");
-            Equal(1, Volatile.Read(ref requestCount), "choosing a route must not automatically resubmit the old query");
+            Equal("text-b", CoreBridge.GetSettings().TextModel, "the actual request must use the newly selected model");
+            Equal(blocked, TestIsolation.BlockedPublicSends, "the route switch must use only the isolated local service");
+            Equal(2, Volatile.Read(ref requestCount), "choosing a route must resubmit through the new route exactly once");
             menu.IsOpen = false;
             window.UpdateLayout();
             var status = window.FooterStatusBlock.TransformToAncestor(window).TransformBounds(new Rect(window.FooterStatusBlock.RenderSize));
@@ -155,16 +176,12 @@ internal static partial class Program
             ThemeService.Apply(ThemePreference.Light);
             FlushDispatcher(2);
             SaveProductSurface(window, "quick-long-route-light");
-            window.EnterKeycapButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            SpinUntil(() => window.State.Stage is QuickSearchUiStage.Completed or QuickSearchUiStage.Failed,
-                "the next explicit query must execute through the new route");
-            Equal(QuickSearchUiStage.Completed, window.State.Stage, window.State.ErrorMessage ?? "quick search completed");
-            Equal("新路线的查询结果", window.State.FinalRenderedText);
             service.GetAwaiter().GetResult();
             Equal(2, Volatile.Read(ref requestCount));
         }
         finally
         {
+            finishSecond.TrySetResult();
             if (menu is not null) menu.IsOpen = false;
             window?.Close();
             listener.Stop();

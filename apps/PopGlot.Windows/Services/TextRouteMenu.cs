@@ -97,7 +97,7 @@ internal static class TextRouteMenu
         var selected = config.PreferFreeEngine || allowed;
         if (!selected || !allowed)
         {
-            return ("选择模型", "选择文字模型；不会自动提交请求。", null, false, StatusTone.Warning);
+            return ("选择模型", "选择翻译引擎；已有文本时会重新翻译。", null, false, StatusTone.Warning);
         }
 
         // For free engine, tone reflects probed reachability evidence.
@@ -114,13 +114,26 @@ internal static class TextRouteMenu
     {
         EngineExecutionKind.CodexAppServer => "Codex",
         EngineExecutionKind.ChatGptDirect => "ChatGPT",
-        EngineExecutionKind.OmpRpc => profile.CliConnection?.UpstreamProviderId switch
-        {
-            "google-antigravity" => "Antigravity",
-            "openai-codex" => "Codex",
-            _ => "OMP",
-        },
+        EngineExecutionKind.OmpRpc => OmpProviderShortName(profile.CliConnection?.UpstreamProviderId),
         _ => string.IsNullOrWhiteSpace(profile.Name) ? "模型" : profile.Name,
+    };
+
+    /// <summary>
+    /// OMP 连接的统一命名：以「提供方」为显示主体（配置维度是 提供方+模型，
+    /// 一个档案即一个提供方下的一个模型），不再把所有提供方笼统显示为 OMP。
+    /// 已知 id 给出稳定短名；未知 id 原样显示（仍可区分是哪个提供方）；
+    /// 缺失时才回退到 OMP。
+    /// </summary>
+    internal static string OmpProviderShortName(string? providerId) => providerId switch
+    {
+        null or "" => "OMP",
+        "google-antigravity" => "Antigravity",
+        "openai-codex" => "Codex",
+        "github-copilot" => "Copilot",
+        "anthropic" or "claude-code" => "Claude",
+        "openai" => "OpenAI",
+        "google" => "Gemini",
+        _ => providerId,
     };
 
     internal static string FreeName(FreeEngineProvider provider) => EngineWording.NameFor(provider);
@@ -156,7 +169,10 @@ internal static class TextRouteMenu
             var id = profile.Id;
             var item = ProfileItem(profile, ModelName(profile), id == activeId);
             item.Tag = id;
-            item.Click += (_, _) => selectProfile(id);
+            item.Click += (_, _) =>
+            {
+                if (!IsCurrentChoice(id)) selectProfile(id);
+            };
             menu.Items.Add(item);
         }
         menu.Items.Add(Header("内置"));
@@ -173,17 +189,43 @@ internal static class TextRouteMenu
                 Tag = provider,
             };
             System.Windows.Automation.AutomationProperties.SetName(item, FreeName(provider));
-            item.Click += async (_, _) => await selectFree(selected);
+            item.Click += async (_, _) =>
+            {
+                if (!IsCurrentChoice(null, selected))
+                    await selectFree(selected);
+            };
             menu.Items.Add(item);
+        }
+    }
+
+    private static bool IsCurrentChoice(string? profileId, FreeEngineProvider? provider = null)
+    {
+        try
+        {
+            var current = ReadCurrent();
+            return provider is { } free
+                ? current.IsFree && ShellSettingsStore.Load().FreeEngineProvider == free
+                : current.Profile?.Id == profileId;
+        }
+        catch (Exception)
+        {
+            // A config read failure belongs to the surface's guarded switch
+            // operation, not an unhandled exception in the menu click.
+            return false;
         }
     }
 
     internal static MenuItem ProfileItem(ProviderProfile profile, string model, bool active)
     {
-        // Keep the model once; connection and profile details belong in the tooltip.
+        // Keep the model once; the OMP provider disambiguates rows that share
+        // a model id across providers; connection and profile details belong
+        // in the tooltip.
+        var secondary = profile.ResolvedExecutionKind == EngineExecutionKind.OmpRpc
+            ? OmpProviderShortName(profile.CliConnection?.UpstreamProviderId)
+            : null;
         var item = new MenuItem
         {
-            Header = CheckRow(string.IsNullOrWhiteSpace(model) ? ShortName(profile) : model, null, active),
+            Header = CheckRow(string.IsNullOrWhiteSpace(model) ? ShortName(profile) : model, secondary, active),
             ToolTip = Detail(profile, model),
             FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal,
         };
@@ -252,7 +294,7 @@ internal static class TextRouteMenu
         var source = profile.ResolvedExecutionKind switch
         {
             EngineExecutionKind.CodexAppServer => "Codex 当前登录 · 独立会话",
-            EngineExecutionKind.OmpRpc => $"OMP 当前登录 · {profile.CliConnection?.UpstreamProviderId}",
+            EngineExecutionKind.OmpRpc => $"{OmpProviderShortName(profile.CliConnection?.UpstreamProviderId)} 经 OMP 登录 · 提供方 {profile.CliConnection?.UpstreamProviderId}",
             EngineExecutionKind.ChatGptDirect => "ChatGPT 账号授权 · 独立会话",
             EngineExecutionKind.Unknown => "不支持的连接类型",
             _ => ProviderSettings.ClassifyEndpoint(profile.ApiBaseUrl) == EndpointClass.Loopback ? "本机服务" : "API 服务",

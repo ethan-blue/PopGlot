@@ -37,15 +37,10 @@
 
                 <!-- Brand header aligned with window caption height -->
                 <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="4,0,0,0">
-                    <Border Width="26" Height="26" CornerRadius="6"
-                            Background="{DynamicResource AccentSoftBrush}"
-                            BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1"
-                            VerticalAlignment="Center">
-                        <Image Width="16" Height="16" VerticalAlignment="Center" HorizontalAlignment="Center"
-                               RenderOptions.BitmapScalingMode="HighQuality"
-                               Source="/PopGlot;component/Assets/popglot-app-avatar-v5.png"
-                               AutomationProperties.Name="PopGlot 图标" />
-                    </Border>
+                    <Image Width="26" Height="26" VerticalAlignment="Center" HorizontalAlignment="Center"
+                           RenderOptions.BitmapScalingMode="HighQuality"
+                           Source="/PopGlot;component/Assets/popglot-app-avatar-v5.png"
+                           AutomationProperties.Name="PopGlot 图标" />
                     <TextBlock x:Name="BrandText" Text="PopGlot" Style="{StaticResource PageTitle}"
                                FontSize="14" FontWeight="SemiBold"
                                Margin="8,0,0,0" VerticalAlignment="Center" />

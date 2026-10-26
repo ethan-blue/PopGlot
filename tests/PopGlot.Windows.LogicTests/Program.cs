@@ -251,7 +251,7 @@ internal static partial class Program
         await RunAsync("summary snapshot invalidation returns a terminal without transport", SummarySnapshotFailureReturnsTerminalWithoutTransport);
         await RunStaAsync("product summary route change retires the busy view", ProductSummaryRouteChangeRetiresBusyState);
         await RunStaAsync("product summary streams and reuses its visible task", ProductSummaryStreamsAndReusesVisibleTask);
-        RunSta("product quick route selection preserves reading and image route", ProductQuickRouteSwitchPreservesReadingAndVision);
+        RunSta("product quick route selection retranslates and stays switchable while streaming", ProductQuickRouteSwitchRetranslatesAndPreservesVision);
         RunSta("product quick menu closes on foreign deactivation", ProductQuickMenuClosesOnForeignDeactivation);
         RunSta("product route snapshot is cached per revision", ProductRouteSnapshotIsCachedPerRevision);
         RunSta("product panel translation toggle keeps unrelated provenance", ProductPanelTranslationToggleKeepsUnrelatedProvenance);
@@ -473,6 +473,12 @@ internal static partial class Program
         {
             await RunAsync("free web translation smoke (network)", FreeTranslationSmokeAsync);
         }
+
+        RunSta("no unhandled dispatcher callbacks remain", () =>
+        {
+            FlushDispatcher(3);
+            Equal(0, _dispatcherFailures, "unhandled WPF callbacks must fail the suite");
+        });
 
         // The whole run must have left the user's real config untouched and
         // must never have attempted a public-network send. The only sanctioned
@@ -7369,7 +7375,7 @@ internal static partial class Program
         var source = File.ReadAllText(Path.Combine(
             FindProjectRoot(), "apps", "PopGlot.Windows", "Sections", "PrivacySection.xaml.cs"));
         True(source.Contains("RefreshDraftRoutePreview"), "unsaved screenshot settings need a route preview");
-        True(source.Contains("保存后预计线路"), "the preview must distinguish draft from actual routing");
+        True(source.Contains("保存后的截图处理方式"), "the preview must distinguish draft from actual screenshot settings");
         True(source.Contains("RouteBadgeText.Text = pipeline"), "the route badge must follow the calculated route");
         True(source.Contains("ProfileManager.ResolveRoute"), "preview must consume the authoritative resolved route");
 
@@ -9438,6 +9444,7 @@ internal static partial class Program
             {
                 _dispatcherFailures++;
                 Console.WriteLine($"DISPATCHER EXCEPTION (#{_dispatcherFailures}): {args.Exception.GetType().Name}: {args.Exception.Message}");
+                Console.WriteLine(args.Exception.StackTrace);
                 args.Handled = true;
             };
             ThemeService.Apply(ThemePreference.Dark);

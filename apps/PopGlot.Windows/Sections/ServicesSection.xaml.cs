@@ -1882,16 +1882,16 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     internal string BuildEvidenceTooltip(ModelCandidateEvaluation candidate)
     {
         var tier = ResolveEvidenceTier(candidate.EvidenceSources, candidate.BenchmarkEvidence is not null);
-        var lines = new List<string> { candidate.Model.Id ?? string.Empty, $"证据等级：{GetEvidenceBadgeText(tier)}" };
+        var lines = new List<string> { candidate.Model.Id ?? string.Empty, $"推荐依据：{GetEvidenceBadgeText(tier)}" };
         if (!string.IsNullOrWhiteSpace(_catalogSourceHost))
         {
             lines.Add($"目录来源：{_catalogSourceHost}");
         }
         if (_catalogFetchedAtUtc is { } fetchedAt)
         {
-            lines.Add($"目录采集：{fetchedAt.ToLocalTime():yyyy-MM-dd HH:mm}（本机时间）");
+            lines.Add($"获取时间：{fetchedAt.ToLocalTime():yyyy-MM-dd HH:mm}（本机时间）");
         }
-        lines.Add("缺证据的能力一律按未知处理，绝不猜测。");
+        lines.Add("未提供的能力信息显示为未知。");
         return string.Join("\n", lines);
     }
 

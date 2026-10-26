@@ -872,7 +872,7 @@ public partial class QuickSearchWindow : Window
             var route = TextRouteMenu.ReadCurrent();
             RouteSelectorLabel.Text = route.Label;
             RouteSelectorButton.ToolTip = (route.Detail ?? string.Empty) +
-                $"\n点击切换模型 ({InterfaceKeys.ModelHotkey.DisplayName}) · 下次翻译生效";
+                $"\n点击切换模型 ({InterfaceKeys.ModelHotkey.DisplayName}) · 切换后立即重译";
         }
         catch (Exception)
         {
@@ -911,7 +911,7 @@ public partial class QuickSearchWindow : Window
         catch (Exception)
         {
             _routeMenu = null;
-            _state.PostPendingNotice("无法读取路由，请检查设置。", error: true);
+            _state.PostPendingNotice("无法读取引擎配置，请在设置中检查。", error: true);
             SyncUiWithState();
         }
     }
@@ -931,23 +931,34 @@ public partial class QuickSearchWindow : Window
     private async Task ChangeTextRouteAsync(Func<(bool Ok, string Error)> change)
     {
         if (_isClosed || _switchingRoute) return;
-        if (_state.Stage is QuickSearchUiStage.Streaming or QuickSearchUiStage.Finalizing)
-        {
-            _state.PostPendingNotice("翻译进行中，稍后切换");
-            SyncUiWithState();
-            return;
-        }
+        // 与浮窗/工作台同一契约：切换立即生效。流式途中也允许切换——先取消
+        // 在途请求（epoch 门会丢弃它的迟到回调），切换成功后用新引擎直接
+        // 重译当前输入，绝不要求用户再按一次 Enter。
         _switchingRoute = true;
         RouteSelectorButton.IsEnabled = false;
+        CancelRunningRequest();
         FooterStatus.Text = "正在切换…";
         try
         {
             var result = await Task.Run(change);
             if (_isClosed) return;
-            var hasText = !string.IsNullOrWhiteSpace(SearchBox.Text);
-            var notice = result.Ok ? (hasText ? "已切换模型（按 Enter 立即翻译）" : "已切换模型") : result.Error;
-            _state.PostPendingNotice(notice, error: !result.Ok);
-            SyncUiWithState();
+            if (!result.Ok)
+            {
+                _state.PostPendingNotice(result.Error, error: true);
+                SyncUiWithState();
+                return;
+            }
+            if (IsVisible && !string.IsNullOrWhiteSpace(SearchBox.Text))
+            {
+                // The switch owns only the config save. Translation has its
+                // own cancellation/epoch fence and must remain switchable.
+                _ = PerformTranslateAsync();
+            }
+            else
+            {
+                _state.PostPendingNotice("已切换模型");
+                SyncUiWithState();
+            }
         }
         catch (Exception exception)
         {
@@ -1075,8 +1086,9 @@ public partial class QuickSearchWindow : Window
     private async Task ChooseStyleAsync(PromptTemplateDto template)
     {
         // Optimistic label; repainted from the authoritative state if the
-        // persist fails. Nothing is re-translated and nothing in flight is
-        // cancelled — the switch lands with the next request only.
+        // persist fails. Same contract as the model switch and every other
+        // surface: with text on screen the new style applies immediately
+        // through a retranslation instead of waiting for the next Enter.
         StyleSelectorLabel.Text = TranslationStyleMenu.ShortLabel(template);
         var applied = await TranslationStyleMenu.SwitchActiveTemplateAsync(
             template.Id,
@@ -1084,8 +1096,12 @@ public partial class QuickSearchWindow : Window
         if (!applied)
         {
             RefreshStyleSelector();
+            return;
         }
-        // The switch takes effect on the next Enter query, preserving the active view.
+        if (!_isClosed && IsVisible && !string.IsNullOrWhiteSpace(SearchBox.Text))
+        {
+            await PerformTranslateAsync();
+        }
     }
 
     internal void OpenSettings(string? page = null)

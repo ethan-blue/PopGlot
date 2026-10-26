@@ -1,7 +1,7 @@
 # PopGlot
 
 [![Windows](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D4)](https://github.com/ethan-blue/PopGlot/releases)
-[![Version](https://img.shields.io/badge/version-0.1.30-5B67B5)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.1.31-5B67B5)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-3D8B6E)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/ethan-blue/PopGlot/ci.yml?branch=main&label=CI)](https://github.com/ethan-blue/PopGlot/actions)
 
@@ -85,9 +85,9 @@ Run `PopGlot.exe`. It stays in the tray. Allow the free engine under Settings �
 
 ## 下载
 
-**0.1.30** 紧凑界面迭代：设置按使用顺序组织，快捷键在默认窗口一屏可见，资料库搜索缩为工具栏输入框；移除重复标题、装饰徽标和大块留白。后台请求构造库升级至固定稳定版 genai 0.7.1，传输与安全策略保持由 PopGlot 管理。发布状态与附件以 [Releases](https://github.com/ethan-blue/PopGlot/releases) 为准。
+**0.1.31** 修正切换引擎后的重译和状态提示，精简设置说明与帮助文案，校正工作台和查词快捷键说明。发布状态与附件以 [Releases](https://github.com/ethan-blue/PopGlot/releases) 为准。
 
-[下载 PopGlot 0.1.30](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.30/PopGlot-v0.1.30-win-x64.zip)
+[下载 PopGlot 0.1.31](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.31/PopGlot-v0.1.31-win-x64.zip)
 
 每一版的发布页都用同一个样子：标题是 `PopGlot 版本号`，页上直接写这一版改了什么，并附上 zip 和 `.sha256`。不用再点进另一份说明。
 
@@ -99,8 +99,8 @@ Run `PopGlot.exe`. It stays in the tray. Allow the free engine under Settings �
 文件名始终是 `PopGlot-v版本号-win-x64.zip`。校验：
 
 ```powershell
-(Get-FileHash -Path .\PopGlot-v0.1.30-win-x64.zip -Algorithm SHA256).Hash.ToLower()
-Get-Content .\PopGlot-v0.1.30-win-x64.zip.sha256
+(Get-FileHash -Path .\PopGlot-v0.1.31-win-x64.zip -Algorithm SHA256).Hash.ToLower()
+Get-Content .\PopGlot-v0.1.31-win-x64.zip.sha256
 ```
 
 全部发布页在 [Releases](https://github.com/ethan-blue/PopGlot/releases)。
