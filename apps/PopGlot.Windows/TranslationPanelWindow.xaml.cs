@@ -1161,7 +1161,7 @@ public partial class TranslationPanelWindow : Window
         StatusText.Text = "输入后按 Ctrl+Enter 翻译";
         Progress.Visibility = Visibility.Collapsed;
         // 空闲态的低对比一次性快捷键提示：进入准备/流式后立即让位给真实状态。
-        SetRouteText("Ctrl+Enter 翻译 · Enter 换行 · Ctrl+R 重试 · Esc 关闭", idleHint: true);
+        SetRouteText("Enter 换行 · Ctrl+R 重试 · Esc 关闭", idleHint: true);
         StatusDot.SetResourceReference(Border.BackgroundProperty, "TextTertiaryBrush");
         ResultSkeleton.Visibility = Visibility.Collapsed;
         TranslationRichBox.Visibility = Visibility.Collapsed;

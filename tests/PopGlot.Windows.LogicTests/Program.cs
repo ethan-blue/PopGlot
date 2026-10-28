@@ -107,6 +107,17 @@ internal static partial class Program
         Run("hotkey digits do not parse as key codes", HotkeyDigitsParseCorrectly);
         Run("v1 shortcut configuration migrates", V1ShortcutConfigurationMigrates);
         Run("v2 shortcut configuration migrates", V2ShortcutConfigurationMigrates);
+        RunSta("default shortcut conflict safely disables and persists without resurrection", DefaultShortcutConflictSafelyDisablesAndPersistsWithoutResurrection);
+        RunSta("user customized shortcut conflict preserved and not deleted", UserCustomizedShortcutConflictPreservedAndNotDeleted);
+        Run("explicit disabled shortcut survives migration and loads as unset", ExplicitDisabledShortcutSurvivesMigrationAndLoadsAsUnset);
+        RunSta("multiple default conflicts are safely handled", MultipleDefaultConflictsAreSafelyHandled);
+        RunSta("default conflict persistence failure reports explicit feedback", DefaultConflictPersistenceFailureReportsExplicitFeedbackWithoutSilentSuccess);
+        RunSta("default conflict followed by custom failure rolls back consistently without persisting", DefaultConflictFollowedByCustomFailureRollsBackConsistentlyWithoutPersisting);
+        RunSta("upgrade default global conflicts with user interface custom safely disables default", UpgradeDefaultGlobalConflictsWithUserInterfaceCustomSafelyDisablesDefault);
+        RunSta("upgrade default global conflicts with user custom global safely disables default", UpgradeDefaultGlobalConflictsWithUserCustomGlobalSafelyDisablesDefault);
+        RunSta("both customized shortcuts conflict continues to report error and never auto deletes", BothCustomizedShortcutsConflictContinuesToReportErrorAndNeverAutoDeletes);
+        Run("hotkey failure coordinator handles degradation dedup without global failure", HotkeyFailureCoordinatorDegradationDedupAndClear);
+        Run("show window hotkey non null contract and fallback semantics", ShowWindowHotkeyNonNullContractAndFallbackSemantics);
         Run("shortcut conflicts are rejected", ShortcutConflictsAreRejected);
         Run("interface shortcuts persist and reject collisions before writing", InterfaceShortcutsPersistAndRejectConflicts);
         RunSta("remapped shortcuts dispatch with old defaults inert", RemappedShortcutsDispatchAndKeepDefaultsInert);
@@ -445,6 +456,9 @@ internal static partial class Program
             ("settings draft guard nav bounce stays synced", WaveRegressionTests.SettingsDraftGuardNavBounceStaysSynced),
             ("panel error brushes track the live theme", WaveRegressionTests.PanelErrorBrushesTrackLiveTheme),
             ("panel footer stays inside the real 540x380 and 460x380 footprint", WaveRegressionTests.PanelFooterStaysInsideRealFootprint),
+            ("disabled button tooltips and long text stay readable", WaveRegressionTests.DisabledButtonTooltipsAndLongTextStayReadable),
+            ("shortcut reset defaults tracks dirty and converges", WaveRegressionTests.ShortcutResetDefaultsTracksDirtyAndConverges),
+            ("quick search help names Enter translation not newline", WaveRegressionTests.QuickSearchHelpNamesEnterTranslationNotNewline),
             ("tts automation names follow speaking state on all three surfaces", WaveRegressionTests.TtsAutomationNamesFollowSpeakingState),
             ("tts speaking icon brush tracks the live theme on the workbench", WaveRegressionTests.TtsSpeakingIconTracksLiveTheme),
             ("tts stop restores the speak icon foreground binding on quick search and panel", WaveRegressionTests.TtsSpeakIconFillRestoresForegroundBinding),
@@ -1019,6 +1033,522 @@ internal static partial class Program
         finally
         {
             File.Delete(path);
+        }
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool RegisterHotKey(nint hWnd, int id, uint fsModifiers, uint vk);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool UnregisterHotKey(nint hWnd, int id);
+
+    /// <summary>
+    /// Ensures that each shortcut in <paramref name="targetShortcuts"/> is occupied
+    /// before testing safe registration.
+    /// If an external application or host OS has already registered a default shortcut
+    /// (reporting Win32 ERROR_HOTKEY_ALREADY_REGISTERED), that provides valid, real-world
+    /// occupation evidence without needing competitor registration. Any remaining free
+    /// shortcuts are registered by <paramref name="competitor"/>, guaranteeing that all
+    /// items in <paramref name="targetShortcuts"/> are occupied when the tested service runs.
+    /// </summary>
+    private static void EnsureShortcutsOccupied(
+        Window competitorWindow,
+        HotkeyService competitor,
+        IReadOnlyDictionary<HotkeyAction, HotkeyBinding> targetShortcuts)
+    {
+        var hwnd = new System.Windows.Interop.WindowInteropHelper(competitorWindow).Handle;
+        var toRegister = new Dictionary<HotkeyAction, HotkeyBinding>();
+
+        foreach (var (action, binding) in targetShortcuts)
+        {
+            const uint modNoRepeat = 0x4000;
+            const int probeId = 0x7EFE;
+            if (RegisterHotKey(hwnd, probeId, binding.Modifiers | modNoRepeat, binding.VirtualKey))
+            {
+                UnregisterHotKey(hwnd, probeId);
+                toRegister[action] = binding;
+            }
+            else
+            {
+                var err = Marshal.GetLastWin32Error();
+                True(err == HotkeyService.ErrorHotkeyAlreadyRegistered,
+                    $"shortcut {action} ({binding.DisplayName}) failed probe with unexpected win32 error: {err}");
+            }
+        }
+
+        if (toRegister.Count > 0)
+        {
+            True(competitor.TryRegisterAll(toRegister, out var compConflict),
+                $"competitor must occupy free shortcuts: {compConflict}");
+        }
+    }
+
+    private static void DefaultShortcutConflictSafelyDisablesAndPersistsWithoutResurrection()
+    {
+        EnsureApplication();
+        var targetWindow = new Window();
+        var competitorWindow = new Window();
+        using var service = new HotkeyService(targetWindow);
+        using var competitor = new HotkeyService(competitorWindow);
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"popglot-hotkey-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var settingsPath = Path.Combine(tempDir, "windows-shell.json");
+
+        try
+        {
+            // Competitor pre-registers QuickSearchDefault (Ctrl+Alt+Q)
+            var competingSet = new Dictionary<HotkeyAction, HotkeyBinding>
+            {
+                [HotkeyAction.QuickSearch] = HotkeyBinding.QuickSearchDefault,
+            };
+            EnsureShortcutsOccupied(competitorWindow, competitor, competingSet);
+
+            // Create initial default settings and save
+            var initialSettings = ShellSettings.Default;
+            ShellSettingsStore.Save(initialSettings, settingsPath);
+
+            // Now service tries to register default settings via TryRegisterSafeDefaults
+            True(service.TryRegisterSafeDefaults(
+                    initialSettings,
+                    out var updatedSettings,
+                    out var conflict,
+                    out var disabledDefaults,
+                    out var persistenceError,
+                    saveSettings: s => ShellSettingsStore.Save(s, settingsPath)),
+                $"safe default registration must succeed by disabling the occupied default: {conflict}");
+
+            True(persistenceError is null, "disk persistence must succeed");
+            True(disabledDefaults.Any(d => d.Action == HotkeyAction.QuickSearch && d.Binding == HotkeyBinding.QuickSearchDefault),
+                "QuickSearch default shortcut must be reported as disabled");
+            True(updatedSettings.QuickSearchHotkey.IsUnset, "conflicting default must be safely unset");
+
+            // Feedback must be clear and understandable
+            var feedback = HotkeyService.DescribeDisabledDefaultsFeedback(disabledDefaults, persistenceError);
+            True(feedback.Contains("极速查词") && feedback.Contains("已被系统或其他程序占用") && feedback.Contains("已自动停用"),
+                $"feedback must be informative: {feedback}");
+
+            // Disk persistence must have recorded 'none'
+            var diskContent = File.ReadAllText(settingsPath);
+            True(diskContent.Contains("\"QuickSearchHotkey\": \"none\""),
+                "the disabled default must be persisted as 'none'");
+
+            // When reloading from disk (simulating restart or upgrade), it must remain unset and not resurrect
+            ShellSettingsStore.InvalidateCache();
+            var reloaded = ShellSettingsStore.Load(settingsPath);
+            True(reloaded.QuickSearchHotkey.IsUnset,
+                "reloaded configuration must retain unset state and not resurrect the conflicting default");
+        }
+        finally
+        {
+            service.Dispose();
+            competitor.Dispose();
+            targetWindow.Close();
+            competitorWindow.Close();
+            ShellSettingsStore.InvalidateCache();
+            if (Directory.Exists(tempDir))
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
+        }
+    }
+
+    private static void UserCustomizedShortcutConflictPreservedAndNotDeleted()
+    {
+        EnsureApplication();
+        var targetWindow = new Window();
+        var competitorWindow = new Window();
+        using var service = new HotkeyService(targetWindow);
+        using var competitor = new HotkeyService(competitorWindow);
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"popglot-hotkey-custom-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var settingsPath = Path.Combine(tempDir, "windows-shell.json");
+
+        try
+        {
+            // Competitor pre-registers a custom combination (Ctrl+Alt+Shift+F13)
+            var customBinding = new HotkeyBinding(
+                HotkeyBinding.ModControl | HotkeyBinding.ModAlt | HotkeyBinding.ModShift, 0x7C); // F13
+            var competingSet = new Dictionary<HotkeyAction, HotkeyBinding>
+            {
+                [HotkeyAction.QuickSearch] = customBinding,
+            };
+            EnsureShortcutsOccupied(competitorWindow, competitor, competingSet);
+
+            // User has customized QuickSearchHotkey to this combination
+            var userSettings = ShellSettings.Default with
+            {
+                QuickSearchHotkey = customBinding,
+            };
+            ShellSettingsStore.Save(userSettings, settingsPath);
+
+            // Attempting safe registration must NOT auto-delete or auto-disable user's customization
+            var success = service.TryRegisterSafeDefaults(
+                userSettings,
+                out var updatedSettings,
+                out var conflict,
+                out var disabledDefaults);
+
+            True(!success, "custom shortcut conflict must not succeed silently");
+            Equal(0, disabledDefaults.Count, "no default shortcuts were disabled");
+            Equal(customBinding, updatedSettings.QuickSearchHotkey,
+                "user's custom shortcut must NOT be replaced or cleared");
+            True(conflict is not null && conflict.Contains("极速查词") && conflict.Contains("可能已被其他程序占用"),
+                $"conflict message must describe the user's custom shortcut conflict: {conflict}");
+
+            // Disk configuration must remain unchanged (not overwritten with 'none')
+            ShellSettingsStore.InvalidateCache();
+            var reloaded = ShellSettingsStore.Load(settingsPath);
+            Equal(customBinding, reloaded.QuickSearchHotkey,
+                "user customization on disk must remain untouched");
+        }
+        finally
+        {
+            service.Dispose();
+            competitor.Dispose();
+            targetWindow.Close();
+            competitorWindow.Close();
+            ShellSettingsStore.InvalidateCache();
+            if (Directory.Exists(tempDir))
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
+        }
+    }
+
+    private static void ExplicitDisabledShortcutSurvivesMigrationAndLoadsAsUnset()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"popglot-hotkey-explicit-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var settingsPath = Path.Combine(tempDir, "windows-shell.json");
+
+        try
+        {
+            // Test 'none', 'disabled', and '未设置' strings in config
+            File.WriteAllText(settingsPath, """
+                {
+                    "SchemaVersion": 3,
+                    "SelectionHotkey": "none",
+                    "ScreenshotHotkey": "disabled",
+                    "CloseHotkey": "未设置",
+                    "QuickSearchHotkey": "Ctrl+Alt+Q"
+                }
+                """);
+            ShellSettingsStore.InvalidateCache();
+            var settings = ShellSettingsStore.Load(settingsPath);
+
+            True(settings.SelectionHotkey.IsUnset, "'none' must load as unset");
+            True(settings.ScreenshotHotkey.IsUnset, "'disabled' must load as unset");
+            True(settings.CloseHotkey.IsUnset, "'未设置' must load as unset");
+            Equal("Ctrl+Alt+Q", settings.QuickSearchHotkey.DisplayName);
+
+            // Re-saving must serialize them cleanly as 'none'
+            ShellSettingsStore.Save(settings, settingsPath);
+            var json = File.ReadAllText(settingsPath);
+            True(json.Contains("\"SelectionHotkey\": \"none\""), "SelectionHotkey must be none");
+            True(json.Contains("\"ScreenshotHotkey\": \"none\""), "ScreenshotHotkey must be none");
+            True(json.Contains("\"CloseHotkey\": \"none\""), "CloseHotkey must be none");
+
+            // Reload again
+            ShellSettingsStore.InvalidateCache();
+            var reloaded = ShellSettingsStore.Load(settingsPath);
+            True(reloaded.SelectionHotkey.IsUnset);
+            True(reloaded.ScreenshotHotkey.IsUnset);
+            True(reloaded.CloseHotkey.IsUnset);
+        }
+        finally
+        {
+            ShellSettingsStore.InvalidateCache();
+            if (Directory.Exists(tempDir))
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
+        }
+    }
+
+    private static void MultipleDefaultConflictsAreSafelyHandled()
+    {
+        EnsureApplication();
+        var targetWindow = new Window();
+        var competitorWindow = new Window();
+        using var service = new HotkeyService(targetWindow);
+        using var competitor = new HotkeyService(competitorWindow);
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"popglot-hotkey-multi-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var settingsPath = Path.Combine(tempDir, "windows-shell.json");
+
+        try
+        {
+            // Competitor pre-registers TWO default shortcuts: QuickSearch (Ctrl+Alt+Q) and Screenshot (Ctrl+Alt+Space)
+            var competingSet = new Dictionary<HotkeyAction, HotkeyBinding>
+            {
+                [HotkeyAction.QuickSearch] = HotkeyBinding.QuickSearchDefault,
+                [HotkeyAction.CaptureScreen] = HotkeyBinding.ScreenshotDefault,
+            };
+            EnsureShortcutsOccupied(competitorWindow, competitor, competingSet);
+
+            var initialSettings = ShellSettings.Default;
+            ShellSettingsStore.Save(initialSettings, settingsPath);
+
+            True(service.TryRegisterSafeDefaults(
+                    initialSettings,
+                    out var updatedSettings,
+                    out var conflict,
+                    out var disabledDefaults,
+                    out var persistenceError,
+                    saveSettings: s => ShellSettingsStore.Save(s, settingsPath)),
+                $"safe default registration must succeed by disabling both occupied defaults: {conflict}");
+
+            True(persistenceError is null, "disk persistence must succeed");
+            True(disabledDefaults.Any(d => d.Action == HotkeyAction.QuickSearch), "QuickSearch must be disabled");
+            True(disabledDefaults.Any(d => d.Action == HotkeyAction.CaptureScreen), "CaptureScreen must be disabled");
+            True(updatedSettings.QuickSearchHotkey.IsUnset);
+            True(updatedSettings.ScreenshotHotkey.IsUnset);
+
+            var feedback = HotkeyService.DescribeDisabledDefaultsFeedback(disabledDefaults, persistenceError);
+            True(feedback.Contains("极速查词") && feedback.Contains("截图翻译") && feedback.Contains("已自动停用"),
+                $"feedback must describe all disabled defaults: {feedback}");
+
+            // Persisted file has both as 'none'
+            ShellSettingsStore.InvalidateCache();
+            var reloaded = ShellSettingsStore.Load(settingsPath);
+            True(reloaded.QuickSearchHotkey.IsUnset && reloaded.ScreenshotHotkey.IsUnset,
+                "both disabled defaults must survive on disk without resurrection");
+        }
+        finally
+        {
+            service.Dispose();
+            competitor.Dispose();
+            targetWindow.Close();
+            competitorWindow.Close();
+            ShellSettingsStore.InvalidateCache();
+            if (Directory.Exists(tempDir))
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
+        }
+    }
+
+    private static void DefaultConflictPersistenceFailureReportsExplicitFeedbackWithoutSilentSuccess()
+    {
+        EnsureApplication();
+        var targetWindow = new Window();
+        var competitorWindow = new Window();
+        using var service = new HotkeyService(targetWindow);
+        using var competitor = new HotkeyService(competitorWindow);
+
+        try
+        {
+            // Competitor pre-registers QuickSearch (Ctrl+Alt+Q)
+            var competingSet = new Dictionary<HotkeyAction, HotkeyBinding>
+            {
+                [HotkeyAction.QuickSearch] = HotkeyBinding.QuickSearchDefault,
+            };
+            EnsureShortcutsOccupied(competitorWindow, competitor, competingSet);
+
+            var initialSettings = ShellSettings.Default;
+
+            // In-memory registration succeeds, but saving to disk throws an IOException
+            var success = service.TryRegisterSafeDefaults(
+                initialSettings,
+                out var updatedSettings,
+                out var conflict,
+                out var disabledDefaults,
+                out var persistenceError,
+                saveSettings: _ => throw new IOException("Disk quota exceeded (test simulated)"));
+
+            True(success, "registration of remaining live hotkeys must still succeed");
+            True(disabledDefaults.Any(d => d.Action == HotkeyAction.QuickSearch), "QuickSearch default was disabled in memory");
+            True(persistenceError is not null && persistenceError.Contains("Disk quota exceeded"),
+                $"persistence error must be explicitly captured: {persistenceError}");
+
+            // Feedback must NOT silently appear as success; it must tell user about save failure
+            var feedback = HotkeyService.DescribeDisabledDefaultsFeedback(disabledDefaults, persistenceError);
+            True(feedback.Contains("配置保存失败") && feedback.Contains("下次启动时可能会恢复"),
+                $"feedback must explicitly state save failure so user is not surprised on restart: {feedback}");
+        }
+        finally
+        {
+            service.Dispose();
+            competitor.Dispose();
+            targetWindow.Close();
+            competitorWindow.Close();
+        }
+    }
+
+    private static void DefaultConflictFollowedByCustomFailureRollsBackConsistentlyWithoutPersisting()
+    {
+        EnsureApplication();
+        var targetWindow = new Window();
+        var competitorWindow = new Window();
+        using var service = new HotkeyService(targetWindow);
+        using var competitor = new HotkeyService(competitorWindow);
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"popglot-hotkey-rollback-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var settingsPath = Path.Combine(tempDir, "windows-shell.json");
+
+        try
+        {
+            // Competitor registers both default QuickSearch (Ctrl+Alt+Q) and custom Selection (F13)
+            var customSelection = new HotkeyBinding(
+                HotkeyBinding.ModControl | HotkeyBinding.ModAlt | HotkeyBinding.ModShift, 0x7C); // F13
+            var competingSet = new Dictionary<HotkeyAction, HotkeyBinding>
+            {
+                [HotkeyAction.QuickSearch] = HotkeyBinding.QuickSearchDefault,
+                [HotkeyAction.TranslateSelection] = customSelection,
+            };
+            EnsureShortcutsOccupied(competitorWindow, competitor, competingSet);
+
+            var userSettings = ShellSettings.Default with
+            {
+                SelectionHotkey = customSelection,
+            };
+            ShellSettingsStore.Save(userSettings, settingsPath);
+
+            var persisted = false;
+            var success = service.TryRegisterSafeDefaults(
+                userSettings,
+                out var updatedSettings,
+                out var conflict,
+                out var disabledDefaults,
+                out var persistenceError,
+                saveSettings: s =>
+                {
+                    persisted = true;
+                    ShellSettingsStore.Save(s, settingsPath);
+                });
+
+            // Overall registration must fail because the custom shortcut cannot be safely disabled
+            True(!success, "registration must fail when user customized shortcut is occupied");
+            True(!persisted, "nothing must be persisted when candidate set fails overall registration");
+            Equal(0, disabledDefaults.Count, "no partial disabled defaults reported on rollback");
+            Equal(userSettings, updatedSettings,
+                "updatedSettings must roll back to original settings to stay consistent with App._shellSettings");
+
+            // Disk configuration remains untouched
+            ShellSettingsStore.InvalidateCache();
+            var onDisk = ShellSettingsStore.Load(settingsPath);
+            Equal(userSettings.SelectionHotkey, onDisk.SelectionHotkey);
+            Equal(userSettings.QuickSearchHotkey, onDisk.QuickSearchHotkey);
+        }
+        finally
+        {
+            competitor.Dispose();
+            competitorWindow.Close();
+            targetWindow.Close();
+            ShellSettingsStore.InvalidateCache();
+            if (Directory.Exists(tempDir))
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
+        }
+    }
+
+    private static void HotkeyFailureCoordinatorDegradationDedupAndClear()
+    {
+        var coordinator = new HotkeyFailureCoordinator();
+        True(!coordinator.DegradationActive, "fresh coordinator has no active degradation");
+        True(!coordinator.FailureActive, "fresh coordinator has no active failure");
+
+        // First degradation notice surfaces
+        True(coordinator.ReportDegradation("极速查词已停用"), "first degradation notice must surface");
+        True(coordinator.DegradationActive, "degradation is active");
+        True(!coordinator.FailureActive, "degradation MUST NOT set FailureActive to true (not a global failure!)");
+
+        // Identical notice must be deduped (stay quiet)
+        True(!coordinator.ReportDegradation("极速查词已停用"), "identical degradation notice must NOT surface again");
+        True(!coordinator.FailureActive, "still not a global failure");
+
+        // Changed notice surfaces
+        True(coordinator.ReportDegradation("极速查词、截图翻译已停用"), "changed degradation notice must surface");
+        Equal("极速查词、截图翻译已停用", coordinator.ActiveDegradationDetail);
+
+        // Clear degradation (e.g. all shortcuts re-enabled)
+        coordinator.ClearDegradation();
+        True(!coordinator.DegradationActive, "degradation cleared");
+        True(!coordinator.FailureActive, "failure still not active");
+    }
+
+    private static void ShowWindowHotkeyNonNullContractAndFallbackSemantics()
+    {
+        // 1. Default value is ShowWindowDefault (Ctrl+Alt+O)
+        Equal("Ctrl+Alt+O", ShellSettings.Default.ShowWindowHotkey.DisplayName);
+        Equal(HotkeyBinding.ShowWindowDefault, ShellSettings.Default.ShowWindowHotkey);
+
+        // 2. Passing null in primary constructor falls back safely to ShowWindowDefault
+        var settingsWithNull = new ShellSettings(
+            SchemaVersion: 3,
+            SelectionHotkey: HotkeyBinding.SelectionDefault,
+            ScreenshotHotkey: HotkeyBinding.ScreenshotDefault,
+            CloseHotkey: HotkeyBinding.CloseDefault,
+            HistoryEnabled: true,
+            Theme: ThemePreference.System,
+            ShowWindowHotkey: null);
+        Equal(HotkeyBinding.ShowWindowDefault, settingsWithNull.ShowWindowHotkey);
+        True(settingsWithNull.ShowWindowHotkey is not null, "property must never be null");
+
+        // 3. UnsetBinding works cleanly
+        var unsetSettings = ShellSettings.Default with
+        {
+            ShowWindowHotkey = HotkeyBinding.UnsetBinding,
+        };
+        True(unsetSettings.ShowWindowHotkey.IsUnset, "ShowWindowHotkey must be unset");
+        Equal("未设置", unsetSettings.ShowWindowHotkey.DisplayName);
+        Equal("none", unsetSettings.ShowWindowHotkey.Serialize());
+
+        // 4. Hotkeys dictionary excludes UnsetBinding
+        True(!unsetSettings.Hotkeys.ContainsKey(HotkeyAction.ShowWindow),
+            "Hotkeys dictionary must not contain ShowWindow when unset");
+        True(ShellSettings.Default.Hotkeys.ContainsKey(HotkeyAction.ShowWindow),
+            "Hotkeys dictionary must contain ShowWindow when valid");
+        Equal(HotkeyBinding.ShowWindowDefault, ShellSettings.Default.Hotkeys[HotkeyAction.ShowWindow]);
+
+        // 5. GetHotkey, IsDefault, WithHotkey helpers
+        Equal(HotkeyBinding.ShowWindowDefault, ShellSettings.Default.GetHotkey(HotkeyAction.ShowWindow));
+        True(ShellSettings.Default.IsDefault(HotkeyAction.ShowWindow));
+        var customBinding = new HotkeyBinding(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x4B); // Ctrl+Alt+K
+        var updated = ShellSettings.Default.WithHotkey(HotkeyAction.ShowWindow, customBinding);
+        Equal(customBinding, updated.ShowWindowHotkey);
+        True(!updated.IsDefault(HotkeyAction.ShowWindow));
+
+        // 6. JSON round-trip with 'none'
+        var tempDir = Path.Combine(Path.GetTempPath(), $"popglot-showwindow-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var path = Path.Combine(tempDir, "shell.json");
+        try
+        {
+            ShellSettingsStore.Save(unsetSettings, path);
+            var content = File.ReadAllText(path);
+            True(content.Contains("\"ShowWindowHotkey\": \"none\""), "JSON must contain 'none'");
+
+            ShellSettingsStore.InvalidateCache();
+            var reloaded = ShellSettingsStore.Load(path);
+            True(reloaded.ShowWindowHotkey.IsUnset, "reloaded ShowWindowHotkey must be unset");
+
+            // 7. Legacy JSON omitting ShowWindowHotkey defaults to ShowWindowDefault
+            File.WriteAllText(path, "{\"SchemaVersion\": 3}");
+            ShellSettingsStore.InvalidateCache();
+            var legacy = ShellSettingsStore.Load(path);
+            Equal(HotkeyBinding.ShowWindowDefault, legacy.ShowWindowHotkey);
+
+            // 8. JSON with null ShowWindowHotkey defaults to ShowWindowDefault
+            File.WriteAllText(path, "{\"SchemaVersion\": 3, \"ShowWindowHotkey\": null}");
+            ShellSettingsStore.InvalidateCache();
+            var withJsonNull = ShellSettingsStore.Load(path);
+            Equal(HotkeyBinding.ShowWindowDefault, withJsonNull.ShowWindowHotkey);
+        }
+        finally
+        {
+            ShellSettingsStore.InvalidateCache();
+            if (Directory.Exists(tempDir))
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
         }
     }
 

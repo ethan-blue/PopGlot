@@ -123,11 +123,13 @@ internal static class InterfaceKeys
         var translateHint = TranslateHotkey.IsValid
             ? $"{TranslateHotkey.DisplayName} 翻译 · Enter 换行"
             : "Ctrl+Enter 翻译 · Enter 换行";
-        foreach (var name in new[] { "TranslateInput", "SourceInputBox", "SearchBox" })
+        foreach (var name in new[] { "TranslateInput", "SourceInputBox" })
         {
             if (scope.FindName(name) is FrameworkElement editor)
                 System.Windows.Automation.AutomationProperties.SetHelpText(editor, translateHint);
         }
+        if (scope.FindName("SearchBox") is FrameworkElement searchBox)
+            System.Windows.Automation.AutomationProperties.SetHelpText(searchBox, "Enter 翻译");
     }
 
     private static void HintAcceleratorOnly(FrameworkElement scope, string name, HotkeyBinding binding)

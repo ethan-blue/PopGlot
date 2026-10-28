@@ -464,23 +464,26 @@
                     </ScrollViewer>
                 </Grid>
 
-                <!-- Footer Status Bar (Row 3, pinned to the bottom) -->
-                <!-- Footer Status Bar: natural flowing alignment without giant gaps -->
+                <!-- Finite columns keep long status and route hints inside narrow panels. -->
                 <Grid Grid.Row="3" Margin="2,8,2,0">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <Border x:Name="StatusDot" Width="6" Height="6" CornerRadius="3"
-                                Background="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center" />
-                        <TextBlock x:Name="StatusText" Style="{StaticResource Metadata}" VerticalAlignment="Center"
-                                   Margin="6,0,0,0"
-                                   TextTrimming="CharacterEllipsis"
-                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
-                                   AutomationProperties.LiveSetting="Polite"
-                                   AutomationProperties.Name="翻译状态" />
-                        <TextBlock x:Name="RouteText" Style="{StaticResource Metadata}" VerticalAlignment="Center"
-                                   Margin="8,0,0,0" MaxWidth="360" TextTrimming="CharacterEllipsis"
-                                   Foreground="{DynamicResource TextTertiaryBrush}"
-                                   ToolTip="{Binding RelativeSource={RelativeSource Self}, Path=Text}" />
-                    </StackPanel>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border x:Name="StatusDot" Width="6" Height="6" CornerRadius="3"
+                            Background="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center" />
+                    <TextBlock x:Name="StatusText" Grid.Column="1" Style="{StaticResource Metadata}" VerticalAlignment="Center"
+                               Margin="6,0,0,0" MaxWidth="180"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
+                               AutomationProperties.LiveSetting="Polite"
+                               AutomationProperties.Name="翻译状态" />
+                    <TextBlock x:Name="RouteText" Grid.Column="2" Style="{StaticResource Metadata}" VerticalAlignment="Center"
+                               Margin="8,0,0,0" MaxWidth="360" TextTrimming="CharacterEllipsis"
+                               HorizontalAlignment="Left"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               ToolTip="{Binding RelativeSource={RelativeSource Self}, Path=Text}" />
                 </Grid>
             </Grid>
         </Grid>

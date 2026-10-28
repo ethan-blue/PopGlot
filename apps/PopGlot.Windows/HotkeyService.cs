@@ -4,6 +4,14 @@ using System.Windows.Interop;
 
 namespace PopGlot.Windows;
 
+internal readonly record struct HotkeyRegistrationFailure(
+    HotkeyAction Action,
+    HotkeyBinding Binding,
+    int Win32Error)
+{
+    public bool IsOccupation => Win32Error == HotkeyService.ErrorHotkeyAlreadyRegistered;
+}
+
 /// <summary>
 /// Registers the process-wide hotkeys and reports precisely which one Windows
 /// refused, so the settings page can point at the offending row instead of
@@ -76,14 +84,20 @@ internal sealed partial class HotkeyService : IDisposable
     /// </summary>
     public bool TryRegisterAll(
         IReadOnlyDictionary<HotkeyAction, HotkeyBinding> hotkeys,
-        out string? conflict)
+        out string? conflict) =>
+        TryRegisterAll(hotkeys, out conflict, out _);
+
+    public bool TryRegisterAll(
+        IReadOnlyDictionary<HotkeyAction, HotkeyBinding> hotkeys,
+        out string? conflict,
+        out HotkeyRegistrationFailure? failure)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(hotkeys);
 
         var previous = _current;
         UnregisterAll();
-        if (RegisterSet(hotkeys, out conflict))
+        if (RegisterSet(hotkeys, out conflict, out failure))
         {
             _current = new Dictionary<HotkeyAction, HotkeyBinding>(hotkeys);
             _suspended = false;
@@ -93,7 +107,7 @@ internal sealed partial class HotkeyService : IDisposable
 
         UnregisterAll();
         _current = previous;
-        if (!RegisterSet(previous, out var restoreConflict))
+        if (!RegisterSet(previous, out var restoreConflict, out _))
         {
             _suspended = true;
             _degraded = true;
@@ -109,6 +123,156 @@ internal sealed partial class HotkeyService : IDisposable
         ExitDegradedState();
         return false;
     }
+
+    /// <summary>
+    /// Attempts to register the hotkeys from <paramref name="settings"/>.
+    /// If registering a factory default hotkey fails due to system occupation
+    /// (ERROR_HOTKEY_ALREADY_REGISTERED), the conflicting default item is safely
+    /// disabled (set to <see cref="HotkeyBinding.UnsetBinding"/>) and persisted to disk,
+    /// and registration retries with the remaining set so that non-conflicting hotkeys
+    /// remain functional and subsequent startups/upgrades will not resurrect the conflicting default.
+    /// User-customized hotkeys and non-occupation failures are never automatically disabled.
+    /// </summary>
+    public bool TryRegisterSafeDefaults(
+        ShellSettings settings,
+        out ShellSettings updatedSettings,
+        out string? conflict,
+        out IReadOnlyList<DisabledDefaultHotkey> disabledDefaults,
+        bool disableOccupiedDefaults = true) =>
+        TryRegisterSafeDefaults(
+            settings,
+            out updatedSettings,
+            out conflict,
+            out disabledDefaults,
+            out _,
+            disableOccupiedDefaults,
+            saveSettings: null);
+
+    public bool TryRegisterSafeDefaults(
+        ShellSettings settings,
+        out ShellSettings updatedSettings,
+        out string? conflict,
+        out IReadOnlyList<DisabledDefaultHotkey> disabledDefaults,
+        out string? persistenceError,
+        bool disableOccupiedDefaults = true,
+        Action<ShellSettings>? saveSettings = null)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var current = settings;
+        var disabled = new List<DisabledDefaultHotkey>();
+        persistenceError = null;
+
+        if (disableOccupiedDefaults)
+        {
+            current = current.DisableFactoryDefaultsConflictingWithCustom(disabled);
+        }
+
+        var validationError = current.ValidateHotkeys();
+        if (validationError is not null)
+        {
+            updatedSettings = settings;
+            disabledDefaults = Array.Empty<DisabledDefaultHotkey>();
+            conflict = validationError;
+            return false;
+        }
+
+        while (true)
+        {
+            if (TryRegisterAll(current.Hotkeys, out conflict, out var failure))
+            {
+                if (disabled.Count > 0)
+                {
+                    try
+                    {
+                        (saveSettings ?? (s => ShellSettingsStore.Save(s)))(current);
+                    }
+                    catch (Exception ex)
+                    {
+                        persistenceError = ex.Message;
+                    }
+                }
+
+                updatedSettings = current;
+                disabledDefaults = disabled;
+                return true;
+            }
+
+            if (disableOccupiedDefaults &&
+                failure is not null &&
+                failure.Value.IsOccupation &&
+                current.IsDefault(failure.Value.Action))
+            {
+                var action = failure.Value.Action;
+                var binding = failure.Value.Binding;
+                disabled.Add(new DisabledDefaultHotkey(action, binding));
+
+                current = current.WithHotkey(action, HotkeyBinding.UnsetBinding);
+                continue;
+            }
+
+            // Registration failed (e.g. customized hotkey conflict or non-occupation failure).
+            // Intermediate default disabling must be rolled back: no changes persisted to disk,
+            // no disabled defaults reported, and updatedSettings matches the original settings
+            // so it stays consistent with App._shellSettings.
+            updatedSettings = settings;
+            disabledDefaults = Array.Empty<DisabledDefaultHotkey>();
+            return false;
+        }
+    }
+
+    internal static string DescribeDisabledDefaultsFeedback(
+        IReadOnlyList<DisabledDefaultHotkey> disabled,
+        string? persistenceError = null)
+    {
+        if (disabled.Count == 0)
+        {
+            return string.Empty;
+        }
+        string baseNotice;
+        if (disabled.Count == 1)
+        {
+            var item = disabled[0];
+            var reason = !string.IsNullOrWhiteSpace(item.ConflictReason)
+                ? item.ConflictReason
+                : "已被系统或其他程序占用";
+            baseNotice = $"{ShellSettings.ActionName(item.Action)}默认快捷键（{item.Binding.DisplayName}）{reason}，已自动停用以避免冲突。可在设置中重新绑定。";
+        }
+        else
+        {
+            if (disabled.All(d => string.IsNullOrWhiteSpace(d.ConflictReason)))
+            {
+                var items = string.Join("、", disabled.Select(d => $"{ShellSettings.ActionName(d.Action)}（{d.Binding.DisplayName}）"));
+                baseNotice = $"{items}默认快捷键已被系统或其他程序占用，已自动停用以避免冲突。可在设置中重新绑定。";
+            }
+            else if (disabled.All(d => !string.IsNullOrWhiteSpace(d.ConflictReason)))
+            {
+                var items = string.Join("、", disabled.Select(d => $"{ShellSettings.ActionName(d.Action)}（{d.Binding.DisplayName}）"));
+                baseNotice = $"{items}默认快捷键与自定义快捷键冲突，已自动停用以避免冲突。可在设置中重新绑定。";
+            }
+            else
+            {
+                var details = disabled.Select(d =>
+                    $"{ShellSettings.ActionName(d.Action)}（{d.Binding.DisplayName}：{(!string.IsNullOrWhiteSpace(d.ConflictReason) ? d.ConflictReason : "已被系统或其他程序占用")}）");
+                baseNotice = $"{string.Join("；", details)}，已自动停用以避免冲突。可在设置中重新绑定。";
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(persistenceError))
+        {
+            baseNotice += $" 注意：配置保存失败（{persistenceError}），下次启动时可能会恢复，请检查文件权限或在设置中手动停用。";
+        }
+
+        return baseNotice;
+    }
+
+    internal static string DescribeDisabledDefaultsFeedback(
+        IReadOnlyList<(HotkeyAction Action, HotkeyBinding Binding)> disabled,
+        string? persistenceError = null) =>
+        DescribeDisabledDefaultsFeedback(
+            disabled.Select(d => new DisabledDefaultHotkey(d.Action, d.Binding)).ToList(),
+            persistenceError);
 
     /// <summary>
     /// Temporarily releases process-wide shortcuts while a recorder is
@@ -134,7 +298,7 @@ internal sealed partial class HotkeyService : IDisposable
         }
 
         UnregisterAll();
-        if (!RegisterSet(_current, out conflict))
+        if (!RegisterSet(_current, out conflict, out _))
         {
             _suspended = true;
             _degraded = true;
@@ -152,7 +316,8 @@ internal sealed partial class HotkeyService : IDisposable
 
     private bool RegisterSet(
         IReadOnlyDictionary<HotkeyAction, HotkeyBinding> hotkeys,
-        out string? conflict)
+        out string? conflict,
+        out HotkeyRegistrationFailure? failure)
     {
         var id = FirstHotkeyId;
         var newlyRegistered = new List<int>();
@@ -174,6 +339,7 @@ internal sealed partial class HotkeyService : IDisposable
                     _registered.Remove(regId);
                 }
                 conflict = DescribeRegistrationFailure(action, binding, win32Error);
+                failure = new HotkeyRegistrationFailure(action, binding, win32Error);
                 return false;
             }
             _registered[id] = action;
@@ -181,6 +347,7 @@ internal sealed partial class HotkeyService : IDisposable
             id++;
         }
         conflict = null;
+        failure = null;
         return true;
     }
 

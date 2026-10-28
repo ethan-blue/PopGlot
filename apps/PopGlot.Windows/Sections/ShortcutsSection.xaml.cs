@@ -37,6 +37,8 @@ public partial class ShortcutsSection : System.Windows.Controls.UserControl
     internal HotkeyRecorder InterfaceStyleHotkey => InterfaceStyleHotkeyRecorder;
     internal HotkeyRecorder InterfaceSwapHotkey => InterfaceSwapHotkeyRecorder;
 
+    internal event System.EventHandler? DefaultsReset;
+
     /// <summary>Resets all shortcut fields to their factory defaults.</summary>
     internal void ResetDefaults()
     {
@@ -53,6 +55,7 @@ public partial class ShortcutsSection : System.Windows.Controls.UserControl
         InterfaceSettingsHotkey.BindingValue = HotkeyBinding.InterfaceSettingsDefault;
         InterfaceTranslateHotkey.BindingValue = HotkeyBinding.InterfaceTranslateDefault;
         InterfaceSpeakHotkey.BindingValue = HotkeyBinding.InterfaceSpeakDefault;
+        DefaultsReset?.Invoke(this, System.EventArgs.Empty);
     }
 
     private void ResetDefaultsButton_Click(object sender, System.Windows.RoutedEventArgs e) =>

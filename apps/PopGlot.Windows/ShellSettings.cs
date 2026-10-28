@@ -25,6 +25,28 @@ internal enum ThemePreference
 }
 
 /// <summary>
+/// A factory default global hotkey that was safely disabled to avoid conflict
+/// with system/external applications or user-customized shortcuts.
+/// </summary>
+internal readonly record struct DisabledDefaultHotkey(
+    HotkeyAction Action,
+    HotkeyBinding Binding,
+    string? ConflictReason = null)
+{
+    public void Deconstruct(out HotkeyAction action, out HotkeyBinding binding)
+    {
+        action = Action;
+        binding = Binding;
+    }
+
+    public static implicit operator (HotkeyAction Action, HotkeyBinding Binding)(DisabledDefaultHotkey item) =>
+        (item.Action, item.Binding);
+
+    public static implicit operator DisabledDefaultHotkey((HotkeyAction Action, HotkeyBinding Binding) item) =>
+        new(item.Action, item.Binding);
+}
+
+/// <summary>
 /// One global hotkey, stored as a portable "Ctrl+Alt+W" string.
 /// </summary>
 /// <remarks>
@@ -142,7 +164,9 @@ internal sealed record HotkeyBinding(uint Modifiers, uint VirtualKey)
         }
 
         var text = input.Trim();
-        if (text.Equals("none", StringComparison.OrdinalIgnoreCase) || text == "未设置")
+        if (text.Equals("none", StringComparison.OrdinalIgnoreCase) ||
+            text.Equals("disabled", StringComparison.OrdinalIgnoreCase) ||
+            text == "未设置")
         {
             return UnsetBinding;
         }
@@ -284,6 +308,9 @@ internal sealed record ShellSettings(
     public HotkeyBinding QuickSearchHotkey { get; init; } =
         QuickSearchHotkey ?? HotkeyBinding.QuickSearchDefault;
 
+    public HotkeyBinding ShowWindowHotkey { get; init; } =
+        ShowWindowHotkey ?? HotkeyBinding.ShowWindowDefault;
+
     public HotkeyBinding InterfaceModelHotkey { get; init; } =
         InterfaceModelHotkey ?? HotkeyBinding.InterfaceModelDefault;
 
@@ -327,6 +354,140 @@ internal sealed record ShellSettings(
         InterfaceStyleHotkey: HotkeyBinding.InterfaceStyleDefault,
         InterfaceSwapHotkey: HotkeyBinding.InterfaceSwapDefault);
 
+    public static HotkeyBinding GetDefault(HotkeyAction action) => action switch
+    {
+        HotkeyAction.TranslateSelection => HotkeyBinding.SelectionDefault,
+        HotkeyAction.CaptureScreen => HotkeyBinding.ScreenshotDefault,
+        HotkeyAction.ClosePanel => HotkeyBinding.CloseDefault,
+        HotkeyAction.ShowWindow => HotkeyBinding.ShowWindowDefault,
+        HotkeyAction.QuickSearch => HotkeyBinding.QuickSearchDefault,
+        _ => HotkeyBinding.UnsetBinding,
+    };
+
+    public HotkeyBinding GetHotkey(HotkeyAction action) => action switch
+    {
+        HotkeyAction.TranslateSelection => SelectionHotkey,
+        HotkeyAction.CaptureScreen => ScreenshotHotkey,
+        HotkeyAction.ClosePanel => CloseHotkey,
+        HotkeyAction.ShowWindow => ShowWindowHotkey,
+        HotkeyAction.QuickSearch => QuickSearchHotkey,
+        _ => HotkeyBinding.UnsetBinding,
+    };
+
+    public bool IsDefault(HotkeyAction action) =>
+        GetHotkey(action) == GetDefault(action);
+
+    public ShellSettings WithHotkey(HotkeyAction action, HotkeyBinding binding) => action switch
+    {
+        HotkeyAction.TranslateSelection => this with { SelectionHotkey = binding },
+        HotkeyAction.CaptureScreen => this with { ScreenshotHotkey = binding },
+        HotkeyAction.ClosePanel => this with { CloseHotkey = binding },
+        HotkeyAction.ShowWindow => this with { ShowWindowHotkey = binding },
+        HotkeyAction.QuickSearch => this with { QuickSearchHotkey = binding },
+        _ => this,
+    };
+
+    /// <summary>
+    /// When auto-disabling occupied defaults is enabled (e.g. startup/upgrade),
+    /// user customization intent takes priority: any factory default global hotkey
+    /// that conflicts with a user-customized global or interface shortcut is safely
+    /// disabled (unset).
+    /// </summary>
+    internal ShellSettings DisableFactoryDefaultsConflictingWithCustom(
+        List<DisabledDefaultHotkey>? disabledList = null)
+    {
+        var current = this;
+
+        var interfaceKeys = new (string Name, HotkeyBinding Binding)[]
+        {
+            ("切换当前模型", current.InterfaceModelHotkey),
+            ("切换风格", current.InterfaceStyleHotkey),
+            ("互换源/目标语言", current.InterfaceSwapHotkey),
+            ("打开工作台", current.InterfaceWorkbenchHotkey),
+            ("打开资料库", current.InterfaceLibraryHotkey),
+            ("打开设置", current.InterfaceSettingsHotkey),
+            ("发起翻译", current.InterfaceTranslateHotkey),
+            ("朗读", current.InterfaceSpeakHotkey),
+        };
+
+        var allActions = new[]
+        {
+            HotkeyAction.TranslateSelection,
+            HotkeyAction.CaptureScreen,
+            HotkeyAction.ClosePanel,
+            HotkeyAction.ShowWindow,
+            HotkeyAction.QuickSearch,
+        };
+
+        foreach (var action in allActions)
+        {
+            if (!current.IsDefault(action))
+            {
+                continue;
+            }
+
+            var defaultBinding = current.GetHotkey(action);
+            if (defaultBinding.IsUnset || !defaultBinding.IsValid)
+            {
+                continue;
+            }
+
+            string? conflictingTarget = null;
+
+            // 1. Check against user-customized global hotkeys
+            foreach (var otherAction in allActions)
+            {
+                if (otherAction == action)
+                {
+                    continue;
+                }
+                if (current.IsDefault(otherAction))
+                {
+                    continue;
+                }
+
+                var otherBinding = current.GetHotkey(otherAction);
+                if (!otherBinding.IsUnset && otherBinding.IsValid &&
+                    (otherBinding == defaultBinding ||
+                     string.Equals(otherBinding.DisplayName, defaultBinding.DisplayName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    conflictingTarget = ActionName(otherAction);
+                    break;
+                }
+            }
+
+            // 2. Check against user-customized interface shortcuts
+            if (conflictingTarget is null)
+            {
+                foreach (var (name, ifaceBinding) in interfaceKeys)
+                {
+                    if (ifaceBinding.IsUnset || !ifaceBinding.IsValid)
+                    {
+                        continue;
+                    }
+
+                    if (ifaceBinding == defaultBinding ||
+                        string.Equals(ifaceBinding.DisplayName, defaultBinding.DisplayName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        conflictingTarget = name;
+                        break;
+                    }
+                }
+            }
+
+            if (conflictingTarget is not null)
+            {
+                current = current.WithHotkey(action, HotkeyBinding.UnsetBinding);
+                disabledList?.Add(new DisabledDefaultHotkey(
+                    action,
+                    defaultBinding,
+                    $"与自定义快捷键“{conflictingTarget}”冲突"));
+            }
+        }
+
+        return current;
+    }
+
     public IReadOnlyDictionary<HotkeyAction, HotkeyBinding> Hotkeys
     {
         get
@@ -345,10 +506,7 @@ internal sealed record ShellSettings(
             Add(HotkeyAction.CaptureScreen, ScreenshotHotkey);
             Add(HotkeyAction.ClosePanel, CloseHotkey);
             Add(HotkeyAction.QuickSearch, QuickSearchHotkey);
-            if (ShowWindowHotkey is not null && ShowWindowHotkey.IsValid)
-            {
-                dict[HotkeyAction.ShowWindow] = ShowWindowHotkey;
-            }
+            Add(HotkeyAction.ShowWindow, ShowWindowHotkey);
             return dict;
         }
     }
@@ -589,7 +747,7 @@ internal static class ShellSettingsStore
                 persisted.CopyTranslationAutomatically ?? defaults.CopyTranslationAutomatically,
                 persisted.StartWithWindows ?? defaults.StartWithWindows,
                 persisted.ShowWindowHotkey is not null
-                    ? HotkeyBinding.Parse(persisted.ShowWindowHotkey, defaults.ShowWindowHotkey ?? HotkeyBinding.ShowWindowDefault)
+                    ? HotkeyBinding.Parse(persisted.ShowWindowHotkey, defaults.ShowWindowHotkey)
                     : defaults.ShowWindowHotkey,
                 persisted.FreeEngineConsent is not null
                     ? Enum.TryParse<FreeEngineConsent>(persisted.FreeEngineConsent, ignoreCase: true, out var consent)
@@ -735,7 +893,7 @@ internal static class ShellSettingsStore
             settings.ClosePanelOnFocusLoss,
             settings.CopyTranslationAutomatically,
             settings.StartWithWindows,
-            settings.ShowWindowHotkey?.Serialize(),
+            settings.ShowWindowHotkey.Serialize(),
             settings.FreeEngineConsent.ToString(),
             settings.CloseHintShown,
             settings.CloudSpeechEnabled,

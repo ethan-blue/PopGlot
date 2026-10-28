@@ -424,6 +424,8 @@
         <Setter Property="RenderOptions.ClearTypeHint" Value="Enabled" />
         <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
         <Setter Property="local:Ui.CornerRadius" Value="{StaticResource ControlRadius}" />
+        <Setter Property="ToolTipService.ShowOnDisabled" Value="True" />
+        <Setter Property="ToolTipService.ShowDuration" Value="15000" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
@@ -746,6 +748,8 @@
         <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
         <Setter Property="RenderOptions.ClearTypeHint" Value="Enabled" />
         <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
+        <Setter Property="ToolTipService.ShowOnDisabled" Value="True" />
+        <Setter Property="ToolTipService.ShowDuration" Value="15000" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
@@ -1798,6 +1802,13 @@
 
     <!-- ==================== Tooltip ==================== -->
     <Style TargetType="ToolTip">
+        <Style.Resources>
+            <!-- Wrap plain text without replacing rich UIElement content. -->
+            <DataTemplate DataType="{x:Type sys:String}">
+                <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+            </DataTemplate>
+        </Style.Resources>
+        <Setter Property="MaxWidth" Value="360" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
         <Setter Property="FontSize" Value="12" />
@@ -1970,6 +1981,8 @@
              keyboard and invisible to screen-reader focus. -->
         <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
         <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="ToolTipService.ShowOnDisabled" Value="True" />
+        <Setter Property="ToolTipService.ShowDuration" Value="15000" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">

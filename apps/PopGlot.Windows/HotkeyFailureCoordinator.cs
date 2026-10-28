@@ -80,6 +80,35 @@ internal sealed class HotkeyFailureCoordinator
     /// <summary>True once the active cycle has had its single balloon.</summary>
     public bool BalloonShownThisCycle { get; private set; }
 
+    /// <summary>Detail of the latest degradation (e.g. auto-disabled defaults), or null.</summary>
+    public string? ActiveDegradationDetail { get; private set; }
+
+    /// <summary>True when shortcuts are operating in a degraded (auto-disabled defaults) state.</summary>
+    public bool DegradationActive => ActiveDegradationDetail is not null;
+
+    /// <summary>
+    /// Records a degradation notice (e.g. occupied default safely disabled).
+    /// Returns true if this is a fresh or changed notice that should be surfaced,
+    /// and false if it is identical to what was already surfaced.
+    /// </summary>
+    public bool ReportDegradation(string detail)
+    {
+        if (string.Equals(ActiveDegradationDetail, detail, StringComparison.Ordinal))
+        {
+            return false;
+        }
+        ActiveDegradationDetail = detail;
+        return true;
+    }
+
+    /// <summary>
+    /// Clears degradation notice (e.g. when all shortcuts are registered without degradation).
+    /// </summary>
+    public void ClearDegradation()
+    {
+        ActiveDegradationDetail = null;
+    }
+
     /// <summary>
     /// Records a global failure (the process really lost its hotkeys) and
     /// decides how loudly it must surface.

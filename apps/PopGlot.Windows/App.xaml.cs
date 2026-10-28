@@ -104,7 +104,7 @@ public partial class App : Application
             // C09: production readiness includes the hotkeys ACTUALLY being
             // registered — creating the service object is not enough. The
             // marker records the real registration outcome.
-            hotkeysRegistered = _hotkeys.TryRegisterAll(_shellSettings.Hotkeys, out var hotkeyConflict);
+            hotkeysRegistered = _hotkeys.TryRegisterSafeDefaults(_shellSettings, out _shellSettings, out var hotkeyConflict, out _);
             CreateTrayIcon();
             if (!hotkeysRegistered)
             {
@@ -229,7 +229,7 @@ public partial class App : Application
             _hotkeyOwner = CreateHotkeyOwnerWindow();
             _hotkeys = new HotkeyService(_hotkeyOwner);
             _hotkeys.Pressed += (_, action) => HandleHotkey(action);
-            hotkeysRegistered = _hotkeys.TryRegisterAll(_shellSettings.Hotkeys, out _);
+            hotkeysRegistered = _hotkeys.TryRegisterSafeDefaults(_shellSettings, out _shellSettings, out _, out _);
             CreateTrayIcon();
             try
             {
@@ -1031,7 +1031,7 @@ public partial class App : Application
         }
         var window = new SettingsWindow(ShellSettingsStore.Load(), _history.Value, _vocabulary.Value)
         {
-            ApplyShellSettings = TryApplyShellSettings,
+            ApplyShellSettings = s => TryApplyShellSettings(s, allowDisableOccupiedDefaults: false),
             SetHotkeysSuspended = suspended => _hotkeys?.SetSuspended(suspended),
         };
         window.LocalDataCleared += () => _mainWindow?.ReloadHistory();
@@ -1668,9 +1668,12 @@ public partial class App : Application
     /// PROBE failure (candidate lost, previous set live again) apart from a
     /// real global failure — by evidence, not by guessing.
     /// </summary>
-    private ShellApplyOutcome TryApplyShellSettings(ShellSettings settings)
+    private ShellApplyOutcome TryApplyShellSettings(ShellSettings settings, bool allowDisableOccupiedDefaults = true)
     {
-        var validationError = settings.ValidateHotkeys();
+        var candidateSettings = allowDisableOccupiedDefaults
+            ? settings.DisableFactoryDefaultsConflictingWithCustom()
+            : settings;
+        var validationError = candidateSettings.ValidateHotkeys();
         if (validationError is not null)
         {
             return ShellApplyOutcome.Failed(ShellApplyFailureKind.InvalidHotkeys, validationError);
@@ -1681,7 +1684,13 @@ public partial class App : Application
         }
 
         _hotkeyFailureReportedThisAttempt = false;
-        if (!_hotkeys.TryRegisterAll(settings.Hotkeys, out var conflict))
+        if (!_hotkeys.TryRegisterSafeDefaults(
+                settings,
+                out var activeSettings,
+                out var conflict,
+                out var disabledDefaults,
+                out var persistenceError,
+                disableOccupiedDefaults: allowDisableOccupiedDefaults))
         {
             // Route by evidence, never by cycle state: a probe failure with
             // a healthy previous set stays settings-inline only, and a
@@ -1715,9 +1724,9 @@ public partial class App : Application
             return ShellApplyOutcome.Failed(ShellApplyFailureKind.HotkeyUnavailable, conflict);
         }
 
-        _shellSettings = settings;
-        InterfaceKeys.Apply(settings);
-        ThemeService.Apply(settings.Theme);
+        _shellSettings = activeSettings;
+        InterfaceKeys.Apply(activeSettings);
+        ThemeService.Apply(activeSettings.Theme);
         // Full success closes any active failure cycle: surfaces clear and a
         // future failure may notify again. Idempotent when nothing failed.
         OnHotkeyRestored();
@@ -1727,6 +1736,21 @@ public partial class App : Application
         // Settings saved → the main window's close button must re-decide
         // between 关闭到托盘 / 退出 PopGlot from the persisted preference.
         _mainWindow?.RefreshCloseButtonForTraySetting();
+
+        if (disabledDefaults.Count > 0)
+        {
+            var notice = HotkeyService.DescribeDisabledDefaultsFeedback(disabledDefaults, persistenceError);
+            if (_hotkeyFailure.ReportDegradation(notice))
+            {
+                var title = persistenceError is null ? "默认快捷键已停用" : "快捷键停用未能保存";
+                Notify(title, notice, Forms.ToolTipIcon.Warning);
+            }
+        }
+        else
+        {
+            _hotkeyFailure.ClearDegradation();
+        }
+
         return ShellApplyOutcome.Ok();
     }
 

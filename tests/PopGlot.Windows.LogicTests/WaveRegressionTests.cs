@@ -64,6 +64,70 @@ internal static class WaveRegressionTests
         throw new InvalidOperationException($"Expected {typeof(TException).Name}.");
     }
 
+    public static void DisabledButtonTooltipsAndLongTextStayReadable()
+    {
+        EnsureApp();
+        foreach (var key in new object[] { typeof(Button), "NavActionButton", "CaptionButton" })
+        {
+            var button = new Button { Style = (Style)Application.Current.FindResource(key), IsEnabled = false };
+            True(ToolTipService.GetShowOnDisabled(button), $"{key}: disabled reason must remain available");
+            True(ToolTipService.GetShowDuration(button) >= 15000, $"{key}: allow reading long help");
+        }
+        var tooltipStyle = (Style)Application.Current.FindResource(typeof(ToolTip));
+        var tip = new ToolTip { Style = tooltipStyle, Content = string.Concat(Enumerable.Repeat("较长的操作说明需要折行阅读。", 40)) };
+        tip.ApplyTemplate();
+        tip.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        tip.Arrange(new Rect(tip.DesiredSize));
+        tip.UpdateLayout();
+        True(tip.DesiredSize.Width <= 360.1, "long help must have a finite readable width");
+        True(tip.DesiredSize.Height > 50, "long help must wrap instead of becoming one clipped line");
+        var richContent = new StackPanel();
+        richContent.Children.Add(new TextBlock { Text = "自定义提示" });
+        var richTip = new ToolTip { Style = tooltipStyle, Content = richContent };
+        richTip.ApplyTemplate();
+        richTip.Measure(new Size(360, double.PositiveInfinity));
+        True(ReferenceEquals(richContent, richTip.Content) && VisualTreeHelper.GetParent(richContent) is not null,
+            "rich tooltip content must still be presented as its original UIElement");
+    }
+
+    public static void ShortcutResetDefaultsTracksDirtyAndConverges()
+    {
+        EnsureApp();
+        var window = new SettingsWindow(ShellSettings.Default with { SelectionHotkey = HotkeyBinding.UnsetBinding }, IsolatedHistory, IsolatedVocabulary);
+        try
+        {
+            window.Show();
+            PumpOnce();
+            True(!window.IsDirty, "saved disabled key starts clean");
+            window.ShortcutsSection.ResetDefaults();
+            True(window.IsDirty && window.SaveButton.IsEnabled, "resetting disabled key must allow saving");
+            Equal(Visibility.Visible, window.SaveActionsPanel.Visibility, "reset reveals save actions");
+        }
+        finally { window.ForceClose = true; window.Close(); }
+        var clean = new SettingsWindow(ShellSettings.Default, IsolatedHistory, IsolatedVocabulary);
+        try
+        {
+            clean.Show();
+            PumpOnce();
+            clean.ShortcutsSection.ResetDefaults();
+            True(!clean.IsDirty, "reset to an unchanged baseline must remain clean");
+        }
+        finally { clean.ForceClose = true; clean.Close(); }
+    }
+
+    public static void QuickSearchHelpNamesEnterTranslationNotNewline()
+    {
+        EnsureApp();
+        var window = new QuickSearchWindow(IsolatedHistory, IsolatedVocabulary);
+        try
+        {
+            InterfaceKeys.RefreshHints(window);
+            var search = (FrameworkElement)window.FindName("SearchBox");
+            Equal("Enter 翻译", AutomationProperties.GetHelpText(search), "quick search must describe its actual Enter action");
+        }
+        finally { window.Close(); }
+    }
+
     // ===================== Harness =====================
 
     private static Application? _bootstrappedApp;
@@ -2364,6 +2428,13 @@ internal static class WaveRegressionTests
                     .TransformToVisual(content).Transform(new Point(0, panel.StatusTextBlock.ActualHeight)).Y;
                 True(footerBottom <= height + 0.5,
                     $"{label}: the footer bottom ({footerBottom:F1}) exceeds the {height} DIP window — the real layout clips the status row");
+                foreach (var name in new[] { "StatusText", "RouteText" })
+                {
+                    var footerText = (FrameworkElement)panel.FindName(name);
+                    var bounds = footerText.TransformToVisual(content).TransformBounds(new Rect(footerText.RenderSize));
+                    True(bounds.Left >= -0.5 && bounds.Right <= width + 0.5,
+                        $"{label}: {name} must remain horizontally inside the actual window, got {bounds}");
+                }
             }
         }
         finally

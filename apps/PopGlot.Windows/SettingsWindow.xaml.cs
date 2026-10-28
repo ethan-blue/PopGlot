@@ -167,6 +167,7 @@ public partial class SettingsWindow : Window
         // still a draft until saved so a revert restores the applied theme.
         GeneralSection.ThemeCombo.SelectionChanged += MarkDirtyHandler;
 
+        ShortcutsSection.DefaultsReset += (_, _) => EvaluateDraftState();
         ShortcutsSection.SelectionHotkey.Recorded += MarkDirtyHandler;
         ShortcutsSection.ScreenshotHotkey.Recorded += MarkDirtyHandler;
         ShortcutsSection.QuickSearchHotkey.Recorded += MarkDirtyHandler;
