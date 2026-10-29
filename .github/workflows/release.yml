@@ -53,7 +53,28 @@ jobs:
             throw "Version mismatch: tag '$tag' specifies version '$expectedVersion', but CHANGELOG.md top version is '$changelogVersion'."
           }
 
-          Write-Host "All versions match release tag $tag ($expectedVersion): csproj=$csprojVersion, cargo=$cargoVersion, changelog=$changelogVersion"
+          # 4. Cargo.lock workspace crate versions
+          # The [workspace.package] version in Cargo.toml is not enough: Cargo.lock
+          # pins its own version per crate, and a lock file left behind after a bump
+          # fails every `cargo --locked` step below with an opaque error. The three
+          # workspace crates must each match the release tag.
+          $lockText = Get-Content 'Cargo.lock' -Raw
+          $lockCrates = @('popglot-core', 'popglot-domain', 'popglot-ffi')
+          $lockVersions = @{}
+          foreach ($crate in $lockCrates) {
+              $pattern = '(?m)^name = "' + $crate + '"\r?\nversion = "([^"]+)"'
+              if ($lockText -notmatch $pattern) {
+                  throw "Could not parse the version of crate '$crate' from Cargo.lock"
+              }
+              $crateVersion = $Matches[1]
+              $lockVersions[$crate] = $crateVersion
+              if ($crateVersion -ne $expectedVersion) {
+                  throw "Version mismatch: tag '$tag' specifies version '$expectedVersion', but Cargo.lock pins crate '$crate' at '$crateVersion'. Run 'cargo update --workspace' and commit the lock file."
+              }
+          }
+          $lockSummary = ($lockCrates | ForEach-Object { "$_=$($lockVersions[$_])" }) -join ', '
+
+          Write-Host "All versions match release tag $tag ($expectedVersion): csproj=$csprojVersion, cargo=$cargoVersion, changelog=$changelogVersion, lock=[$lockSummary]"
 
       - uses: dtolnay/rust-toolchain@stable
         with:

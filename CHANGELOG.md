@@ -3,6 +3,24 @@
 本文件从 **0.0.1** 开始维护。更早的开发过程没有正式版本号；
 曾被误打的 `v0.3.0` tag 已撤回（见 `docs/VERSIONING.md` 历史修正），编号不复用。
 
+## 0.1.34 - 2026-10-29
+
+### 修复
+- 修复 0.1.33 发布失败。版本从 0.1.32 提升到 0.1.33 时只改了 `Cargo.toml` 的 `[workspace.package] version`，未同步 `Cargo.lock`；发布工作流的版本一致性校验当时只覆盖 `PopGlot.Windows.csproj`、`Cargo.toml` 与 `CHANGELOG.md` 三处，因此没有拦截，随后所有带 `--locked` 的 Cargo 步骤均以「cannot update the lock file because --locked was passed」失败，v0.1.33 的 Release 没有打包、也没有产出安装包。本次已同步 lock 文件中 popglot-core、popglot-domain、popglot-ffi 三个包的版本。
+
+### 变更
+- 发布工作流（`.github/workflows/release.yml`）的版本一致性校验新增第 4 项：`Cargo.lock` 中三个 workspace 包的版本必须与发布 tag 一致。不一致时在门禁阶段即失败，并提示执行 `cargo update --workspace`，避免同类问题再次静默漏网。
+
+### 迁移
+- 无。沿用现有配置与本地数据。
+
+### 验证与边界
+- `scripts/verify.ps1` 全量门禁：Rust 格式检查、工作区测试（`--locked`）、Clippy、WPF Debug 构建、PureTests 58 项、Windows 逻辑测试 361 项，全部 0 失败。
+- CliTests --ui 首次运行为 28 项通过 / 1 项失败（`OMP login failure/cancel/unsafe URL isolation`），同命令立即重跑为 29 项通过 / 0 项失败。本批为零 C# 行为改动，判定为该项偶发波动而非回归，已作为测试稳定性问题记录待查。
+- `cargo test --workspace --locked --no-run` 通过（这是 0.1.33 失败的直接步骤）。
+- 新增的 Cargo.lock 校验已在本机模拟两种场景验证：版本一致时通过并打印三个包的版本；人为把 popglot-domain 改回旧版本时按预期抛出明确错误并提示修复命令。
+- v0.1.33 的 tag 保留不动；其 Release 从未成功产出安装包，GitHub 上可用的上一个正式版本为 0.1.32。0.1.34 是该缺陷修复后首个成功构建的版本。
+
 ## 0.1.33 - 2026-10-28
 
 ### 变更
