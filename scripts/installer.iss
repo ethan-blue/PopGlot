@@ -49,9 +49,17 @@ SignTool=popglotsign $f
 SignedUninstaller=yes
 #endif
 
+; 中文界面依赖 Inno Setup 自带的 Languages\ChineseSimplified.isl，而该语言文件在
+; 部分安装形态（例如某些 CI 镜像预装的版本）里并不存在。build-installer.ps1
+; 会在编译前探测：缺失时定义 POPGLOT_NO_ZH_LANG，这里退化为纯英文界面，
+; 编译照常完成——绝不因为少一个语言文件就让整个安装包出不来。
 [Languages]
+#ifdef POPGLOT_NO_ZH_LANG
+Name: "english"; MessagesFile: "compiler:Default.isl"
+#else
 Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
+#endif
 
 [Tasks]
 Name: "startmenuicon"; Description: "创建开始菜单快捷方式"; GroupDescription: "快捷方式："

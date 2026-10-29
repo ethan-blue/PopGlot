@@ -85,6 +85,14 @@ $isccArguments = @(
     "/O$resolvedOutputDir"
 )
 
+# 中文界面是可选的：某些 Inno Setup 安装形态（含部分 CI 镜像预装版本）不带
+# Languages\ChineseSimplified.isl。缺它就退化成英文界面，而不是编译失败。
+$chineseLanguage = Join-Path (Split-Path -Parent $iscc) 'Languages\ChineseSimplified.isl'
+if (-not (Test-Path -LiteralPath $chineseLanguage -PathType Leaf)) {
+    $isccArguments += '/DPOPGLOT_NO_ZH_LANG=1'
+    Write-Host "未找到中文语言文件（$chineseLanguage），安装包将只带英文界面。"
+}
+
 $certificatePath = $env:POPGLOT_SIGN_CERTIFICATE_PATH
 $certificateThumbprint = $env:POPGLOT_SIGN_CERTIFICATE_THUMBPRINT
 $signingConfigured = -not [string]::IsNullOrWhiteSpace($certificatePath) -or
