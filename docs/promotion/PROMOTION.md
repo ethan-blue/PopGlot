@@ -97,7 +97,7 @@
 | --- | --- |
 | 掘金 | 技术向长文，讲 WPF + Rust 分层与划词/剪贴板恢复的实现 |
 | 少数派 | 使用体验向，投稿门槛较高，需要成稿质量 |
-| Reddit（单个 sub 起步） | 先发一个最贴切的 sub，看反馈再决定要不要铺开；不要一套文案群发 |
+| Reddit（只发 r/SideProject） | 唯一明确欢迎自推、且「免费 + 开源 + 可直接下载运行」天然满足其要求的 sub。其余 sub 逐条核实过门槛，现阶段都不要发，理由见下方「Reddit 门槛」 |
 | 知乎 | 回答具体问题（如「Windows 上有什么好用的划词翻译」），不做自问自答 |
 
 ### P2 · 有稳定版本和素材后再做
@@ -107,7 +107,7 @@
 | Product Hunt | 需要完整素材包（图标、截图、tagline、首发评论），准备不足不如不发 |
 | Hacker News（Show HN） | 对标题和时机敏感，成败波动大 |
 | B 站 / 小红书 | 需要视频或图文成品，制作成本最高 |
-| awesome 各类目录站 | 长尾但稳定，可随时提交，见 [copy-en.md](copy-en.md) |
+| awesome 目录站 | 长尾但稳定。逐个核实过门槛，现在只有 `mbiesiad/awesome-translations` 与 `quozd/awesome-dotnet` 可提交；awesome-rust 与 awesome-windows 都要求 star ≥ 50，暂不满足 |
 
 ---
 
@@ -124,6 +124,24 @@
 | 长尾 | 持续 | 每次发版同步更新发布说明；目录站随版本补交；B 站/小红书做成品内容 |
 
 **一条纪律**：任何渠道上被问到「为什么不用 XX」时，诚实地承认竞品的强项，再说自己的取舍。硬撑会直接毁掉信任。
+
+### Reddit 门槛（2026-10-29 逐条核实，别凭印象发）
+
+| sub | 结论 | 原因 |
+| --- | --- | --- |
+| r/SideProject | **发** | 明确欢迎自推，风险最低 |
+| r/Windows11 | 谨慎 | 推广第三方软件需先 modmail 获批，否则删帖且可能封号 |
+| r/software | 谨慎 | 必须周三 + 指定 flair + 给出超出软件本身的价值，另有隐藏 karma 门槛，违反可永封 |
+| r/opensource | **不发** | 要求 ≥ 1 年维护 + 3 名以上贡献者，PopGlot 当前不合格 |
+| r/translator | **不发** | 版规禁广告、禁机器翻译内容 |
+| r/dotnet | 等 0.2.0 | 只接受 major / minor 版本，0.1.35 是 patch |
+
+### 开源目录站（同样逐个核实）
+
+- 现在可提交：`mbiesiad/awesome-translations`（无门槛，目标分支 `develop`）、`quozd/awesome-dotnet`（无门槛，但该库最后提交是 2026-03-26，合并会慢）
+- 暂不满足：`awesome-rust`（star > 50 或 downloads > 2000）、`0PandaDEV/awesome-windows`（star ≥ 50，且明文排斥 AI 类工具）
+- 不合适：`awesome-selfhosted` 收的是可自托管的网络服务，桌面应用不属于其范围
+- 条目原文与 PR 命令见 [copy-en.md](copy-en.md)，**尚未发起任何 PR**
 
 ---
 
