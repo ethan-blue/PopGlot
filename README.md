@@ -97,9 +97,13 @@ The selection panel sits next to the cursor. The translation stays; the note sit
     可选第 4 秒：按 Ctrl+Alt+O 打开工作台，展示左原文右译文
 
   怎么生成 How to record:
-    Windows 推荐 ScreenToGif（开源）——「录像机」框选区域 → 录制 → 编辑器里删掉多余帧 → 另存为 GIF。
-    参数建议：12–15 fps，128 色，裁剪掉空白桌面区域，目标体积 < 3 MiB（GitHub README 渲染友好）。
-    录制前把无关窗口收干净；画面里不要出现真实的 API Key、私有地址或客户代码。
+    1) 起一个干净实例（配置、历史、提示词全部重定向到 %TEMP%\PopGlot-Demo，与日常实例隔离）：
+         ./scripts/start-demo-instance.ps1 -Reset
+       注意：它只隔离 PopGlot 自己的数据目录，不隔离 Windows 凭据管理器和外部账号——
+       录之前自己关掉聊天窗口、邮箱、通知预览和带个人路径的终端。
+    2) Windows 推荐 ScreenToGif（开源）：「录像机」框选区域 → 录制 → 编辑器删多余帧 → 另存为 GIF。
+       参数建议：12–15 fps，128 色，裁剪掉空白桌面区域，目标 < 3 MiB（GitHub README 渲染友好）。
+    3) 画面里不要出现真实的 API Key、私有地址或客户代码。完整分镜见 docs/VIDEO_DEMO.md。
 
   录好并放到 docs/images/demo.gif 之后，把下面两行解除注释即可（它们现在的形态就是最终形态）：
 
@@ -147,11 +151,12 @@ Free and MIT-licensed. Model fees are between you and your provider, if you plug
 
 1. 装完（或解压后）运行 `PopGlot.exe`。窗口不自动弹出，图标在任务栏通知区域。
 2. 选中一段英文，按 `Ctrl+Alt+W`。第一次会走一遍配置向导，把云端翻译、免费线路、历史、开机自启、诊断上报这五项一次选完（都标了推荐值），之后随时可以在「设置 → 通用 → 重新显示引导」重来。
-3. 没有自己的引擎也能直接用：默认走 Google 公共翻译。Google 不可用时，在「设置 → 隐私与数据」改选 MyMemory。
-4. 要换模型：设置 → 引擎 → 添加引擎。填地址和密钥，测试连接，再在底部切换器中选用。
-5. 想彻底不外发：打开「安全离线模式」。此时本机 Ollama / LM Studio 仍然可用。
+3. 没有自己的引擎也能直接用：内置免费线路 **0.1.35 起默认开启**，不再拦你一层「先去设置页允许」的动作，默认走 Google 公共翻译。Google 不可用时，在浮窗或查词窗的线路菜单里改选 MyMemory。
+4. 想彻底关掉免费线路：「设置 → 通用 → 重新显示引导」，在向导的隐私一页取消勾选。设置 → 隐私与数据页现在只陈述当前状态，那里没有开关按钮。
+5. 要换模型：设置 → 引擎 → 添加引擎。填地址和密钥，测试连接，再在底部切换器中选用。
+6. 想彻底不外发：打开「安全离线模式」。此时本机 Ollama / LM Studio 仍然可用。
 
-Run `PopGlot.exe`. It stays in the tray. The first-run wizard walks you through the five privacy choices once. If you have no engine yet, the free Google route answers; switch to MyMemory under Settings → Privacy if it is unavailable, or add your own engine.
+Run `PopGlot.exe`. It stays in the tray and walks you through the five privacy choices once. With no engine configured, the free route answers right away — since 0.1.35 it is on by default, with no separate consent step in Settings → Privacy. Pick MyMemory instead of Google from the route menu in the panel or the quick-search window, or turn the free route off via Settings → General → Redisplay Guide. Add your own engine for better results.
 
 默认快捷键：
 
@@ -197,6 +202,14 @@ Windows 11 x64，Rust stable（`x86_64-pc-windows-msvc`），Visual Studio Build
 ```
 
 `verify.ps1` 会跑 Rust 格式检查、测试、Clippy、WPF 构建，以及 PureTests、LogicTests 和 CLI/WPF 连接场景（`CliTests --ui`）。全部使用隔离配置与模拟服务，不会调用真实模型。WPF 工程会自己编译 `popglot-ffi`，并把 `popglot_ffi.dll` 拷到输出目录。
+
+要录演示或截图，用隔离实例，配置与历史都重定向到 `%TEMP%\PopGlot-Demo`，碰不到你日常那个实例的数据：
+
+```powershell
+./scripts/start-demo-instance.ps1 -Reset
+```
+
+For a clean recording instance, use `./scripts/start-demo-instance.ps1 -Reset` — config, history and prompts are redirected to `%TEMP%\PopGlot-Demo`, leaving your daily instance untouched. It isolates PopGlot's own data directory only: Credential Manager and external accounts are still shared, so close chat, mail and notification previews before you record.
 
 离线延迟测量：
 

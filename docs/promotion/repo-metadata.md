@@ -6,39 +6,30 @@
 
 ---
 
-## 1. Description / About（≤ 350 字符，英文）
+## 1. Description / About（已落地，勿重复改）
 
-GitHub 的 Description 会显示在搜索结果、Topic 页、以及 `github.com/topics/xxx` 列表里，比 README 更先被搜索引擎抓到。**写受众 + 场景 + 结果，不堆关键词。**
-
-### 推荐（223 字符，含空格）
+**现状（已由 team-lead 用 gh 写入，2026-10-29）**：
 
 ```
-Windows translator for developers: select any English error, comment, command or doc line, press one hotkey, and read the translation next to your cursor. Local OCR by default, works offline. MIT.
+A Windows translator for selected text and screenshots. Select and translate instantly, screenshot OCR stays on your machine by default, bring your own OpenAI/Anthropic/Gemini key or a local Ollama model, and cut every outbound request with safe offline mode. WPF + Rust, MIT.
 ```
 
-### 备选 A —— 强调隐私（247 字符）
+290 字符，在 350 上限内。它已经覆盖了三件陌生人在搜索结果里最想确认的事：**是什么**（selected text + screenshots translator）、**数据是否安全**（OCR stays on your machine / cut every outbound request）、**要不要自带账号**（bring your own key or a local Ollama model）。无需再改。
 
-```
-A Windows translator for people who read English technical text. Select it, press a hotkey, read the translation in place. Screenshots stay local unless you allow otherwise; an offline switch blocks every outbound request. MIT.
-```
+**维护时的硬性约束**（改这行前先过一遍）：
 
-### 备选 B —— 强调引擎自由（262 字符）
-
-```
-Windows translation hotkeys for reading English technical material. Bring your own key: OpenAI-compatible, OpenAI Responses, Anthropic, Gemini, Ollama or LM Studio. No key needed to start. Screen OCR stays local. MIT.
-```
-
-选一条即可；推荐首选，因为它包含了陌生人在搜索结果里最想确认的三件事：**给谁的**（developers）、**怎么用**（select + hotkey）、**数据是否安全**（local / offline 收尾）。
-
-不要用：句号结尾省略、`WIP`、`v0.1.35` 之类的版本号（会立刻过期）、任何形式的「best / fastest / #1」。
+- 不能出现版本号（`v0.1.35` 之类会立刻过期）。
+- 不能出现 `best` / `fastest` / `#1` / `official` 这类无法验证的说法。
+- 每次产品能力边界变化时（例如真的出了 macOS 版、真的签了名）回头同步，否则 Description 会先于 README 变成假信息。
+- 注意：README 的定位句已改成「给读英文技术内容的程序员」，Description 这边偏通用受众。两者不必逐字对齐——搜索结果要宽，README 要准——但**不能互斥**，比如 Description 不能暗示 macOS 可用。
 
 ---
 
 ## 2. Homepage
 
-**当前状态：没有官网。**
+**当前状态：没有官网，GitHub 上的 Homepage 字段为空（API 读回 `null`）。**
 
-**建议：暂时留空，不要填。**
+**建议：保持留空，不要填。**
 
 理由：
 
@@ -50,40 +41,27 @@ Windows translation hotkeys for reading English technical material. Bring your o
 
 **后续填什么**（当其中之一落地时再回来填）：
 
-1. 一个静态落地页（哪怕是 `https://ethan-blue.github.io/PopGlot/`），上面只有一个 30 秒 Demo GIF、两个下载按钮、一段 privacy 摘要 —— 这是最推荐的第一步，因为它同时给 Homeowner 一个真实可填的 URL。
+1. 一个静态落地页（哪怕是 `https://ethan-blue.github.io/PopGlot/`），上面只有一个 15–30 秒 Demo GIF、两个下载按钮、一段 privacy 摘要 —— 这是最推荐的第一步，因为它同时给 Homepage 一个真实可填的 URL。GIF 素材可以先照 README 里那段 HTML 注释的分镜录。
 2. 如果做了文档站，填文档站根地址，而不是某个具体页面。
 
 填之前先在 `[docs/PRIVACY.md](./../PRIVACY.md)` 口径下确认：落地页不能声称的能力比 README 更多，也不能出现统计外链（分析脚本）却没在隐私说明里写清。
 
 ---
 
-## 3. Topics（建议 10 个）
+## 3. Topics（已落地，现状 13 个）
 
-GitHub 单个仓库最多 20 个 topic，但**塞满 20 个会让标签栏像关键词堆砌**。控制在 8–10 个，选择的原则是：搜索时会用到的 + 别人过滤时用得到的。
+**现状（已由 team-lead 用 gh 写入，2026-10-29）**，按 GitHub 返回的顺序：
 
-**置信度说明**：标 High 的是我判断 GitHub Topics 里长期存在的高频 topic；标 Medium/Low 的请在填之前用 `https://github.com/topics/<topic名>` 打开确认是否存在——不存在的 topic 填进去会显示成灰色普通文本，不会生成可点击的话题页，等于白占一格。
+`csharp`、`desktop-app`、`dotnet`、`llm`、`ocr`、`privacy`、`rust`、`screenshot`、`translate`、`translation`、`translator`、`windows`、`wpf`
 
-| # | Topic | 为什么 | GitHub 是否已存在 |
-| --- | --- | --- | --- |
-| 1 | `windows` | 唯一的门槛条件，必须让人在结果列表里一眼看到 | High |
-| 2 | `translator` | 与 `translation`（偏「翻译这项技术/译文本身」）相比，`translator` 更贴近「工具」语义，两类都应该占 | High |
-| 3 | `translate` | 覆盖动词型搜索词 | High |
-| 4 | `ocr` | 截图翻译的核心能力，也是区分于纯文本翻译工具的词 | High |
-| 5 | `wpf` | 技术栈筛选；找 .NET 桌面项目的人会用它过滤 | High |
-| 6 | `rust` | 技术栈筛选；架构上是 Rust 内核 + WPF 外壳，对 contributor 有吸引力 | High |
-| 7 | `dotnet` | 技术栈筛选（`.net` 作为 topic 名不合法，`csharp` 可替代） | High |
-| 8 | `llm` | 表明支持接入大模型；比 `ai` 更精准、噪音更少 | High |
-| 9 | `desktop-app` | 与 cli / web 工具区分，`desktop-application` 也是同类候选 | Medium（若不存在用 `desktop` 兜底，置信 High） |
-| 10 | `privacy` | 隐私是这个项目真实的卖点之一（本地 OCR、离线总开关） | High |
+这组已经把我原本建议的 10 个全部覆盖，并多带了好用的 `screenshot`、`dotnet`、`csharp`、`translation`、`privacy`。**不需要再增删。**
 
-**候补（当前不填，留着轮换）**：
+**后续维护约束**：
 
-- `productivity`、`developer-tools`（置信 Medium，偏泛，容易淹没）
-- `openai`、`anthropic`、`gemini`、`ollama`（支持哪些引擎不该占 topic 位，写在 README 里就够了；等人搜索特定生态时再说）
-- `clipboard`、`hotkey`（贴切但太小众，搜索量撑不起）
-- `python`、`go` 之类与本项目无关的词绝不要填
-
-**为什么不填 `macos` / `linux`**：当前只有 Windows 版，填了等于骗关注，点进来的人会立刻发现并留下负第一印象。`PRODUCT_SPEC.md` 里 macOS/Linux 属于 P2 移植计划，做完再补。
+- **绝对不要加 `macos` / `linux` / `cross-platform`** —— 当前只有 Windows 版，加了等于骗关注，点进来的人立刻发现并留下负第一印象。等真的移植完成再说。
+- 满了 20 个也不要继续塞；现在 13 个已经是上限舒适区的边缘，再加低频词（`productivity`、`developer-tools`）只会稀释。
+- 支持哪些引擎（`openai` / `anthropic` / `gemini` / `ollama`）不占 topic 位，写在 README 里就够了。有人为了能被按生态搜索到而加进去，代价是标签栏变成厂商列表。
+- 每次加之前用 `https://github.com/topics/<topic名>` 确认存在：不存在的 topic 会显示成灰色普通文本，不能点击，等于白占一格。
 
 ---
 
