@@ -20,6 +20,8 @@
     <CornerRadius x:Key="ControlRadius">6</CornerRadius>
     <CornerRadius x:Key="CardRadius">10</CornerRadius>
     <CornerRadius x:Key="PaneRadius">10</CornerRadius>
+    <CornerRadius x:Key="ChipRadius">4</CornerRadius>          <!-- 新增：小胶囊/标签 -->
+    <CornerRadius x:Key="FloatingRadius">12</CornerRadius>     <!-- 新增：浮层窗体外框 -->
 
     <!-- Spacing scale: 4 / 8 / 12 / 16 / 20 / 24 DIP -->
     <sys:Double x:Key="Spacing4">4</sys:Double>

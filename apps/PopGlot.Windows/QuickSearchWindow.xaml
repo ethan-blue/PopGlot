@@ -12,7 +12,7 @@
     <!-- Not AllowsTransparency: text-first window keeps ClearType via an
          opaque surface; DWM provides rounding and shadow. -->
     <Grid>
-        <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="12"
+        <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="{StaticResource FloatingRadius}"
                 BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
 
         <Grid>
@@ -108,7 +108,7 @@
                                             Background="{TemplateBinding Background}"
                                             BorderBrush="{TemplateBinding BorderBrush}"
                                             BorderThickness="{TemplateBinding BorderThickness}"
-                                            CornerRadius="10" Padding="8,3"
+                                            CornerRadius="{StaticResource CardRadius}" Padding="8,3"
                                             SnapsToDevicePixels="True">
                                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                                     </Border>
@@ -202,7 +202,7 @@
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <!-- Result Pill -->
-                                    <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="4"
+                                    <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="{StaticResource ChipRadius}"
                                             Padding="6,2" Margin="0,0,8,0" VerticalAlignment="Center">
                                         <TextBlock Text="译文" FontSize="11" FontWeight="SemiBold"
                                                    Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center" />
@@ -379,6 +379,6 @@
          Overlay-only: no layout footprint, no hit testing. -->
     <Border Background="Transparent"
             BorderBrush="{DynamicResource WindowEdgeBrush}" BorderThickness="1"
-            CornerRadius="12" IsHitTestVisible="False" />
+            CornerRadius="{StaticResource FloatingRadius}" IsHitTestVisible="False" />
     </Grid>
 </Window>

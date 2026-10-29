@@ -130,28 +130,12 @@ internal static class WaveRegressionTests
 
     // ===================== Harness =====================
 
-    private static Application? _bootstrappedApp;
-
-    /// <summary>STA-thread twin of Program.EnsureApplication (it is private
-    /// there); safe to call after Program's version already ran.</summary>
-    private static void EnsureApp()
-    {
-        if (Application.Current is null)
-        {
-            var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-            try
-            {
-                app.InitializeComponent();
-            }
-            catch
-            {
-                // Fallback mirrors Program.EnsureApplication.
-            }
-            _bootstrappedApp = app;
-            app.DispatcherUnhandledException += (_, args) => args.Handled = true;
-        }
-        ThemeService.Apply(ThemePreference.Dark);
-    }
+    /// <summary>
+    /// OPT-021: delegates to the single owner in <see cref="Program"/>. This
+    /// file must never create an Application of its own - a second creator is
+    /// how the harness used to poison its own AppDomain.
+    /// </summary>
+    private static void EnsureApp() => Program.EnsureApplication();
 
     private static string FindProjectRoot()
     {

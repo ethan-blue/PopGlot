@@ -1,7 +1,7 @@
 # PopGlot
 
 [![Windows](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D4)](https://github.com/ethan-blue/PopGlot/releases)
-[![Version](https://img.shields.io/badge/version-0.1.33-5B67B5)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.1.34-5B67B5)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-3D8B6E)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/ethan-blue/PopGlot/ci.yml?branch=main&label=CI)](https://github.com/ethan-blue/PopGlot/actions)
 
@@ -85,9 +85,9 @@ Run `PopGlot.exe`. It stays in the tray. Allow the free engine under Settings �
 
 ## 下载
 
-**0.1.33** 主窗口隐藏到托盘后不再继续轮询刷新按钮状态；划词浮窗与极速查词的工具栏按钮高度统一；并修正产品规格中的空闲内存口径与两项陈旧文档数字。本版同时修复了首次发版时 `Cargo.lock` 未随版本同步导致的构建失败，并把 `Cargo.lock` 纳入发布工作流的版本一致性校验。发布状态与附件以 [Releases](https://github.com/ethan-blue/PopGlot/releases) 为准。
+**0.1.34** 修复 Windows 逻辑测试结果不可复现的问题：同一命令曾在不同运行中产生「全部通过」与「成片失败」两种结论，现由测试宿主统一引导 WPF Application，连续运行的用例结论逐字一致。关闭主窗口时不再重复读取设置；划词浮窗、极速查词窗口与截图浮层的 19 处圆角改为引用主题 token，数值与原先一致、视觉无变化。发布状态与附件以 [Releases](https://github.com/ethan-blue/PopGlot/releases) 为准。
 
-[下载 PopGlot 0.1.33](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.33/PopGlot-v0.1.33-win-x64.zip)
+[下载 PopGlot 0.1.34](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.34/PopGlot-v0.1.34-win-x64.zip)
 
 每一版的发布页都用同一个样子：标题是 `PopGlot 版本号`，页上直接写这一版改了什么，并附上 zip 和 `.sha256`。不用再点进另一份说明。
 
@@ -99,8 +99,8 @@ Run `PopGlot.exe`. It stays in the tray. Allow the free engine under Settings �
 文件名始终是 `PopGlot-v版本号-win-x64.zip`。校验：
 
 ```powershell
-(Get-FileHash -Path .\PopGlot-v0.1.33-win-x64.zip -Algorithm SHA256).Hash.ToLower()
-Get-Content .\PopGlot-v0.1.33-win-x64.zip.sha256
+(Get-FileHash -Path .\PopGlot-v0.1.34-win-x64.zip -Algorithm SHA256).Hash.ToLower()
+Get-Content .\PopGlot-v0.1.34-win-x64.zip.sha256
 ```
 
 全部发布页在 [Releases](https://github.com/ethan-blue/PopGlot/releases)。

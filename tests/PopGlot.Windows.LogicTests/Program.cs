@@ -55,6 +55,20 @@ internal static partial class Program
         // or public network. A missing isolation bootstrap must fail the run.
         TestIsolation.Initialize();
 
+        // OPT-021: the ONE Application is created here - before test #1 and on
+        // the dedicated STA harness thread - so no later creator can race it,
+        // and a failure reports ONE root cause instead of cascading into
+        // hundreds of identical duplicate-instance failures.
+        var appBootFailure = BootWpfApplicationOnce();
+        if (appBootFailure is not null)
+        {
+            Console.Error.WriteLine(
+                "harness failure: the WPF Application could not be created before any test ran; " +
+                "aborting so this run reports a single actionable root cause. No tests were executed.");
+            Console.Error.WriteLine(appBootFailure.ToString());
+            return 4;
+        }
+
         // C12 真机验收架：独立时段执行（exe lifecycle-stress），不进常规套件。
         if (Array.Exists(args, a => string.Equals(a, "lifecycle-probe", StringComparison.OrdinalIgnoreCase)))
         {
@@ -6143,23 +6157,10 @@ internal static partial class Program
         ProfileManager.ConfigPathOverride = Path.Combine(dir, "product-config.json");
         CoreBridge.Initialize();
         // SettingsWindow resolves its nav styles from the app-level theme
-        // dictionary; bootstrap the same Application the screenshot pass uses.
-        if (Application.Current is null)
-        {
-            var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-            app.Resources.MergedDictionaries.Add(new ResourceDictionary
-            {
-                Source = new Uri("/PopGlot;component/Themes/Controls.xaml", UriKind.RelativeOrAbsolute),
-            });
-        }
-        else if (Application.Current.Resources.MergedDictionaries.Count == 0)
-        {
-            Application.Current.Resources.MergedDictionaries.Add(new ResourceDictionary
-            {
-                Source = new Uri("/PopGlot;component/Themes/Controls.xaml", UriKind.RelativeOrAbsolute),
-            });
-        }
-        ThemeService.Apply(ThemePreference.Dark);
+        // dictionary - App.xaml merges Themes/Controls.xaml, so the harness
+        // Application already carries it. OPT-021: this file must NEVER create
+        // an Application of its own; EnsureApplication also applies the theme.
+        EnsureApplication();
         try
         {
             var window = new SettingsWindow(
@@ -9930,9 +9931,13 @@ internal static partial class Program
 
     private static System.Windows.Threading.Dispatcher GetStaHarnessDispatcher()
     {
-        if (_staHarnessDispatcher is not null)
+        // OPT-021: the double-check below reads a field that another thread
+        // publishes, so every read/write goes through Volatile - a plain read
+        // outside the lock may observe null after the harness already ran.
+        var ready = Volatile.Read(ref _staHarnessDispatcher);
+        if (ready is not null)
         {
-            return _staHarnessDispatcher;
+            return ready;
         }
 
         lock (StaHarnessGate)
@@ -9944,7 +9949,7 @@ internal static partial class Program
                     var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
                     SynchronizationContext.SetSynchronizationContext(
                         new System.Windows.Threading.DispatcherSynchronizationContext(dispatcher));
-                    _staHarnessDispatcher = dispatcher;
+                    Volatile.Write(ref _staHarnessDispatcher, dispatcher);
                     StaHarnessReady.Set();
                     System.Windows.Threading.Dispatcher.Run();
                 })
@@ -9958,22 +9963,85 @@ internal static partial class Program
         }
 
         StaHarnessReady.Wait();
-        return _staHarnessDispatcher!;
+        return Volatile.Read(ref _staHarnessDispatcher)
+               ?? throw new InvalidOperationException("the STA harness dispatcher was never published");
     }
 
-    internal static void EnsureApplication()
+    // ---- OPT-021: exactly-once WPF Application, owned by the STA harness ----
+    // Application.Current is AppDomain state owned by WPF; it can diverge
+    // from WPF's own "already created" slot (a half-failed construction, or a
+    // dispatcher shutdown, clears one and not the other). Using it as the
+    // once-flag let tests each try to create their own Application once it
+    // diverged. The once-flag below is ours and nothing else may create one.
+    private static readonly object AppBootGate = new();
+    private static Exception? _appBootFailure;
+    private static bool _appBootAttempted;
+    private static bool _appCreatedCore;
+
+    /// <summary>
+    /// Creates the ONE Application, on the STA harness thread, before any test
+    /// can create one from its own thread.
+    /// </summary>
+    /// <returns>
+    /// <see langword="null"/> once the Application exists; otherwise the primal
+    /// failure. The result is sticky - the boot is never retried, so a failed
+    /// process can never half-create a second Application.
+    /// </returns>
+    internal static Exception? BootWpfApplicationOnce()
     {
-        if (Application.Current is null)
+        if (Volatile.Read(ref _appBootAttempted))
         {
+            return Volatile.Read(ref _appBootFailure);
+        }
+
+        lock (AppBootGate)
+        {
+            if (Volatile.Read(ref _appBootAttempted))
+            {
+                return Volatile.Read(ref _appBootFailure);
+            }
+
+            try
+            {
+                // Main never runs on the harness thread, and no test can see
+                // this before it completes, so this Invoke cannot deadlock.
+                GetStaHarnessDispatcher().Invoke(CreateApplicationCore);
+            }
+            catch (Exception ex)
+            {
+                Volatile.Write(ref _appBootFailure, ex);
+            }
+
+            Volatile.Write(ref _appBootAttempted, true);
+        }
+
+        return Volatile.Read(ref _appBootFailure);
+    }
+
+    /// <summary>Runs ONCE, and only on the STA harness thread.</summary>
+    private static void CreateApplicationCore()
+    {
+        if (Volatile.Read(ref _appCreatedCore))
+        {
+            return;
+        }
+
+        var thread = Thread.CurrentThread;
+        try
+        {
+            Console.WriteLine($"[harness] creating Application on '{thread.Name}' #{thread.ManagedThreadId} apartment={thread.GetApartmentState()}");
             var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown };
             try
             {
                 app.InitializeComponent();
             }
-            catch
+            catch (Exception initEx)
             {
-                // Fallback
+                // Kept from the original code: a failed resource load must not
+                // be fatal, but it IS diagnostically important - print it.
+                Console.WriteLine($"[harness] InitializeComponent fell back: {initEx.GetType().Name}: {initEx.Message}");
             }
+
             // Keep a strong root: Application.Current alone must not be the
             // only reference keeping the host alive across test loops.
             _bootstrappedApp = app;
@@ -9987,12 +10055,37 @@ internal static partial class Program
                 Console.WriteLine(args.Exception.StackTrace);
                 args.Handled = true;
             };
-            ThemeService.Apply(ThemePreference.Dark);
+            Volatile.Write(ref _appCreatedCore, true);
         }
-        else
+        catch (Exception ex)
         {
-            ThemeService.Apply(ThemePreference.Dark);
+            // By the time we get here the AppDomain slot is claimed whether or
+            // not Application.Current is readable - the run CANNOT recover.
+            throw new InvalidOperationException(
+                $"the WPF harness could not create its Application on thread #{thread.ManagedThreadId} " +
+                $"(name='{thread.Name}', apartment={thread.GetApartmentState()}). The AppDomain slot is now claimed " +
+                "and this process can never create another Application; every later WPF test would fail with a " +
+                "duplicate-instance error that has nothing to do with itself.", ex);
         }
+    }
+
+    /// <summary>
+    /// Ensures the harness Application is usable and the dark theme is applied.
+    /// OPT-021: this never CREATES anything - the single owner is
+    /// <see cref="BootWpfApplicationOnce"/>. Application.Current is AppDomain
+    /// state owned by WPF and must never be used as the once-flag.
+    /// </summary>
+    internal static void EnsureApplication()
+    {
+        var failure = Volatile.Read(ref _appBootFailure);
+        if (failure is not null)
+        {
+            throw new InvalidOperationException(
+                "the WPF harness Application failed to boot; continuing would only produce hundreds of identical " +
+                "duplicate-instance failures: " + failure.Message, failure);
+        }
+
+        ThemeService.Apply(ThemePreference.Dark);
     }
 
     private static void RenderScreenshotsAndMeasureBaseline()

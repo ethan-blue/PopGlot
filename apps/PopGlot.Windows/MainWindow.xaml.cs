@@ -1072,7 +1072,12 @@ public partial class MainWindow : Window
     {
         if (!AllowClose)
         {
-            var closeToTray = ShellSettingsStore.Load().CloseMainWindowToTray;
+            // OPT-002R: ONE snapshot for the whole method — the only write is
+            // CloseHintShown below, after both reads. The in-memory
+            // _closeHintShown short-circuit stays: it is per-process, while
+            // settings.CloseHintShown is the cross-process switch.
+            var settings = ShellSettingsStore.Load();
+            var closeToTray = settings.CloseMainWindowToTray;
             if (!closeToTray)
             {
                 RequestExit?.Invoke();
@@ -1091,7 +1096,7 @@ public partial class MainWindow : Window
             }
             // The "still running" balloon shows at most once per install:
             // in-memory for this run, persisted so later runs never nag.
-            if (!_closeHintShown && !ShellSettingsStore.Load().CloseHintShown)
+            if (!_closeHintShown && !settings.CloseHintShown)
             {
                 _closeHintShown = true;
                 NotifyTray?.Invoke(
