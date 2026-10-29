@@ -330,6 +330,11 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
+        // 主窗口关闭到托盘走的是 Hide()（MainWindow.OnClosing 里
+        // e.Cancel = true），WPF 不会为它触发 Unloaded，所以只靠
+        // Loaded/Unloaded 启停会让这个 2 秒表在托盘态一直空转。可见性
+        // 是唯一的可靠开关：隐藏即停，重新显示再由这里启动。
+        IsVisibleChanged += (_, _) => SyncSessionStorePollTimer();
         // 顶部工具栏的快捷键提示与左侧标题、右侧按钮组共享一行：窄态下
         // 三者拥挤，提示会被压成极小的低对比碎片。这里按工作台实际宽度
         // 自行收起提示；按键说明始终保留在输入框的 HelpText 上，读屏与
@@ -368,7 +373,24 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         RefreshStyleSelector();
         UpdateSummaryCapabilityVisuals();
         RefreshRestoreSessionAffordance();
-        _sessionStorePollTimer.Start();
+        SyncSessionStorePollTimer();
+    }
+
+    /// <summary>
+    /// 轮询计时器只在工作台真正可见时运行。隐藏到托盘、窗口最小化或控件
+    /// 被移出可视树时都应当停表——托盘态下没有任何 UI 需要它刷新。
+    /// 启停是幂等的，Tick 订阅只在构造函数里挂一次，不会重复。
+    /// </summary>
+    private void SyncSessionStorePollTimer()
+    {
+        if (IsVisible)
+        {
+            _sessionStorePollTimer.Start();
+        }
+        else
+        {
+            _sessionStorePollTimer.Stop();
+        }
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
@@ -1621,21 +1643,15 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
     private async Task ChooseStyleAsync(PromptTemplateDto template)
     {
-        StyleSelectorLabel.Text = TranslationStyleMenu.ShortLabel(template);
-        var applied = await TranslationStyleMenu.SwitchActiveTemplateAsync(
-            template.Id,
-            message => TranslateStatus.Text = message);
+        var applied = await TranslationStyleMenu.ChooseStyleAsync(
+            template,
+            StyleSelectorLabel,
+            message => TranslateStatus.Text = message,
+            () => TranslateInput.Text?.Trim(),
+            TranslateAsync);
         if (!applied)
         {
             RefreshStyleSelector();
-        }
-        else
-        {
-            var text = TranslateInput.Text?.Trim();
-            if (!string.IsNullOrWhiteSpace(text))
-            {
-                _ = TranslateAsync();
-            }
         }
     }
 

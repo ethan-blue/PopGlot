@@ -7556,7 +7556,17 @@ internal static partial class Program
     {
         var appDir = Path.Combine(FindProjectRoot(), "apps", "PopGlot.Windows");
         var coordinatorCode = File.ReadAllText(Path.Combine(appDir, "Services", "TranslationCoordinator.cs"));
-        var detectorCode = File.ReadAllText(Path.Combine(appDir, "MainWindow.xaml.cs"));
+        // The detector moved out of MainWindow.xaml.cs into the shared style
+        // menu service, so resolve it by content instead of by a fixed path:
+        // a later move must not strand this guard on a stale filename again.
+        var detectorCode = Directory
+            .GetFiles(appDir, "*.cs", SearchOption.AllDirectories)
+            .Where(file => !file.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                        && !file.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            .Select(File.ReadAllText)
+            .FirstOrDefault(code => code.Contains("IsVisionDirectPipeline(string? pipelineLabel)", StringComparison.Ordinal))
+            ?? throw new InvalidOperationException(
+                $"IsVisionDirectPipeline must stay declared as a literal is-pattern under {appDir}");
 
         // The coordinator emits its vision labels through exactly two
         // ternaries over TargetsLocalRuntime: vision-direct (the vision model

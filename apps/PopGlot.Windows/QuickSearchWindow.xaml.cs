@@ -1085,22 +1085,19 @@ public partial class QuickSearchWindow : Window
 
     private async Task ChooseStyleAsync(PromptTemplateDto template)
     {
-        // Optimistic label; repainted from the authoritative state if the
-        // persist fails. Same contract as the model switch and every other
-        // surface: with text on screen the new style applies immediately
-        // through a retranslation instead of waiting for the next Enter.
-        StyleSelectorLabel.Text = TranslationStyleMenu.ShortLabel(template);
-        var applied = await TranslationStyleMenu.SwitchActiveTemplateAsync(
-            template.Id,
-            message => FooterStatus.Text = message);
+        // Optimistic label and the shared persist-then-retranslate contract
+        // live in TranslationStyleMenu.ChooseStyleAsync; the window-specific
+        // guard below stays here: a closed or hidden quick-search bar never
+        // fires a retranslation.
+        var applied = await TranslationStyleMenu.ChooseStyleAsync(
+            template,
+            StyleSelectorLabel,
+            message => FooterStatus.Text = message,
+            () => SearchBox.Text,
+            () => !_isClosed && IsVisible ? PerformTranslateAsync() : Task.CompletedTask);
         if (!applied)
         {
             RefreshStyleSelector();
-            return;
-        }
-        if (!_isClosed && IsVisible && !string.IsNullOrWhiteSpace(SearchBox.Text))
-        {
-            await PerformTranslateAsync();
         }
     }
 

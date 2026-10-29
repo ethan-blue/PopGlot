@@ -685,6 +685,20 @@ internal static class ShellSettingsStore
                 return def;
             }
 
+            // 【缓存身份契约】命中判定必须跟随文件的原始字节，因此内容哈希
+            // 必须参与判定，而哈希依赖读盘 —— 不存在「既保住契约、又省掉命
+            // 中路径的读盘与哈希」的写法。
+            // 不要用 (路径, LastWriteTimeUtc, Length) 三元组替代哈希：外部
+            // 编辑器可以在保持字节长度不变的同时把时间戳钉回原值
+            // （SetLastWriteTimeUtc），三元组会误判命中并返回过期快照，
+            // 用户改了设置却读到旧值。
+            // 0.1.33 曾尝试把命中探针提到读盘之前以省掉这些开销，直接破坏
+            // 本契约并导致 3 项 LogicTests 失败（ShellSettingsBomFileLoads
+            // UserSettingsAndKeepsBytesCacheIdentity / ShellSettingsUtf16
+            // BomFileLoadsUserSettingsAndKeepsBytesCacheIdentity /
+            // QuickSearchHotkeyRegistrationSerializationAndDegradation），
+            // 已回退。这三个用例刻意构造上述场景锁死本契约，不是测试缺陷。
+            // 本方法的命中节省只体现在跳过 JSON 反序列化上。
             var fileInfo = new FileInfo(path);
             var lastWrite = fileInfo.LastWriteTimeUtc;
             var bytes = File.ReadAllBytes(path);

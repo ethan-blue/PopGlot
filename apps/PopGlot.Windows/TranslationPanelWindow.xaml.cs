@@ -2010,21 +2010,15 @@ public partial class TranslationPanelWindow : Window
 
     private async Task ChooseStyleAsync(PromptTemplateDto template)
     {
-        StyleSelectorLabel.Text = TranslationStyleMenu.ShortLabel(template);
-        var applied = await TranslationStyleMenu.SwitchActiveTemplateAsync(
-            template.Id,
-            message => StatusText.Text = message);
+        var applied = await TranslationStyleMenu.ChooseStyleAsync(
+            template,
+            StyleSelectorLabel,
+            message => StatusText.Text = message,
+            () => SourceInputBox.Text?.Trim(),
+            RetranslateCurrentTextAsync);
         if (!applied)
         {
             RefreshStyleSelector();
-        }
-        else
-        {
-            var text = SourceInputBox.Text?.Trim();
-            if (!string.IsNullOrWhiteSpace(text))
-            {
-                _ = RetranslateCurrentTextAsync();
-            }
         }
     }
 

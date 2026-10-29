@@ -299,7 +299,7 @@
 
                         <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                             <Button x:Name="RouteSelectorButton" Style="{StaticResource IconButton}"
-                                    Width="Auto" MinWidth="32" Height="26" Padding="6,0" Margin="0,0,4,0"
+                                    Width="Auto" MinWidth="32" Height="32" Padding="6,0" Margin="0,0,4,0"
                                     AutomationProperties.Name="文字翻译模型"
                                     ToolTipService.ShowOnDisabled="True"
                                     ToolTip="文字翻译模型（点击切换）"
@@ -318,7 +318,7 @@
                                 </StackPanel>
                             </Button>
                             <Button x:Name="StyleSelectorButton" Style="{StaticResource IconButton}"
-                                    Width="Auto" MinWidth="32" Height="26" Padding="6,0" Margin="0,0,6,0"
+                                    Width="Auto" MinWidth="32" Height="32" Padding="6,0" Margin="0,0,6,0"
                                     AutomationProperties.Name="文字翻译风格"
                                     ToolTipService.ShowOnDisabled="True"
                                     ToolTip="风格（点击选择）"

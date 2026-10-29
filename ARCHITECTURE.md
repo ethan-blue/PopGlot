@@ -91,7 +91,7 @@ FFI Callback (C ABI Native Thread)
 - 终态校准与 Partial 保全：若流被取消或异常中断，Coordinator 留存已接收的 Partial 文本并展示部分结果提示，同时禁止发起无意义的二次错误重试。
 
 ### 3. UI Stream-Final 双层渲染与 UI Final Gate
-- **双层平滑渲染**：首 delta 到达时，TranslateSection、TranslationPanelWindow 与 QuickSearchWindow 切换至轻量只读文本流式层，支持长文本自动跟随滚动；收到终态 Envelope 后无缝切换为 Rich Markdown 呈现层。两层严格统一字号（15px）与行高（22px），消除完成瞬间的跳动与缩水；
+- **双层平滑渲染**：首 delta 到达时，TranslateSection、TranslationPanelWindow 与 QuickSearchWindow 切换至轻量只读文本流式层，支持长文本自动跟随滚动；收到终态 Envelope 后无缝切换为 Rich Markdown 呈现层。两层严格统一字号（14.5px），且不显式设置行高（随字体默认），消除完成瞬间的跳动与缩水；
 - **UI Final Gate 动作门禁**：
   - 流式增量阶段以及 partial/未完成状态下，严格禁用自动复制到剪贴板、TTS 语音朗读、生词收藏与本地历史写入；
   - 只有收到包含完整 Token 校验的最终合法 Envelope 时，Final Gate 才允许执行上述动作；
@@ -160,7 +160,7 @@ CaptureFrame → image limits/redaction → vision stream model
 - Clippy 全 targets 且 warnings-as-errors
 - WPF warnings-as-errors 构建
 - 无密钥启动冒烟测试
-- 零依赖 Windows 逻辑测试：113 项逻辑测试覆盖剪贴板事务、边界定位、状态机、快捷键迁移、历史过滤、流式管道、推荐服务与主题对比度。
+- 零依赖 Windows 逻辑测试：361 项逻辑测试覆盖剪贴板事务、边界定位、状态机、快捷键迁移、历史过滤、流式管道、推荐服务与主题对比度。
 
 ## 依赖与协议依据
 

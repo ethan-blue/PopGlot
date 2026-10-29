@@ -131,7 +131,7 @@
 
                         <!-- Global TEXT-translation style selector: consistent with the workbench and panel. -->
                         <Button x:Name="StyleSelectorButton" Style="{StaticResource IconButton}"
-                                Width="Auto" MinWidth="32" Padding="4,0" Margin="4,0,0,0"
+                                Width="Auto" MinWidth="32" Height="32" Padding="4,0" Margin="4,0,0,0"
                                 AutomationProperties.Name="文字翻译风格"
                                 ToolTipService.ShowOnDisabled="True"
                                 ToolTip="风格（点击选择）"
