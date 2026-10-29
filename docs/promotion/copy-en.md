@@ -39,7 +39,11 @@ Cited below, 直接写：
 
 凡是对募集用户的英文渠道，正文里都要原样出现：
 
-1. **Unsigned installer.** Current installer is unsigned, so SmartScreen may warn on the first run. Verify the shipped `.sha256` if you want to be sure. Do not claim a code-signing certificate we do not have.
+1. **Unsigned installer.** Current installer is unsigned, so SmartScreen will warn on the first run. Say this yourself, before anyone else does, and always give the way to verify.统一用这句：
+
+   > The installer is currently unsigned, so Windows SmartScreen will warn before the first run. Every asset ships a `.sha256`: open the release page, download that file, and compare the values yourself - `Get-FileHash PopGlot-v0.1.35-win-x64-setup.exe` in PowerShell, or `certutil -hashfile PopGlot-v0.1.35-win-x64-setup.exe SHA256` in cmd.
+
+   Do not claim a code-signing certificate we do not have.
 2. **Bring your own key.** The interesting engines need your own API key (OpenAI-compatible, OpenAI Responses, Anthropic, Gemini) or a local endpoint (Ollama, LM Studio). The default no-configuration route is Google public translate, i.e. public machine translation - convenient, not special. MyMemory can be selected when Google is unavailable.
 3. **No traction claims.** Do not say "users", "downloads", "rated", "trusted by N". We have none of those numbers to cite. See 0.4.
 
@@ -74,6 +78,33 @@ Cited below, 直接写：
 - [ ] 声明了「我是作者」（Reddit 尤其重要，写做 "I'm the author - AMA / happy to answer anything technical"）。
 - [ ] 同一天没有把同一段文案投到多个 subreddit（这是 Reddit 判定 spam 的头号信号）。
 - [ ] 原文手写，不要过一遍 LLM 润色。r/dotnet、r/rust、HN 明确排斥 AI 生成的帖子。
+
+---
+
+### 0.6 竞品格局与定位纪律（2026-10-29，由 team-lead 提供，数据查自 GitHub REST API）
+
+**可陈述的事实**
+
+- pot-app 组织下的仓库在 GitHub 上均已 archived；主仓库 `pot-desktop` 最后提交日期为 2026-07-04。同品类最知名的开源项目已停更。
+- 同品类里仍然活跃的开源竞品包括 STranslate（8,442 star，MIT，同为 WPF）与 eSearch（7,371 star）。**它们同样支持 Ollama / LM Studio 本地端点。**
+
+**因此「支持本地模型」不是差异化，是入场券。不要在英文文案里把它写成卖点。**
+
+差异化只能落在这五条上，且每条都有对应的实现：
+
+| 差异化 | 可写的表述 |
+| --- | --- |
+| 截图默认本机 OCR | Screenshots are OCR'd on your machine by default |
+| 图片外发是独立开关 | Sending the bitmap to a vision model requires an explicit opt-in, every time |
+| 离线模式连免费通道一起断 | Safe offline mode blocks every outbound request, including the no-configuration fallback, while local endpoints keep working |
+| 剪贴板按序号还原 | The clipboard is restored by sequence number, so a newer copy is never overwritten |
+| 密钥进凭据管理器 | Keys are stored in Windows Credential Manager; logs never record source text, screenshots or keys |
+
+**涉及竞品时的红线**
+
+- 只写可验证的事实：「the official pot-app repositories are archived; pot-desktop's last commit is 2026-07-04」。
+- **禁止**写 "Pot is dead" / "the best alternative" / "better than X" / "the only one that ..."。Reddit 对踩竞品与自我吹捧高度敏感，会被 downvote 甚至删帖。
+- 提到竞品时，顺带承认它们的存在与优点（例如 STranslate 与 eSearch 都活跃且都支持本地模型）。这反而增加可信度，也避免别人在评论区替你补充。
 
 ---
 
@@ -155,7 +186,7 @@ Default hotkeys (rebindable):
 Under the hood it is a WPF (.NET 10) shell over a Rust core (popglot-domain, popglot-core, popglot-ffi) separated by a C ABI. The translation logic is in the Rust core, so the shell can be replaced without rewriting it. MIT licensed.
 
 Being straight with you about the parts that are not polished:
-- The installer is currently unsigned. SmartScreen will probably warn on the first run. Check the .sha256 if you want to be certain. I'd rather say this than have someone find out after downloading.
+- The installer is currently unsigned, so Windows SmartScreen will warn before the first run. Every asset ships a `.sha256`: open the release page, download that file, and compare it yourself with `Get-FileHash PopGlot-v0.1.35-win-x64-setup.exe` in PowerShell (or `certutil -hashfile PopGlot-v0.1.35-win-x64-setup.exe SHA256` in cmd). I'd rather say this than have someone find out after downloading.
 - Better results need your own key: OpenAI-compatible endpoints, OpenAI Responses, Anthropic, Gemini, or a local model through Ollama or LM Studio. Keys go into Windows Credential Manager. If you configure nothing, it falls back to Google's public translate, with MyMemory available when Google is unreachable. That fallback is ordinary machine translation - it is a convenience default, not the interesting part.
 - Screenshots are OCR'd on your machine by default. Sending the image to a vision model takes an explicit opt-in. Safe offline mode blocks every outbound request, including that fallback, while a local Ollama or LM Studio endpoint keeps working. Logs never record source text, screenshots or keys.
 - The clipboard is restored by sequence number, so if you copy something else while the panel is open, the app does not clobber your newer copy. That was fiddly to get right.
@@ -237,8 +268,8 @@ Practical details:
 - Logs never record source text, screenshots or keys. History caps at 200 entries / 90 days / 4 MiB, and partial results are not stored.
 
 Rough edges I'd rather name myself:
-- The installer is currently unsigned, so SmartScreen warns on the first run. Check the .sha256.
-- The free fallback is a public third-party service; do not point confidential text at it. Use a local endpoint or offline mode for that.
+- The installer is currently unsigned, so Windows SmartScreen will warn before the first run. Every asset ships a `.sha256` - compare it with `Get-FileHash PopGlot-v0.1.35-win-x64-setup.exe` in PowerShell. I am not going to pretend the warning does not exist.
+- Confidential or sensitive text should go to a local endpoint or offline mode, not the free fallback. I say this in the README too, and it is the one piece of advice I would want somebody to repeat back to me.
 
 I have no usage numbers to quote. If it breaks on your machine, that's the most useful thing you can tell me.
 ```
@@ -483,7 +514,7 @@ Things that bit me that I did not expect:
 - Bundling .NET. Both the ~59 MB installer and the ~88 MB portable zip bundle the runtime so there is no separate install step. That is a real size penalty and I think it is worth it; a translator that fails because the user has the wrong runtime patch is worse than 60 MB.
 
 Being straight about the state of it:
-- The installer is currently unsigned. SmartScreen warns on first run. Every asset ships a .sha256.
+- The installer is currently unsigned, so Windows SmartScreen will warn before the first run. Every asset ships a `.sha256`; verify it with `Get-FileHash PopGlot-v0.1.35-win-x64-setup.exe` in PowerShell.
 - The better engines need your own key: OpenAI-compatible, OpenAI Responses, Anthropic, Gemini, or a local Ollama / LM Studio endpoint. Configure nothing and you get Google's public translate, with MyMemory selectable when that is unreachable - ordinary machine translation, there so the app works out of the box.
 - Screenshots OCR locally by default; vision models require explicit opt-in. Safe offline mode blocks every outbound request but still lets a local endpoint answer.
 - MIT. No telemetry claims beyond the above, no usage numbers to quote.
