@@ -77,6 +77,9 @@ Cited below, 直接写：
 - [ ] 没有出现 0.3 的任一词汇。
 - [ ] 声明了「我是作者」（Reddit 尤其重要，写做 "I'm the author - AMA / happy to answer anything technical"）。
 - [ ] 同一天没有把同一段文案投到多个 subreddit（这是 Reddit 判定 spam 的头号信号）。
+- [ ] 没有把「支持本地模型（Ollama / LM Studio）」当卖点主打。见 0.6：这是入场券不是差异化。
+- [ ] 提到竞品时只写了可验证事实（pot-app 仓库已 archived、pot-desktop 最后提交 2026-07-04），没有写 "dead" / "better than" / "the best alternative"。
+- [ ] 正文里出现了未签名安装包的自白 + 可执行的 SHA-256 校验方式（`Get-FileHash` / `certutil`）。
 - [ ] 原文手写，不要过一遍 LLM 润色。r/dotnet、r/rust、HN 明确排斥 AI 生成的帖子。
 
 ---
@@ -243,7 +246,7 @@ Wednesday release post. MIT licensed, no paywall, no accounts. I'm the author.
 Repo: https://github.com/ethan-blue/PopGlot
 v0.1.35 downloads: https://github.com/ethan-blue/PopGlot/releases
 
-PopGlot translates text you select anywhere on Windows, and translates screenshots. Rather than list features, here are the three problems that took actual work, since those are the parts that might be interesting here.
+PopGlot translates text you select anywhere on Windows, and translates screenshots. This is not a category with a shortage of entries: STranslate and eSearch are alive and well, and pot-desktop - the best known of the bunch - has its GitHub repositories archived with its last commit dated 2026-07-04. Local model support via Ollama or LM Studio is common across all of them, so I will not claim that as a differentiator. Rather than list features, here are the three problems that took actual work, since those are the parts that might be interesting here.
 
 1. Restoring the clipboard without stealing newer copies
 
@@ -316,7 +319,9 @@ PopGlot is a Windows desktop translator for selected text and screenshots, MIT l
 Source: https://github.com/ethan-blue/PopGlot
 Releases: https://github.com/ethan-blue/PopGlot/releases
 
-The design goal was a translation tool that does not require changing how you work: a hotkey, a panel, done. The privacy-relevant design choices:
+The design goal was a translation tool that does not require changing how you work: a hotkey, a panel, done. One reason it exists at all: the pot-app organisation's repositories are archived on GitHub, with pot-desktop's last commit dated 2026-07-04. Active alternatives do exist (STranslate, eSearch) and several of them also support local model endpoints, so the differentiators below are about defaults rather than capability lists.
+
+The privacy-relevant design choices:
 
 - Screenshots are OCR'd on the machine by default. Sending the bitmap to a vision model requires an explicit opt-in; it is never the default.
 - Safe offline mode blocks every outbound request, including the no-configuration fallback, while leaving local Ollama and LM Studio endpoints working.
@@ -564,7 +569,9 @@ Happy to talk about the Win32 bits, the interop boundary, or any part of this th
 ```
 I'm the author. This is the honest version, including the parts that are not done.
 
-The problem was small and constant. I read a lot of material that is not in my first language, and translating meant: select, copy, alt-tab, paste into a browser box, read, alt-tab back, lose my place. Every one of those steps is trivial and the sum of them drove me mad. So I wrote a translator whose whole pitch is "select text, press a key, read it where you are."
+There are already several open source translators in this space, so let me answer "why another one" first. The honest version: the pot-app organisation's repositories on GitHub are all archived now, and the main one, pot-desktop, has its last commit dated 2026-07-04. That is not a dig - those projects did real work - but it is why I wanted something whose bugs I could fix myself. And I am not going to claim PopGlot beats anything: STranslate and eSearch are both actively maintained and both support local models, so "supports Ollama / LM Studio" is table stakes here, not a feature I get to brag about. What I did differently is narrower, and it is all about defaults.
+
+The problem I set out to solve was small and constant. I read a lot of material that is not in my first language, and translating meant: select, copy, alt-tab, paste into a browser box, read, alt-tab back, lose my place. Every one of those steps is trivial and the sum of them drove me mad. So I wrote a translator whose whole pitch is "select text, press a key, read it where you are."
 
 What it does now:
 
@@ -582,7 +589,7 @@ What it costs you and what it does not do:
 
 - It's free and MIT: https://github.com/ethan-blue/PopGlot. No account, no paid tier, no upsell. I have no usage numbers, no ratings - this is a thing I built and use.
 - To get genuinely good output you bring your own key (OpenAI-compatible, OpenAI Responses, Anthropic, Gemini) or point it at a local model server. If you configure nothing it falls back to Google's public translate, and MyMemory can be selected when Google is unreachable. That fallback is ordinary public machine translation. It is there so the app works out of the box, not because it's special.
-- The installer is unsigned. SmartScreen will warn the first time you run it. I am not pretending otherwise; every download ships a .sha256 so you can check it yourself.
+- The installer is unsigned, so Windows SmartScreen will warn before the first run. I am not pretending otherwise: every download ships a `.sha256`, so run `Get-FileHash PopGlot-v0.1.35-win-x64-setup.exe` in PowerShell and compare the value yourself before you execute anything.
 - Confidential text should go to a local endpoint or offline mode, not the free fallback. The README says this too.
 
 v0.1.35, out today: https://github.com/ethan-blue/PopGlot/releases
@@ -640,7 +647,7 @@ A C ABI between language halves. The translation logic is Rust (popglot-domain, 
 
 Engines are adapters: OpenAI-compatible, OpenAI Responses, Anthropic, Gemini, or a local Ollama / LM Studio endpoint, keys in Windows Credential Manager. If you configure nothing you get Google's public translate, with MyMemory selectable when Google is unreachable. That fallback is ordinary machine translation - it exists so the app works out of the box, not as a selling point. Only the single selected snippet is ever sent, never the whole document. Logs never record source text, screenshots or keys. History is bounded: 200 entries, 90 days, 4 MiB, and partial results are never persisted.
 
-Things that are not good yet: the installer is unsigned so SmartScreen warns on first run (every asset ships a .sha256); there is no demo video, only static screenshots in docs/images/; and I have no users or numbers to quote you.
+Things that are not good yet: the installer is unsigned so Windows SmartScreen warns before the first run - every asset ships a `.sha256` and you can check it with `certutil -hashfile PopGlot-v0.1.35-win-x64-setup.exe SHA256` or `Get-FileHash` in PowerShell; there is no demo video, only static screenshots in docs/images/; and I have no users or numbers to quote you.
 
 MIT. v0.1.35: https://github.com/ethan-blue/PopGlot/releases (~59 MB installer bundling .NET, ~88 MB portable zip).
 ```
@@ -828,7 +835,7 @@ LibHunt 没有单独的 `/submit` 页面 —— 我在 2026-10-29 访问 `libhun
 Description（LibHunt 偏好一句话）：
 
 ```
-PopGlot is a MIT-licensed Windows translator for selected text and screenshots. Screenshots are OCR'd on the machine by default and sending the image to a vision model requires an explicit opt-in. Engines are pluggable: OpenAI-compatible, OpenAI Responses, Anthropic, Gemini, or a local Ollama / LM Studio endpoint.
+PopGlot is a MIT-licensed Windows translator for selected text and screenshots. Screenshots are OCR'd on the machine by default; sending the bitmap to a vision model requires an explicit per-use opt-in, and safe offline mode blocks every outbound request including the no-configuration fallback. The clipboard is restored by sequence number and keys are stored in Windows Credential Manager. Engines include OpenAI-compatible, OpenAI Responses, Anthropic, Gemini and local endpoints.
 ```
 
 **④ 步骤**
@@ -860,7 +867,7 @@ PopGlot is a MIT-licensed Windows translator for selected text and screenshots. 
 复用 A.4.1 的 short description 即可：
 
 ```
-A MIT-licensed Windows translator for selected text and screenshots, with local OCR by default and pluggable engines (OpenAI-compatible, Anthropic, Gemini, or local Ollama / LM Studio).
+A MIT-licensed Windows translator for selected text and screenshots: local OCR by default, image upload only on explicit opt-in, safe offline mode that also blocks the free fallback, clipboard restored by sequence number, keys in Windows Credential Manager.
 ```
 
 **④ 步骤**
@@ -885,7 +892,10 @@ A MIT-licensed Windows translator for selected text and screenshots, with local 
 
 ---
 
-## Task B. awesome 列表清单
+## Task B. 开源目录站 / awesome 列表清单
+
+> 本节即 team-lead 要求的「开源目录站」部分。**只收录我实际核实过的仓库** —— 逐个用 GitHub REST API 确认存在性与活跃度，并拉取 `CONTRIBUTING.md` 逐条核对条目格式要求。有明显门槛或不合适的，我直接写「不建议提交 / 现在不要提交」并给出理由，没有为了凑数硬塞。
+> 没有核实完成的部分（slant.co 的官方条款、LibHunt 是否收录桌面应用）已在对应小节注明「尚未核实完成，待补」。
 
 ### B.0 核实方法与免责
 
@@ -926,7 +936,7 @@ A MIT-licensed Windows translator for selected text and screenshots, with local 
 插入位置：`## Apps` → `### Automated translation` 小节。**按该小节现有字母序，PopGlot 排在 Copy Translator 之后、LibreTranslate 之前**（现有顺序已经是 R / C / C / L 并不严格按字母序，因此你也可以直接追加到小节末尾，并在 PR 里说明）。稳妥做法是追加到小节最后一行。
 
 ```markdown
-- [PopGlot](https://github.com/ethan-blue/PopGlot) - A translator for Windows that translates selected text and screenshots, OCRs screenshots locally by default, and supports OpenAI-compatible, OpenAI Responses, Anthropic, Gemini and local Ollama or LM Studio endpoints.
+- [PopGlot](https://github.com/ethan-blue/PopGlot) - A Windows translator for selected text and screenshots that OCRs screenshots on your machine by default and requires an explicit opt-in before the image goes to a vision model, with a strict offline mode that blocks every outbound request including the no-configuration fallback.
 ```
 
 **提交步骤**
@@ -953,7 +963,7 @@ PR 正文建议：
 ```
 Adding PopGlot under Apps > Automated translation.
 
-PopGlot is a MIT-licensed Windows translator for selected text and screenshots. Relevant points for this section: screenshots are OCR'd on the machine by default with the vision-model path behind an explicit per-use opt-in, engines are pluggable (OpenAI-compatible, OpenAI Responses, Anthropic, Gemini, plus local Ollama / LM Studio), and there is a strict offline mode.
+PopGlot is a MIT-licensed Windows translator for selected text and screenshots. Relevant points for this section: screenshots are OCR'd on the machine by default with the vision-model path behind an explicit per-use opt-in, there is a strict offline mode that blocks every outbound request including the no-configuration fallback, and the clipboard is restored by sequence number so a newer copy is never overwritten. Local model endpoints are supported, as several other tools in this list also do.
 
 I am the author of the project.
 ```
@@ -1121,7 +1131,7 @@ git push origin add-popglot
 **条目原文（留作将来提交，不要现在发）**
 
 ```markdown
-* [PopGlot](https://github.com/ethan-blue/PopGlot) - Translates selected text and screenshots on Windows, OCRs screenshots on your machine by default and supports local Ollama or LM Studio endpoints with no network required. Open source, MIT.
+* [PopGlot](https://github.com/ethan-blue/PopGlot) - Translates selected text and screenshots on Windows. Screenshots are OCR'd on your machine by default, the picture leaves only on an explicit opt-in, and a strict offline mode blocks every outbound request including the free fallback. Open source, MIT.
 ```
 
 > 格式核对：AP style title-casing → 描述句首字母大写、句末句号。列表现有条目如 `Velocmd - A lightning fast, native system launcher. Search files, run commands, and navigate your system seamlessly.` 就是这种写法。
