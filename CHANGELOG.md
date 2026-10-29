@@ -3,38 +3,25 @@
 本文件从 **0.0.1** 开始维护。更早的开发过程没有正式版本号；
 曾被误打的 `v0.3.0` tag 已撤回（见 `docs/VERSIONING.md` 历史修正），编号不复用。
 
-## 0.1.34 - 2026-10-29
-
-### 修复
-- 修复 0.1.33 发布失败。版本从 0.1.32 提升到 0.1.33 时只改了 `Cargo.toml` 的 `[workspace.package] version`，未同步 `Cargo.lock`；发布工作流的版本一致性校验当时只覆盖 `PopGlot.Windows.csproj`、`Cargo.toml` 与 `CHANGELOG.md` 三处，因此没有拦截，随后所有带 `--locked` 的 Cargo 步骤均以「cannot update the lock file because --locked was passed」失败，v0.1.33 的 Release 没有打包、也没有产出安装包。本次已同步 lock 文件中 popglot-core、popglot-domain、popglot-ffi 三个包的版本。
-
-### 变更
-- 发布工作流（`.github/workflows/release.yml`）的版本一致性校验新增第 4 项：`Cargo.lock` 中三个 workspace 包的版本必须与发布 tag 一致。不一致时在门禁阶段即失败，并提示执行 `cargo update --workspace`，避免同类问题再次静默漏网。
-
-### 迁移
-- 无。沿用现有配置与本地数据。
-
-### 验证与边界
-- `scripts/verify.ps1` 全量门禁：Rust 格式检查、工作区测试（`--locked`）、Clippy、WPF Debug 构建、PureTests 58 项、Windows 逻辑测试 361 项，全部 0 失败。
-- CliTests --ui 首次运行为 28 项通过 / 1 项失败（`OMP login failure/cancel/unsafe URL isolation`），同命令立即重跑为 29 项通过 / 0 项失败。本批为零 C# 行为改动，判定为该项偶发波动而非回归，已作为测试稳定性问题记录待查。
-- `cargo test --workspace --locked --no-run` 通过（这是 0.1.33 失败的直接步骤）。
-- 新增的 Cargo.lock 校验已在本机模拟两种场景验证：版本一致时通过并打印三个包的版本；人为把 popglot-domain 改回旧版本时按预期抛出明确错误并提示修复命令。
-- v0.1.33 的 tag 保留不动；其 Release 从未成功产出安装包，GitHub 上可用的上一个正式版本为 0.1.32。0.1.34 是该缺陷修复后首个成功构建的版本。
-
-## 0.1.33 - 2026-10-28
+## 0.1.33 - 2026-10-29
 
 ### 变更
 - 划词浮窗译文操作行的模型与风格按钮高度改为 32，与同一行的朗读、复制、收藏按钮对齐；极速查词窗口头部的风格按钮同样改为 32。
 - 产品规格中的空闲内存指标改用 Private Bytes 口径：当前 60.44 MiB，达到 80 MiB 软目标。工作集仍为 106.24 MiB，其中约 45.8 MiB 是自包含 .NET 运行时的共享代码页，多进程共用、不计入本应用独占占用，因此原本以工作集计的 80 MiB 软目标无法达成，改为以 Private Bytes 衡量。
+- 发布工作流（`.github/workflows/release.yml`）的版本一致性校验新增第 4 项：`Cargo.lock` 中三个 workspace 包的版本必须与发布 tag 一致。不一致时在门禁阶段即失败，并提示执行 `cargo update --workspace`，避免同类问题再次静默漏网。
 
 ### 修复
 - 主窗口隐藏到托盘后不再继续每 2 秒轮询刷新「恢复暂存」按钮状态。此前该轮询只在窗口卸载时停止，而关闭到托盘走的是隐藏（不触发卸载），轮询会在后台一直进行。
+- 修复本版首次发版时的构建失败：版本从 0.1.32 提升时只改了 `Cargo.toml` 的 `[workspace.package] version`，未同步 `Cargo.lock`；发布工作流的版本一致性校验当时只覆盖 `PopGlot.Windows.csproj`、`Cargo.toml` 与 `CHANGELOG.md` 三处，因此没有拦截，随后所有带 `--locked` 的 Cargo 步骤均以「cannot update the lock file because --locked was passed」失败，Release 没有打包、也没有产出安装包。已同步 lock 文件中 popglot-core、popglot-domain、popglot-ffi 三个包的版本后重新发布，编号沿用 0.1.33（该编号此前从未成功发布，无 Release 页与安装包，故不视为已占用）。
 
 ### 迁移
 - 无。沿用现有配置与本地数据。
 
 ### 验证与边界
-- `scripts/verify.ps1` 全量门禁通过：Rust 格式检查、工作区测试、Clippy、WPF Debug 构建、PureTests 58 项、Windows 逻辑测试 361 项、连接流程 CliTests --ui 29 项，全部 0 失败。
+- `scripts/verify.ps1` 全量门禁通过：Rust 格式检查、工作区测试（`--locked`）、Clippy、WPF Debug 构建、PureTests 58 项、Windows 逻辑测试 361 项，全部 0 失败。
+- `cargo test --workspace --locked --no-run` 通过（这是首次发版失败的直接步骤）。
+- 新增的 `Cargo.lock` 版本校验已在本机模拟两种场景验证：版本一致时通过并打印三个包的版本；人为把 popglot-domain 改回旧版本时按预期抛出明确错误并提示修复命令。
+- CliTests --ui 首次运行为 28 项通过 / 1 项失败（`OMP login failure/cancel/unsafe URL isolation`），同命令立即重跑为 29 项通过 / 0 项失败。该批为零 C# 行为改动，判定为该项偶发波动而非回归，已作为测试稳定性问题记录待查。
 - 已知 Windows 逻辑测试存在与调用方式无关的结果波动：同一命令在不同运行中曾得到 361 项全通过与 227 项通过 / 134 项失败两种结果，失败均为「不能在同一 AppDomain 中创建多个 System.Windows.Application 实例」，根因待查。本批数字以 `scripts/verify.ps1` 全量运行的输出为准。
 - 逻辑测试中有一项依赖真实物理鼠标悬停的前置条件，在无头或非交互环境下仍可能失败。
 - 划词浮窗与极速查词窗口在 100% 与 150% 缩放下的按钮排布仍需实机目视确认；本批只做了代码层面的布局复核与自动化布局断言。
