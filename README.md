@@ -1,7 +1,7 @@
 # PopGlot
 
 [![Windows](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D4)](https://github.com/ethan-blue/PopGlot/releases)
-[![Version](https://img.shields.io/badge/version-0.1.34-5B67B5)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.1.35-5B67B5)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-3D8B6E)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/ethan-blue/PopGlot/ci.yml?branch=main&label=CI)](https://github.com/ethan-blue/PopGlot/actions)
 
@@ -85,23 +85,31 @@ Run `PopGlot.exe`. It stays in the tray. Allow the free engine under Settings �
 
 ## 下载
 
-**0.1.34** 修复 Windows 逻辑测试结果不可复现的问题：同一命令曾在不同运行中产生「全部通过」与「成片失败」两种结论，现由测试宿主统一引导 WPF Application，连续运行的用例结论逐字一致。关闭主窗口时不再重复读取设置；划词浮窗、极速查词窗口与截图浮层的 19 处圆角改为引用主题 token，数值与原先一致、视觉无变化。发布状态与附件以 [Releases](https://github.com/ethan-blue/PopGlot/releases) 为准。
+**0.1.35** 开始提供 Windows 安装包：覆盖升级会自动探测上一次的安装位置，默认按当前用户安装、无需管理员，卸载只删程序文件而保留你的配置与历史。同时新增首次配置向导（隐私选择一次做完）、应用内更新提示（只提示，不静默下载），内置免费引擎改为默认允许——不再需要钻进设置页授权；另外加固了密钥与端点的防泄露。发布状态与附件以 [Releases](https://github.com/ethan-blue/PopGlot/releases) 为准。
 
-[下载 PopGlot 0.1.34](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.34/PopGlot-v0.1.34-win-x64.zip)
+| 形态 | 文件名 | 适合谁 |
+| --- | --- | --- |
+| 安装包（推荐） | `PopGlot-v0.1.35-win-x64-setup.exe` | 大多数桌面用户。向导安装、开始菜单快捷方式、标准卸载入口；下次升级直接运行新版安装包即可原地覆盖。 |
+| 便携 zip | `PopGlot-v0.1.35-win-x64.zip` | 免安装、U 盘随身、只读目录运行。解压后运行 `PopGlot.exe`。 |
 
-每一版的发布页都用同一个样子：标题是 `PopGlot 版本号`，页上直接写这一版改了什么，并附上 zip 和 `.sha256`。不用再点进另一份说明。
+- [下载安装包 PopGlot 0.1.35](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.35/PopGlot-v0.1.35-win-x64-setup.exe)
+- [下载便携包 PopGlot 0.1.35](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.35/PopGlot-v0.1.35-win-x64.zip)
+
+每一版的发布页都用同一个样子：标题是 `PopGlot 版本号`，页上直接写这一版改了什么，并附上安装包与 zip（各自带 `.sha256`）。不用再点进另一份说明。
 
 | 版本 | 包里有没有 .NET |
 | --- | --- |
-| 0.1.2 及以后 | 有。解压后运行 `PopGlot.exe`。 |
+| 0.1.2 及以后 | 有。安装包装完即用，便携包解压后运行 `PopGlot.exe`。 |
 | 0.1.1 及以前 | 没有。要先安装 .NET 10 Desktop Runtime（x64）。 |
 
-文件名始终是 `PopGlot-v版本号-win-x64.zip`。校验：
+文件名始终是 `PopGlot-v版本号-win-x64-setup.exe` 与 `PopGlot-v版本号-win-x64.zip`。校验：
 
 ```powershell
-(Get-FileHash -Path .\PopGlot-v0.1.34-win-x64.zip -Algorithm SHA256).Hash.ToLower()
-Get-Content .\PopGlot-v0.1.34-win-x64.zip.sha256
+(Get-FileHash -Path .\PopGlot-v0.1.35-win-x64-setup.exe -Algorithm SHA256).Hash.ToLower()
+Get-Content .\PopGlot-v0.1.35-win-x64-setup.exe.sha256
 ```
+
+> 安装包目前未签名，首次运行可能看到 SmartScreen 提示；每个包的 SHA-256 与发布页附件同名文件一一对应。
 
 全部发布页在 [Releases](https://github.com/ethan-blue/PopGlot/releases)。
 

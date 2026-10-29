@@ -111,6 +111,57 @@ internal static class FreeTranslateService
     /// </summary>
     internal const int MaxRequestUrlLength = 2_000;
 
+    // 本机配额：公共端点按 IP 限流，一个失控的客户端会把这台机器的 IP 打
+    // 到被封。每小时上限保护的是用户自己的可用性（也是对被借用端点的自我
+    // 节制），超限后本小时内不再自动重试。
+    internal const int HourlySendBudget = 400;
+    private const long QuotaWindowMs = 60L * 60 * 1000;
+    private static readonly object QuotaGate = new();
+    private static int _quotaUsed;
+    private static long _quotaWindowStartMs;
+
+    /// <summary>Test seam: clears the local hourly budget.</summary>
+    internal static void ResetQuotaForTest()
+    {
+        lock (QuotaGate)
+        {
+            _quotaUsed = 0;
+            _quotaWindowStartMs = 0;
+        }
+    }
+
+    /// <summary>Remaining sends in the current hour (test/invariant seam).</summary>
+    internal static int QuotaRemaining
+    {
+        get
+        {
+            lock (QuotaGate)
+            {
+                return Math.Max(0, HourlySendBudget - _quotaUsed);
+            }
+        }
+    }
+
+    private static bool TryConsumeQuota()
+    {
+        var now = MonotonicMilliseconds;
+        lock (QuotaGate)
+        {
+            // 有符号差：跨 TickCount64 回绕仍然成立。
+            if (_quotaWindowStartMs == 0 || now - _quotaWindowStartMs >= QuotaWindowMs)
+            {
+                _quotaWindowStartMs = now;
+                _quotaUsed = 0;
+            }
+            if (_quotaUsed >= HourlySendBudget)
+            {
+                return false;
+            }
+            _quotaUsed++;
+            return true;
+        }
+    }
+
     private static readonly object CacheGate = new();
     private static readonly Dictionary<string, TranslationResponse> Cache = new();
     private static readonly LinkedList<string> CacheOrder = new();
@@ -155,21 +206,27 @@ internal static class FreeTranslateService
         }
     }
 
+    // 0.1.35：端点地址来自混淆目录（FreeEndpointCatalog），不再明文硬编码。
+    // 详见该文件的诚实边界说明：提高扒取门槛，不等于加密。
     private static readonly FreeEndpoint[] DefaultEndpoints =
     [
         new FreeEndpoint(
-            "translate.googleapis.com",
-            static (sl, tl, q) =>
-                $"https://translate.googleapis.com/translate_a/single?client=gtx&sl={sl}&tl={tl}&dt=t&dt=bd&dt=rm&q={HttpUtility.UrlEncode(q)}",
+            FreeEndpointCatalog.HostOf(FreeEndpointCatalog.GtxSingleUrl),
+            static (sl, tl, q) => FreeEndpointCatalog.GtxSingleUrl
+                .Replace("{sl}", sl)
+                .Replace("{tl}", tl)
+                .Replace("{q}", HttpUtility.UrlEncode(q)),
             ParseGtxSingle),
         new FreeEndpoint(
-            "clients5.google.com",
-            static (sl, tl, q) =>
-                $"https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl={sl}&tl={tl}&q={HttpUtility.UrlEncode(q)}",
+            FreeEndpointCatalog.HostOf(FreeEndpointCatalog.DictChromeExUrl),
+            static (sl, tl, q) => FreeEndpointCatalog.DictChromeExUrl
+                .Replace("{sl}", sl)
+                .Replace("{tl}", tl)
+                .Replace("{q}", HttpUtility.UrlEncode(q)),
             ParseDictChromeEx),
         new FreeEndpoint(
-            "api.mymemory.translated.net",
-            static (_, _, _) => "https://api.mymemory.translated.net/get",
+            FreeEndpointCatalog.HostOf(FreeEndpointCatalog.MyMemoryUrl),
+            static (_, _, _) => FreeEndpointCatalog.MyMemoryUrl,
             ParseMyMemory,
             FreeEngineProvider.MyMemory,
             static (sl, tl, q) => BuildMyMemoryRequest(sl, tl, q)),
@@ -238,6 +295,14 @@ internal static class FreeTranslateService
         foreach (var endpoint in endpoints)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            // 本机配额先于一切：超配额时一个请求都不发，理由按限流归类。
+            if (!TryConsumeQuota())
+            {
+                lastError = new FreeTranslateException(
+                    FreeTranslateFailureKind.RateLimited,
+                    $"本机这一小时内使用内置免费引擎已达 {HourlySendBudget} 次上限，暂停自动重试以保护公共端点；可稍后重试，或在设置中配置自己的模型服务。");
+                break;
+            }
             // A rate-limited host only benches ITSELF; a healthy alternative
             // endpoint is still tried on this very request.
             if (IsHostCoolingDown(endpoint.Host))

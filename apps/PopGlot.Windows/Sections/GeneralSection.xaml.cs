@@ -39,8 +39,73 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
     internal ComboBox ThemeCombo => ThemeComboBox;
     internal TextBlock StartupStateHintText => StartupStateHint;
     internal Button StartupRepair => StartupRepairButton;
+    internal ToggleButton AutoUpdateCheck => AutoUpdateCheckToggle;
 
     internal bool IsLoading { get => _loading; set => _loading = value; }
+
+    /// <summary>Writes the startup update-check switch without a settings save bar.</summary>
+    private void AutoUpdateCheck_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading)
+        {
+            return;
+        }
+        var enabled = AutoUpdateCheckToggle.IsChecked == true;
+        try
+        {
+            ShellSettingsStore.Update(current => current with { CheckUpdatesEnabled = enabled });
+        }
+        catch (System.Exception)
+        {
+            // 开关只影响一次后台检查，写盘失败不必打断界面。
+        }
+        UpdateStatusText.Text = enabled
+            ? "只在启动时静默查一次 GitHub Releases；有新版只提示，不自动下载安装。"
+            : "已关闭启动检查；你可以随时点「立即检查」。";
+    }
+
+    /// <summary>
+    /// 手动检查：读 GitHub Releases（公开只读，不需要令牌），把结果写在状态
+    /// 行里。发现新版本时打开发布页——下载与安装始终由用户亲手完成。
+    /// </summary>
+    private async void CheckUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        CheckUpdateButton.IsEnabled = false;
+        UpdateStatusText.Text = "正在检查…";
+        try
+        {
+            var result = await Services.UpdateService.CheckAsync();
+            if (!result.Ok)
+            {
+                UpdateStatusText.Text = $"检查未完成：{result.Error ?? "未知原因"}。可稍后重试或手动访问发布页。";
+                return;
+            }
+            if (result.UpToDate)
+            {
+                UpdateStatusText.Text = $"已是最新版本（{result.CurrentVersion}）。";
+                return;
+            }
+            UpdateStatusText.Text = string.IsNullOrEmpty(result.InstallerName)
+                ? $"发现新版本 {result.LatestVersion}；正在打开发布页。"
+                : $"发现新版本 {result.LatestVersion}（安装包：{result.InstallerName}）；正在打开发布页。";
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = result.ReleaseUrl ?? Services.UpdateService.ReleasesPageUrl,
+                    UseShellExecute = true,
+                });
+            }
+            catch (System.Exception)
+            {
+                // 打不开浏览器不构成故障：状态行已经给出版本号与安装包名。
+            }
+        }
+        finally
+        {
+            CheckUpdateButton.IsEnabled = true;
+        }
+    }
 
     private bool _compact;
 
@@ -202,10 +267,9 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
     }
 
     /// <summary>
-    /// 「重新显示引导」入口：把 HasCompletedOnboarding 复位为未完成并回到
-    /// 主窗口工作台重新展开三步引导条。与「重新启用」自启按钮一样是即时
-    /// 动作，不走设置页的保存条；写盘失败只损失"下次启动再出现"，不影响
-    /// 本次展示。
+    /// 「重新显示引导」入口：0.1.35 起直接打开首次配置向导——隐私选择
+    /// （含内置免费引擎开关）就住在那里，这是关掉免费引擎后唯一的回头路。
+    /// 写盘失败只损失"下次启动再出现"，不影响本次展示。
     /// </summary>
     private void RestartOnboarding_Click(object sender, RoutedEventArgs e)
     {
@@ -217,13 +281,11 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
         {
             // 展示引导本身不依赖这次写盘成功。
         }
-        var main = Window.GetWindow(this) as MainWindow
-            ?? System.Windows.Application.Current?.MainWindow as MainWindow;
-        if (main is null)
-        {
-            return;
-        }
-        main.RestartOnboarding();
+        var owner = Window.GetWindow(this)
+            ?? System.Windows.Application.Current?.MainWindow;
+        var wizard = new FirstRunWindow { Owner = owner };
+        WindowPositioner.ConvergeFirstShow(wizard);
+        wizard.ShowDialog();
     }
 
     // C25：离线帮助查看器。纯本机渲染，FindProjectRoot 式回退保证开发与

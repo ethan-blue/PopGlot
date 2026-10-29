@@ -102,7 +102,9 @@ internal static class UserDataBackupService
     public static string SerializeBackup(UserDataBackupPackage package)
     {
         ArgumentNullException.ThrowIfNull(package);
-        return JsonSerializer.Serialize(package, JsonOptions);
+        // 0.1.35：备份包是会被拷贝到别处的文件，序列化后再过一道脱敏——
+        // 只要里面出现了登记过的密钥原文，落盘的就是掩码。
+        return SecretRedactor.Redact(JsonSerializer.Serialize(package, JsonOptions));
     }
 
     /// <summary>

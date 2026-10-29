@@ -188,7 +188,7 @@ internal static partial class Program
         await RunAsync("free engine skips over-budget urls without sending or consuming the permit", FreeEngineSkipsOverBudgetUrlsWithoutSending);
         Run("free engine failures classify by typed kind, not message strings", FreeEngineFailuresClassifyByTypedKind);
         await RunAsync("free engine authorization matrix at the send boundary", FreeEngineAuthorizationMatrixAtSendBoundary);
-        await RunAsync("free engine authorization is consumed once at the send boundary", FreeEngineSendBoundaryConsumesAuthorization);
+        await RunAsync("free engine authorization is re-checked live at the send boundary", FreeEngineSendBoundaryReChecksLivePolicy);
         await RunAsync("offline policy blocks remote but allows local providers", OfflineModeSendsNothing);
         await RunAsync("test connection draft never alters saved settings", DraftConnectionLeavesSettingsUntouched);
         await RunAsync("precancelled draft never enters the native provider", PrecancelledDraftDoesNotSend);
@@ -4202,7 +4202,6 @@ internal static partial class Program
         CoreBridge.Initialize();
         var originalLoader = OutboundPolicy.SettingsLoader;
         var originalSaver = OutboundPolicy.SettingsSaver;
-        var originalPrompt = OutboundPolicy.ConsentPrompt;
         var path = Path.Combine(Path.GetTempPath(), $"popglot-consent-{Guid.NewGuid():N}.json");
         OutboundPolicy.SettingsLoader = () => ShellSettingsStore.Load(path);
         OutboundPolicy.SettingsSaver = settings => ShellSettingsStore.Save(settings, path);
@@ -4214,49 +4213,46 @@ internal static partial class Program
                 NetworkEnabled = true,
             };
 
-            // Unset consent and no prompt (headless / in-window-only flows)
-            // must fail closed AND must not record a denial the user never
-            // gave — authorization lives in the privacy settings page.
+            // 0.1.35 契约：全新安装（从未表态）默认允许，不再要求用户先去
+            // 设置页点“允许”，也不会因为没人回答就拒绝翻译。
             File.Delete(path);
-            OutboundPolicy.ConsentPrompt = null;
-            Equal(false, OutboundPolicy.AllowsFreeEngine(settings, out var denial));
-            True(denial is not null, "a denial must explain itself");
-            True(denial!.ActionableSuggestion?.Contains("隐私与数据") == true,
-                "the denial must point at the privacy settings page");
-            True(!File.Exists(path) ||
-                ShellSettingsStore.Load(path).FreeEngineConsent == FreeEngineConsent.Unset,
-                "a missing prompt must never persist a denial");
+            Equal(true, OutboundPolicy.AllowsFreeEngine(settings, out var freshDenial),
+                "a fresh install allows the free engine by default");
+            True(freshDenial is null, "allowing by default carries no denial");
 
-            // Answering the prompt with "allow and remember" persists Allowed.
-            File.Delete(path);
-            OutboundPolicy.ConsentPrompt = _ => FreeEngineDecision.AlwaysAllow;
-            Equal(true, OutboundPolicy.AllowsFreeEngine(settings, out _));
-            Equal(FreeEngineConsent.Allowed, ShellSettingsStore.Load(path).FreeEngineConsent);
-
-            // A persisted denial denies without asking.
+            // 明确拒绝过（首次配置向导里关掉）仍然拒绝，且不受任何默认值影响。
             ShellSettingsStore.Save(
                 ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Denied }, path);
-            OutboundPolicy.ConsentPrompt = _ => FreeEngineDecision.AlwaysAllow;
-            Equal(false, OutboundPolicy.AllowsFreeEngine(settings, out _));
+            Equal(false, OutboundPolicy.AllowsFreeEngine(settings, out var denial));
+            True(denial is not null, "a denial must explain itself");
+            True(denial!.ActionableSuggestion?.Contains("重新显示引导") == true,
+                "the denial must point at the first-run wizard entry");
+
+            // Allowed 与 Unset 行为一致：都是允许。
+            ShellSettingsStore.Save(
+                ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed }, path);
+            Equal(true, OutboundPolicy.AllowsFreeEngine(settings, out _));
+            ShellSettingsStore.Save(
+                ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Unset }, path);
+            Equal(true, OutboundPolicy.AllowsFreeEngine(settings, out _),
+                "an unanswered consent is allowed, never a silent refusal");
 
             // The offline switch outranks even an explicit allowance.
             var offline = settings with { SafeDevMode = true };
             Equal(false, OutboundPolicy.AllowsFreeEngine(offline, out var offlineDenial));
             Equal(TranslationErrorKind.NetworkDisabled, offlineDenial?.Kind);
 
-            // Refusing the prompt persists the refusal so nothing is asked or
-            // sent next time.
+            // 拒绝一经持久化，后续不再出网（这里不弹任何询问）。
             File.Delete(path);
-            OutboundPolicy.ConsentPrompt = _ => FreeEngineDecision.Deny;
-            Equal(false, OutboundPolicy.AllowsFreeEngine(settings, out _));
+            OutboundPolicy.PersistConsent(FreeEngineConsent.Denied);
             Equal(FreeEngineConsent.Denied, ShellSettingsStore.Load(path).FreeEngineConsent);
+            Equal(false, OutboundPolicy.AllowsFreeEngine(settings, out _));
             await Task.CompletedTask;
         }
         finally
         {
             OutboundPolicy.SettingsLoader = originalLoader;
             OutboundPolicy.SettingsSaver = originalSaver;
-            OutboundPolicy.ConsentPrompt = originalPrompt;
             File.Delete(path);
         }
     }
@@ -4274,9 +4270,7 @@ internal static partial class Program
         var originalLoader = OutboundPolicy.SettingsLoader;
         var originalSaver = OutboundPolicy.SettingsSaver;
         var originalSender = FreeTranslateService.HttpSenderOverride;
-        var originalPrompt = OutboundPolicy.ConsentPrompt;
         var consentPath = Path.Combine(Path.GetTempPath(), $"popglot-consent-matrix-{Guid.NewGuid():N}.json");
-        OutboundPolicy.ConsentPrompt = null;
         long sends = 0;
         FreeTranslateService.HttpSenderOverride = (request, _) =>
         {
@@ -4308,7 +4302,8 @@ internal static partial class Program
                     NetworkEnabled = networkEnabled,
                 };
                 var label = $"consent={consent} safeDevMode={safeDevMode} networkEnabled={networkEnabled}";
-                var allowed = consent == FreeEngineConsent.Allowed && !safeDevMode && networkEnabled;
+                // 0.1.35：Unset 与 Allowed 一样允许，只有 Denied 才拦下。
+                var allowed = consent != FreeEngineConsent.Denied && !safeDevMode && networkEnabled;
                 Interlocked.Exchange(ref sends, 0);
 
                 // Normal entry: the coordinator running the REAL free-engine
@@ -4350,42 +4345,42 @@ internal static partial class Program
                 }
             }
 
-            // Unset stays Unset: a refused probe must not record a denial the
-            // user never gave.
+            // Unset stays Unset in the file, but it no longer blocks: an
+            // unanswered consent must issue an authorization rather than
+            // record a denial the user never gave.
             OutboundPolicy.SettingsLoader = () => ShellSettingsStore.Load(consentPath);
             OutboundPolicy.SettingsSaver = s => ShellSettingsStore.Save(s, consentPath);
             var unsetSettings = CoreBridge.GetSettings() with { SafeDevMode = false, NetworkEnabled = true };
-            Equal(false, OutboundPolicy.AllowsFreeEngine(unsetSettings, out _, out var unsetAuth));
-            True(unsetAuth is null, "a denied decision must never issue an authorization");
-            Equal(FreeEngineConsent.Unset, ShellSettingsStore.Load(consentPath).FreeEngineConsent);
+            Equal(true, OutboundPolicy.AllowsFreeEngine(unsetSettings, out _, out var unsetAuth),
+                "an unanswered consent is allowed by default");
+            True(unsetAuth is not null, "the default-allow decision must issue an authorization");
+            True(ShellSettingsStore.Load(consentPath).FreeEngineConsent != FreeEngineConsent.Denied,
+                "defaulting to allowed must never persist a denial the user never gave");
         }
         finally
         {
             OutboundPolicy.SettingsLoader = originalLoader;
             OutboundPolicy.SettingsSaver = originalSaver;
-            OutboundPolicy.ConsentPrompt = originalPrompt;
             FreeTranslateService.HttpSenderOverride = originalSender;
             File.Delete(consentPath);
         }
     }
 
     /// <summary>
-    /// C01 acceptance: the free-engine authorization is a one-shot, live-checked
-    /// token at the real send boundary. F01 — revoking the consent stops the
-    /// old authorization, including through the production health probe
-    /// (0 additional sends). F02 — AllowOnce is consumed atomically by its
-    /// first send; a second use and two concurrent claimants yield exactly
-    /// one send. F03 — a revocation between endpoint fallbacks stops the
-    /// remaining endpoints after the first send.
+    /// C01 acceptance: the free-engine authorization is live-checked at the real
+    /// send boundary (0.1.35 起不再有「一次性消耗」语义，策略在每次发送前重读)。
+    /// F01 — revoking the consent stops the old authorization, including through
+    /// the production health probe (0 additional sends). F02 — a live safe-dev
+    /// flip stops the send; without a live loader the decision snapshot applies.
+    /// F03 — a revocation between endpoint fallbacks stops the remaining
+    /// endpoints after the first send.
     /// </summary>
-    private static async Task FreeEngineSendBoundaryConsumesAuthorization()
+    private static async Task FreeEngineSendBoundaryReChecksLivePolicy()
     {
         var originalLoader = OutboundPolicy.SettingsLoader;
         var originalSaver = OutboundPolicy.SettingsSaver;
         var originalSender = FreeTranslateService.HttpSenderOverride;
         var originalLive = OutboundPolicy.LiveSettingsLoader;
-        var originalPrompt = OutboundPolicy.ConsentPrompt;
-        OutboundPolicy.ConsentPrompt = null;
         OutboundPolicy.LiveSettingsLoader = null;
         long sends = 0;
         FreeTranslateService.HttpSenderOverride = (_, _) =>
@@ -4407,46 +4402,19 @@ internal static partial class Program
             var settings = CoreBridge.GetSettings() with { SafeDevMode = false, NetworkEnabled = true };
             ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed }, consentPath);
 
-            // F02: AllowOnce dies with its first real send.
-            OutboundPolicy.ConsentPrompt = _ => FreeEngineDecision.AllowOnce;
-            File.Delete(consentPath);
-            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var onceAuth), "AllowOnce must issue an authorization");
-            True(onceAuth is { IsOnceOnly: true }, "the prompt answer must mark the token once-only");
-            await FreeTranslateService.TranslateAsync("once-first", "auto", "zh-CN", onceAuth!);
-            Equal(1L, Interlocked.Read(ref sends), "the first AllowOnce send must go out");
-            await ThrowsAsync<InvalidOperationException>(() =>
-                FreeTranslateService.TranslateAsync("once-second", "auto", "zh-CN", onceAuth!));
-            Equal(1L, Interlocked.Read(ref sends), "a spent AllowOnce token must never send again");
-            True(onceAuth!.IsConsumed, "the token must report itself consumed");
-
-            // Concurrent double consumption: exactly one of two racers sends.
-            File.Delete(consentPath);
-            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var raceAuth), "AllowOnce must issue a fresh token");
-            var first = FreeTranslateService.TranslateAsync("race-a", "auto", "zh-CN", raceAuth!);
-            var second = FreeTranslateService.TranslateAsync("race-b", "auto", "zh-CN", raceAuth!);
-            var failures = 0;
-            foreach (var task in new[] { first, second })
-            {
-                try { await task; }
-                catch (InvalidOperationException) { failures++; }
-            }
-            Equal(1, failures, "exactly one concurrent claimant may send");
-            Equal(2L, Interlocked.Read(ref sends), "the race must produce exactly one real send");
-
-            // F01: an AlwaysAllow token must re-read the live consent at every
-            // send, so a revocation stops both translations and health probes.
+            // F01: a token must re-read the live consent at every send, so a
+            // revocation stops both translations and health probes.
             ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed }, consentPath);
-            OutboundPolicy.ConsentPrompt = null;
             True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var alwaysAuth), "Allowed consent must issue an authorization");
             await FreeTranslateService.TranslateAsync("revoke-before", "auto", "zh-CN", alwaysAuth!);
-            Equal(3L, Interlocked.Read(ref sends), "the pre-revocation send must go out");
+            Equal(1L, Interlocked.Read(ref sends), "the pre-revocation send must go out");
             ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Denied }, consentPath);
             await ThrowsAsync<InvalidOperationException>(() =>
                 FreeTranslateService.TranslateAsync("revoke-after", "auto", "zh-CN", alwaysAuth!));
-            Equal(3L, Interlocked.Read(ref sends), "a revoked token must not translate");
+            Equal(1L, Interlocked.Read(ref sends), "a revoked token must not translate");
             var revokedHealth = await FreeTranslateService.GetHealthAsync(force: true, alwaysAuth!);
             True(!revokedHealth.Ok, "a probe with a revoked token must fail closed");
-            Equal(3L, Interlocked.Read(ref sends), "a revoked token must not send a health probe either");
+            Equal(1L, Interlocked.Read(ref sends), "a revoked token must not send a health probe either");
 
             // F03: a revocation between endpoint fallbacks stops the remaining
             // endpoints after the first real send.
@@ -4455,7 +4423,7 @@ internal static partial class Program
             FreeTranslateService.HttpSenderOverride = (request, token) =>
             {
                 var sent = Interlocked.Increment(ref sends);
-                if (sent == 4)
+                if (sent == 2)
                 {
                     // The user revokes while the first endpoint is in flight.
                     ShellSettingsStore.Save(
@@ -4468,7 +4436,7 @@ internal static partial class Program
             };
             await ThrowsAsync<InvalidOperationException>(() =>
                 FreeTranslateService.TranslateAsync("fallback-revoked", "auto", "zh-CN", alwaysAuth!));
-            Equal(4L, Interlocked.Read(ref sends), "the fallback loop must stop after the first send");
+            Equal(2L, Interlocked.Read(ref sends), "the fallback loop must stop after the first send");
             FreeTranslateService.HttpSenderOverride = fallbackSender;
             ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed }, consentPath);
 
@@ -4477,16 +4445,15 @@ internal static partial class Program
             OutboundPolicy.LiveSettingsLoader = () => settings with { SafeDevMode = true };
             await ThrowsAsync<InvalidOperationException>(() =>
                 FreeTranslateService.TranslateAsync("live-offline", "auto", "zh-CN", alwaysAuth!));
-            Equal(4L, Interlocked.Read(ref sends), "a live safe-dev-mode flip must stop the send");
+            Equal(2L, Interlocked.Read(ref sends), "a live safe-dev-mode flip must stop the send");
             OutboundPolicy.LiveSettingsLoader = null;
             await FreeTranslateService.TranslateAsync("snapshot-fallback", "auto", "zh-CN", alwaysAuth!);
-            Equal(5L, Interlocked.Read(ref sends), "without a live loader the decision snapshot applies");
+            Equal(3L, Interlocked.Read(ref sends), "without a live loader the decision snapshot applies");
         }
         finally
         {
             OutboundPolicy.SettingsLoader = originalLoader;
             OutboundPolicy.SettingsSaver = originalSaver;
-            OutboundPolicy.ConsentPrompt = originalPrompt;
             OutboundPolicy.LiveSettingsLoader = originalLive;
             FreeTranslateService.HttpSenderOverride = originalSender;
             File.Delete(consentPath);
@@ -4552,7 +4519,7 @@ internal static partial class Program
         };
         FreeTranslateService.EndpointsOverride = TwoFakeEndpoints();
         var settings = CoreBridge.GetSettings() with { SafeDevMode = false, NetworkEnabled = true };
-        var auth = new FreeEngineAuthorization(settings, IsOnceOnly: false);
+        var auth = new FreeEngineAuthorization(settings);
         try
         {
             // 1. Endpoint A answers 200 + garbage, endpoint B 200 + valid:
@@ -4625,7 +4592,7 @@ internal static partial class Program
         };
         FreeTranslateService.EndpointsOverride = TwoFakeEndpoints();
         var settings = CoreBridge.GetSettings() with { SafeDevMode = false, NetworkEnabled = true };
-        var auth = new FreeEngineAuthorization(settings, IsOnceOnly: false);
+        var auth = new FreeEngineAuthorization(settings);
         try
         {
             // 1. A=429, B=200: the first request still succeeds through B.
@@ -4714,7 +4681,7 @@ internal static partial class Program
         OutboundPolicy.SettingsLoader = () =>
             ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed };
         var settings = CoreBridge.GetSettings() with { SafeDevMode = false, NetworkEnabled = true };
-        var auth = new FreeEngineAuthorization(settings, IsOnceOnly: false);
+        var auth = new FreeEngineAuthorization(settings);
         try
         {
             // 1. A answers 429: the mark lands at fakeNow + 60s — i.e. 30s
@@ -4787,22 +4754,20 @@ internal static partial class Program
             var longText = new string('翻', 1500);
             var longFailure = await ThrowsAsync<FreeTranslateException>(() =>
                 FreeTranslateService.TranslateAsync(longText, "auto", "zh-CN",
-                    new FreeEngineAuthorization(settings, IsOnceOnly: false)));
+                    new FreeEngineAuthorization(settings)));
             Equal(0L, Interlocked.Read(ref sends), "an over-budget request must send nothing");
             Equal("内容较长，内置免费引擎单次无法处理，请缩短内容或使用已配置的翻译引擎。", longFailure.Message);
             Equal(FreeTranslateFailureKind.LongContent, longFailure.Kind);
 
-            // 2. The local length rejection must not consume an AllowOnce
-            //    permit: nothing reached the send boundary.
-            var onceAuth = new FreeEngineAuthorization(settings, IsOnceOnly: true);
+            // 2. The local length rejection is decided before any transport:
+            //    a second identical request still sends nothing.
             await ThrowsAsync<FreeTranslateException>(() =>
-                FreeTranslateService.TranslateAsync(longText, "auto", "zh-CN", onceAuth));
-            True(!onceAuth.IsConsumed,
-                "a local budget rejection must not burn the AllowOnce permit");
+                FreeTranslateService.TranslateAsync(longText, "auto", "zh-CN",
+                    new FreeEngineAuthorization(settings)));
 
             // 3. MyMemory documents a 500-byte q limit. Enforce bytes (so CJK
             // is counted correctly) before endpoint selection or transport.
-            var myMemoryAuth = new FreeEngineAuthorization(settings, IsOnceOnly: true);
+            var myMemoryAuth = new FreeEngineAuthorization(settings);
             var myMemoryFailure = await ThrowsAsync<FreeTranslateException>(() =>
                 FreeTranslateService.TranslateAsync(
                     new string('a', FreeTranslateService.MyMemoryMaxQueryBytes + 1),
@@ -4812,13 +4777,13 @@ internal static partial class Program
                     provider: FreeEngineProvider.MyMemory));
             Equal(FreeTranslateFailureKind.LongContent, myMemoryFailure.Kind);
             Equal(0L, Interlocked.Read(ref sends), "MyMemory byte overflow must send nothing");
-            True(!myMemoryAuth.IsConsumed, "MyMemory byte overflow must not consume authorization");
+            True(myMemoryAuth is not null, "the MyMemory budget check runs with an authorization in hand");
 
             // 4. Short text behaves exactly as before: the first endpoint is
             //    attempted and answers.
             var ok = await FreeTranslateService.TranslateAsync(
                 $"short-ok {Guid.NewGuid():N}", "auto", "zh-CN",
-                new FreeEngineAuthorization(settings, IsOnceOnly: false));
+                new FreeEngineAuthorization(settings));
             Equal("短文译文", ok.Result.TranslatedText);
             Equal(1L, Interlocked.Read(ref sends), "a short request must translate as before");
         }
@@ -8794,7 +8759,9 @@ internal static partial class Program
                     new ProviderDiagnostics("d1", ProviderType.OpenAiCompatible, "http://127.0.0.1", 1, 200, 10)));
             };
 
-            SetIsolatedConsent(FreeEngineConsent.Unset);
+            // 0.1.35：默认允许，所以只有在用户明确关闭过（向导里取消勾选）
+            // 时才需要“允许公共翻译”这条回头路。
+            SetIsolatedConsent(FreeEngineConsent.Denied);
             section.RefreshAfterSettingsChanged();
 
             // 1. All 3 in-place exits must be visible when unconfigured
@@ -8815,7 +8782,7 @@ internal static partial class Program
             section.OpenOfflineUsageFlow = () => offlineNavigations++;
             section.OfflineUsageEntryButton.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
             Equal(1, offlineNavigations, "clicking offline usage must trigger offline usage flow once");
-            Equal(FreeEngineConsent.Unset, ShellSettingsStore.Load().FreeEngineConsent, "consent must remain unset");
+            Equal(FreeEngineConsent.Denied, ShellSettingsStore.Load().FreeEngineConsent, "consent must remain denied");
 
             // 3. User enters text and hits Enter/Translate when unconfigured:
             // Must block in-place with 3 exits, zero network sends, zero dialogs, preserving input text!
@@ -10031,6 +9998,13 @@ internal static partial class Program
         {
             Console.WriteLine($"[harness] creating Application on '{thread.Name}' #{thread.ManagedThreadId} apartment={thread.GetApartmentState()}");
             var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            // OPT-021 残留排查：套件仍偶发「成片失败」，症状是所有需要
+            // LoadComponent 的用例抛「应用程序对象正在关闭」——即有人在套件
+            // 中途调了 Application.Shutdown()。ShutdownMode 已是显式关闭，
+            // 所以只可能是某个用例（或其异步尾巴）真的调了它。这个钩子在
+            // Exit 时打印调用栈，下次复现时第一手就能定位元凶。
+            app.Exit += (_, _) => Console.WriteLine(
+                "[harness] Application.Exit raised — shutdown caller stack:" + Environment.NewLine + Environment.StackTrace);
             try
             {
                 app.InitializeComponent();
@@ -14287,10 +14261,14 @@ internal static partial class Program
 
         Equal(Visibility.Visible, section.EmptyStateGuide.Visibility,
             "the empty result plane must show the first-use guide");
+        // 0.1.35：默认允许，因此“未表态”状态下不会再展示授权入口；只有用户
+        // 明确关闭过（首次配置向导里取消勾选）才需要这条回头路。
+        SetIsolatedConsent(FreeEngineConsent.Denied);
+        section.RefreshAfterSettingsChanged();
         var consentBefore = ShellSettingsStore.Load().FreeEngineConsent;
-        Equal(FreeEngineConsent.Unset, consentBefore, "the isolated environment starts undecided");
+        Equal(FreeEngineConsent.Denied, consentBefore, "the isolated environment starts explicitly off");
         Equal(Visibility.Visible, section.FreeEngineEntryButton.Visibility,
-            "the inline consent entry must be offered while undecided");
+            "the inline consent entry must be offered while the engine is off");
 
         // The example fills text only; nothing is sent.
         typeof(TranslateSection)

@@ -507,9 +507,18 @@ public partial class App : Application
                 // entry — the registry boundary is verified per resource.
                 StartupRegistration.EnsureRegistered();
             }
-            // Free-engine first-use authorization lives in
-            // 「设置 → 隐私与数据」— no runtime popup interrupts translation.
-            // OutboundPolicy fails closed until the user allows it there.
+            // 0.1.35：首次配置向导把隐私选择一次做完（内置免费引擎默认开启）。
+            // 只在全新安装时出现；后台自启不弹窗，测量/测试隔离下也绝不弹窗。
+            if (!measurementIsolation && !backgroundStart && !_shellSettings.HasCompletedOnboarding)
+            {
+                var wizard = new FirstRunWindow();
+                wizard.ShowDialog();
+                _shellSettings = ShellSettingsStore.Load();
+                if (wizard.OpenServicesRequested)
+                {
+                    ShowSettings(startAddEngineFlow: true);
+                }
+            }
 
             // Startup only creates the tray, theme, and a hidden message
             // window for the hotkeys; the heavy MainWindow is built on first
@@ -577,6 +586,32 @@ public partial class App : Application
             if (e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase))
             {
                 ShowSettings();
+            }
+
+            // 0.1.35：启动后静默查一次更新。只提示，不下载、不安装、不触碰
+            // 用户数据；测量/测试隔离下绝不联网。
+            if (_shellSettings.CheckUpdatesEnabled && !measurementIsolation)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(20)).ConfigureAwait(false);
+                        var update = await Services.UpdateService.CheckAsync().ConfigureAwait(false);
+                        if (!update.Ok || update.UpToDate)
+                        {
+                            return;
+                        }
+                        await Dispatcher.InvokeAsync(() => Notify(
+                            $"PopGlot 有新版本 {update.LatestVersion}",
+                            $"当前 {update.CurrentVersion}。不会自动下载安装，可在「设置 → 通用 → 立即检查」打开下载页。",
+                            Forms.ToolTipIcon.Info));
+                    }
+                    catch (Exception)
+                    {
+                        // 更新检查是增值功能：任何失败都不该出现在用户面前。
+                    }
+                });
             }
 
         }

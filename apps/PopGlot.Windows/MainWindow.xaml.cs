@@ -481,7 +481,8 @@ public partial class MainWindow : Window
         {
             if (!ProfileManager.HasConfiguredUserEngine())
             {
-                if (ShellSettingsStore.Load().FreeEngineConsent == FreeEngineConsent.Allowed)
+                // 0.1.35：默认允许；只有明确拒绝过才不显示该状态行。
+                if (ShellSettingsStore.Load().FreeEngineConsent != FreeEngineConsent.Denied)
                 {
                     SetResidentStatus(
                         StatusChannel.EngineConfig,

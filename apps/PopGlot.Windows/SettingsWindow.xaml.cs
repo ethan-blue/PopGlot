@@ -440,6 +440,8 @@ public partial class SettingsWindow : Window
         // real registry state paints beside it (hint text + re-enable).
         GeneralSection.StartWithWindows.IsChecked = settings.StartWithWindows;
         GeneralSection.CloseToTray.IsChecked = settings.CloseMainWindowToTray;
+        // 0.1.35：更新检查开关自己即时写盘，不进保存条。
+        GeneralSection.AutoUpdateCheck.IsChecked = settings.CheckUpdatesEnabled;
         RefreshStartupState();
         Helpers.SelectComboByTag(GeneralSection.ThemeCombo, settings.Theme.ToString());
         CaptureSection.SetShellSettings(settings);

@@ -37,3 +37,62 @@ jobs:
       # draft-test isolation, hotkey round-trips and the DPI screenshot matrix.
       - run: dotnet run --project tests/PopGlot.Windows.LogicTests/PopGlot.Windows.LogicTests.csproj --configuration Release
       - run: dotnet run --project tests/PopGlot.Windows.CliTests/PopGlot.Windows.CliTests.csproj --configuration Release -- --ui
+
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish installer input
+        run: >
+          dotnet publish apps/PopGlot.Windows/PopGlot.Windows.csproj
+          -c Release -r win-x64 --self-contained true -o dist/release
+          /p:DebugType=None /p:DebugPortablePdb=false
+
+      # The csproj only copies the Rust core into the build output, so the
+      # publish folder needs it shipped explicitly — the validation artifact
+      # must be a package that would actually run.
+      - name: Ship the Rust core with the app
+        shell: pwsh
+        run: |
+          cargo build --release --locked -p popglot-ffi
+          Copy-Item 'target\release\popglot_ffi.dll' 'dist\release\popglot_ffi.dll'
+          if (-not (Test-Path 'dist\release\popglot_ffi.dll')) {
+            throw 'popglot_ffi.dll is missing from the publish output.'
+          }
+
+      - name: Ensure Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $iscc -and -not (Get-Command ISCC.exe -ErrorAction SilentlyContinue)) {
+            choco install innosetup -y --no-progress
+            if ($LASTEXITCODE -ne 0) {
+              throw "Chocolatey failed to install Inno Setup (exit code $LASTEXITCODE)."
+            }
+          }
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          $csprojText = Get-Content 'apps/PopGlot.Windows/PopGlot.Windows.csproj' -Raw
+          if ($csprojText -notmatch '<Version>\s*([^\s<]+)\s*</Version>') {
+            throw 'Could not parse <Version> from apps/PopGlot.Windows/PopGlot.Windows.csproj.'
+          }
+          ./scripts/build-installer.ps1 -Version $Matches[1]
+
+      - name: Upload installer validation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/*.exe
+          if-no-files-found: error

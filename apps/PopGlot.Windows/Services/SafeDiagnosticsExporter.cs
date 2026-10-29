@@ -104,7 +104,9 @@ internal static class SafeDiagnosticsExporter
             WriteIndented = true,
             Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         };
-        return JsonSerializer.Serialize(package, options);
+        // 0.1.35：白名单字段之外再过一道脱敏——万一某个字段被未来改动带进
+        // 了密钥原文，导出文件也不会把它带出本机。
+        return SecretRedactor.Redact(JsonSerializer.Serialize(package, options));
     }
 
     public static bool TryExportToFile(SafeDiagnosticsPackage package, string destinationPath, out string message)

@@ -120,6 +120,10 @@ internal static partial class Program
         Run("first-show keeps a declared position on a secondary monitor", FirstShowKeepsDeclaredPositionOnSecondary);
         Run("first-show target anchor prefers the owner center over the cursor", FirstShowAnchorPrefersOwnerCenter);
         await RunAsync("github issue reporter upload, redaction and consent", RunGitHubIssueReporterTests);
+        Run("secret redactor masks registered keys and every secret shape", SecretRedactorMasksRegisteredAndShaped);
+        Run("free endpoint catalog reveals usable urls only at runtime", FreeEndpointCatalogRevealsAtRuntimeOnly);
+        await RunAsync("free engine local hourly budget stops sends", FreeEngineLocalHourlyBudget);
+        await RunAsync("update service only reports a genuinely newer release", UpdateServiceReportsOnlyNewer);
 
         Console.WriteLine($"\nPopGlot pure tests: {_passed} passed, {_failed} failed, " +
                           $"{Interlocked.Read(ref refusedSends)} send attempts refused.");
@@ -847,21 +851,21 @@ internal static partial class Program
     private static void AuthorizationTokenBasics()
     {
         var settings = DemoSettings();
-        OutboundPolicy.ConsentPrompt = null;
+
+        // 0.1.35：允许/未表态都放行，且每次发送前都复核实时策略。
         ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed }, consentPath());
         True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var alwaysAuth), "Allowed consent must issue a token");
-        True(alwaysAuth is { IsOnceOnly: false }, "Allowed consent is not once-only");
         True(alwaysAuth!.TryClaimSend(out _), "the first claim succeeds against an allowed policy");
-
-        // A once-only token dies with its first claim, atomically.
         ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Unset }, consentPath());
-        OutboundPolicy.ConsentPrompt = _ => FreeEngineDecision.AllowOnce;
-        True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var onceAuth), "AllowOnce must issue a token");
-        True(onceAuth!.TryClaimSend(out _), "the first claim consumes the permit");
-        True(onceAuth.IsConsumed, "the token reports itself consumed");
-        True(!onceAuth.TryClaimSend(out var refusal), "a spent token must refuse");
-        True(refusal is not null && refusal.Contains("仅本次"), "the refusal must name the spent permit");
-        OutboundPolicy.ConsentPrompt = null;
+        True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var unsetAuth), "an unanswered consent is allowed by default");
+        True(unsetAuth!.TryClaimSend(out _), "the default-allow claim succeeds");
+
+        // 明确拒绝后：拿不到授权，已发出的令牌也在复核处被拦下。
+        ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Denied }, consentPath());
+        Equal(false, OutboundPolicy.AllowsFreeEngine(settings, out var denial), "a denied consent must refuse");
+        True(denial is not null, "the refusal must explain itself");
+        True(!alwaysAuth.TryClaimSend(out var refusal), "a revoked policy stops a live token");
+        True(refusal is not null && refusal.Contains("撤销"), "the refusal must name the revocation");
     }
 
     private static void StartupStateMachineBasics()
@@ -900,7 +904,6 @@ internal static partial class Program
         var originalEndpoints = FreeTranslateService.EndpointsOverride;
         var originalLoader = OutboundPolicy.SettingsLoader;
         var originalSaver = OutboundPolicy.SettingsSaver;
-        var originalPrompt = OutboundPolicy.ConsentPrompt;
         long sends = 0;
         FreeTranslateService.HttpSenderOverride = (_, _) =>
         {
@@ -918,18 +921,16 @@ internal static partial class Program
         try
         {
             var settings = DemoSettings();
-            OutboundPolicy.ConsentPrompt = _ => FreeEngineDecision.AllowOnce;
-            ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Unset }, consentPath);
+            ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed }, consentPath);
 
-            // 1. Issued against Unset, still Unset: one send consumes it.
-            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var token), "Unset + AllowOnce prompt must issue");
+            // 1. An allowed send goes out.
+            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var token), "Allowed consent must issue a token");
             await FreeTranslateService.TranslateAsync("a4-first", "auto", "zh-CN", token!);
             Equal(1L, Interlocked.Read(ref sends), "the permitted send goes out");
-            True(token!.IsConsumed, "a submitted send consumes the permit");
 
-            // 2. A send attempt that fails at the transport stays consumed.
-            ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Unset }, consentPath);
-            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var failing), "fresh once-token");
+            // 2. Every endpoint of the selected provider gets its attempt, and
+            //    each attempt is one real send.
+            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var failing), "a fresh token");
             var originalForFailure = FreeTranslateService.HttpSenderOverride;
             FreeTranslateService.HttpSenderOverride = (_, _) =>
             {
@@ -939,31 +940,27 @@ internal static partial class Program
             await ThrowsAsync<InvalidOperationException>(() =>
                 FreeTranslateService.TranslateAsync("a4-fail", "auto", "zh-CN", failing!));
             FreeTranslateService.HttpSenderOverride = originalForFailure;
-            True(failing!.IsConsumed, "a submitted attempt that fails stays consumed");
-            Equal(2L, Interlocked.Read(ref sends), "the failed attempt was one real send");
+            Equal(3L, Interlocked.Read(ref sends), "each fallback endpoint is one real send");
 
-            // 3. An explicit denial after issuance refuses WITHOUT consuming.
-            ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Unset }, consentPath);
-            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var revoked), "fresh once-token");
+            // 3. An explicit denial after issuance refuses: zero sends.
+            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var revoked), "a fresh token");
             ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Denied }, consentPath);
             await ThrowsAsync<InvalidOperationException>(() =>
                 FreeTranslateService.TranslateAsync("a4-denied", "auto", "zh-CN", revoked!));
-            Equal(2L, Interlocked.Read(ref sends), "a denied token sends nothing");
-            True(!revoked!.IsConsumed, "a refused request must not burn the permit");
+            Equal(3L, Interlocked.Read(ref sends), "a denied token sends nothing");
 
-            // 4. An offline flip refuses without consuming.
-            ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Unset }, consentPath);
-            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var offline), "fresh once-token");
+            // 4. An offline flip refuses at the send boundary.
+            ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed }, consentPath);
+            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var offline), "a fresh token");
             OutboundPolicy.LiveSettingsLoader = () => settings with { SafeDevMode = true };
             await ThrowsAsync<InvalidOperationException>(() =>
                 FreeTranslateService.TranslateAsync("a4-offline", "auto", "zh-CN", offline!));
             OutboundPolicy.LiveSettingsLoader = null;
-            Equal(2L, Interlocked.Read(ref sends), "an offline send goes nowhere");
-            True(!offline!.IsConsumed, "an offline refusal must not burn the permit");
+            Equal(3L, Interlocked.Read(ref sends), "an offline send goes nowhere");
 
-            // 5. A construction failure refuses without consuming.
-            ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Unset }, consentPath);
-            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var construction), "fresh once-token");
+            // 5. A construction failure never reaches transport; the same
+            //    authorization still works once the endpoints are healthy.
+            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var construction), "a fresh token");
             FreeTranslateService.EndpointsOverride =
             [
                 new FreeTranslateService.FreeEndpoint(
@@ -974,22 +971,17 @@ internal static partial class Program
             await ThrowsAsync<InvalidOperationException>(() =>
                 FreeTranslateService.TranslateAsync("a4-build", "auto", "zh-CN", construction!));
             FreeTranslateService.EndpointsOverride = null;
-            Equal(2L, Interlocked.Read(ref sends), "a construction failure never reaches transport");
-            True(!construction!.IsConsumed, "a construction failure must not burn the permit");
+            Equal(3L, Interlocked.Read(ref sends), "a construction failure never reaches transport");
             await FreeTranslateService.TranslateAsync("a4-build-recovered", "auto", "zh-CN", construction!);
-            True(construction.IsConsumed, "the permit survives until a real submission");
-            Equal(3L, Interlocked.Read(ref sends), "the recovered send goes out");
+            Equal(4L, Interlocked.Read(ref sends), "the recovered send goes out");
 
-            // 6. A cache hit: no send, no consumption.
-            ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Unset }, consentPath);
-            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var cached), "fresh once-token");
+            // 6. A cache hit: no send.
+            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var cached), "a fresh token");
             await FreeTranslateService.TranslateAsync("a4-first", "auto", "zh-CN", cached!);
-            Equal(3L, Interlocked.Read(ref sends), "a cache hit sends nothing");
-            True(!cached!.IsConsumed, "a cache hit must not burn the permit");
+            Equal(4L, Interlocked.Read(ref sends), "a cache hit sends nothing");
 
             // 7. MyMemory's documented 500-byte q budget is enforced locally.
-            ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Unset }, consentPath);
-            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var myMemoryLong), "fresh once-token");
+            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var myMemoryLong), "a fresh token");
             await ThrowsAsync<FreeTranslateException>(() =>
                 FreeTranslateService.TranslateAsync(
                     new string('a', FreeTranslateService.MyMemoryMaxQueryBytes + 1),
@@ -997,17 +989,15 @@ internal static partial class Program
                     "zh-CN",
                     myMemoryLong!,
                     provider: FreeEngineProvider.MyMemory));
-            Equal(3L, Interlocked.Read(ref sends), "MyMemory byte overflow sends nothing");
-            True(!myMemoryLong!.IsConsumed, "MyMemory byte overflow does not consume the permit");
+            Equal(4L, Interlocked.Read(ref sends), "MyMemory byte overflow sends nothing");
 
             // 8. A revocation between fallback endpoints stops the rest.
             ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed }, consentPath);
-            OutboundPolicy.ConsentPrompt = null;
             True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var fallback), "Allowed consent must issue");
             FreeTranslateService.HttpSenderOverride = (_, _) =>
             {
                 var sent = Interlocked.Increment(ref sends);
-                if (sent == 4)
+                if (sent == 5)
                 {
                     ShellSettingsStore.Save(
                         ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Denied }, consentPath);
@@ -1019,40 +1009,215 @@ internal static partial class Program
             };
             await ThrowsAsync<InvalidOperationException>(() =>
                 FreeTranslateService.TranslateAsync("a4-fallback", "auto", "zh-CN", fallback!));
-            Equal(4L, Interlocked.Read(ref sends), "the fallback loop stops after the first send");
-            FreeTranslateService.HttpSenderOverride = (_, _) =>
-            {
-                Interlocked.Increment(ref sends);
-                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
-                {
-                    Content = new StringContent(
-                        "[[[\"mock-translation\",\"demo source\",\"en\",\"\"]]]",
-                        Encoding.UTF8, "application/json"),
-                });
-            };
+            Equal(5L, Interlocked.Read(ref sends), "the fallback loop stops after the first send");
 
-            // 8. Concurrent claimants: exactly one send.
-            ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Unset }, consentPath);
-            OutboundPolicy.ConsentPrompt = _ => FreeEngineDecision.AllowOnce;
-            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var race), "fresh once-token");
-            var first = FreeTranslateService.TranslateAsync("a4-race-a", "auto", "zh-CN", race!);
-            var second = FreeTranslateService.TranslateAsync("a4-race-b", "auto", "zh-CN", race!);
-            var refusals = 0;
-            foreach (var task in new[] { first, second })
-            {
-                try { await task; }
-                catch (InvalidOperationException) { refusals++; }
-            }
-            Equal(1, refusals, "exactly one concurrent claimant may send");
+            // 9. With the consent revoked, no new authorization exists at all.
+            Equal(false, OutboundPolicy.AllowsFreeEngine(settings, out var finalDenial, out var finalAuth),
+                "a revoked consent refuses");
+            True(finalAuth is null, "a refused decision must never issue an authorization");
+            True(finalDenial is not null, "the refusal must explain itself");
+            await ThrowsAsync<InvalidOperationException>(() =>
+                FreeTranslateService.TranslateAsync("a4-no-auth", "auto", "zh-CN", null!));
+            Equal(5L, Interlocked.Read(ref sends), "an unauthorized send goes nowhere");
         }
         finally
         {
-            OutboundPolicy.ConsentPrompt = originalPrompt;
             OutboundPolicy.LiveSettingsLoader = null;
             OutboundPolicy.SettingsLoader = originalLoader;
             OutboundPolicy.SettingsSaver = originalSaver;
             FreeTranslateService.HttpSenderOverride = originalSender;
             FreeTranslateService.EndpointsOverride = originalEndpoints;
+        }
+    }
+
+    /// <summary>
+    /// 0.1.35 防泄露 A：登记过的真实密钥与各种密钥形态，一律不得出现在
+    /// 日志、导出、备份或 Issue 正文里。
+    /// </summary>
+    private static void SecretRedactorMasksRegisteredAndShaped()
+    {
+        SecretRedactor.ResetForTest();
+        try
+        {
+            const string key = "popglot-live-key-9f3c21";
+            SecretRedactor.Register(key);
+            True(SecretRedactor.ContainsSecret($"Authorization: {key}"), "a registered key must be detectable");
+            var masked = SecretRedactor.Redact($"GET /v1/chat failed with Authorization: {key}");
+            True(!masked.Contains(key, StringComparison.Ordinal), "the registered key must not survive redaction");
+            True(masked.Contains(SecretRedactor.Mask, StringComparison.Ordinal), "the mask must stand in for it");
+
+            // 形状匹配：未经登记但长得像密钥的内容也要抹掉。
+            var shaped = SecretRedactor.Redact(
+                "key=sk-abcdefgh12345678 and Bearer eyJhbGciOiJI.abcdefgh and https://user:pass@example.com/v1");
+            True(!shaped.Contains("sk-abcdefgh12345678", StringComparison.Ordinal),
+                "a provider token shape must be masked");
+            True(!shaped.Contains("pass@example.com", StringComparison.Ordinal),
+                "a url credential must be masked");
+            var query = SecretRedactor.Redact("https://api.example.com/v1?key=abcdef123456&q=hi");
+            True(!query.Contains("abcdef123456", StringComparison.Ordinal),
+                "a key query parameter must be masked");
+            True(query.Contains("q=hi", StringComparison.Ordinal),
+                "redaction must not eat the innocent parts of a url");
+
+            SecretRedactor.Forget(key);
+            True(!SecretRedactor.ContainsSecret(key), "forgetting a key removes it from the battery");
+        }
+        finally
+        {
+            SecretRedactor.ResetForTest();
+        }
+    }
+
+    /// <summary>
+    /// 0.1.35 防泄露 B：内置免费端点只在运行期还原。内嵌常量里不得出现
+    /// 明文主机，还原结果又必须是可用的 https 地址。
+    /// </summary>
+    private static void FreeEndpointCatalogRevealsAtRuntimeOnly()
+    {
+        var urls = FreeEndpointCatalog.AllUrls;
+        Equal(3, urls.Length, "three built-in endpoints must be catalogued");
+        var expectedHosts = new[] { "translate.googleapis.com", "clients5.google.com", "api.mymemory.translated.net" };
+        foreach (var url in urls)
+        {
+            True(url.StartsWith("https://", StringComparison.Ordinal), $"an endpoint must be https: {url}");
+            True(!string.IsNullOrWhiteSpace(FreeEndpointCatalog.HostOf(url)), "the host must be derivable");
+        }
+        foreach (var host in expectedHosts)
+        {
+            var found = false;
+            foreach (var url in urls)
+            {
+                if (string.Equals(FreeEndpointCatalog.HostOf(url), host, StringComparison.OrdinalIgnoreCase))
+                {
+                    found = true;
+                    break;
+                }
+            }
+            True(found, $"the catalog must still reach {host}");
+        }
+
+        // 内嵌常量必须是混淆后的形态：任何一条常量里都不该出现明文主机。
+        var fields = typeof(FreeEndpointCatalog).GetFields(
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        var encodedCount = 0;
+        foreach (var field in fields)
+        {
+            if (!field.IsLiteral || !field.Name.EndsWith("Encoded", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            encodedCount++;
+            var value = field.GetRawConstantValue() as string ?? string.Empty;
+            foreach (var host in expectedHosts)
+            {
+                True(!value.Contains(host, StringComparison.OrdinalIgnoreCase),
+                    $"the embedded constant {field.Name} must not carry the plaintext host {host}");
+            }
+            True(value.Length > 0 && FreeEndpointCatalog.Reveal(value).StartsWith("https://", StringComparison.Ordinal),
+                $"the constant {field.Name} must decode to a usable url");
+        }
+        Equal(3, encodedCount, "every endpoint must be stored obfuscated");
+    }
+
+    /// <summary>
+    /// 0.1.35：本机每小时配额耗尽后，一个请求都不发，且按限流如实归类。
+    /// </summary>
+    private static async Task FreeEngineLocalHourlyBudget()
+    {
+        var originalSender = FreeTranslateService.HttpSenderOverride;
+        var originalLoader = OutboundPolicy.SettingsLoader;
+        long sends = 0;
+        FreeTranslateService.HttpSenderOverride = (_, _) =>
+        {
+            Interlocked.Increment(ref sends);
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "[[[\"mock-translation\",\"demo source\",\"en\",\"\"]]]",
+                    Encoding.UTF8, "application/json"),
+            });
+        };
+        try
+        {
+            FreeTranslateService.ResetQuotaForTest();
+            var budget = FreeTranslateService.HourlySendBudget;
+            True(budget > 0, "the local budget must be a positive number");
+            Equal(budget, FreeTranslateService.QuotaRemaining, "a fresh hour starts with the full budget");
+
+            var settings = DemoSettings();
+            OutboundPolicy.SettingsLoader = () => ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed };
+            True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var auth), "the budget test runs authorized");
+            for (var index = 0; index < budget; index++)
+            {
+                await FreeTranslateService.TranslateAsync($"quota-{index}", "auto", "zh-CN", auth!);
+            }
+            Equal((long)budget, Interlocked.Read(ref sends), "every in-budget request goes out");
+            Equal(0, FreeTranslateService.QuotaRemaining, "the budget is exhausted");
+
+            FreeTranslateException? overBudget = null;
+            try
+            {
+                await FreeTranslateService.TranslateAsync("quota-over", "auto", "zh-CN", auth!);
+            }
+            catch (FreeTranslateException exception)
+            {
+                overBudget = exception;
+            }
+            True(overBudget is not null, "an over-budget request must fail with a typed reason");
+            Equal(FreeTranslateFailureKind.RateLimited, overBudget?.Kind,
+                "an exhausted local budget is a rate-limit fact, not a crash");
+            Equal((long)budget, Interlocked.Read(ref sends), "an over-budget request sends nothing");
+        }
+        finally
+        {
+            FreeTranslateService.HttpSenderOverride = originalSender;
+            FreeTranslateService.ResetQuotaForTest();
+            OutboundPolicy.SettingsLoader = originalLoader;
+        }
+    }
+
+    /// <summary>
+    /// 0.1.35：更新检查只报「真的更新」。同版本与旧版本都不能谎报，网络失败
+    /// 不能打扰用户；安装包资产只用于展示，不触发任何下载。
+    /// </summary>
+    private static async Task UpdateServiceReportsOnlyNewer()
+    {
+        Equal("0.1.35", UpdateService.Normalize("v0.1.35"), "a v-prefixed tag normalizes");
+        Equal("0.1.35", UpdateService.Normalize("0.1.35"), "a bare tag stays as-is");
+        True(UpdateService.IsNewer("0.1.35", "0.1.34"), "a patch bump is newer");
+        True(UpdateService.IsNewer("0.2.0", "0.1.9"), "a minor bump beats any patch");
+        True(!UpdateService.IsNewer("0.1.34", "0.1.35"), "an older release is never newer");
+        True(!UpdateService.IsNewer("0.1.35", "0.1.35"), "the same version is never newer");
+
+        var originalGetter = UpdateService.HttpGetOverride;
+        try
+        {
+            UpdateService.HttpGetOverride = (_, _) => Task.FromResult<string?>( """
+                {"tag_name":"v9.9.9","html_url":"https://example.invalid/release",
+                 "assets":[{"name":"PopGlot-v9.9.9-win-x64.zip"},
+                           {"name":"PopGlot-v9.9.9-win-x64-setup.exe"}]}
+                """);
+            var newer = await UpdateService.CheckAsync();
+            True(newer.Ok, "a readable release payload is a successful check");
+            True(!newer.UpToDate, "a newer tag must be reported");
+            Equal("9.9.9", newer.LatestVersion, "the tag is normalized for display");
+            Equal("PopGlot-v9.9.9-win-x64-setup.exe", newer.InstallerName, "the installer asset is named");
+            Equal("https://example.invalid/release", newer.ReleaseUrl, "the release page is carried through");
+
+            UpdateService.HttpGetOverride = (_, _) => Task.FromResult<string?>( """
+                {"tag_name":"v0.0.1","html_url":"https://example.invalid/old","assets":[]}
+                """);
+            var older = await UpdateService.CheckAsync();
+            True(older.UpToDate, "an older release must read as up to date, never as a downgrade");
+
+            UpdateService.HttpGetOverride = (_, _) => throw new InvalidOperationException("offline");
+            var failed = await UpdateService.CheckAsync();
+            True(!failed.Ok, "a failed check reports itself as failed");
+            True(failed.UpToDate, "a failed check never claims an update is waiting");
+        }
+        finally
+        {
+            UpdateService.HttpGetOverride = originalGetter;
         }
     }
 

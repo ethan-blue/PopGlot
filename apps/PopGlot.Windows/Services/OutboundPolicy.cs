@@ -2,74 +2,58 @@ using System.Windows;
 
 namespace PopGlot.Windows.Services;
 
+/// <summary>
+/// 内置免费引擎的联网意愿。
+///
+/// 0.1.35 起「默认允许」：<see cref="Unset"/>（从未表态，含所有旧配置文件）
+/// 与 <see cref="Allowed"/> 行为完全一致——用户不再需要钻进设置页点“允许”
+/// 才能翻译。隐私选择收敛到两处：总开关「允许连接云端翻译服务」，以及首次
+/// 配置向导里的隐私一页。
+/// </summary>
 internal enum FreeEngineConsent
 {
+    /// <summary>从未表态。自 0.1.35 起等同允许，仅为兼容旧配置而保留。</summary>
     Unset = 0,
-    Allowed = 1,
-    Denied = 2,
-}
 
-internal enum FreeEngineDecision
-{
-    AlwaysAllow,
-    AllowOnce,
-    Deny,
+    /// <summary>明确允许。</summary>
+    Allowed = 1,
+
+    /// <summary>
+    /// 明确拒绝（在首次配置向导里关掉）。这是用户亲手做出的选择，任何升级
+    /// 都不得静默翻回允许。
+    /// </summary>
+    Denied = 2,
 }
 
 /// <summary>
 /// Proof that <see cref="OutboundPolicy"/> authorized free-engine traffic for
 /// one request scope, carrying the exact network settings the decision was
-/// made against. Issued only on the Allowed/AllowOnce paths; the last send
-/// layer (<see cref="FreeTranslateService"/>) refuses to transmit without one,
-/// so a UI or health-probe caller can never bypass the policy.
+/// made against. The last send layer (<see cref="FreeTranslateService"/>)
+/// refuses to transmit without one, so a UI or health-probe caller can never
+/// bypass the policy.
 /// </summary>
 /// <remarks>
 /// C01: the authorization is a per-request token, never stored in a UI or
-/// singleton field. <see cref="TryClaimSend"/> is the atomic send boundary —
-/// an AllowOnce permission dies with its first real send, and every send
-/// re-reads the live policy, so a revocation between the decision and a
-/// later endpoint fallback stops the remaining sends.
+/// singleton field. <see cref="TryClaimSend"/> is the live send boundary —
+/// every send re-reads the current policy, so a revocation between the
+/// decision and a later endpoint fallback stops the remaining sends.
 /// </remarks>
 internal sealed class FreeEngineAuthorization
 {
-    private int _consumed;
-
     public ProviderSettings Settings { get; }
 
-    public bool IsOnceOnly { get; }
-
-    public FreeEngineAuthorization(ProviderSettings settings, bool IsOnceOnly)
+    public FreeEngineAuthorization(ProviderSettings settings)
     {
         Settings = settings ?? throw new ArgumentNullException(nameof(settings));
-        this.IsOnceOnly = IsOnceOnly;
     }
-
-    /// <summary>True once this authorization has backed a real send (AllowOnce only).</summary>
-    public bool IsConsumed => Volatile.Read(ref _consumed) == 1;
 
     /// <summary>
-    /// Atomically claims ONE real HTTP send at the transport boundary and
-    /// re-reads the live policy. The live check runs BEFORE the consume, so
-    /// a refused request never burns the permit; the consume is the last
-    /// step before the transport call, so a failed send attempt stays
-    /// consumed (no refund) but a request that never reaches submission
-    /// does not. AllowOnce succeeds exactly once, and dies with an explicit
-    /// later denial even though it was originally issued against Unset.
+    /// Re-reads the live policy immediately before the transport call. Returns
+    /// false (with a user-readable refusal) when the free engine was revoked,
+    /// or when safe-mode/offline was switched on since the decision.
     /// </summary>
-    public bool TryClaimSend(out string? refusal)
-    {
-        refusal = null;
-        if (!OutboundPolicy.SendStillAllowed(Settings, IsOnceOnly, out refusal))
-        {
-            return false;
-        }
-        if (IsOnceOnly && Interlocked.Exchange(ref _consumed, 1) != 0)
-        {
-            refusal = "“仅本次允许”已用于上一次发送；没有再次发送任何请求。可在「设置 → 隐私与数据」中选择始终允许。";
-            return false;
-        }
-        return true;
-    }
+    public bool TryClaimSend(out string? refusal) =>
+        OutboundPolicy.SendStillAllowed(Settings, out refusal);
 }
 
 /// <summary>
@@ -80,13 +64,6 @@ internal static class OutboundPolicy
 {
     public const string FreeEngineDestination =
         "你选中的公共翻译（Google translate.googleapis.com / clients5.google.com，或备用 MyMemory api.mymemory.translated.net）";
-
-    /// <summary>
-    /// Asked once per unset consent, before the first outbound free-engine
-    /// request. The host installs a prompt with a window owner; headless
-    /// callers leave it null, which fails closed.
-    /// </summary>
-    public static Func<string, FreeEngineDecision>? ConsentPrompt { get; set; }
 
     /// <summary>Test seam: where consent is persisted. Production uses the real store.</summary>
     internal static Func<ShellSettings> SettingsLoader { get; set; } = () => ShellSettingsStore.Load();
@@ -103,13 +80,12 @@ internal static class OutboundPolicy
 
     /// <summary>
     /// The per-send re-check behind <see cref="FreeEngineAuthorization.TryClaimSend"/>.
-    /// Consent is always read live — including for once-only tokens, which
-    /// were issued against Unset but must still die on an explicit later
-    /// denial. Safe-dev-mode/network fall back to the decision snapshot when
-    /// no live loader is installed (pure/test hosts only; production binds
-    /// the loader in App startup). Fails closed.
+    /// Consent is always read live from the store, so flipping the switch (or
+    /// going offline) stops every endpoint that has not been sent yet.
+    /// Safe-dev-mode/network fall back to the decision snapshot when no live
+    /// loader is installed (pure/test hosts only). Fails closed.
     /// </summary>
-    internal static bool SendStillAllowed(ProviderSettings snapshot, bool isOnceOnly, out string? refusal)
+    internal static bool SendStillAllowed(ProviderSettings snapshot, out string? refusal)
     {
         refusal = null;
         var current = LiveSettingsLoader?.Invoke() ?? snapshot;
@@ -118,18 +94,10 @@ internal static class OutboundPolicy
             refusal = "已开启安全离线模式或网络翻译已关闭；未发送任何请求。";
             return false;
         }
-        var consent = SettingsLoader().FreeEngineConsent;
-        if (isOnceOnly)
+        // Unset is allowed by default; only an explicit Denied stops the send.
+        if (SettingsLoader().FreeEngineConsent == FreeEngineConsent.Denied)
         {
-            if (consent == FreeEngineConsent.Denied)
-            {
-                refusal = "内置免费引擎的授权已被撤销；未发送任何请求。";
-                return false;
-            }
-        }
-        else if (consent != FreeEngineConsent.Allowed)
-        {
-            refusal = "内置免费引擎的授权已被撤销或尚未允许；未发送任何请求。可在「设置 → 隐私与数据」中重新允许。";
+            refusal = "内置免费引擎的授权已被撤销；未发送任何请求。";
             return false;
         }
         return true;
@@ -137,8 +105,9 @@ internal static class OutboundPolicy
 
     /// <summary>
     /// Decides whether a no-config text translation may leave the machine.
-    /// SafeDevMode and disabled network deny unconditionally; otherwise the
-    /// persisted consent decides, and the very first use asks.
+    /// SafeDevMode and disabled network deny unconditionally; an explicit
+    /// Denied consent denies; everything else (including a fresh install that
+    /// never answered) is allowed.
     /// </summary>
     public static bool AllowsFreeEngine(ProviderSettings settings, out TranslationError? denial) =>
         AllowsFreeEngine(settings, out denial, out _);
@@ -158,59 +127,18 @@ internal static class OutboundPolicy
             return false;
         }
 
-        var consent = SettingsLoader().FreeEngineConsent;
-        if (consent == FreeEngineConsent.Denied)
+        if (SettingsLoader().FreeEngineConsent == FreeEngineConsent.Denied)
         {
             denial = new TranslationError(
                 TranslationErrorKind.Configuration,
                 "未允许使用内置免费引擎；没有发送任何请求。",
-                "可在「设置 → 隐私与数据」中重新允许，或配置自己的模型服务。");
+                "可在「设置 → 通用 → 重新显示引导」中重新选择，或配置自己的模型服务。");
             return false;
         }
 
-        if (consent == FreeEngineConsent.Allowed)
-        {
-            denial = null;
-            authorization = new FreeEngineAuthorization(settings, IsOnceOnly: false);
-            return true;
-        }
-
-        // First use: fail closed WITHOUT recording a denial — the user has
-        // not answered anything, and authorization lives in
-        // 「设置 → 隐私与数据」, not in a popup that interrupts translation.
-        // A host may still install ConsentPrompt (future in-window prompts);
-        // headless callers leave it null.
-        var decision = ConsentPrompt?.Invoke(FreeEngineDestination) ?? FreeEngineDecision.Deny;
-        if (decision == FreeEngineDecision.AlwaysAllow)
-        {
-            PersistConsent(FreeEngineConsent.Allowed);
-            denial = null;
-            authorization = new FreeEngineAuthorization(settings, IsOnceOnly: false);
-            return true;
-        }
-        if (decision == FreeEngineDecision.AllowOnce)
-        {
-            denial = null;
-            // AllowOnce covers exactly the send it was asked for — never a
-            // later automatic health probe.
-            authorization = new FreeEngineAuthorization(settings, IsOnceOnly: true);
-            return true;
-        }
-        if (ConsentPrompt is null)
-        {
-            denial = new TranslationError(
-                TranslationErrorKind.Configuration,
-                "首次使用内置免费引擎需要先授权；没有发送任何请求。",
-                "打开「设置 → 隐私与数据」，在内置免费引擎一行选择「允许」；或在服务页配置自己的模型服务。");
-            return false;
-        }
-
-        PersistConsent(FreeEngineConsent.Denied);
-        denial = new TranslationError(
-            TranslationErrorKind.Configuration,
-            "你选择了不使用内置免费引擎；没有发送任何请求。",
-            "可在「设置 → 隐私与数据」中重新允许，或配置自己的模型服务。");
-        return false;
+        denial = null;
+        authorization = new FreeEngineAuthorization(settings);
+        return true;
     }
 
     /// <summary>Persists the consent choice, never throwing into the caller.</summary>
@@ -229,7 +157,7 @@ internal static class OutboundPolicy
             exception is InvalidOperationException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
         {
             // Persisting the choice must not mask the translation result; the
-            // next run simply asks again.
+            // next run simply falls back to the default.
         }
     }
 }

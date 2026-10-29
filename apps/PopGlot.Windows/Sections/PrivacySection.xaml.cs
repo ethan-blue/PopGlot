@@ -29,9 +29,6 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
     private void PrivacySection_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         var compact = e.NewSize.Width < 560;
-        Grid.SetColumn(FreeEngineConsentActions, compact ? 0 : 1);
-        Grid.SetRow(FreeEngineConsentActions, compact ? 1 : 0);
-        FreeEngineConsentActions.Margin = compact ? new Thickness(0, 8, 0, 0) : new Thickness(12, 0, 0, 0);
         Grid.SetColumn(ModeComboBox, compact ? 0 : 1);
         Grid.SetRow(ModeComboBox, compact ? 1 : 0);
         ModeComboBox.HorizontalAlignment = compact ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
@@ -212,6 +209,10 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
     }
 
     // ================= Free engine consent =================
+    //
+    // 0.1.35：内置免费引擎默认允许，这里只做状态陈述，不再放允许/拒绝按钮。
+    // 唯一的关闭入口是首次配置向导的隐私一页（设置 → 通用 → 重新显示引导），
+    // 以及上面的总开关「允许连接云端翻译服务」。
 
     internal void RefreshFreeEngineState()
     {
@@ -221,34 +222,9 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         }
         FreeEngineConsentState.Text = _shellSettings.FreeEngineConsent switch
         {
-            FreeEngineConsent.Allowed => "当前状态：已允许",
-            FreeEngineConsent.Denied => "当前状态：已拒绝（不会出网）",
-            _ => "当前状态：首次使用时会询问",
+            FreeEngineConsent.Denied => "当前状态：已关闭（不会出网）",
+            _ => "当前状态：已开启（默认）",
         };
-    }
-
-    private void AllowFreeEngine_Click(object sender, RoutedEventArgs e) =>
-        SetFreeEngineConsent(FreeEngineConsent.Allowed, "已允许内置免费引擎。");
-
-    private void DenyFreeEngine_Click(object sender, RoutedEventArgs e) =>
-        SetFreeEngineConsent(FreeEngineConsent.Denied, "已停用公共翻译；自建引擎的联网许可不变。");
-
-    private void ResetFreeEngineConsent_Click(object sender, RoutedEventArgs e) =>
-        SetFreeEngineConsent(FreeEngineConsent.Unset, "已恢复首次询问。");
-
-    private void SetFreeEngineConsent(FreeEngineConsent consent, string message)
-    {
-        try
-        {
-            _shellSettings = ShellSettingsStore.Update(current => current with { FreeEngineConsent = consent });
-            RefreshFreeEngineState();
-            SidebarChanged?.Invoke();
-            StatusChanged?.Invoke(message, StatusTone.Info);
-        }
-        catch (Exception exception)
-        {
-            StatusChanged?.Invoke($"保存选择失败：{exception.Message}", StatusTone.Error);
-        }
     }
 
     internal ShellSettings CurrentShellSettings => _shellSettings;

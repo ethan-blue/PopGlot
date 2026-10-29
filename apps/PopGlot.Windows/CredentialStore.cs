@@ -40,6 +40,10 @@ internal sealed partial class CredentialStore : ICredentialVault
             throw new ArgumentException($"API Key 不能超过 {MaxKeyCharacters} 个字符。", nameof(apiKey));
         }
 
+        // 0.1.35：真实密钥一出现就登记到脱敏器，之后任何文本（日志、导出、
+        // Issue 正文、界面报错）里再出现这段字符串都会被替换成掩码。
+        SecretRedactor.Register(apiKey);
+
         var secretBytes = Encoding.Unicode.GetBytes(apiKey);
         var secretPointer = Marshal.AllocCoTaskMem(secretBytes.Length);
         try
@@ -123,7 +127,11 @@ internal sealed partial class CredentialStore : ICredentialVault
             try
             {
                 Marshal.Copy(credential.CredentialBlob, secretBytes, 0, secretBytes.Length);
-                return Encoding.Unicode.GetString(secretBytes).TrimEnd('\0');
+                var apiKey = Encoding.Unicode.GetString(secretBytes).TrimEnd('\0');
+                // 读取路径同样登记：升级后第一次读到旧密钥，日志与导出也
+                // 必须知道要抹掉它。
+                SecretRedactor.Register(apiKey);
+                return apiKey;
             }
             finally
             {

@@ -303,7 +303,9 @@ internal sealed record ShellSettings(
     HotkeyBinding? InterfaceLibraryHotkey = null,
     HotkeyBinding? InterfaceSettingsHotkey = null,
     HotkeyBinding? InterfaceTranslateHotkey = null,
-    HotkeyBinding? InterfaceSpeakHotkey = null)
+    HotkeyBinding? InterfaceSpeakHotkey = null,
+    // 0.1.35：启动时是否静默查一次 GitHub Releases（只提示，不自动下载安装）。
+    bool CheckUpdatesEnabled = true)
 {
     public HotkeyBinding QuickSearchHotkey { get; init; } =
         QuickSearchHotkey ?? HotkeyBinding.QuickSearchDefault;
@@ -344,7 +346,8 @@ internal sealed record ShellSettings(
         CopyTranslationAutomatically: false,
         StartWithWindows: false,
         ShowWindowHotkey: HotkeyBinding.ShowWindowDefault,
-        FreeEngineConsent: FreeEngineConsent.Unset,
+        // 0.1.35：内置免费引擎默认允许（Unset 语义同上），用户无需先去设置页授权。
+        FreeEngineConsent: FreeEngineConsent.Allowed,
         CloseHintShown: false,
         CloudSpeechEnabled: false,
         CloseMainWindowToTray: true,
@@ -800,7 +803,8 @@ internal static class ShellSettingsStore
             HotkeyBinding.Parse(persisted.InterfaceLibraryHotkey, defaults.InterfaceLibraryHotkey),
             HotkeyBinding.Parse(persisted.InterfaceSettingsHotkey, defaults.InterfaceSettingsHotkey),
             HotkeyBinding.Parse(persisted.InterfaceTranslateHotkey, defaults.InterfaceTranslateHotkey),
-            HotkeyBinding.Parse(persisted.InterfaceSpeakHotkey, defaults.InterfaceSpeakHotkey));
+            HotkeyBinding.Parse(persisted.InterfaceSpeakHotkey, defaults.InterfaceSpeakHotkey),
+            persisted.CheckUpdatesEnabled ?? true);
 
             lock (CacheLock)
             {
@@ -923,7 +927,10 @@ internal static class ShellSettingsStore
             settings.InterfaceLibraryHotkey.Serialize(),
             settings.InterfaceSettingsHotkey.Serialize(),
             settings.InterfaceTranslateHotkey.Serialize(),
-            settings.InterfaceSpeakHotkey.Serialize());
+            settings.InterfaceSpeakHotkey.Serialize(),
+            // 0.1.35：启动时的更新检查开关。默认开启（只读公开 Releases，
+            // 不下载、不安装），旧配置文件缺失该字段时同样读作开启。
+            settings.CheckUpdatesEnabled);
 
         // Write through a temporary file so a crash mid-write cannot leave the
         // user without settings on the next launch: exclusive-access write,
@@ -980,5 +987,6 @@ internal static class ShellSettingsStore
         string? InterfaceLibraryHotkey = null,
         string? InterfaceSettingsHotkey = null,
         string? InterfaceTranslateHotkey = null,
-        string? InterfaceSpeakHotkey = null);
+        string? InterfaceSpeakHotkey = null,
+        bool? CheckUpdatesEnabled = null);
 }

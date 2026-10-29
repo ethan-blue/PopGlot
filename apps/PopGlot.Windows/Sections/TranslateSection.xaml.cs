@@ -1407,7 +1407,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     {
         try
         {
-            return ShellSettingsStore.Load().FreeEngineConsent == FreeEngineConsent.Allowed;
+            return ShellSettingsStore.Load().FreeEngineConsent != FreeEngineConsent.Denied;
         }
         catch
         {
@@ -1457,7 +1457,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         try
         {
             var settings = ShellSettingsStore.Load();
-            hasFallbackRoute = settings.FreeEngineConsent == FreeEngineConsent.Allowed;
+            hasFallbackRoute = settings.FreeEngineConsent != FreeEngineConsent.Denied;
             if (ShortcutEntriesHint is not null)
             {
                 var sel = settings.SelectionHotkey?.DisplayName ?? "Ctrl+Alt+W";

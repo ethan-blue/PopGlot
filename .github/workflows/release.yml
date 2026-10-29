@@ -124,6 +124,22 @@ jobs:
           $hash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $zipName`n" | Set-Content -Path $shaPath -NoNewline
 
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          $iscc = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $iscc -and -not (Get-Command ISCC.exe -ErrorAction SilentlyContinue)) {
+            choco install innosetup -y --no-progress
+            if ($LASTEXITCODE -ne 0) {
+              throw "Chocolatey failed to install Inno Setup (exit code $LASTEXITCODE)."
+            }
+          }
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          ./scripts/build-installer.ps1 -Version $version
+
       - name: Write the release page
         id: release_page
         shell: pwsh
@@ -140,3 +156,5 @@ jobs:
           files: |
             dist/PopGlot-${{ github.ref_name }}-win-x64.zip
             dist/PopGlot-${{ github.ref_name }}-win-x64.zip.sha256
+            dist/PopGlot-${{ github.ref_name }}-win-x64-setup.exe
+            dist/PopGlot-${{ github.ref_name }}-win-x64-setup.exe.sha256

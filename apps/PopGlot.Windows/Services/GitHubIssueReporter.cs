@@ -222,7 +222,8 @@ internal static partial class GitHubIssueReporter
             {
                 builder.Append('\n');
             }
-            builder.Append(DiagnosticsLog.SanitizeForExport(TokenRegex().Replace(line, "[redacted-token]")));
+            builder.Append(SecretRedactor.Redact(
+                DiagnosticsLog.SanitizeForExport(TokenRegex().Replace(line, "[redacted-token]"))));
         }
         return builder.ToString();
     }
