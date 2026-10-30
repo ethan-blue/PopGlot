@@ -1,4 +1,4 @@
-[workspace]
+﻿[workspace]
 members = [
     "crates/popglot-domain",
     "crates/popglot-core",
@@ -11,7 +11,7 @@ exclude = ["vendor/genai"]
 genai = { path = "vendor/genai" }
 
 [workspace.package]
-version = "0.1.35"
+version = "0.1.36"
 edition = "2024"
 license = "MIT"
 authors = ["PopGlot Contributors"]

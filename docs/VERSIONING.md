@@ -85,6 +85,3 @@
 
 ## 分发成熟度与发布形态边界
 
-有关便携绿色包（Level 1）的验证矩阵、自包含运行约定、特殊路径测试、只读目录弹性以及后续安装器/代码签名方案（Level 2 & Level 3），参见 [分发成熟度规范](file:///d:/Projects/GitProjects/PopGlot/docs/DISTRIBUTION_MATURITY.md)。
-
-

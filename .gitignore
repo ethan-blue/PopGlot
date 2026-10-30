@@ -34,3 +34,4 @@ dist/
 /scripts/tmp-*.ps1
 /scripts/dbg-*.ps1
 /scripts/apply_*.py
+.workbuddy/

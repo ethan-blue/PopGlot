@@ -78,6 +78,9 @@ internal static partial class Program
         await RunAsync("free HTTP limits body before buffering, including unknown or false length", FreeResponseStreamingCap);
         Run("translation quality warns without rejecting code or same-language content", TranslationLanguageQuality);
         Run("OCR scales long images within the per-edge engine limit", OcrDimensionLimits);
+        Run("OCR collapses engine-inserted spaces between CJK characters", OcrCjkSpaceCollapse);
+        Run("OCR upscale candidates follow line height and engine limits", OcrScaleCandidates);
+        Run("OCR dual-pass score prefers solid text over fragments", OcrScoreFunction);
         Run("MyMemory never guesses unsupported scripts as English", MyMemoryScriptBoundaries);
         Run("OMP resolves official Bun package without executing shims", () => OmpBunDiscovery(root));
         Run("session store enforces max 5 sessions and LRU eviction", SessionStoreCapacityAndLru);
@@ -2296,36 +2299,26 @@ internal static string FindProjectRoot()
     {
         var projectRoot = FindProjectRoot();
 
-        // 1. docs/DISTRIBUTION_MATURITY.md exists and covers levels & verification checklist
-        var maturityDocPath = Path.Combine(projectRoot, "docs", "DISTRIBUTION_MATURITY.md");
-        True(File.Exists(maturityDocPath), "docs/DISTRIBUTION_MATURITY.md must exist");
-        var maturityDoc = File.ReadAllText(maturityDocPath);
-        True(maturityDoc.Contains("Level 1: 便携绿色包"), "doc must define Level 1 portable zip baseline");
-        True(maturityDoc.Contains("Level 2: 托管安装器"), "doc must define Level 2 installer proposal");
-        True(maturityDoc.Contains("Level 3: 受控自动更新"), "doc must define Level 3 auto-update proposal");
-        True(maturityDoc.Contains("D1-01") && maturityDoc.Contains("D1-08"), "doc must include verification matrix D1-01 through D1-08");
-
-        // 2. docs/VERSIONING.md cross-references DISTRIBUTION_MATURITY.md
+        // 1. docs/VERSIONING.md states the versioning rules (internal distribution
+        //    maturity notes live outside the repo).
         var versioningDocPath = Path.Combine(projectRoot, "docs", "VERSIONING.md");
         True(File.Exists(versioningDocPath), "docs/VERSIONING.md must exist");
-        var versioningDoc = File.ReadAllText(versioningDocPath);
-        True(versioningDoc.Contains("DISTRIBUTION_MATURITY.md"), "VERSIONING.md must cross-reference DISTRIBUTION_MATURITY.md");
 
-        // 3. scripts/publish-package.ps1 enforces --self-contained and generates build-manifest.json
+        // 2. scripts/publish-package.ps1 enforces --self-contained and generates build-manifest.json
         var publishScriptPath = Path.Combine(projectRoot, "scripts", "publish-package.ps1");
         True(File.Exists(publishScriptPath), "scripts/publish-package.ps1 must exist");
         var publishScript = File.ReadAllText(publishScriptPath);
         True(publishScript.Contains("--self-contained"), "publish script must specify --self-contained");
         True(publishScript.Contains("build-manifest.json"), "publish script must generate build-manifest.json");
 
-        // 4. scripts/write-release-notes.ps1 provides sha256 checking instructions
+        // 3. scripts/write-release-notes.ps1 provides sha256 checking instructions
         var releaseNotesScriptPath = Path.Combine(projectRoot, "scripts", "write-release-notes.ps1");
         True(File.Exists(releaseNotesScriptPath), "scripts/write-release-notes.ps1 must exist");
         var releaseNotesScript = File.ReadAllText(releaseNotesScriptPath);
         True(releaseNotesScript.Contains("Get-FileHash") && releaseNotesScript.Contains(".sha256"),
             "write-release-notes.ps1 must format sha256 checksum verification instructions");
 
-        // 5. .github/workflows/release.yml enforces 4-way consistency and self-contained packaging
+        // 4. .github/workflows/release.yml enforces 4-way consistency and self-contained packaging
         var releaseYmlPath = Path.Combine(projectRoot, ".github", "workflows", "release.yml");
         True(File.Exists(releaseYmlPath), ".github/workflows/release.yml must exist");
         var releaseYml = File.ReadAllText(releaseYmlPath);

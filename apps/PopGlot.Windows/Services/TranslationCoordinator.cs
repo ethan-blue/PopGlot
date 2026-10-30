@@ -1241,7 +1241,7 @@ internal sealed class TranslationCoordinator
                     if (string.IsNullOrWhiteSpace(recognized))
                     {
                         throw new InvalidOperationException(
-                            "本地 OCR 未能在所选区域识别到文字。请重新框选更清晰的区域，或在设置中开启截图上传以使用视觉模型。");
+                            "本机 OCR 没有识别出文字。换个更清晰、字号更大的区域再试；也可以到「Windows 设置 → 时间和语言 → 语言和区域」补装对应语言的「光学字符识别」，或在设置里允许截图走视觉模型。");
                     }
 
                     session.SourceText = recognized;
@@ -1328,7 +1328,7 @@ internal sealed class TranslationCoordinator
                 if (string.IsNullOrWhiteSpace(recognized))
                 {
                     throw new InvalidOperationException(
-                        "本地 OCR 未能在所选区域识别到文字。请重新框选更清晰的区域，或在设置中开启截图上传以使用视觉模型。");
+                        "本机 OCR 没有识别出文字。换个更清晰、字号更大的区域再试；也可以到「Windows 设置 → 时间和语言 → 语言和区域」补装对应语言的「光学字符识别」，或在设置里允许截图走视觉模型。");
                 }
 
                 session.SourceText = recognized;
