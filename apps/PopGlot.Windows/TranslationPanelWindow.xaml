@@ -344,14 +344,14 @@
                                       Data="{StaticResource IconSpeaker}" />
                             </Button>
                             <Button x:Name="ResultCopyBtn" AutomationProperties.Name="复制译文" Style="{StaticResource IconButton}" Width="32" Height="32" Margin="0,0,2,0"
-                                    ToolTip="复制译文" Click="ResultCopy_Click">
+                                    ToolTip="复制译文 (Ctrl+Shift+C)" Click="ResultCopy_Click">
                                 <Path x:Name="ResultCopyIcon" Width="12" Height="12" Stretch="Uniform"
                                       Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                       Data="{StaticResource IconCopy}" />
                             </Button>
                             <ToggleButton x:Name="StarToggle" Width="32" Height="32"
                                           AutomationProperties.Name="收藏到生词本"
-                                          ToolTip="收藏到生词本" Click="StarToggle_Click"
+                                          ToolTip="收藏到生词本 (Ctrl+S)" Click="StarToggle_Click"
                                           FocusVisualStyle="{StaticResource FocusRing}">
                                 <ToggleButton.Template>
                                     <ControlTemplate TargetType="ToggleButton">
@@ -426,9 +426,12 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock x:Name="ExplanationText" Grid.Column="0" FontSize="12"
-                                               Foreground="{DynamicResource TextSecondaryBrush}" LineHeight="18"
-                                               TextWrapping="Wrap" VerticalAlignment="Center" />
+                                    <TextBox x:Name="ExplanationText" Grid.Column="0" FontSize="12"
+                                               Foreground="{DynamicResource TextSecondaryBrush}"
+                                               TextWrapping="Wrap" VerticalAlignment="Center"
+                                               Style="{StaticResource ResultTextBox}" IsReadOnly="True"
+                                               Background="Transparent" BorderThickness="0"
+                                               VerticalScrollBarVisibility="Disabled" />
                                     <Button x:Name="ErrorSettingsButton" Grid.Column="1" Style="{StaticResource GhostButton}"
                                             Content="打开设置" Padding="8,3" FontSize="11.5" Margin="8,0,0,0"
                                             VerticalAlignment="Center" Visibility="Collapsed"

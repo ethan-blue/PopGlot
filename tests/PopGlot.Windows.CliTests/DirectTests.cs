@@ -50,7 +50,7 @@ internal static class DirectTests
                 return Json(new { access_token = "fixture-access-" + Guid.NewGuid(), refresh_token = "fixture-refresh-" + Guid.NewGuid(),
                     id_token = Jwt(_nonce), token_type = "Bearer", scope = "openid email offline_access resource.invoke chatgpt.tokens.use.direct", expires_in = 3600 });
             }
-            if (uri.AbsolutePath.EndsWith("oauth/revoke")) return new(HttpStatusCode.OK) { Content = new StringContent("") };
+            if (uri.AbsolutePath.EndsWith("oauth/revoke")) return new(_scenario == "revoke_failure" ? HttpStatusCode.InternalServerError : HttpStatusCode.OK) { Content = new StringContent("") };
             Program.Assert(request.Headers.Authorization?.Scheme == "Bearer", "direct model calls require the selected account token");
             if (_expectedContext is { } context)
                 Program.Assert(request.Headers.Authorization?.Parameter == context.Token,
@@ -92,6 +92,7 @@ internal static class DirectTests
     internal static void HoldUiRequest() { _scenario = "hold"; _requestEntered = new(TaskCreationOptions.RunContinuationsAsynchronously); }
     internal static bool UiRequestEntered => _requestEntered?.Task.IsCompleted == true;
     internal static void ReleaseUiScenario() => _scenario = null;
+    internal static void FailNextUiRevoke() => _scenario = "revoke_failure";
     public static async Task SignInAndValidation()
     {
         Setup(); using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15)); Task? callback = null;
@@ -201,13 +202,43 @@ internal static class DirectTests
     public static async Task RefreshAndLogout()
     {
         var profile = Profile(); var id = profile.DirectConnection!.AccountId;
+        var remaining = ChatGptAccountStore.SaveValidated("oaiapp_fixture", "remaining-subject", "Remaining fixture",
+            new("remaining-access", "remaining-refresh", Jwt("fixture", subject: "remaining-subject"),
+                "resource.invoke chatgpt.tokens.use.direct", DateTimeOffset.UtcNow.AddHours(1), DateTimeOffset.UtcNow,
+                Guid.NewGuid().ToString("N")), null);
         var old = ChatGptAccountStore.Load(id); ChatGptAccountStore.ReplaceCredentials(id, old.Revision, old with { ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(-1) });
         var before = _refreshes;
         await Task.WhenAll(ChatGptOAuth.AccessTokenAsync(id, CancellationToken.None), ChatGptOAuth.AccessTokenAsync(id, CancellationToken.None));
         Program.Assert(_refreshes == before + 1, "refresh serialized per registration and replacement reused");
         Program.Assert(ChatGptAccountStore.Load(id).RefreshToken != old.RefreshToken, "save rotating refresh token");
-        await ChatGptOAuth.SignOutAsync(id, CancellationToken.None);
-        Program.Assert(!ChatGptAccountStore.HasCredentials(id) && ChatGptAccountStore.Get(id).ClientId == "oaiapp_fixture", "logout clears tokens and retains account registration");
+        var accountDirectory = Path.Combine(StoragePaths.CoreConfigDirectory, "chatgpt-accounts");
+        var beforeLogoutIds = ChatGptAccountStore.List().Select(account => account.Id).ToHashSet();
+        var removed = await ChatGptOAuth.SignOutAsync(id, CancellationToken.None);
+        var afterLogoutIds = ChatGptAccountStore.List().Select(account => account.Id).ToHashSet();
+        Program.Assert(removed && beforeLogoutIds.Contains(id) && beforeLogoutIds.Contains(remaining.Id) &&
+            afterLogoutIds.SetEquals(beforeLogoutIds.Where(accountId => accountId != id)),
+            "logout removes only the selected registration");
+        Program.Assert(!File.Exists(Path.Combine(accountDirectory, id + ".account.json")) && !File.Exists(Path.Combine(accountDirectory, id + ".credentials")),
+            "logout removes the account registration and protected credentials");
+
+        ChatGptAccountStore.ClearCredentials(remaining.Id);
+        var deadRemoved = await ChatGptOAuth.SignOutAsync(remaining.Id, CancellationToken.None);
+        Program.Assert(deadRemoved && !ChatGptAccountStore.List().Any(account => account.Id == remaining.Id) &&
+            !File.Exists(Path.Combine(accountDirectory, remaining.Id + ".account.json")) &&
+            !File.Exists(Path.Combine(accountDirectory, remaining.Id + ".credentials")),
+            "a dead account without credentials can be removed locally");
+
+        var failedRevoke = ChatGptAccountStore.SaveValidated("oaiapp_fixture", "failed-revoke-subject", "Failed revoke fixture",
+            new("failed-access", "failed-refresh", Jwt("fixture", subject: "failed-revoke-subject"),
+                "resource.invoke chatgpt.tokens.use.direct", DateTimeOffset.UtcNow.AddHours(1), DateTimeOffset.UtcNow,
+                Guid.NewGuid().ToString("N")), null);
+        _scenario = "revoke_failure";
+        var revokeResult = await ChatGptOAuth.SignOutAsync(failedRevoke.Id, CancellationToken.None);
+        _scenario = null;
+        Program.Assert(!revokeResult && !ChatGptAccountStore.List().Any(account => account.Id == failedRevoke.Id) &&
+            !File.Exists(Path.Combine(accountDirectory, failedRevoke.Id + ".account.json")) &&
+            !File.Exists(Path.Combine(accountDirectory, failedRevoke.Id + ".credentials")),
+            "a failed official revoke still removes both local account files");
     }
     public static Task ImportBoundaries()
     {

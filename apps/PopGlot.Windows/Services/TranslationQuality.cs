@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 
 namespace PopGlot.Windows.Services;
 
@@ -33,16 +32,5 @@ internal static class TranslationQuality
         return null;
     }
 
-    private static string Prose(string text)
-    {
-        // Cap work and abstain on ambiguous machine syntax / unmatched fences.
-        if (text.Length > 32_768) return string.Empty;
-        try
-        {
-            var prose = Regex.Replace(text, @"```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\r\n]*`|https?://\S+", " ",
-                RegexOptions.None, TimeSpan.FromMilliseconds(100));
-            return prose.IndexOfAny(['`', '{', '}', '=', ';', '\\', '<', '>']) >= 0 ? string.Empty : prose.Trim();
-        }
-        catch (RegexMatchTimeoutException) { return string.Empty; }
-    }
+    private static string Prose(string text) => LanguageText.Prose(text);
 }

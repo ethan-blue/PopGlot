@@ -42,6 +42,7 @@ public partial class ServicesSection
         if (_cliCommitInProgress || _saveInProgress) return;
         ShowConnectionEditor(direct: false, adding: false);
         _editingProfileId = profile.Id;
+        UpdateDeleteTooltip();
         var rows = (CliToolsListBox.ItemsSource as IEnumerable<CliToolRow>)?.ToList() ?? [];
         var toolId = profile.ResolvedExecutionKind == EngineExecutionKind.CodexAppServer ? CliDiscovery.CodexToolId : CliDiscovery.OmpToolId;
         var selected = rows.FirstOrDefault(r => r.ToolId == toolId &&
@@ -67,6 +68,7 @@ public partial class ServicesSection
     private void RestoreCliProfile(ProviderProfile profile)
     {
         _cliProfileId = profile.Id; _cliKind = profile.ResolvedExecutionKind;
+        ConnectionNameTextBox.Text = profile.Name;
         _cliConnection = profile.CliConnection?.Clone(); _cliReady = false;
         _cliTestedModel = null; _cliTestedAt = null;
         var model = new CliModel(profile.CliConnection?.ModelId ?? profile.TextModel,
@@ -82,12 +84,15 @@ public partial class ServicesSection
         _catalogOperation?.Cancel();
         ShowEditorForm(addMode: false);
         _isAdding = adding;
-        PresetsPanel.Visibility = ConfigFormPanel.Visibility = EditorActionBar.Visibility = Visibility.Collapsed;
+        PresetsPanel.Visibility = ConfigFormPanel.Visibility = Visibility.Collapsed;
         CliConnectionsPanel.Visibility = Visibility.Visible;
         CliToolConnectionPanel.Visibility = direct ? Visibility.Collapsed : Visibility.Visible;
         ChatGptConnectionPanel.Visibility = direct ? Visibility.Visible : Visibility.Collapsed;
+        CliActionRow.Visibility = ChatGptActionRow.Visibility = adding ? Visibility.Visible : Visibility.Collapsed;
         ChooseAnotherProviderButton.Visibility = adding ? Visibility.Visible : Visibility.Collapsed;
         HideDraftGuard();
+        EditorActionBar.Visibility = adding ? Visibility.Collapsed : Visibility.Visible;
+        UpdateSaveButtonLabel();
         EditorScroll.ScrollToTop();
         UpdateCliButtons();
     }
@@ -155,7 +160,8 @@ public partial class ServicesSection
         if (_selectingCliTool || CliConnectButton is null || CliToolsListBox.SelectedItem is not CliToolRow row) return;
         CancelCliOperation();
         ResetCliConnection();
-        _editingProfileId = null;
+        if (_isAdding) _editingProfileId = null; // 仅添加流程重置编辑身份
+        ConnectionNameTextBox.Text = "";
         ShowConnectionEditor(direct: false, adding: true);
         SetCliSourceIdentity(row);
         CliConnectionStatus.Text = "点击「连接 / 刷新账号」后启动此工具，读取其账号与模型。不会发送翻译请求。";
@@ -234,7 +240,8 @@ public partial class ServicesSection
         var existing = ProfileManager.Load().Profiles.FirstOrDefault(p => p.Id == _cliProfileId);
         return new ProviderProfile
         {
-            Id = _cliProfileId ?? $"cli-{Guid.NewGuid():N}", Name = existing?.Name ?? $"{row.ToolName} · {model.DisplayName}",
+            Id = _cliProfileId ?? $"cli-{Guid.NewGuid():N}",
+            Name = (ConnectionNameTextBox.Text.Trim() is { Length: > 0 } customName ? customName : null) ?? existing?.Name ?? $"{row.ToolName} · {model.DisplayName}",
             ExecutionKind = EngineExecutionKindNames.Format(_cliKind), CliConnection = _cliConnection.Clone(),
             TextModel = model.Id, SupportsText = true, SupportsVision = false, VisionModel = "",
             ApiBaseUrl = "", TextEndpoint = "", VisionEndpoint = "", CredentialTarget = "", IsLocal = false,
@@ -248,6 +255,7 @@ public partial class ServicesSection
         var operation = new CancellationTokenSource(TimeSpan.FromMinutes(3));
         _cliOperation = operation; _cliTestedModel = null; _cliTestedAt = null;
         CliConnectionStatus.Text = "正在将测试句 Hello world 翻译为中文…";
+        CliConnectionStatus.Foreground = TryFindResource("TextSecondaryBrush") as System.Windows.Media.Brush ?? CliConnectionStatus.Foreground;
         UpdateCliButtons();
         try
         {
@@ -259,11 +267,18 @@ public partial class ServicesSection
                 throw new InvalidOperationException("工具返回了不完整的翻译，请重试。");
             _cliTestedModel = ModelIdentity(); _cliTestedAt = DateTime.UtcNow;
             CliConnectionStatus.Text = $"测试通过：{response.Result.TranslatedText}（{response.ElapsedMs / 1000.0:F1} 秒）。可保存并使用。";
+            CliConnectionStatus.Foreground = TryFindResource("SuccessBrush") as System.Windows.Media.Brush ?? CliConnectionStatus.Foreground;
         }
         catch (OperationCanceledException)
         { if (ReferenceEquals(_cliOperation, operation)) CliConnectionStatus.Text = "测试已取消，未保存测试结果。"; }
         catch (Exception ex)
-        { if (ReferenceEquals(_cliOperation, operation)) CliConnectionStatus.Text = CliFailureText(ex); }
+        {
+            if (ReferenceEquals(_cliOperation, operation))
+            {
+                CliConnectionStatus.Text = CliFailureText(ex);
+                CliConnectionStatus.Foreground = TryFindResource("DangerBrush") as System.Windows.Media.Brush ?? CliConnectionStatus.Foreground;
+            }
+        }
         finally
         { if (ReferenceEquals(_cliOperation, operation)) { _cliOperation = null; UpdateCliButtons(); } operation.Dispose(); }
     }
@@ -366,4 +381,7 @@ public partial class ServicesSection
         UpdateChatGptButtons();
     }
     private static string CliFailureText(Exception ex) => GitHubIssueReporter.SafeError(ex);
+
+    /// <summary>来源目录的 OMP/Codex 预设：展开既有检测卡并触发同一次检测。</summary>
+    private void CliPreset_Click(object sender, RoutedEventArgs e) => DetectCliTools_Click(sender, e);
 }

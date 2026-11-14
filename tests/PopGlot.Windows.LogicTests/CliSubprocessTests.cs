@@ -3,6 +3,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using PopGlot.Windows.Sections;
+using PopGlot.Windows.Services;
 using PopGlot.Windows.Services.AiConnections;
 
 namespace PopGlot.Windows.LogicTests;
@@ -338,6 +339,98 @@ internal static class CliSubprocessTests
         {
         }
         return null;
+    }
+
+    public static async Task NativeTransportErrorRemainsTransportAsync()
+    {
+        CoreBridge.Initialize(TestIsolation.CoreConfigDirectory);
+        var original = CoreBridge.GetSettings();
+        using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        CoreBridge.SaveSettings(original with
+        {
+            ProviderType = ProviderType.OpenAiCompatible,
+            ApiBaseUrl = $"http://127.0.0.1:{port}/v1",
+            TextModel = "loopback-model",
+            NetworkEnabled = true,
+            SafeDevMode = false,
+        });
+        try
+        {
+            try
+            {
+                _ = await CoreBridge.TranslateTextAsync("isolated-key", "source", "en", "zh-CN")
+                    .WaitAsync(TimeSpan.FromSeconds(10));
+                throw new InvalidOperationException("a refused local provider connection unexpectedly succeeded");
+            }
+            catch (TranslationErrorException ex)
+            {
+                True(ex.Kind == TranslationErrorKind.Transport,
+                    $"native transport kind must cross FFI, got {ex.Kind}: {ex.Message}");
+                True(ex.Message.Contains("网络", StringComparison.Ordinal), "native transport message retains its diagnostic text");
+                var classified = TranslationCoordinator.ClassifyException(ex);
+                Equal(TranslationErrorKind.Transport, classified.Kind,
+                    "a transport message containing 网络 must not be guessed as NetworkDisabled");
+                True(TranslationPanelWindow.FriendlyError(ex.Message, classified.Kind) != "模型网络目前未启用",
+                    "the transport UI headline must not claim network translation is disabled");
+            }
+        }
+        finally
+        {
+            CoreBridge.SaveSettings(original);
+        }
+    }
+
+    public static void TypedEnvelopePreservesProviderErrorKind()
+    {
+        True(TranslationCoordinator.SessionDeadline == TimeSpan.FromMinutes(10),
+            "the session deadline remains ten minutes and is not a user-cancellation timeout");
+        foreach (var (wireKind, expectedKind) in new[]
+        {
+            ("cancelled", TranslationErrorKind.Cancelled),
+            ("timeout", TranslationErrorKind.Timeout),
+            ("transport", TranslationErrorKind.Transport),
+            ("auth", TranslationErrorKind.Unauthorized),
+            ("rate_limit", TranslationErrorKind.RateLimited),
+            ("offline", TranslationErrorKind.OfflineOnly),
+            ("parse", TranslationErrorKind.ParseError),
+            ("unknown", TranslationErrorKind.Unknown),
+        })
+        {
+            try
+            {
+                _ = CoreBridge.EnsureSuccess<string>(
+                    $"{{\"ok\":false,\"data\":null,\"error\":\"模型网络目前未启用\",\"error_kind\":\"{wireKind}\"}}");
+                throw new InvalidOperationException($"{wireKind} envelope unexpectedly succeeded");
+            }
+            catch (TranslationErrorException ex)
+            {
+                Equal(expectedKind, ex.Kind, $"{wireKind} must survive CoreBridge deserialization");
+                if (wireKind == "transport")
+                    Equal("模型网络目前未启用", ex.Message, "wire error text is retained for diagnostic context");
+                if (wireKind == "timeout")
+                {
+                    var classified = TranslationCoordinator.ClassifyException(ex);
+                    Equal(TranslationErrorKind.Timeout, classified.Kind,
+                        "deadline errors stay Timeout after coordinator classification");
+                    Equal(ex.Message, classified.Message, "timeout text remains distinct from cancellation");
+                }
+            }
+        }
+
+        Equal("ready", CoreBridge.EnsureSuccess<string>("{\"ok\":true,\"data\":\"ready\",\"error\":null}"),
+            "legacy success envelopes remain unchanged");
+        try
+        {
+            _ = CoreBridge.EnsureSuccess<string>("{\"ok\":false,\"data\":null,\"error\":\"legacy error\"}");
+            throw new InvalidOperationException("legacy failure unexpectedly succeeded");
+        }
+        catch (InvalidOperationException ex) when (ex is not TranslationErrorException)
+        {
+            Equal("legacy error", ex.Message, "envelopes without error_kind retain generic failure behavior");
+        }
     }
 
     private static void True(bool condition, string message)

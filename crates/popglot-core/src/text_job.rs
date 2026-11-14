@@ -357,8 +357,7 @@ impl TextJobManager {
         let explanation = assembled
             .metadata
             .as_ref()
-            .map(|metadata| metadata.explanation.clone())
-            .unwrap_or_default();
+            .map_or_else(String::new, |metadata| metadata.explanation.clone());
         if let Some(metadata) = &assembled.metadata {
             warnings.extend(metadata.warnings.iter().cloned());
         }
@@ -399,6 +398,9 @@ impl TextJobManager {
 
     /// Number of live jobs (diagnostics/tests).
     pub fn live_count(&self) -> usize {
-        self.jobs.lock().map(|jobs| jobs.len()).unwrap_or_default()
+        self.jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 }

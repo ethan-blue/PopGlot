@@ -74,6 +74,8 @@ internal static class FreeTranslateService
     /// </summary>
     internal static Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? HttpSenderOverride { get; set; }
     internal static HttpClient? HttpClientOverrideForTest { get; set; }
+    /// <summary>免费端点整请求超时：长文本需要比 12 秒更宽的预算。</summary>
+    internal static readonly TimeSpan WholeRequestTimeout = TimeSpan.FromSeconds(30);
 
     private static readonly HttpClient HttpClient = new(new SocketsHttpHandler
     {
@@ -86,8 +88,9 @@ internal static class FreeTranslateService
         AllowAutoRedirect = false,
     })
     {
-        Timeout = TimeSpan.FromSeconds(12),
+        Timeout = WholeRequestTimeout,
     };
+
 
     // These undocumented endpoints rate-limit per IP; after a 429 we back off
     // instead of hammering them on every retry. The cooldown is PER HOST: a
@@ -271,6 +274,10 @@ internal static class FreeTranslateService
             throw new FreeTranslateException(
                 FreeTranslateFailureKind.LongContent,
                 $"MyMemory 单次最多处理 {MyMemoryMaxQueryBytes} 字节。请缩短内容或使用已配置的翻译引擎。");
+        }
+        if (selected == FreeEngineProvider.MyMemory)
+        {
+            sl = ResolveMyMemorySource(sl, trimmed);
         }
         var cacheKey = $"{selected}|{sl}|{tl}|{trimmed}";
         TranslationResponse? cached;
@@ -589,21 +596,8 @@ internal static class FreeTranslateService
             return normalized;
         }
 
-        // MyMemory cannot detect languages. Never label kana, Hangul,
-        // Cyrillic, accented Latin, etc. as English merely by default.
-        if (text.Any(ch => ch is >= '\u3040' and <= '\u30ff' or >= '\u31f0' and <= '\u31ff'))
-            return "ja";
-        if (text.Any(ch => ch is >= '\uac00' and <= '\ud7af' or >= '\u1100' and <= '\u11ff' or >= '\u3130' and <= '\u318f'))
-            return "ko";
-        if (text.Any(ch => char.IsLetter(ch) && !char.IsAsciiLetter(ch) && ch is not (>= '\u4e00' and <= '\u9fff')))
-            throw new FreeTranslateException(FreeTranslateFailureKind.Unavailable,
-                "MyMemory 不支持可靠的自动语言检测，请先选择原文语言后重试。");
-
-        var cjk = text.Count(ch => ch is >= '\u4e00' and <= '\u9fff');
-        var latin = text.Count(char.IsAsciiLetter);
-        if (cjk > 0 && latin == 0) return "zh-CN";
-        if (latin > 0 && cjk == 0) return "en";
-        throw new FreeTranslateException(FreeTranslateFailureKind.Unavailable,
+        return LanguageCatalog.DetectScript(text) ?? throw new FreeTranslateException(
+            FreeTranslateFailureKind.Unavailable,
             "MyMemory 无法可靠判断这段混合文本的原文语言，请先选择原文语言后重试。");
     }
 

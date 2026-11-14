@@ -42,12 +42,14 @@ internal static partial class Program
     {
         Equal("ja", FreeTranslateService.ResolveMyMemorySource("auto", "翻訳してください"), "kana identifies Japanese");
         Equal("ko", FreeTranslateService.ResolveMyMemorySource("auto", "안녕하세요"), "Hangul identifies Korean");
+        Equal("ru", FreeTranslateService.ResolveMyMemorySource("auto", "Привет мир"), "Cyrillic identifies Russian");
+        Equal("en", FreeTranslateService.ResolveMyMemorySource("auto", "école"), "accented Latin uses the shared English default");
         Equal("fr", FreeTranslateService.ResolveMyMemorySource("fr", "bonjour"), "explicit source always wins");
-        foreach (var text in new[] { "Привет мир", "école", "你好 hello", "12345" })
+        foreach (var text in new[] { "你好 hello", "12345" })
         {
             var refused = false;
             try { FreeTranslateService.ResolveMyMemorySource("auto", text); } catch (FreeTranslateException) { refused = true; }
-            True(refused, "ambiguous or unsupported auto source requires an explicit choice");
+            True(refused, "ambiguous or unclassified auto source still requires an explicit choice");
         }
     }
 

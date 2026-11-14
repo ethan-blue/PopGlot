@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 
 using PopGlot.Windows.Services;
+using PopGlot.Windows.Sections;
 
 namespace PopGlot.Windows.LogicTests;
 
@@ -178,6 +179,12 @@ internal static partial class Program
                     "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"));
                 await WriteSummarySseDeltaAsync(network, "first");
                 await releaseTerminal.Task;
+                // The tail (delta + [DONE] + terminator) completes the response.
+                // The client may close the connection as soon as it has consumed
+                // it, so the write-completion can surface a 10053 even though the
+                // bytes were delivered (Release-mode timing). Tolerate that here;
+                // the assertions below on the completed response text are the real
+                // check that the tail arrived.
                 try
                 {
                     await WriteSummarySseDeltaAsync(network,
@@ -186,8 +193,8 @@ internal static partial class Program
                     await network.WriteAsync("0\r\n\r\n"u8.ToArray());
                     await network.FlushAsync();
                 }
-                catch (IOException) when (cancel) { }
-                catch (SocketException) when (cancel) { }
+                catch (IOException) { }
+                catch (SocketException) { }
             });
 
             using var cancellation = new CancellationTokenSource();
@@ -259,6 +266,225 @@ internal static partial class Program
                 listener.Stop();
                 await service.WaitAsync(TimeSpan.FromSeconds(3));
             }
+        }
+    }
+
+    private static async Task NativeIncompleteStatusUsesThreeSurfaces()
+    {
+        EnsureApplication();
+        foreach (var fixture in new[]
+                 {
+                     (FinishReasonLength: true, Badge: "输出截断", Status: "输出截断 · 内容不完整",
+                         Banner: "输出达到长度上限，内容不完整", Reason: "模型输出达到长度上限，译文可能被截断。"),
+                     (FinishReasonLength: false, Badge: "连接早闭", Status: "连接早闭 · 内容可能不完整",
+                         Banner: "服务提前结束响应，内容可能不完整", Reason: "SSE 流在协议完成事件前正常结束；译文可能不完整。"),
+                 })
+        {
+            var session = await RunNativeIncompleteStreamAsync(fixture.FinishReasonLength);
+            Equal(TranslationSessionStage.Partial, session.Stage);
+            True(!string.IsNullOrWhiteSpace(session.TranslatedText), "the real native stream must retain its emitted body");
+            True(session.Warnings.Any(warning => warning.Contains(fixture.Reason, StringComparison.Ordinal)),
+                "the native response must carry the protocol reason into the UI session");
+
+            var epoch = 1L;
+            var workbench = TranslateSectionReducer.StartTranslation(TranslateUiState.Initial, epoch);
+            workbench = TranslateSectionReducer.ApplyStreamUpdate(workbench,
+                new TranslationStreamUpdate("status-session", epoch, TranslationStreamUpdateKind.Delta,
+                    session.TranslatedText, session.TranslatedText, session.TranslatedText.Length), epoch);
+            workbench = TranslateSectionReducer.ApplyCompletion(workbench, session, epoch);
+            Equal(fixture.Badge, workbench.BadgeText);
+            Equal(fixture.Status, workbench.StatusText);
+            True(workbench.ExplanationText.Contains(fixture.Reason, StringComparison.Ordinal),
+                "workbench explanation must show the native warning reason");
+            True(workbench.IsPartialIncomplete && !workbench.AreResultActionsEnabled,
+                "workbench must retain its partial action gate");
+            var workbenchView = new TranslateSection();
+            workbenchView.ApplyState(workbench);
+            True(ReferenceEquals(workbenchView.EngineBadge.Foreground, workbenchView.TryFindResource("WarningBrush")) &&
+                 ReferenceEquals(workbenchView.StatusBlock.Foreground, workbenchView.TryFindResource("WarningBrush")),
+                "workbench truncation and early-close states must use warning tone");
+
+            var history = new HistoryStore(TestIsolation.HistoryPath);
+            var vocabulary = new VocabularyStore(TestIsolation.VocabularyPath);
+            var quick = new QuickSearchWindow(history, vocabulary);
+            try
+            {
+                quick.State.StartNewSearch("native status source");
+                quick.State.OnSessionCompleted(session, quick.State.CurrentEpoch, "native status source");
+                typeof(QuickSearchWindow).GetMethod("SyncUiWithState",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .Invoke(quick, null);
+                Equal(fixture.Badge, quick.IncompleteBadgeBlock.Text);
+                Equal(fixture.Status, quick.FooterStatusBlock.Text);
+                True(ReferenceEquals(quick.IncompleteBadgeBlock.Foreground, quick.TryFindResource("WarningBrush")),
+                    "quick search truncation and early-close badges must use warning tone");
+                True(ReferenceEquals(quick.StatusDotShape.Fill, quick.TryFindResource("WarningBrush")),
+                    "quick search truncation and early-close status dots must use warning tone");
+                True(quick.State.Explanation?.Contains(fixture.Reason, StringComparison.Ordinal) == true,
+                    "quick search explanation must show the native warning reason");
+                True(quick.State.CanCopy && !quick.State.CanSpeak && !quick.State.CanStar,
+                    "quick search must keep manual copy while blocking side effects");
+            }
+            finally
+            {
+                quick.Close();
+            }
+
+            var panel = new TranslationPanelWindow(new System.Windows.Rect(100, 100, 20, 20), history,
+                () => ShellSettings.Default, null, null, vocabulary);
+            try
+            {
+                DrivePanelSession(panel, "native status source", session);
+                Equal(fixture.Badge, panel.EngineBadge.Text);
+                Equal(fixture.Status, panel.StatusTextBlock.Text);
+                Equal(fixture.Banner, panel.WarningText.Text);
+                True(ReferenceEquals(panel.EngineBadge.Foreground, panel.TryFindResource("WarningBrush")),
+                    "floating panel truncation and early-close badge must use warning tone");
+                var warningBox = (System.Windows.Controls.Border)panel.FindName("WarningBox")!;
+                var statusDot = (System.Windows.Controls.Border)panel.FindName("StatusDot")!;
+                True(ReferenceEquals(warningBox.Background, panel.TryFindResource("WarningSoftBrush")) &&
+                     ReferenceEquals(warningBox.BorderBrush, panel.TryFindResource("WarningBrush")) &&
+                     ReferenceEquals(statusDot.Background, panel.TryFindResource("WarningBrush")),
+                    "floating panel incomplete states must use warning card and status-dot tones");
+                True(panel.ExplanationText.Text.Contains(fixture.Reason, StringComparison.Ordinal),
+                    "floating panel explanation must show the native warning reason");
+                True(!panel.ResultSpeakBtn.IsEnabled && !panel.StarToggle.IsEnabled,
+                    "floating panel must keep speak and star gated");
+                True(panel.ResultCopyBtn.IsEnabled, "floating panel must retain manual copy");
+            }
+            finally
+            {
+                panel.ForceClose = true;
+                panel.Close();
+            }
+        }
+        var serverFailure = new TranslationSession
+        {
+            Stage = TranslationSessionStage.Failed,
+            TranslatedText = "已接收的部分输出",
+            Error = new TranslationError(TranslationErrorKind.ServerError, "HTTP 500 Internal Server Error"),
+        };
+        var failedEpoch = 1L;
+        var failedWorkbench = TranslateSectionReducer.StartTranslation(TranslateUiState.Initial, failedEpoch);
+        failedWorkbench = TranslateSectionReducer.ApplyStreamUpdate(failedWorkbench,
+            new TranslationStreamUpdate("failed-status", failedEpoch, TranslationStreamUpdateKind.Delta,
+                serverFailure.TranslatedText, serverFailure.TranslatedText, serverFailure.TranslatedText.Length), failedEpoch);
+        failedWorkbench = TranslateSectionReducer.ApplyCompletion(failedWorkbench, serverFailure, failedEpoch);
+        Equal("生成失败", failedWorkbench.BadgeText);
+        Equal("生成失败 · 内容不完整", failedWorkbench.StatusText);
+        var failedWorkbenchView = new TranslateSection();
+        failedWorkbenchView.ApplyState(failedWorkbench);
+        True(ReferenceEquals(failedWorkbenchView.EngineBadge.Foreground, failedWorkbenchView.TryFindResource("DangerBrush")) &&
+             ReferenceEquals(failedWorkbenchView.StatusBlock.Foreground, failedWorkbenchView.TryFindResource("DangerBrush")),
+            "workbench request failures must use danger tone");
+
+        var failedState = new QuickSearchState();
+        failedState.StartNewSearch("server failure");
+        failedState.OnSessionCompleted(serverFailure, failedState.CurrentEpoch, "server failure");
+        Equal("生成失败", failedState.IncompleteBadgeText);
+        Equal("生成失败 · 内容不完整", failedState.StatusText);
+        True(!failedState.IsPartialWarningTone, "a true request failure must use danger tone");
+        var failedQuick = new QuickSearchWindow(new HistoryStore(TestIsolation.HistoryPath),
+            new VocabularyStore(TestIsolation.VocabularyPath));
+        failedQuick.State.StartNewSearch("server failure");
+        failedQuick.State.OnSessionCompleted(serverFailure, failedQuick.State.CurrentEpoch, "server failure");
+        typeof(QuickSearchWindow).GetMethod("SyncUiWithState",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .Invoke(failedQuick, null);
+        True(ReferenceEquals(failedQuick.IncompleteBadgeBlock.Foreground, failedQuick.TryFindResource("DangerBrush")),
+            "quick search request failures must use danger tone");
+        True(ReferenceEquals(failedQuick.StatusDotShape.Fill, failedQuick.TryFindResource("DangerBrush")),
+            "quick search request failures must use danger tone");
+        failedQuick.Close();
+
+        var failurePanel = new TranslationPanelWindow(new System.Windows.Rect(100, 100, 20, 20),
+            new HistoryStore(TestIsolation.HistoryPath), () => ShellSettings.Default, null, null,
+            new VocabularyStore(TestIsolation.VocabularyPath));
+        try
+        {
+            DrivePanelSession(failurePanel, "server failure", serverFailure);
+            Equal("生成失败", failurePanel.EngineBadge.Text);
+            Equal("生成失败 · 内容不完整", failurePanel.StatusTextBlock.Text);
+            Equal("生成失败，内容不完整", failurePanel.WarningText.Text);
+            True(ReferenceEquals(failurePanel.EngineBadge.Foreground, failurePanel.TryFindResource("DangerBrush")),
+                "floating panel request failures must use danger tone");
+            var failureWarningBox = (System.Windows.Controls.Border)failurePanel.FindName("WarningBox")!;
+            var failureStatusDot = (System.Windows.Controls.Border)failurePanel.FindName("StatusDot")!;
+            True(ReferenceEquals(failureWarningBox.Background, failurePanel.TryFindResource("DangerSoftBrush")) &&
+                 ReferenceEquals(failureWarningBox.BorderBrush, failurePanel.TryFindResource("DangerBrush")) &&
+                 ReferenceEquals(failureStatusDot.Background, failurePanel.TryFindResource("DangerBrush")),
+                "floating panel true failures must use danger card and status-dot tones");
+        }
+        finally
+        {
+            failurePanel.ForceClose = true;
+            failurePanel.Close();
+        }
+    }
+
+    private static async Task<TranslationSession> RunNativeIncompleteStreamAsync(bool finishReasonLength)
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var requestCount = 0;
+        var server = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync();
+            using var network = client.GetStream();
+            await ReadSummaryHttpRequestAsync(network);
+            Interlocked.Increment(ref requestCount);
+            await network.WriteAsync(Encoding.ASCII.GetBytes(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"));
+            await WriteSummarySseDeltaAsync(network, "保留的部分译文");
+            // The terminal (when present) drives the partial classification the
+            // test asserts; the chunk terminator after it is best-effort because
+            // the client may close once it has the terminal.
+            if (finishReasonLength)
+            {
+                var terminal = JsonSerializer.Serialize(new
+                {
+                    choices = new[] { new { delta = new { }, finish_reason = "length" } },
+                });
+                await WriteSummaryHttpChunkAsync(network, Encoding.UTF8.GetBytes($"data: {terminal}\n\n"));
+            }
+            try
+            {
+                await network.WriteAsync("0\r\n\r\n"u8.ToArray());
+            }
+            catch (IOException) { }
+            catch (SocketException) { }
+        });
+
+        var settings = CoreBridge.GetSettings() with
+        {
+            ProviderType = ProviderType.OpenAiCompatible,
+            ApiBaseUrl = $"http://127.0.0.1:{port}",
+            TextEndpoint = "/chat/completions",
+            TextModel = "status-loopback-model",
+            SupportsText = true,
+            NetworkEnabled = true,
+            SafeDevMode = false,
+        };
+        try
+        {
+            var stream = CoreBridge.TranslateTextDraftStream(settings, "isolated-status-key",
+                "native status source", "en", "zh-CN", requestId: Guid.NewGuid().ToString("N"));
+            var response = await stream.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+            await server.WaitAsync(TimeSpan.FromSeconds(5));
+            Equal(1, requestCount, "one isolated native request must reach the loopback server");
+            return new TranslationSession
+            {
+                Stage = response.Result.IsPartial ? TranslationSessionStage.Partial : TranslationSessionStage.Completed,
+                TranslatedText = response.Result.TranslatedText,
+                Explanation = response.Result.Explanation,
+                Warnings = response.Result.Warnings,
+            };
+        }
+        finally
+        {
+            listener.Stop();
+            await server.WaitAsync(TimeSpan.FromSeconds(5));
         }
     }
 

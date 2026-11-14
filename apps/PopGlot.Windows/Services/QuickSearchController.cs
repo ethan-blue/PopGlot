@@ -33,6 +33,8 @@ internal sealed class QuickSearchState
     public bool IsRichBoxVisible { get; private set; }
     public bool IsStreamIndicatorVisible { get; private set; }
     public bool IsIncompleteBadgeVisible { get; private set; }
+    public string IncompleteBadgeText { get; private set; } = "未完成";
+    public bool IsPartialWarningTone { get; private set; } = true;
     public bool IsProgressVisible { get; private set; }
 
     public bool CanCopy { get; private set; }
@@ -61,9 +63,12 @@ internal sealed class QuickSearchState
 
     private const string IdleHintsText = "Enter 翻译 · Shift+Enter 换行 · Esc 关闭";
     private const string StreamingHintsText = "Esc 取消生成";
-    private const string CompletedHintsText = "Ctrl+Shift+C 复制 · Ctrl+P 朗读 · Ctrl+S 收藏 · Esc 关闭";
-    private const string PartialHintsText = "Ctrl+Shift+C 复制 · Esc 关闭";
-    private const string DismissHintsText = "Esc 关闭";
+    // T9.23：朗读键可录制，提示从 InterfaceKeys.SpeakHotkey 拼装；
+    // Ctrl+Shift+C / Ctrl+S 是固定键，保留字面量。
+    private static string CompletedHintsText =>
+        $"Ctrl+Shift+C 复制 · {(InterfaceKeys.SpeakHotkey.IsValid ? InterfaceKeys.SpeakHotkey.DisplayName : "Ctrl+P")} 朗读 · Ctrl+S 收藏 · Esc 关闭";
+    private const string PartialHintsText = "Ctrl+Shift+C 复制 · Enter 重试 · Esc 关闭";
+    private const string DismissHintsText = "Enter 重试 · Esc 关闭";
 
     private void RefreshHints()
     {
@@ -103,6 +108,8 @@ internal sealed class QuickSearchState
         IsRichBoxVisible = false;
         IsStreamIndicatorVisible = true;
         IsIncompleteBadgeVisible = false;
+        IncompleteBadgeText = "未完成";
+        IsPartialWarningTone = true;
         IsProgressVisible = true;
         CanCopy = false;
         CanSpeak = false;
@@ -222,25 +229,26 @@ internal sealed class QuickSearchState
                 AccumulatedText = session.TranslatedText;
             }
             Phonetic = session.Phonetic;
-            Explanation = string.Join("\n", new[] { session.Explanation }
-                .Concat(session.Warnings).Where(note => !string.IsNullOrWhiteSpace(note)).Distinct());
-            // 与 Failed 分支一致：partial+error 的状态行同时给出 Message 与
-            // 非空 ActionableSuggestion（已含建议时去重），而不是只报 Message。
             var partialError = session.Error is not null ? ComposeErrorText(session.Error)
                 : session.Warnings.Count > 0 ? string.Join("\n", session.Warnings) : null;
+            var partialExplanation = string.Join("\n", new[] { session.Explanation, partialError }
+                .Concat(session.Warnings).Where(note => !string.IsNullOrWhiteSpace(note)).Distinct());
+            // Keep the reason and retry guidance in the existing explanation card.
+            var partialHasText = !string.IsNullOrWhiteSpace(AccumulatedText);
+            var partialPresentation = TranslationStatusText.Resolve(
+                session.Stage, partialHasText, partialError, session.Warnings);
+            ApplyIncompleteCopy(partialPresentation);
             ErrorMessage = partialError;
-            IsResultVisible = !string.IsNullOrEmpty(AccumulatedText);
-            IsStreamLayerVisible = !string.IsNullOrEmpty(AccumulatedText);
+            Explanation = AppendGuidance(partialExplanation, partialPresentation.RetryGuidance);
+            IsResultVisible = partialHasText;
+            IsStreamLayerVisible = partialHasText;
             IsRichBoxVisible = false;
-            IsIncompleteBadgeVisible = !string.IsNullOrEmpty(AccumulatedText);
-            // G06/N04 对齐面板 gate：partial 只保留手动复制；朗读、收藏
-            // 与一切自动副作用一律禁止——不完整的内容不可被当作可靠结果。
-            CanCopy = !string.IsNullOrWhiteSpace(AccumulatedText);
+            IsIncompleteBadgeVisible = partialHasText;
+            // G06/N04: partial text remains manually copyable only.
+            CanCopy = partialHasText;
             CanSpeak = false;
             CanStar = false;
-            StatusText = partialError is not null
-                ? $"{partialError}（部分内容已保留）"
-                : $"译文不完整 · {TranslationElapsedText.ForTiming(session.Timing)}";
+            StatusText = partialPresentation.StatusText;
             RefreshHints();
             return true;
         }
@@ -268,9 +276,20 @@ internal sealed class QuickSearchState
         CanSpeak = false;
         CanStar = false;
         var err = session.Error is not null ? ComposeErrorText(session.Error) : "翻译失败";
+        var presentation = TranslationStatusText.Resolve(session.Stage, hasPartial, err, session.Warnings);
+        ApplyIncompleteCopy(presentation);
         ErrorMessage = err;
-        StatusText = hasPartial ? $"{err}（已保留部分内容）" : err;
+        Explanation = AppendGuidance(string.Join("\n", new[] { session.Explanation }
+            .Concat(session.Warnings).Where(note => !string.IsNullOrWhiteSpace(note))), presentation.RetryGuidance);
+        StatusText = hasPartial ? presentation.StatusText : err;
         RefreshHints();
+        return true;
+    }
+
+    public bool OnCachedSessionCompleted(TranslationSession session, long epoch, string currentInputQuery)
+    {
+        if (!OnSessionCompleted(session, epoch, currentInputQuery)) return false;
+        StatusText = TranslationRoundTripCache.ReusedStatus;
         return true;
     }
 
@@ -294,6 +313,17 @@ internal sealed class QuickSearchState
         }
         return string.IsNullOrEmpty(message) ? suggestion : $"{message} {suggestion}";
     }
+    private void ApplyIncompleteCopy(TranslationStatusCopy copy)
+    {
+        IncompleteBadgeText = copy.BadgeText;
+        IsPartialWarningTone = copy.IsWarningTone;
+    }
+
+    private static string AppendGuidance(string text, string? guidance)
+    {
+        if (string.IsNullOrWhiteSpace(guidance) || text.Contains(guidance, StringComparison.Ordinal)) return text;
+        return string.IsNullOrWhiteSpace(text) ? guidance : $"{text}\n{guidance}";
+    }
 
     public bool OnCancelled(long epoch, string currentInputQuery)
     {
@@ -309,6 +339,8 @@ internal sealed class QuickSearchState
         FinalRenderedText = string.Empty;
         ErrorMessage = null;
         var hasPartial = !string.IsNullOrEmpty(AccumulatedText);
+        ApplyIncompleteCopy(TranslationStatusText.Resolve(
+            TranslationSessionStage.Cancelled, hasPartial, null, warnings: null));
         IsResultVisible = hasPartial;
         IsStreamLayerVisible = hasPartial;
         IsRichBoxVisible = false;
@@ -317,7 +349,8 @@ internal sealed class QuickSearchState
         CanCopy = hasPartial;
         CanSpeak = false;
         CanStar = false;
-        StatusText = hasPartial ? "翻译已取消 · 译文不完整" : "翻译请求已取消";
+        StatusText = hasPartial ? TranslationStatusText.Resolve(
+            TranslationSessionStage.Cancelled, hasPartial, null, warnings: null).StatusText : "翻译请求已取消";
         RefreshHints();
         return true;
     }
@@ -345,7 +378,11 @@ internal sealed class QuickSearchState
         CanSpeak = false;
         CanStar = false;
         ErrorMessage = $"翻译失败: {ex.Message}";
-        StatusText = hasPartial ? $"翻译失败: {ex.Message}（已保留部分内容）" : $"翻译失败: {ex.Message}";
+        var presentation = TranslationStatusText.Resolve(
+            TranslationSessionStage.Failed, hasPartial, ErrorMessage, warnings: null);
+        ApplyIncompleteCopy(presentation);
+        Explanation = AppendGuidance(ErrorMessage, presentation.RetryGuidance);
+        StatusText = hasPartial ? presentation.StatusText : ErrorMessage;
         RefreshHints();
         return true;
     }
@@ -390,6 +427,8 @@ internal sealed class QuickSearchState
             // 流式中改查询：旧内容不是无标记孤儿，而是明示转成
             // Cancelled+partial——文本保留、徽标可见、只可手动复制，
             // 状态行告诉用户按 Enter 重新翻译。
+            ApplyIncompleteCopy(TranslationStatusText.Resolve(
+                TranslationSessionStage.Cancelled, hasPartial: true, errorMessage: null, warnings: null));
             Stage = QuickSearchUiStage.Cancelled;
             ErrorMessage = null;
             IsResultVisible = true;

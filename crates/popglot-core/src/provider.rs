@@ -16,7 +16,7 @@ pub const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_REQUEST_BYTES: usize = 12 * 1024 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 pub const STREAM_PROMPT_VERSION: &str = "popglot-translation-stream-v1";
-const MAX_MODEL_OUTPUT_TOKENS: u32 = 1_200;
+const MAX_MODEL_OUTPUT_TOKENS: u32 = 4_096;
 const MIN_STREAM_DELIMITER_CHARS: usize = 16;
 const MAX_STREAM_DELIMITER_CHARS: usize = 64;
 const MAX_EXTRA_HEADERS: usize = 16;
@@ -400,11 +400,20 @@ pub(crate) fn output_token_limit(request: &TranslationRequest) -> u32 {
         TextTask::Translate => MAX_MODEL_OUTPUT_TOKENS,
     };
     match &request.input {
-        TranslationInput::Text { source } => u32::try_from(source.chars().count())
-            .unwrap_or(u32::MAX)
-            .saturating_mul(2)
-            .saturating_add(256)
-            .clamp(384, ceiling),
+        TranslationInput::Text { source } => {
+            let source_chars = u32::try_from(source.chars().count()).unwrap_or(u32::MAX);
+            match request.task {
+                TextTask::Translate => source_chars
+                    .saturating_mul(3)
+                    .saturating_add(512)
+                    .clamp(512, ceiling),
+                TextTask::Summarize => source_chars
+                    .saturating_mul(2)
+                    .saturating_add(256)
+                    .clamp(384, ceiling),
+                TextTask::Explain => unreachable!("Explain returns its fixed budget above"),
+            }
+        }
         TranslationInput::Vision { .. } => ceiling,
     }
 }
@@ -1273,7 +1282,10 @@ impl TranslationProvider for OpenAiResponsesProvider {
     }
 
     fn parse(&self, response: &[u8]) -> Result<TranslationResult, ProviderError> {
-        parse_translation_json(&openai_responses_content(response)?)
+        let (text, truncation) = openai_responses_content(response)?;
+        let mut result = parse_translation_json(&text)?;
+        apply_truncation(&mut result, truncation);
+        Ok(result)
     }
 
     fn parse_stream_fallback(
@@ -1281,10 +1293,10 @@ impl TranslationProvider for OpenAiResponsesProvider {
         response: &[u8],
         delimiter: &str,
     ) -> Result<TranslationResult, ProviderError> {
-        Ok(parse_text_first_fallback(
-            &openai_responses_content(response)?,
-            delimiter,
-        ))
+        let (text, truncation) = openai_responses_content(response)?;
+        let mut result = parse_text_first_fallback(&text, delimiter);
+        apply_truncation(&mut result, truncation);
+        Ok(result)
     }
 
     fn prepare_stream(
@@ -1323,7 +1335,10 @@ impl TranslationProvider for AnthropicMessagesProvider {
     }
 
     fn parse(&self, response: &[u8]) -> Result<TranslationResult, ProviderError> {
-        parse_translation_json(&anthropic_content_text(response)?)
+        let (text, truncation) = anthropic_content_text(response)?;
+        let mut result = parse_translation_json(&text)?;
+        apply_truncation(&mut result, truncation);
+        Ok(result)
     }
 
     fn parse_stream_fallback(
@@ -1331,10 +1346,10 @@ impl TranslationProvider for AnthropicMessagesProvider {
         response: &[u8],
         delimiter: &str,
     ) -> Result<TranslationResult, ProviderError> {
-        Ok(parse_text_first_fallback(
-            &anthropic_content_text(response)?,
-            delimiter,
-        ))
+        let (text, truncation) = anthropic_content_text(response)?;
+        let mut result = parse_text_first_fallback(&text, delimiter);
+        apply_truncation(&mut result, truncation);
+        Ok(result)
     }
 
     fn prepare_stream(
@@ -1373,7 +1388,10 @@ impl TranslationProvider for GeminiGenerateContentProvider {
     }
 
     fn parse(&self, response: &[u8]) -> Result<TranslationResult, ProviderError> {
-        parse_translation_json(&gemini_content_text(response)?)
+        let (text, truncation) = gemini_content_text(response)?;
+        let mut result = parse_translation_json(&text)?;
+        apply_truncation(&mut result, truncation);
+        Ok(result)
     }
 
     fn parse_stream_fallback(
@@ -1381,10 +1399,10 @@ impl TranslationProvider for GeminiGenerateContentProvider {
         response: &[u8],
         delimiter: &str,
     ) -> Result<TranslationResult, ProviderError> {
-        Ok(parse_text_first_fallback(
-            &gemini_content_text(response)?,
-            delimiter,
-        ))
+        let (text, truncation) = gemini_content_text(response)?;
+        let mut result = parse_text_first_fallback(&text, delimiter);
+        apply_truncation(&mut result, truncation);
+        Ok(result)
     }
 
     fn prepare_stream(
@@ -1458,22 +1476,30 @@ fn parse_openai_responses_stream_event(
 ) -> Result<Option<ProviderStreamEvent>, ProviderError> {
     let value: Value = serde_json::from_str(data)
         .map_err(|_| invalid_response("Responses SSE 事件不是有效 JSON。"))?;
-    if event == "response.failed"
-        || value.get("type").and_then(Value::as_str) == Some("response.failed")
-        || value.get("type").and_then(Value::as_str) == Some("error")
-    {
+    let event_type = value.get("type").and_then(Value::as_str).unwrap_or(event);
+    if event_type == "response.failed" || event_type == "error" {
         return Ok(Some(ProviderStreamEvent::ProviderError(
             openai_stream_error(&value)
                 .unwrap_or_else(|| invalid_response("Responses 流式请求失败。")),
         )));
     }
-    if event == "response.completed"
-        || value.get("type").and_then(Value::as_str) == Some("response.completed")
-    {
+    if event_type == "response.incomplete" {
+        let response = value.get("response").unwrap_or(&value);
+        let reason = response
+            .pointer("/incomplete_details/reason")
+            .and_then(Value::as_str);
+        let delta = openai_responses_output_text(response)
+            .unwrap_or_default()
+            .to_owned();
+        return Ok(Some(ProviderStreamEvent::Truncated {
+            delta,
+            reason: openai_responses_truncation_reason(reason),
+        }));
+    }
+    if event_type == "response.completed" {
         return Ok(Some(ProviderStreamEvent::Completed));
     }
-    if (event == "response.output_text.delta"
-        || value.get("type").and_then(Value::as_str) == Some("response.output_text.delta"))
+    if event_type == "response.output_text.delta"
         && let Some(delta) = value
             .get("delta")
             .and_then(Value::as_str)
@@ -1495,8 +1521,6 @@ fn parse_anthropic_stream_event(
     event: &str,
     data: &str,
 ) -> Result<Option<ProviderStreamEvent>, ProviderError> {
-    // Anthropic emits both SSE comments and explicit ping events. Neither has
-    // semantic content, and an empty ping payload is not JSON.
     if event == "ping" {
         return Ok(None);
     }
@@ -1514,6 +1538,15 @@ fn parse_anthropic_stream_event(
         return Ok(Some(ProviderStreamEvent::ProviderError(
             stream_upstream_error("Provider 流式错误", message),
         )));
+    }
+    if event_type == "message_delta"
+        && let Some(stop_reason) = value.pointer("/delta/stop_reason").and_then(Value::as_str)
+        && let Some(reason) = anthropic_truncation_reason(stop_reason)
+    {
+        return Ok(Some(ProviderStreamEvent::Truncated {
+            delta: String::new(),
+            reason,
+        }));
     }
     if event_type == "message_stop" {
         return Ok(Some(ProviderStreamEvent::Completed));
@@ -1539,8 +1572,6 @@ fn parse_gemini_stream_event(data: &str) -> Result<Option<ProviderStreamEvent>, 
         .and_then(Value::as_array)
         .and_then(|items| items.first())
     else {
-        // Usage metadata and other non-content messages are deliberately not
-        // surfaced as text deltas.
         return Ok(None);
     };
     let finish_reason = candidate.get("finishReason").and_then(Value::as_str);
@@ -1552,6 +1583,12 @@ fn parse_gemini_stream_event(data: &str) -> Result<Option<ProviderStreamEvent>, 
                     format!("Gemini 因安全策略阻止了翻译：{reason}。"),
                 ),
             )));
+        }
+        if reason == "MAX_TOKENS" {
+            return Ok(Some(ProviderStreamEvent::Truncated {
+                delta: gemini_candidate_text(candidate),
+                reason: "模型输出达到长度上限，译文可能被截断。",
+            }));
         }
         if reason != "STOP" {
             return Ok(Some(ProviderStreamEvent::ProviderError(invalid_response(
@@ -1565,6 +1602,21 @@ fn parse_gemini_stream_event(data: &str) -> Result<Option<ProviderStreamEvent>, 
         (false, false) => Ok(Some(ProviderStreamEvent::TextDelta(text))),
         (true, true) => Ok(Some(ProviderStreamEvent::Completed)),
         (true, false) => Ok(None),
+    }
+}
+fn openai_responses_truncation_reason(reason: Option<&str>) -> &'static str {
+    match reason {
+        Some("max_output_tokens") => "模型输出达到长度上限，译文可能被截断。",
+        Some("content_filter") => "内容被提供方安全策略截断。",
+        _ => "模型输出未完整返回，译文可能不完整。",
+    }
+}
+
+fn anthropic_truncation_reason(reason: &str) -> Option<&'static str> {
+    match reason {
+        "max_tokens" => Some("模型输出达到长度上限，译文可能被截断。"),
+        "refusal" => Some("内容被提供方安全策略截断。"),
+        _ => None,
     }
 }
 
@@ -2147,7 +2199,9 @@ fn parse_json(response: &[u8]) -> Result<Value, ProviderError> {
     serde_json::from_slice(response).map_err(|_| invalid_response("Provider 返回了无效 JSON。"))
 }
 
-fn anthropic_content_text(response: &[u8]) -> Result<String, ProviderError> {
+fn anthropic_content_text(
+    response: &[u8],
+) -> Result<(String, Option<&'static str>), ProviderError> {
     let value = parse_json(response)?;
     let text = value
         .get("content")
@@ -2160,10 +2214,14 @@ fn anthropic_content_text(response: &[u8]) -> Result<String, ProviderError> {
     if text.is_empty() {
         return Err(invalid_response("Anthropic 响应缺少 content 文本。"));
     }
-    Ok(text)
+    let truncation = value
+        .get("stop_reason")
+        .and_then(Value::as_str)
+        .and_then(anthropic_truncation_reason);
+    Ok((text, truncation))
 }
 
-fn gemini_content_text(response: &[u8]) -> Result<String, ProviderError> {
+fn gemini_content_text(response: &[u8]) -> Result<(String, Option<&'static str>), ProviderError> {
     let value = parse_json(response)?;
     reject_gemini_prompt_block(&value)?;
     let candidate = value
@@ -2184,7 +2242,9 @@ fn gemini_content_text(response: &[u8]) -> Result<String, ProviderError> {
     if text.is_empty() {
         return Err(invalid_response("Gemini 响应缺少 content 文本。"));
     }
-    Ok(text)
+    let truncation =
+        (finish_reason == Some("MAX_TOKENS")).then_some("模型输出达到长度上限，译文可能被截断。");
+    Ok((text, truncation))
 }
 
 /// Converts a Gemini generateContent endpoint into a streaming SSE endpoint.
@@ -2261,30 +2321,52 @@ fn apply_openai_chat_completion(value: &Value, result: &mut TranslationResult) {
         result.warnings.push(reason.to_owned());
     }
 }
-
-fn openai_responses_content(response: &[u8]) -> Result<String, ProviderError> {
-    let value = parse_json(response)?;
-    if let Some(text) = value.get("output_text").and_then(Value::as_str) {
-        return Ok(text.to_owned());
+fn apply_truncation(result: &mut TranslationResult, truncation: Option<&'static str>) {
+    if let Some(reason) = truncation {
+        result.is_partial = true;
+        result.warnings.push(reason.to_owned());
     }
+}
+
+fn openai_responses_output_text(value: &Value) -> Option<&str> {
     value
-        .get("output")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .flat_map(|item| {
-            item.get("content")
+        .get("output_text")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("output")
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
+                .flat_map(|item| {
+                    item.get("content")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                })
+                .find_map(|content| {
+                    (content.get("type").and_then(Value::as_str) == Some("output_text"))
+                        .then(|| content.get("text").and_then(Value::as_str))
+                        .flatten()
+                })
         })
-        .find_map(|content| {
-            (content.get("type").and_then(Value::as_str) == Some("output_text"))
-                .then(|| content.get("text").and_then(Value::as_str))
-                .flatten()
-        })
-        .map(str::to_owned)
-        .ok_or_else(|| invalid_response("Responses API 响应缺少 output_text 内容。"))
+}
+
+fn openai_responses_content(
+    response: &[u8],
+) -> Result<(String, Option<&'static str>), ProviderError> {
+    let value = parse_json(response)?;
+    let text = openai_responses_output_text(&value)
+        .ok_or_else(|| invalid_response("Responses API 响应缺少 output_text 内容。"))?;
+    let truncation =
+        (value.get("status").and_then(Value::as_str) == Some("incomplete")).then(|| {
+            openai_responses_truncation_reason(
+                value
+                    .pointer("/incomplete_details/reason")
+                    .and_then(Value::as_str),
+            )
+        });
+    Ok((text.to_owned(), truncation))
 }
 
 fn parse_text_first_fallback(model_text: &str, delimiter: &str) -> TranslationResult {
@@ -2442,11 +2524,11 @@ mod tests {
     }
 
     #[test]
-    fn translation_output_budget_stays_small_but_scales_with_source() {
-        assert_eq!(output_token_limit(&text_request("hello")), 384);
-        assert_eq!(output_token_limit(&text_request(&"a".repeat(300))), 856);
-        assert_eq!(output_token_limit(&text_request(&"a".repeat(2_000))), 1_200);
-        assert_eq!(output_token_limit(&vision_request()), 1_200);
+    fn translation_output_budget_scales_with_source_and_caps_at_4096() {
+        assert_eq!(output_token_limit(&text_request("hello")), 527);
+        assert_eq!(output_token_limit(&text_request(&"a".repeat(300))), 1_412);
+        assert_eq!(output_token_limit(&text_request(&"a".repeat(2_000))), 4_096);
+        assert_eq!(output_token_limit(&vision_request()), 4_096);
     }
 
     #[test]
@@ -3127,7 +3209,10 @@ mod tests {
             }]
         }))
         .unwrap();
-        assert_eq!(gemini_content_text(&multi_parts).unwrap(), "Hello, world!");
+        assert_eq!(
+            gemini_content_text(&multi_parts).unwrap(),
+            ("Hello, world!".to_owned(), None)
+        );
 
         for block_reason in ["SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "IMAGE_SAFETY"] {
             let blocked_candidate = serde_json::to_vec(&json!({
@@ -3177,6 +3262,75 @@ mod tests {
         assert_eq!(result.translated_text, "译文正文");
         assert_eq!(result.explanation, "说明内容");
         assert!(!result.translated_text.contains(delimiter));
+    }
+
+    #[test]
+    fn provider_truncation_protocols_preserve_partial_text_and_reason() {
+        for (reason, expected) in [
+            (
+                "max_output_tokens",
+                "模型输出达到长度上限，译文可能被截断。",
+            ),
+            ("content_filter", "内容被提供方安全策略截断。"),
+            ("other", "模型输出未完整返回，译文可能不完整。"),
+        ] {
+            let data = json!({"type":"response.incomplete","response":{"incomplete_details":{"reason":reason},"output_text":"responses partial"}}).to_string();
+            assert_eq!(
+                parse_openai_responses_stream_event("response.incomplete", &data).unwrap(),
+                Some(ProviderStreamEvent::Truncated {
+                    delta: "responses partial".to_owned(),
+                    reason: expected
+                }),
+            );
+        }
+        let responses = br#"{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output_text":"responses partial"}"#;
+        assert_eq!(
+            openai_responses_content(responses).unwrap(),
+            (
+                "responses partial".to_owned(),
+                Some("模型输出达到长度上限，译文可能被截断。"),
+            )
+        );
+
+        for (stop_reason, expected) in [
+            ("max_tokens", "模型输出达到长度上限，译文可能被截断。"),
+            ("refusal", "内容被提供方安全策略截断。"),
+        ] {
+            let data =
+                json!({"type":"message_delta","delta":{"stop_reason":stop_reason}}).to_string();
+            assert_eq!(
+                parse_anthropic_stream_event("message_delta", &data).unwrap(),
+                Some(ProviderStreamEvent::Truncated {
+                    delta: String::new(),
+                    reason: expected
+                }),
+            );
+        }
+        let anthropic = br#"{"stop_reason":"max_tokens","content":[{"type":"text","text":"anthropic partial"}]}"#;
+        assert_eq!(
+            anthropic_content_text(anthropic).unwrap(),
+            (
+                "anthropic partial".to_owned(),
+                Some("模型输出达到长度上限，译文可能被截断。"),
+            )
+        );
+
+        let gemini_data = json!({"candidates":[{"content":{"parts":[{"text":"gemini partial"}]},"finishReason":"MAX_TOKENS"}]}).to_string();
+        assert_eq!(
+            parse_gemini_stream_event(&gemini_data).unwrap(),
+            Some(ProviderStreamEvent::Truncated {
+                delta: "gemini partial".to_owned(),
+                reason: "模型输出达到长度上限，译文可能被截断。",
+            }),
+        );
+        let gemini = br#"{"candidates":[{"content":{"parts":[{"text":"gemini partial"}]},"finishReason":"MAX_TOKENS"}]}"#;
+        assert_eq!(
+            gemini_content_text(gemini).unwrap(),
+            (
+                "gemini partial".to_owned(),
+                Some("模型输出达到长度上限，译文可能被截断。"),
+            )
+        );
     }
 
     #[test]

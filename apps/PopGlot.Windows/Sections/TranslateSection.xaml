@@ -486,7 +486,7 @@
                                     <StackPanel x:Name="UnconfiguredGuidePanel" Visibility="Collapsed" HorizontalAlignment="Stretch" Margin="0,0,0,10">
                                         <TextBlock x:Name="GuideTitle" Text="尚未配置翻译引擎" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center"
                                                    Foreground="{DynamicResource TextPrimaryBrush}" />
-                                        <TextBlock x:Name="GuideDescription" Text="免配置即开即用；仅传输文本，保障隐私安全。"
+                                        <TextBlock x:Name="GuideDescription" Text="无需配置即可使用公共直译；仅发送待翻译文本，不发送截图或本地数据。"
                                                    Style="{StaticResource Caption}" TextAlignment="Center" TextWrapping="Wrap"
                                                    Foreground="{DynamicResource TextTertiaryBrush}" Margin="0,4,0,12" />
                                         <WrapPanel Orientation="Horizontal" HorizontalAlignment="Stretch">
@@ -536,9 +536,10 @@
                                 <Border Height="1" Background="{DynamicResource BorderSubtleBrush}" Margin="0,0,0,8" />
                                 <TextBlock Text="补充说明" Style="{StaticResource FieldLabel}"
                                            Foreground="{DynamicResource TextTertiaryBrush}" Margin="0,0,0,4" />
-                                <TextBlock x:Name="TranslateExplanation" Style="{StaticResource Caption}"
-                                           Foreground="{DynamicResource TextSecondaryBrush}"
-                                           TextWrapping="Wrap" />
+                                <TextBox x:Name="TranslateExplanation" Style="{StaticResource ResultTextBox}"
+                                           Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12"
+                                           IsReadOnly="True" TextWrapping="Wrap" Background="Transparent" BorderThickness="0"
+                                           VerticalScrollBarVisibility="Disabled" />
                             </StackPanel>
                             <ItemsControl x:Name="TranslateTermsList" Margin="0,8,0,0" Visibility="Collapsed">
                                 <ItemsControl.ItemsPanel>
@@ -578,7 +579,7 @@
                                         <TextBlock Text="{Binding PlacementTarget.Text, RelativeSource={RelativeSource AncestorType=ToolTip}}" />
                                         <TextBlock x:Name="TranslateEngineBadge" Style="{StaticResource Metadata}"
                                                    Foreground="{DynamicResource TextTertiaryBrush}" Text="" />
-                                        <TextBlock Text="{Binding ToolTip, ElementName=TranslateEngineBadge}"
+                                        <TextBlock x:Name="TranslateStatusDetail"
                                                    TextWrapping="Wrap" MaxWidth="320" />
                                     </StackPanel>
                                 </ToolTip>
@@ -604,7 +605,7 @@
                             <Button x:Name="TranslateStarButton" Style="{StaticResource IconButton}"
                                     Width="32" Height="32" Margin="4,0,0,0"
                                     AutomationProperties.Name="收藏到生词本"
-                                    ToolTip="收藏到生词本" Click="TranslateStar_Click">
+                                    ToolTip="收藏到生词本 (Ctrl+S)" Click="TranslateStar_Click">
                                 <Path x:Name="TranslateStarIcon" Width="12" Height="12" Stretch="Uniform"
                                       Fill="{DynamicResource TextSecondaryBrush}"
                                       Data="{StaticResource IconStar}" />

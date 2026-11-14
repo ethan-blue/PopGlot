@@ -109,6 +109,16 @@ internal static class ChatGptAccountStore
     }
     public static void ClearCredentials(string id)
     { lock (Gate) { var path = PathFor(id, ".credentials"); if (File.Exists(path)) File.Delete(path); } }
+    public static void RemoveAccount(string id)
+    {
+        lock (Gate)
+        {
+            var accountPath = PathFor(id, ".account.json");
+            var credentialsPath = PathFor(id, ".credentials");
+            File.Delete(credentialsPath);
+            File.Delete(accountPath);
+        }
+    }
     private static void WriteCredentials(string id, ChatGptCredentials credentials)
     {
         var plain = JsonSerializer.SerializeToUtf8Bytes(credentials);

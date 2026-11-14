@@ -104,6 +104,8 @@ internal static partial class Program
         await RunAsync("dispose reclaims only the process it spawned", CliSubprocessTests.DisposeKillsOwnChildOnly);
         await RunAsync("disabled cli adapters never spawn through the typed policy", CliSubprocessTests.DisabledAdapterPolicyNeverSpawns);
         Run("ffi text job protocol runs through the real core", CliSubprocessTests.TextJobProtocolThroughCore);
+        Run("FFI error kinds survive CoreBridge envelopes", CliSubprocessTests.TypedEnvelopePreservesProviderErrorKind);
+        await RunAsync("native transport error survives Rust FFI classification", CliSubprocessTests.NativeTransportErrorRemainsTransportAsync);
         RunSta("connection panel stays honest without spawning", CliSubprocessTests.ConnectionPanelStaysHonestWithoutSpawning);
         await RunAsync("clipboard selection supports target window", ClipboardSelectionSupportsTargetWindowAsync);
         await RunAsync("selection pre-read is bounded, recoverable and never double-copies", SelectionPrereadIsBoundedAndDegradesWithFeedbackAsync);
@@ -148,6 +150,8 @@ internal static partial class Program
         Run("lan vision service needs the explicit permission", LanVisionServiceNeedsExplicitPermission);
         Run("routing decision table agrees across the ffi boundary", RoutingDecisionTableAgreesAcrossFfi);
         Run("language catalog normalizes and swaps", LanguageCatalogBehaviour);
+        await RunStaAsync("workbench auto target uses a local provider request and rejects same-language pairs", LanguageDirectionLoopbackAndSameLanguageGuard);
+        await RunStaAsync("language swap retranslates the previous result across surfaces", LanguageSwapLoopbackReplacesSourceAndRetranslates);
 
         Run("sensitive history is rejected", SensitiveHistoryIsRejected);
         Run("history de-duplicates and survives reload", HistoryDeduplicatesAndReloads);
@@ -208,6 +212,8 @@ internal static partial class Program
         Run("service health states are explicit and hue-safe", ServiceHealthStatesAreExplicit);
         Run("loaded service does not become a false draft", LoadedServiceDoesNotBecomeFalseDraft);
 
+        RunSta("managed engine and account deletion flows", ManagedAndAccountDeletionFlows);
+        RunSta("managed editor unified login surface", ManagedEditorUnifiedLoginSurface);
         Run("settings draft snapshot pure comparison and revert clean", SettingsDraftSnapshotPureComparison);
 
         Run("header normalization and editor revert clean", HeaderNormalizationAndEditorRevertClean);
@@ -233,9 +239,15 @@ internal static partial class Program
         Run("page transitions have no text-damaging animations", NoTextDamagingPageTransitions);
         Run("text windows are opaque for ClearType", TextWindowsAreOpaque);
         Run("daily flows never open system dialogs", DailyFlowsUseInlineConfirmations);
-        RunSta("library clear all acts on the first click", LibraryClearAllActsOnFirstClick);
+        RunSta("library clear requires confirmation and settings clear acts on first click", LibraryClearRequiresConfirmation);
         RunSta("main window library refreshes after the first frame by revision", MainWindowLibraryRefreshesAfterFirstFrame);
         RunSta("library preserves saved markdown and disables empty actions", LibrarySavedMarkdown);
+        RunSta("library source is selectable copyable and shortcuts survive focus", LibrarySourceCopySelectable);
+        RunSta("library undo reports entries the store could not restore", LibraryUndoReportsPartialRestore);
+        RunSta("library clear requires two clicks and undo bar follows its mode", LibraryClearConfirmAndUndoBarMode);
+        RunSta("library timestamps double-click hover and honest search name", LibraryTimestampsDoubleClickHoverAndSearchName);
+        RunSta("panel auto copy preserves lists and source copy keeps whitespace", PanelAutoCopyPreservesListsAndSourceFidelity);
+        RunSta("managed profile rows show account ownership", ManagedProfileRowsShowAccountOwnership);
         Run("unready services cannot become the default", UnreadyServicesCannotBecomeDefault);
         Run("schema v4 factory profiles migrate out of configured services", SchemaV4MigratesPristineTemplates);
         Run("concurrent saves do not collide on temporary files", ProfileManagerConcurrentSavesDoNotClash);
@@ -273,6 +285,7 @@ internal static partial class Program
         await RunAsync("partial summary never enters the success cache", SummaryStreamingPartialNeverCachesAsSuccess);
         await RunAsync("summary freezes style and cache identity", SummaryStreamingFreezesPromptAndCacheIdentity);
         await RunAsync("native summary streams one frozen request through real ffi", SummaryNativeStreamUsesSingleSnapshotRequest);
+        await RunStaAsync("native incomplete translation status converges across panel, workbench, and quick search", NativeIncompleteStatusUsesThreeSurfaces);
         await RunAsync("summary snapshot invalidation returns a terminal without transport", SummarySnapshotFailureReturnsTerminalWithoutTransport);
         await RunStaAsync("product summary route change retires the busy view", ProductSummaryRouteChangeRetiresBusyState);
         await RunStaAsync("product summary streams and reuses its visible task", ProductSummaryStreamsAndReusesVisibleTask);
@@ -484,6 +497,32 @@ internal static partial class Program
             ("backspace unbinds a shortcut and says so", WaveRegressionTests.HotkeyBackspaceUnbindsShortcut),
             ("style template advances and wraps in store order", WaveRegressionTests.StyleClickCyclesToNextEnabledTemplate),
             ("help window renders packaged offline articles and honest fallbacks", WaveRegressionTests.HelpWindowRendersPackagedArticles));
+
+        // 0.1.37 remediation batch T9.11–T9.19 (RemediationBatchTests.cs).
+        RunStaBatch(
+            ("quick search source copy keeps whitespace", RemediationBatchTests.QuickSearchCopySourceKeepsWhitespace),
+            ("explanation surfaces are read-only selectable", RemediationBatchTests.ExplanationSurfacesAreReadOnlySelectable),
+            ("hidden panel completion renders terminal on restore", RemediationBatchTests.HiddenPanelCompletionRendersTerminalOnRestore),
+            ("auto copy wording is scoped to the floating panel", RemediationBatchTests.AutoCopyWordingIsScopedToFloatingPanel),
+            ("quick search failed state offers retry that reissues", RemediationBatchTests.QuickSearchFailedStateOffersRetryThatReissues),
+            ("quick search clear button empties input", RemediationBatchTests.QuickSearchClearButtonEmptiesInput),
+            ("panel ctrl s stars completed but not partial", RemediationBatchTests.PanelCtrlSStarsCompletedButNotPartial),
+            ("panel esc closes route menu without cancelling or hiding", RemediationBatchTests.PanelEscClosesRouteMenuWithoutCancellingOrHiding),
+            ("workbench esc closes restore menu first", RemediationBatchTests.WorkbenchEscClosesRestoreMenuFirst),
+            ("library page engine switch does not retranslate", RemediationBatchTests.LibraryPageEngineSwitchDoesNotRetranslate),
+            ("panel source stays editable mid stream and cancels old request", RemediationBatchTests.PanelSourceStaysEditableMidStreamAndCancelsOldRequest),
+            ("translate key hints follow recorded binding", RemediationBatchTests.TranslateKeyHintsFollowRecordedBinding),
+            ("copy star shortcut tooltips match across surfaces", RemediationBatchTests.CopyStarShortcutTooltipsMatchAcrossSurfaces),
+            ("pin tooltip states focus loss policy honestly", RemediationBatchTests.PinTooltipStatesFocusLossPolicyHonestly),
+            ("workbench status hover keeps engine style detail", RemediationBatchTests.WorkbenchStatusHoverKeepsEngineStyleDetail),
+            ("workbench counter warns near input budget", RemediationBatchTests.WorkbenchCounterWarnsNearInputBudget),
+            ("new translation resets result scroll", RemediationBatchTests.NewTranslationResetsResultScroll),
+            ("quick search long result scrolls one layer only", RemediationBatchTests.QuickSearchLongResultScrollsOneLayerOnly),
+            ("quick search partial with error shows recovery card", RemediationBatchTests.QuickSearchPartialWithErrorShowsRecoveryCard),
+            ("empty state privacy copy avoids absolute promise", RemediationBatchTests.EmptyStatePrivacyCopyAvoidsAbsolutePromise),
+            ("panel empty input retry shows hint", RemediationBatchTests.PanelEmptyInputRetryShowsHint),
+            ("quick search partial snapshot restores as incomplete", RemediationBatchTests.QuickSearchPartialSnapshotRestoresAsIncomplete),
+            ("connection test failure prefers truncation reason", RemediationBatchTests.ConnectionTestFailurePrefersTruncationReason));
 
         // E3 follow-ups: high-contrast seam and PerMonitorV2 DPI robustness.
         Run("dpi geometry dip pixel roundtrips stay within a pixel", WaveRegressionTests.DpiGeometryRoundtripsAreIdentity);
@@ -2453,6 +2492,14 @@ internal static partial class Program
         lock (recorded)
         {
             return recorded.Count;
+        }
+    }
+
+    private static bool recordedHas(List<string> recorded, string text)
+    {
+        lock (recorded)
+        {
+            return recorded.Contains(text);
         }
     }
 
@@ -4860,8 +4907,8 @@ internal static partial class Program
         {
             new InvalidOperationException("已开启安全离线模式或网络翻译已关闭；未发送任何请求。"),
         })!;
-        Equal(TranslationErrorKind.OfflineOnly, offline.Kind,
-            "policy refusals keep their existing honest classification");
+        Equal(TranslationErrorKind.Unknown, offline.Kind,
+            "an untyped exception's offline wording is no longer guessed; real offline policy retains its typed classification");
     }
 
 
@@ -5535,10 +5582,310 @@ internal static partial class Program
                 Path.Combine(captureDir, "library_saved_markdown_light.png"), ThemePreference.Light);
             True(section.ExportMenuButton.IsEnabled, "a populated collection can be exported");
             section.ClearCurrentButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            FlushDispatcher(2);
+            section.ClearCurrentButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            FlushDispatcher(3);
             True(!section.ClearCurrentButton.IsEnabled && !section.ExportMenuButton.IsEnabled,
                 "empty collections must not offer ineffective actions");
         }
         finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    private static void LibrarySourceCopySelectable()
+    {
+        EnsureApplication();
+        // The copy handlers are async and resume after the clipboard write; give
+        // this STA thread a Dispatcher synchronization context so their
+        // continuations marshal back here instead of touching the window from a
+        // worker thread.
+        var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+        SynchronizationContext.SetSynchronizationContext(
+            new System.Windows.Threading.DispatcherSynchronizationContext(dispatcher));
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-library-copy-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        const string sourceText = "  Hello world \nsecond line  ";
+        // Record copies in memory (the same seam ThreeEntriesCopyTheSameAgreedText
+        // uses) instead of the real system clipboard, which is unavailable on a
+        // headless CI runner. The assertions still check the exact copied text.
+        var recorded = new List<string>();
+        var originalWriter = Helpers.ClipboardWriterOverride;
+        Helpers.ClipboardWriterOverride = text =>
+        {
+            lock (recorded) { recorded.Add(text ?? string.Empty); }
+            return Task.Delay(30).ContinueWith(static _ => true);
+        };
+        try
+        {
+            var history = new HistoryStore(Path.Combine(dir, "history.json"));
+            var entry = new TranslationHistoryEntry(
+                Guid.NewGuid(), DateTimeOffset.UtcNow, "划词", sourceText,
+                "- 译文条目", "解释文本", ["foo_bar_baz"], "en", "zh-CN");
+            history.TryAdd(entry, enabled: true);
+            var section = new LibrarySection();
+            section.Initialize(history, new VocabularyStore(Path.Combine(dir, "vocabulary.json")));
+            section.ReloadHistory();
+            var window = new Window { Content = section, Width = 980, Height = 700, ShowInTaskbar = false };
+            try
+            {
+                window.Show();
+                FlushDispatcher(3);
+                section.LibraryListBox.SelectedIndex = 0;
+                FlushDispatcher(2);
+
+                True(section.DetailSource is System.Windows.Controls.Primitives.TextBoxBase { IsReadOnly: true },
+                    "DetailSource must be a read-only selectable text control");
+                Equal(sourceText, section.DetailSource.Text, "the source block must echo the stored text verbatim");
+
+                section.CardCopySourceButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                SpinUntil(() => recordedHas(recorded, sourceText),
+                    "copying the source must place the raw untrimmed source on the clipboard");
+
+                True(section.DetailExplanationHeader.IsVisible && section.DetailExplanation.Text == "解释文本",
+                    "a non-empty explanation must show its header and copy entry");
+
+                var chip = FindVisualChildren<Button>(section.DetailTermsList)
+                    .Single(candidate => AutomationProperties.GetName(candidate) == "复制术语");
+                chip.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                SpinUntil(() => recordedHas(recorded, "foo_bar_baz"),
+                    "a protected-term chip copies its term");
+
+                // 根级 PreviewKeyDown：焦点在详情控件时快捷键逻辑仍生效。
+                section.DetailSource.Focus();
+                FlushDispatcher(2);
+                True(section.HandleSectionShortcut(System.Windows.Input.Key.C,
+                        System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Shift),
+                    "Ctrl+Shift+C must be handled at the section root");
+                SpinUntil(() => recordedHas(recorded, "- 译文条目"),
+                    "the root shortcut must copy the stored translation as agreed plain text");
+                True(!section.HandleSectionShortcut(System.Windows.Input.Key.C, System.Windows.Input.ModifierKeys.Control),
+                    "a plain Ctrl+C must stay with the focused control for text selection");
+            }
+            finally { window.Close(); FlushDispatcher(2); }
+        }
+        finally { Helpers.ClipboardWriterOverride = originalWriter; Directory.Delete(dir, recursive: true); }
+    }
+
+    private static void LibraryUndoReportsPartialRestore()
+    {
+        EnsureApplication();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-library-undo-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var history = new HistoryStore(Path.Combine(dir, "history.json"));
+            for (var index = 0; index < 200; index++)
+            {
+                history.TryAdd(Entry($"full entry {index}", $"第 {index} 条"), enabled: true);
+            }
+            var section = new LibrarySection();
+            string? lastStatus = null;
+            var tone = StatusTone.Info;
+            section.StatusChanged += (message, status) => { lastStatus = message; tone = status; };
+            section.Initialize(history, new VocabularyStore(Path.Combine(dir, "vocabulary.json")));
+            section.ReloadHistory();
+            var window = new Window { Content = section, Width = 980, Height = 700, ShowInTaskbar = false };
+            try
+            {
+                window.Show();
+                FlushDispatcher(3);
+                section.LibraryListBox.SelectedIndex = 0;
+                FlushDispatcher(2);
+                var removedId = ((LibraryRow)section.LibraryListBox.SelectedItem!).Id;
+                section.CardDeleteButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                FlushDispatcher(2);
+                True(!history.Load().Any(entry => entry.Id == removedId), "setup: the row is deleted");
+                True(section.LibraryUndoBar.IsVisible, "setup: the undo ticket is live");
+
+                // Refill the store to capacity before undoing: the restore must
+                // report the entry it could not put back instead of success.
+                history.TryAdd(Entry("capacity refill", "占位"), enabled: true);
+                FlushDispatcher(2);
+                section.LibraryUndoButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                FlushDispatcher(2);
+                True(lastStatus is not null && lastStatus.Contains("1 条因容量或内容限制未恢复", StringComparison.Ordinal),
+                    $"partial restore must say how many entries stayed out, got: {lastStatus}");
+                Equal(StatusTone.Warning, tone);
+                True(section.LibraryUndoBar.IsVisible,
+                    "the unrecovered entries must stay on a live retry ticket, not be consumed silently");
+            }
+            finally { window.Close(); FlushDispatcher(2); }
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    private static void LibraryClearConfirmAndUndoBarMode()
+    {
+        EnsureApplication();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-library-clear-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var history = new HistoryStore(Path.Combine(dir, "history.json"));
+            history.TryAdd(Entry("clear me", "清空"), enabled: true);
+            history.TryAdd(Entry("keep me", "保留"), enabled: true);
+            var section = new LibrarySection();
+            section.Initialize(history, new VocabularyStore(Path.Combine(dir, "vocabulary.json")));
+            section.ReloadHistory();
+            var window = new Window { Content = section, Width = 980, Height = 700, ShowInTaskbar = false };
+            try
+            {
+                window.Show();
+                FlushDispatcher(3);
+
+                // T9.2：第一次点击只武装确认，第二次才清空。
+                section.ClearCurrentButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                FlushDispatcher(2);
+                Equal(2, history.Load().Count, "the first clear click must not delete anything");
+                Equal("确认清空?", section.ClearCurrentButton.Content as string, "the armed button states its confirmation");
+                section.ClearCurrentButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                FlushDispatcher(3);
+                Equal(0, history.Load().Count, "the second clear click wipes the collection");
+                True(section.LibraryUndoBar.IsVisible, "the undo ticket survives the wipe");
+
+                // T9.3：切到生词页时历史撤销条隐藏，切回历史恢复。
+                section.ModeVocabulary.IsChecked = true;
+                FlushDispatcher(3);
+                True(!section.LibraryUndoBar.IsVisible,
+                    "a history undo ticket must hide while the vocabulary mode is showing");
+                section.ModeHistory.IsChecked = true;
+                FlushDispatcher(3);
+                True(section.LibraryUndoBar.IsVisible,
+                    "switching back to history restores its undo ticket");
+                section.LibraryUndoButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                FlushDispatcher(3);
+                Equal(2, history.Load().Count, "the restored ticket still undoes the wipe");
+            }
+            finally { window.Close(); FlushDispatcher(2); }
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    private static void LibraryTimestampsDoubleClickHoverAndSearchName()
+    {
+        EnsureApplication();
+        var dir = Path.Combine(Path.GetTempPath(), $"popglot-library-t9-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var history = new HistoryStore(Path.Combine(dir, "history.json"));
+            history.TryAdd(new TranslationHistoryEntry(
+                Guid.NewGuid(), new DateTimeOffset(2024, 5, 6, 7, 8, 9, TimeSpan.Zero),
+                "划词", "a very long source title that certainly truncates in the narrow list column with more words",
+                "对应译文", "", [], "en", "zh-CN"), enabled: true);
+            var section = new LibrarySection();
+            section.Initialize(history, new VocabularyStore(Path.Combine(dir, "vocabulary.json")));
+            section.ReloadHistory();
+            var loads = 0;
+            section.LoadToTranslate += (_, _, _, _, _, _) => loads++;
+            var window = new Window { Content = section, Width = 980, Height = 700, ShowInTaskbar = false };
+            try
+            {
+                window.Show();
+                FlushDispatcher(3);
+                section.LibraryListBox.SelectedIndex = 0;
+                FlushDispatcher(2);
+                var row = (LibraryRow)section.LibraryListBox.SelectedItem!;
+
+                // T9.4：详情含年份；列表悬停给全格式。
+                True(section.DetailKind.Text.Contains("2024-", StringComparison.Ordinal),
+                    $"the detail timestamp must carry the year, got {section.DetailKind.Text}");
+                True(row.FullTimestamp.Contains("2024-", StringComparison.Ordinal),
+                    "the row tooltip text must carry the year");
+
+                // T9.6：标题/摘要悬停即全文。
+                var titleBlock = FindVisualChildren<TextBlock>(section.LibraryListBox)
+                    .First(block => block.Text == row.TitleOneLine);
+                var detailBlock = FindVisualChildren<TextBlock>(section.LibraryListBox)
+                    .First(block => block.Text == row.DetailOneLine);
+                Equal(row.TitleOneLine, titleBlock.ToolTip as string, "the truncated title tooltip shows the full text");
+                Equal(row.DetailOneLine, detailBlock.ToolTip as string, "the truncated summary tooltip shows the full text");
+
+                // T9.7：读屏名如实。
+                Equal("搜索当前列表", System.Windows.Automation.AutomationProperties.GetName(section.LibrarySearchBox),
+                    "the search box automation name must describe the current-list scope");
+
+                // T9.5：双击列表项载入一次；双击空白不触发。
+                var container = (ListBoxItem)section.LibraryListBox.ItemContainerGenerator.ContainerFromIndex(0);
+                var rowArgs = new System.Windows.Input.MouseButtonEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, System.Windows.Input.MouseButton.Left)
+                {
+                    RoutedEvent = Control.MouseDoubleClickEvent,
+                    Source = titleBlock,
+                };
+                section.LibraryListBox.RaiseEvent(rowArgs);
+                FlushDispatcher(2);
+                Equal(1, loads, "a double click on a row loads it into the workbench exactly once");
+                typeof(LibrarySection).GetMethod("LibraryList_MouseDoubleClick",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                    .Invoke(section, [section.LibraryListBox, new System.Windows.Input.MouseButtonEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, System.Windows.Input.MouseButton.Left)
+                    {
+                        RoutedEvent = Control.MouseDoubleClickEvent,
+                        Source = section.LibraryListBox,
+                    }]);
+                FlushDispatcher(2);
+                Equal(1, loads, "a double click on empty list space must not load anything");
+            }
+            finally { window.Close(); FlushDispatcher(2); }
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    private static void PanelAutoCopyPreservesListsAndSourceFidelity()
+    {
+        EnsureApplication();
+        var clipboardWrites = new List<string>();
+        var originalWriter = Helpers.ClipboardWriterOverride;
+        Helpers.ClipboardWriterOverride = text =>
+        {
+            lock (clipboardWrites) { clipboardWrites.Add(text ?? string.Empty); }
+            return Task.FromResult(true);
+        };
+        const string listMarkdown = "- 第一项\n- 第二项";
+        const string paddedSource = "  padded source  ";
+        var settings = ShellSettings.Default with { CopyTranslationAutomatically = true };
+        var panel = new TranslationPanelWindow(
+            new Rect(100, 100, 20, 20),
+            new HistoryStore(TestIsolation.HistoryPath),
+            () => settings,
+            null,
+            null,
+            new VocabularyStore(TestIsolation.VocabularyPath));
+        try
+        {
+            panel.Show();
+            DrivePanelToCompletion(panel, listMarkdown);
+            SpinUntil(() => GateStage(panel) == TranslationPanelStage.Completed, "the completion must land");
+            SpinUntil(() => CountWrites(clipboardWrites) >= 1, "auto copy fires once");
+            var completionCopy = clipboardWrites[0];
+            Equal(MarkdownPresenter.ToPlainText(listMarkdown, preserveListStructure: true), completionCopy,
+                "the completion auto-copy must keep list structure");
+
+            // 第二条自动复制路径（摘要遮挡时收尾）必须与首条一致。
+            var behind = (Task)typeof(TranslationPanelWindow)
+                .GetMethod("FinishTranslationBehindSummaryAsync",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .Invoke(panel, [paddedSource])!;
+            behind.Wait(TimeSpan.FromSeconds(5));
+            SpinUntil(() => CountWrites(clipboardWrites) >= 2, "the behind-summary path also copies");
+            Equal(completionCopy, clipboardWrites[1], "both auto-copy paths must agree byte for byte");
+
+            // T9.9：原文复制不 Trim。
+            var sourceBox = (System.Windows.Controls.TextBox)typeof(TranslationPanelWindow)
+                .GetField("SourceInputBox", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(panel)!;
+            sourceBox.Text = paddedSource;
+            var before = CountWrites(clipboardWrites);
+            typeof(TranslationPanelWindow).GetMethod("SourceCopy_Click",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(panel, [panel, new RoutedEventArgs()]);
+            SpinUntil(() => CountWrites(clipboardWrites) > before, "the source copy reaches the clipboard");
+            Equal(paddedSource, clipboardWrites[^1], "the panel source copy must keep leading and trailing whitespace");
+        }
+        finally
+        {
+            panel.ForceClose = true;
+            try { panel.Close(); } catch { }
+            Helpers.ClipboardWriterOverride = originalWriter;
+        }
     }
 
     /// <summary>P03: the show path no longer rebuilds the library before the
@@ -5607,7 +5954,7 @@ internal static partial class Program
         return false;
     }
 
-    private static void LibraryClearAllActsOnFirstClick()
+    private static void LibraryClearRequiresConfirmation()
     {
         EnsureApplication();
         var dir = Path.Combine(Path.GetTempPath(), $"popglot-library-clear-{Guid.NewGuid():N}");
@@ -5621,8 +5968,12 @@ internal static partial class Program
             section.ReloadHistory();
 
             section.ClearCurrentButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-
-            Equal(0, history.Load().Count, "one click must clear the active list");
+            FlushDispatcher(2);
+            Equal(1, history.Load().Count, "T9.2: the first clear click only arms the confirmation");
+            Equal("确认清空?", section.ClearCurrentButton.Content as string, "the armed button states its confirmation");
+            section.ClearCurrentButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            FlushDispatcher(3);
+            Equal(0, history.Load().Count, "the second clear click wipes the active list");
             Equal("清空当前列表", AutomationProperties.GetName(section.ClearCurrentButton),
                 "the icon-only clear action must keep an accessible name");
             True(section.ClearCurrentButton.Content is null,
@@ -7482,11 +7833,11 @@ internal static partial class Program
             "the stage-limited Esc cancellation must be gone");
 
         var panel = File.ReadAllText(Path.Combine(appDir, "TranslationPanelWindow.xaml.cs"));
-        True(panel.Contains("if (_openDropDowns > 0 || IsContextMenuOpen())"),
-            "panel Esc must let open menus/drop-downs consume Escape first (A06)");
+        True(panel.Contains("if (_openDropDowns > 0 || IsContextMenuOpen() || _routeMenu is { IsOpen: true } || _styleMenu is { IsOpen: true })"),
+            "panel Esc must let open menus/drop-downs consume Escape first (A06, T9.19 route/style menus)");
         True(panel.Contains("if (Ui.GetIsComposing(SourceInputBox))"),
             "panel Esc must spare a live IME composition instead of hiding/cancelling (E3)");
-        True(panel.IndexOf("if (_openDropDowns > 0 || IsContextMenuOpen())") <
+        True(panel.IndexOf("if (_openDropDowns > 0 || IsContextMenuOpen() || _routeMenu is { IsOpen: true } || _styleMenu is { IsOpen: true })") <
              panel.IndexOf("if (Ui.GetIsComposing(SourceInputBox))"),
             "menu/drop-down priority must stay ahead of the IME composition guard (A06 over E3)");
         True(panel.Contains("E3 manual verification TODO"),
@@ -8733,8 +9084,13 @@ internal static partial class Program
 
             True(!section.IsHoldingSummary, "failed summary reverts to translation");
             Equal("不可丢失的关键译文", section.ResultBox.Text, "translation text must remain intact");
-            True($"{section.StatusBlock.ToolTip}".Contains("API Key expired or network down"),
-                "the failure reason remains available without a long visible status");
+            // T9.26：状态行 ToolTip 是结构化对象（内嵌引擎徽标），失败原因写入
+            // 其中的详情文本块，不再替换整个 ToolTip。
+            var statusToolTip = (System.Windows.Controls.ToolTip)section.StatusBlock.ToolTip;
+            var statusDetail = FindLogicalDescendants<TextBlock>(statusToolTip)
+                .First(block => block.Name == "TranslateStatusDetail");
+            True(statusDetail.Text.Contains("API Key expired or network down"),
+                "the failure reason remains available in the structured status tooltip");
         }
         finally
         {
@@ -13663,7 +14019,7 @@ internal static partial class Program
         True(state.CanCopy, "Copy allowed for retained partial text");
         True(state.IsIncompleteBadgeVisible, "Incomplete badge visible on failed with partial");
         Equal("半截文字", state.AccumulatedText);
-        True(state.StatusText.Contains("已保留部分内容"), "Status text should note partial retention");
+        Equal("生成失败 · 内容不完整", state.StatusText, "ordinary failures must not be described as an interruption");
 
         // 4) Test Cancelled session with accumulated partial text
         state.StartNewSearch("cancel test");
@@ -13676,16 +14032,14 @@ internal static partial class Program
         True(state.CanCopy, "Copy allowed for retained partial text");
         True(state.IsIncompleteBadgeVisible, "Incomplete badge visible on cancelled with partial");
         Equal("取消前内容", state.AccumulatedText);
-        True(state.StatusText.Contains("译文不完整"), "Status text should label incomplete");
+        Equal("翻译已取消 · 内容不完整", state.StatusText, "cancelled partial output must say cancelled, not interrupted");
     }
 
     /// <summary>
-    /// partial+error must read like failed+error: the error line and the
-    /// status line carry BOTH the message and its non-empty actionable
-    /// suggestion, deduplicated when the classifier already embedded the
-    /// suggestion in the message — while the partial gate stays intact
-    /// (manual copy allowed; TTS, starring and every auto side effect
-    /// forbidden).
+    /// partial+error must keep the error and actionable suggestion in the
+    /// explanation card while the status line reports the shared failure
+    /// category — with no duplicated suggestion and the partial gate intact
+    /// (manual copy allowed; TTS, starring and every auto side effect forbidden).
     /// </summary>
     private static void QuickSearchPartialErrorShowsMessageAndSuggestion()
     {
@@ -13710,10 +14064,11 @@ internal static partial class Program
             $"the error message must be shown, got: {state.ErrorMessage}");
         True(state.ErrorMessage is not null && state.ErrorMessage.Contains("请检查网络后重试", StringComparison.Ordinal),
             $"the actionable suggestion must be shown alongside the message, got: {state.ErrorMessage}");
-        True(state.StatusText.Contains("模型连接中断", StringComparison.Ordinal) &&
-             state.StatusText.Contains("请检查网络后重试", StringComparison.Ordinal),
-            $"the status line must carry message plus suggestion, got: {state.StatusText}");
-        True(state.StatusText.Contains("部分内容已保留"), "the partial retention note must stay");
+        Equal("生成失败 · 内容不完整", state.StatusText,
+            "the status line must report the shared category rather than replace the reason");
+        True(state.Explanation is not null && state.Explanation.Contains("模型连接中断", StringComparison.Ordinal) &&
+             state.Explanation.Contains("请检查网络后重试", StringComparison.Ordinal),
+            $"the explanation card must show the message and suggestion, got: {state.Explanation}");
 
         // The partial gate must not move: manual copy yes, TTS/star no.
         True(state.CanCopy, "partial must keep manual copy");
@@ -13944,15 +14299,16 @@ internal static partial class Program
         True(quickSearch.StreamBox is TextBox, "StreamBox must be a TextBox for scrolling");
         Equal(true, quickSearch.StreamBox.IsReadOnly);
         Equal(false, quickSearch.StreamBox.Focusable);
-        Equal(ScrollBarVisibility.Auto, quickSearch.StreamBox.VerticalScrollBarVisibility);
+        // T9.29：内层结果框不再自带滚动，统一由外层 ResultScroll 单层滚动。
+        Equal(ScrollBarVisibility.Disabled, quickSearch.StreamBox.VerticalScrollBarVisibility);
         Equal(TextWrapping.Wrap, quickSearch.StreamBox.TextWrapping);
         Equal(14.5, quickSearch.StreamBox.FontSize);
-        Equal(220.0, quickSearch.StreamBox.MaxHeight);
+        Equal(double.PositiveInfinity, quickSearch.StreamBox.MaxHeight);
 
         True(quickSearch.RichBox is RichTextBox, "RichBox must be a RichTextBox for markdown formatting");
         Equal(14.5, quickSearch.RichBox.FontSize);
-        Equal(220.0, quickSearch.RichBox.MaxHeight);
-        Equal(ScrollBarVisibility.Auto, quickSearch.RichBox.VerticalScrollBarVisibility);
+        Equal(double.PositiveInfinity, quickSearch.RichBox.MaxHeight);
+        Equal(ScrollBarVisibility.Disabled, quickSearch.RichBox.VerticalScrollBarVisibility);
 
         Equal(AutomationLiveSetting.Polite, AutomationProperties.GetLiveSetting(quickSearch.FooterStatusBlock));
         Equal("翻译状态", AutomationProperties.GetName(quickSearch.FooterStatusBlock));
@@ -14178,13 +14534,16 @@ internal static partial class Program
         {
             Stage = TranslationSessionStage.Partial,
             TranslatedText = "partial output",
-            Warnings = ["Truncated response"],
+            Warnings = ["模型输出达到长度上限，译文可能被截断。"],
         };
         state = TranslateSectionReducer.ApplyCompletion(state, partialSession, 21);
         Equal(TranslateUiPhase.Partial, state.Phase);
         True(!state.AreResultActionsEnabled, "Actions MUST be disabled for Partial session");
         True(state.IsPartialIncomplete, "Marked as partial incomplete");
-        Equal("内容不完整", state.BadgeText);
+        Equal("输出截断", state.BadgeText);
+        Equal("输出截断 · 内容不完整", state.StatusText);
+        True(state.ExplanationText.Contains("长度上限", StringComparison.Ordinal),
+            "the workbench must show the truncation reason");
         Equal("partial output", state.FinalText);
         True(!state.IsStreamLayerVisible, "Stream layer collapsed for final display");
         True(state.IsFinalLayerVisible, "Final layer visible");
@@ -14202,7 +14561,8 @@ internal static partial class Program
         Equal(TranslateUiPhase.Partial, state.Phase);
         True(!state.AreResultActionsEnabled, "Actions MUST be disabled on cancel with partial");
         True(state.IsPartialIncomplete, "Marked as partial incomplete");
-        Equal("内容不完整", state.BadgeText);
+        Equal("已取消", state.BadgeText);
+        Equal("内容不完整 · 已取消", state.StatusText);
         Equal("streamed before cancel", state.FinalText);
 
         // 4) Failed session with accumulated stream text retains partial text and GATES actions
@@ -14219,7 +14579,8 @@ internal static partial class Program
         Equal(TranslateUiPhase.Partial, state.Phase);
         True(!state.AreResultActionsEnabled, "Actions MUST be disabled on fail with partial");
         True(state.IsPartialIncomplete, "Marked as partial incomplete");
-        Equal("内容不完整", state.BadgeText);
+        Equal("生成失败", state.BadgeText);
+        Equal("生成失败 · 内容不完整", state.StatusText);
         Equal("streamed before fail", state.FinalText);
 
         // 5) Exception with accumulated stream text retains partial text and GATES actions
@@ -14231,7 +14592,8 @@ internal static partial class Program
         Equal(TranslateUiPhase.Partial, state.Phase);
         True(!state.AreResultActionsEnabled, "Actions MUST be disabled on exception with partial");
         True(state.IsPartialIncomplete, "Marked as partial incomplete");
-        Equal("内容不完整", state.BadgeText);
+        Equal("生成失败", state.BadgeText);
+        Equal("生成失败 · 内容不完整", state.StatusText);
         Equal("streamed before exc", state.FinalText);
 
         // 6) Cancelled session without stream text
@@ -14810,8 +15172,8 @@ internal static partial class Program
             var swap = (Button)section.FindName("TranslateSwapButton");
             var running = TranslateSectionReducer.StartTranslation(section.CurrentState, 91);
             section.ApplyState(running);
-            True(!section.SourceLangCombo.IsEnabled && !section.TargetLangCombo.IsEnabled && !swap.IsEnabled,
-                "language direction controls must lock for an in-flight request snapshot");
+            True(!section.SourceLangCombo.IsEnabled && !section.TargetLangCombo.IsEnabled && swap.IsEnabled,
+                "language selectors must lock for an in-flight request while swap remains available");
             section.ApplyState(TranslateSectionReducer.ApplyCompletion(running, new TranslationSession
             {
                 Stage = TranslationSessionStage.Completed,
@@ -14819,7 +15181,7 @@ internal static partial class Program
                 Timing = new TranslationSessionTiming(TotalElapsedMs: 120),
             }, 91));
             True(section.SourceLangCombo.IsEnabled && section.TargetLangCombo.IsEnabled && swap.IsEnabled,
-                "language direction controls must restore after request completion");
+                "language selectors must restore after request completion and swap remains available");
         }
         finally
         {
@@ -15045,7 +15407,7 @@ internal static partial class Program
         True(!gate.CanPerformResultActions, "Actions MUST be blocked on FailedWithPartial");
         True(!gate.ShouldTriggerAutoCopy(true), "AutoCopy MUST be blocked on FailedWithPartial");
         True(gate.HasPartialText, "HasPartialText must be true");
-        Equal("生成中断，内容不完整", gate.GetPartialWarningBanner());
+        Equal("生成失败，内容不完整", gate.GetPartialWarningBanner());
         Equal("streamed before fail", gate.StreamedText);
 
         // 4) Cancelled session without partial text

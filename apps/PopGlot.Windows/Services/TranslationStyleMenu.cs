@@ -76,6 +76,10 @@ internal static class TranslationStyleMenu
         }
     }
 
+    internal static string? ActiveIdentity() => TryGetActiveTemplate() is { } template
+        ? $"{template.Id}\u001f{template.Revision}"
+        : null;
+
     /// <summary>
     /// One-click cycle target: the enabled templates in store order, the
     /// active one advancing by one (wrapping). A one-template store returns

@@ -177,23 +177,34 @@ internal static class ChatGptOAuth
         }
         finally { gate.Release(); }
     }
-    public static async Task SignOutAsync(string accountId, CancellationToken ct)
+    public static async Task<bool> SignOutAsync(string accountId, CancellationToken ct)
     {
         foreach (var profile in ProfileManager.Load().Profiles.Where(p => p.DirectConnection?.AccountId == accountId))
             CliTranslationExecutor.CancelProfile(profile.Id);
         var gate = AccountLock(accountId); await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var account = ChatGptAccountStore.Get(accountId); var credentials = ChatGptAccountStore.Load(accountId);
-            using var request = new HttpRequestMessage(HttpMethod.Post, Issuer + "/api/accounts/oauth/revoke")
-            { Content = new FormUrlEncodedContent(new Dictionary<string, string> { ["token"] = credentials.RefreshToken,
-                ["token_type_hint"] = "refresh_token", ["client_id"] = account.ClientId }) };
-            try
+            var account = ChatGptAccountStore.Get(accountId);
+            var revokeSucceeded = !ChatGptAccountStore.HasCredentials(accountId);
+            if (!revokeSucceeded)
             {
-                DirectHttp.RequirePolicy(); using var response = await DirectHttp.Client.SendAsync(request, ct).ConfigureAwait(false);
-                if (!response.IsSuccessStatusCode) throw new InvalidOperationException("本机已退出；官方会话撤销失败，可到 ChatGPT 中撤销授权。");
+                try
+                {
+                    var credentials = ChatGptAccountStore.Load(accountId);
+                    using var request = new HttpRequestMessage(HttpMethod.Post, Issuer + "/api/accounts/oauth/revoke")
+                    { Content = new FormUrlEncodedContent(new Dictionary<string, string> { ["token"] = credentials.RefreshToken,
+                        ["token_type_hint"] = "refresh_token", ["client_id"] = account.ClientId }) };
+                    DirectHttp.RequirePolicy();
+                    using var response = await DirectHttp.Client.SendAsync(request, ct).ConfigureAwait(false);
+                    revokeSucceeded = response.IsSuccessStatusCode;
+                }
+                catch (Exception)
+                {
+                    // Local account removal must not depend on the authorization server.
+                }
             }
-            finally { ChatGptAccountStore.ClearCredentials(accountId); }
+            ChatGptAccountStore.RemoveAccount(accountId);
+            return revokeSucceeded;
         }
         finally { gate.Release(); }
     }

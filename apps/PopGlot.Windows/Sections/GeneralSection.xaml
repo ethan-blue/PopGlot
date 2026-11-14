@@ -183,8 +183,8 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="自动复制译文" Style="{StaticResource RowTitle}" />
-                        <TextBlock Text="翻译完成后复制到剪贴板" Style="{StaticResource RowHint}" />
+                        <TextBlock Text="浮窗自动复制" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="划词/截图浮窗翻译完成后复制到剪贴板" Style="{StaticResource RowHint}" />
                     </StackPanel>
                     <ToggleButton x:Name="AutoCopyToggle"
                                   AutomationProperties.Name="译后自动复制" Grid.Column="1"

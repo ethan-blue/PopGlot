@@ -300,7 +300,7 @@ mod tests {
             "x".repeat(800),
             popglot_domain::LanguagePair::new("en", "zh-CN"),
         );
-        assert_eq!(output_token_limit(&request), 1_200);
+        assert_eq!(output_token_limit(&request), 2_912);
 
         for (kind, model, pointer) in [
             (
@@ -349,7 +349,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 prepared.body.pointer(pointer).and_then(Value::as_u64),
-                Some(1_200)
+                Some(2_912)
             );
             if pointer == "/max_completion_tokens" {
                 assert!(prepared.body.get("max_tokens").is_none());

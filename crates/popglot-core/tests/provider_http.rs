@@ -1506,6 +1506,34 @@ async fn finish_reason_length_yields_partial_with_truncation_warning() {
             .any(|w| w.contains("长度上限"))
     );
 }
+#[tokio::test]
+async fn long_chinese_translation_sends_expanded_output_budget() {
+    let server = SseServer::start(vec![(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"译文\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+            .as_bytes()
+            .to_vec(),
+        Duration::ZERO,
+    )]);
+    let config = sse_settings(ProviderType::OpenAiCompatible, &server);
+    let response = client()
+        .execute_stream(
+            provider_for(ProviderType::OpenAiCompatible).as_ref(),
+            &config,
+            "stream-key",
+            "long-chinese-budget",
+            &TranslationRequest::text("中".repeat(700), LanguagePair::new("zh-CN", "en")),
+            Some("PGMETA_long_budget_0123456789"),
+            &CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .expect("stream response");
+    assert!(!response.result.is_partial);
+    let request = server.requests().pop().expect("captured request");
+    let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).expect("request body"))
+        .expect("request JSON");
+    assert!(body["max_tokens"].as_u64().expect("max_tokens") >= 2_600);
+}
 
 #[tokio::test]
 async fn chat_sse_handles_utf8_split_multiple_events_and_heartbeat() {

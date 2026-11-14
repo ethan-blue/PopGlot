@@ -46,7 +46,7 @@ internal static class CliTranslationExecutor
                 RequirePolicy(snapshot, enforceSavedState);
                 var settings = CoreBridge.GetSettings();
                 job = CoreBridge.PrepareTextJob(new(source, sourceLanguage, targetLanguage, Task: task,
-                    IncludeExplanation: task == "translate", ProtectCodeTokens: settings.ProtectCodeTokens,
+                    IncludeExplanation: task == "translate" && settings.IncludeExplanation, ProtectCodeTokens: settings.ProtectCodeTokens,
                     Preference: preference?.Preference, TemplateId: preference?.TemplateId, TemplateRevision: preference?.Revision));
                 var run = backend.RunAsync(job.SystemInstructions, job.UserPayload, delta =>
                 {
@@ -74,7 +74,11 @@ internal static class CliTranslationExecutor
                     backend is ChatGptDirectBackend ? new("chatgpt-direct", snapshot.DirectConnection?.ModelId, submittedMs, firstDeltaMs) : null);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            { buffer.Abort("模型连接请求已取消或超时。"); throw new InvalidOperationException("模型连接请求已取消或超时，请检查连接状态后重试。"); }
+            {
+                buffer.Abort("模型连接请求超时。");
+                throw new TranslationErrorException(TranslationErrorKind.Timeout,
+                    "模型连接请求超时，请检查连接状态后重试。");
+            }
             catch
             { buffer.Abort("模型连接请求未完成。"); throw; }
             finally

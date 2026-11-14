@@ -1224,12 +1224,27 @@ internal static partial class CoreBridge
         }
         if (!response.Ok || response.Data is null)
         {
+            if (!string.IsNullOrWhiteSpace(response.ErrorKind))
+                throw new TranslationErrorException(ParseTranslationErrorKind(response.ErrorKind),
+                    response.Error ?? "PopGlot Core operation failed.");
             throw new InvalidOperationException(response.Error ?? "PopGlot Core operation failed.");
         }
         return response.Data;
     }
 
-    private sealed record Envelope<T>(bool Ok, T? Data, string? Error);
+    private static TranslationErrorKind ParseTranslationErrorKind(string kind) => kind switch
+    {
+        "cancelled" => TranslationErrorKind.Cancelled,
+        "timeout" => TranslationErrorKind.Timeout,
+        "transport" => TranslationErrorKind.Transport,
+        "auth" => TranslationErrorKind.Unauthorized,
+        "rate_limit" => TranslationErrorKind.RateLimited,
+        "offline" => TranslationErrorKind.OfflineOnly,
+        "parse" => TranslationErrorKind.ParseError,
+        _ => TranslationErrorKind.Unknown,
+    };
+
+    private sealed record Envelope<T>(bool Ok, T? Data, string? Error, string? ErrorKind = null);
 }
 
 internal enum TranslationMode

@@ -35,3 +35,6 @@ dist/
 /scripts/dbg-*.ps1
 /scripts/apply_*.py
 .workbuddy/
+
+# Internal remediation task books stay local (repo docs are user/contributor-facing).
+docs/REMEDIATION_SPEC_*.md

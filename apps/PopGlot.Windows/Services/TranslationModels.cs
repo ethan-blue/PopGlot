@@ -127,6 +127,8 @@ internal enum TranslationErrorKind
     NetworkDisabled,
     OfflineOnly,
     RateLimited,
+    Timeout,
+    Transport,
     Unauthorized,
     ServerError,
     ParseError,
@@ -134,9 +136,10 @@ internal enum TranslationErrorKind
     OcrFailed,
     Sensitive,
     EmptyInput,
+    SameLanguagePair,
     Unknown,
-}
 
+}
 internal sealed record TranslationError(
     TranslationErrorKind Kind,
     string Message,
@@ -153,6 +156,8 @@ internal sealed record TranslationError(
         TranslationErrorKind.NetworkDisabled => "network_disabled",
         TranslationErrorKind.OfflineOnly => "offline_only",
         TranslationErrorKind.RateLimited => "rate_limited",
+        TranslationErrorKind.Timeout => "timeout",
+        TranslationErrorKind.Transport => "transport",
         TranslationErrorKind.Unauthorized => "unauthorized",
         TranslationErrorKind.ServerError => "server_error",
         TranslationErrorKind.ParseError => "parse_error",
@@ -160,8 +165,16 @@ internal sealed record TranslationError(
         TranslationErrorKind.OcrFailed => "ocr_failed",
         TranslationErrorKind.Sensitive => "sensitive",
         TranslationErrorKind.EmptyInput => "empty_input",
+        TranslationErrorKind.SameLanguagePair => "same_language_pair",
         _ => "unknown",
     };
+}
+
+internal sealed class TranslationErrorException : InvalidOperationException
+{
+    public TranslationErrorKind Kind { get; }
+
+    public TranslationErrorException(TranslationErrorKind kind, string message) : base(message) => Kind = kind;
 }
 
 internal sealed record TranslationSessionTiming(

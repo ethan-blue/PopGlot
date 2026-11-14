@@ -46,6 +46,7 @@ internal static partial class Program
             Check("application construction leaves stores untouched before startup isolation", AppConstructionDoesNotReadStores);
             Check("Codex protocol + FFI stream", () => StreamFake(EngineExecutionKind.CodexAppServer));
             Check("OMP protocol + FFI stream", () => StreamFake(EngineExecutionKind.OmpRpc));
+            Check("OMP translation respects the explanation setting", ExplanationSetting);
             Check("OMP prompt terminal is correlated and cannot succeed at agent_end", OmpPromptTerminals);
             Check("settings field updates merge inside the queue and notify saved language", SettingsFieldUpdates);
             Check("profile editor commits preserve newer engines and route choices", ProfileCommitIsolation);
@@ -62,6 +63,7 @@ internal static partial class Program
             Check("main translation/history/summary/recognized-text route", CoordinatorRoutes);
             Check("advisory language warning preserves complete text and remains visible", WrongLanguageFinal);
             Check("lost protected token remains partial through the OMP job bridge", TokenIntegrityFinal);
+            Check("segment ToolReportedCompletion follows the real terminal, not warning count", ToolReportedCompletionFollowsRealTerminal);
             Check("disconnect cancels active saved connection", DisconnectActive);
             Check("immediate disconnect fences queued request", DisconnectQueued);
             Check("official OAuth/PKCE/callback/JWT/encrypted credentials", DirectTests.SignInAndValidation);
@@ -119,6 +121,24 @@ internal static partial class Program
         Assert(response.CliDiagnostics?.RequestPreparationMs is not null && response.CliDiagnostics.FirstProtocolDeltaMs >= response.CliDiagnostics.RequestPreparationMs,
             "CLI timing must separate preparation from the first protocol text delta");
         Assert(stream.Buffer.GetAccumulatedText() == "你好，世界", "stream matches result");
+    }
+    private static async Task ExplanationSetting()
+    {
+        var profile = FakeProfile(EngineExecutionKind.OmpRpc);
+        var saved = CoreBridge.GetSettings();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", "explanation_disabled");
+        try
+        {
+            CoreBridge.SaveSettings(saved with { IncludeExplanation = false });
+            var response = await CliTranslationExecutor.Stream(profile, "Hello world", "en", "zh", null, timeout.Token).Completion;
+            Assert(response.Result.TranslatedText == "setting-observed", "PrepareTextJob passed IncludeExplanation=false from saved settings");
+        }
+        finally
+        {
+            CoreBridge.SaveSettings(saved);
+            Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", null);
+        }
     }
     private static async Task FailureFake(string scenario)
     {
@@ -406,9 +426,13 @@ internal static partial class Program
                     if (omp)
                     {
                         if (scenario == "multi_run") Emit(new { type = "agent_end", isTerminal = false });
-                        Emit(new { type = "message_update", assistantMessageEvent = new { type = "text_delta", delta = scenario == "wrong_language"
-                            ? "Please restart the application before changing the translation settings again." : "你好，" } });
-                        if (scenario != "wrong_language") Emit(new { type = "message_update", assistantMessageEvent = new { type = "text_delta", delta = "世界" } });
+                        var firstDelta = scenario == "explanation_disabled"
+                            ? instructions.Contains("explanation must always be the empty string.", StringComparison.Ordinal)
+                                ? "setting-observed" : "setting-missing"
+                            : scenario == "wrong_language"
+                                ? "Please restart the application before changing the translation settings again." : "你好，";
+                        Emit(new { type = "message_update", assistantMessageEvent = new { type = "text_delta", delta = firstDelta } });
+                        if (scenario is not ("wrong_language" or "explanation_disabled")) Emit(new { type = "message_update", assistantMessageEvent = new { type = "text_delta", delta = "世界" } });
                         Emit(new { type = "message_update", assistantMessageEvent = new { type = "text_delta", delta = metadata } });
                         Emit(new { type = "message_end", message = new { stopReason = scenario == "terminal_length" ? "length" : "stop" } });
                         if (scenario != "terminal_only") Emit(new { type = "agent_end", isTerminal = true });

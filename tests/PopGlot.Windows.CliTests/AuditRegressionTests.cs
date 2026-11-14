@@ -147,4 +147,38 @@ internal static partial class Program
         finally { ProfileManager.Save(original); ProfileManager.ApplyActiveToCore(original); }
         return Task.CompletedTask;
     }
+
+    private static Task ToolReportedCompletionFollowsRealTerminal()
+    {
+        // T9.33：分段响应的 ToolReportedCompletion 按真实终态判定，
+        // 中性警告不再把完整结果误标为未完成。
+        var profile = FakeProfile(EngineExecutionKind.OmpRpc);
+        var method = typeof(TranslationCoordinator).GetMethod("BuildSegmentResponse",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+
+        TranslationResponse Build(string text, string[] warnings, bool isPartial) =>
+            (TranslationResponse)method.Invoke(null, new object?[]
+            {
+                new System.Text.StringBuilder(text), Array.Empty<string>(), warnings, 0UL,
+                profile, null, isPartial,
+            })!;
+
+        var completeWithWarning = Build("完整译文", new[] { "中性提示：所选语言可能不匹配" }, isPartial: false);
+        Assert(completeWithWarning.CliDiagnostics?.ToolReportedCompletion == true,
+            "a complete result with a neutral warning must report completion");
+
+        var completeNoWarning = Build("完整译文", Array.Empty<string>(), isPartial: false);
+        Assert(completeNoWarning.CliDiagnostics?.ToolReportedCompletion == true,
+            "a complete result without warnings must report completion");
+
+        var partial = Build("部分译文", Array.Empty<string>(), isPartial: true);
+        Assert(partial.CliDiagnostics?.ToolReportedCompletion == false,
+            "a partial result must not report completion");
+
+        var empty = Build("", Array.Empty<string>(), isPartial: false);
+        Assert(empty.CliDiagnostics?.ToolReportedCompletion == false,
+            "an empty body must not report completion");
+
+        return Task.CompletedTask;
+    }
 }

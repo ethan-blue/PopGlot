@@ -452,11 +452,17 @@ internal sealed class VocabularyStore : IVocabularyRepository
     /// are not replaced.
     /// </summary>
     public bool InsertMissing(IReadOnlyList<VocabularyWord> items, out int inserted)
+        => InsertMissing(items, out inserted, out _);
+
+    public bool InsertMissing(IReadOnlyList<VocabularyWord> items, out int inserted,
+        out IReadOnlyList<VocabularyWord> remaining)
     {
         ArgumentNullException.ThrowIfNull(items);
         inserted = 0;
+        remaining = [];
         TaskCompletionSource<bool>? tcs = null;
         List<VocabularyWord>? previous = null;
+        var deferred = new List<VocabularyWord>();
         lock (_gate)
         {
             if (LoadBlocked)
@@ -476,17 +482,21 @@ internal sealed class VocabularyStore : IVocabularyRepository
                 if (item.Word.Length > MaxEntryCharacters ||
                     (item.Translation?.Length ?? 0) > MaxEntryCharacters)
                 {
+                    deferred.Add(item);
                     continue;
                 }
 
                 if (_words.Count + adding.Count >= MaxEntries)
                 {
-                    break;
+                    deferred.Add(item);
+                    continue;
                 }
 
                 adding.Add(item);
                 ids.Add(item.Id);
             }
+
+            remaining = deferred;
 
             if (adding.Count == 0)
             {

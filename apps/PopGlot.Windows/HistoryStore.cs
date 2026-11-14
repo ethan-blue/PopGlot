@@ -329,7 +329,8 @@ internal sealed partial class HistoryStore : IHistoryRepository
                 var cutoff = DateTimeOffset.UtcNow - MaxAge;
                 var existing = _entries
                     .Where(item => item.CreatedAt >= cutoff
-                        && !(item.Source == entry.Source && item.TargetLanguage == entry.TargetLanguage))
+                        && !(item.Source == entry.Source && item.SourceLanguage == entry.SourceLanguage
+                            && item.TargetLanguage == entry.TargetLanguage))
                     .Take(MaxEntries - 1);
                 var next = new List<TranslationHistoryEntry> { entry };
                 next.AddRange(existing);

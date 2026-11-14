@@ -547,6 +547,21 @@ internal sealed class TranslationCoordinator
             }
 
             session.SourceText = trimmed;
+            var normalizedSourceLanguage = LanguageCatalog.Normalize(sourceLang);
+            var normalizedTargetLanguage = LanguageCatalog.Normalize(targetLang);
+            var isChineseConversion = normalizedSourceLanguage == "zh-CN" && normalizedTargetLanguage == "zh-TW" ||
+                normalizedSourceLanguage == "zh-TW" && normalizedTargetLanguage == "zh-CN";
+            if (normalizedSourceLanguage != LanguageCatalog.Auto &&
+                normalizedSourceLanguage == normalizedTargetLanguage && !isChineseConversion)
+            {
+                session.Stage = TranslationSessionStage.Failed;
+                session.Error = new TranslationError(
+                    TranslationErrorKind.SameLanguagePair,
+                    "原文与目标语言相同，请更换语言方向。");
+                onStageChanged?.Invoke(session.Stage);
+                CloseInteractionTrace(session);
+                return session;
+            }
             session.Stage = TranslationSessionStage.Routing;
             onStageChanged?.Invoke(session.Stage);
 
@@ -1574,7 +1589,7 @@ internal sealed class TranslationCoordinator
     /// Total wall-clock budget for ONE translation session across all of its
     /// segments. Each request keeps its own internal timeout; this deadline
     /// only prevents 8 sequential requests from extending the session
-    /// indefinitely. Expiry is surfaced like a user cancellation.
+    /// indefinitely. Expiry is surfaced as a typed timeout, distinct from user cancellation.
     /// </summary>
     internal static readonly TimeSpan SessionDeadline = TimeSpan.FromMinutes(10);
 
@@ -1672,6 +1687,9 @@ internal sealed class TranslationCoordinator
                 // Keep the current bounded fragment as well as earlier
                 // completed segments. It remains visible but is never saved.
                 session.TranslatedText = merged + streamSession.Buffer.GetAccumulatedText();
+                if (!cancellationToken.IsCancellationRequested && sessionCts.IsCancellationRequested)
+                    throw new TranslationErrorException(TranslationErrorKind.Timeout,
+                        "翻译会话超过 10 分钟总时限，已停止。");
                 throw;
             }
             catch (Exception)
@@ -1802,7 +1820,10 @@ internal sealed class TranslationCoordinator
                 ElapsedMs: networkMs),
             engineProfile?.Name,
             engineProfile?.ExecutionFacts.IsCliExecution == true
-                ? new CliBackendDiagnostics(engineProfile.ExecutionKind, engineProfile.CliConnection?.ModelId, engineProfile.CliConnection?.ExpectedVersion, networkMs, warnings.Count == 0)
+                // T9.33：按真实终态判定（非 partial 且正文非空），不再用
+                // 「警告数=0」的旧语义——中性警告不等于未完成。
+                ? new CliBackendDiagnostics(engineProfile.ExecutionKind, engineProfile.CliConnection?.ModelId, engineProfile.CliConnection?.ExpectedVersion, networkMs,
+                    !isPartial && !string.IsNullOrWhiteSpace(merged.ToString()))
                 : null);
 
     /// <summary>
@@ -2055,81 +2076,65 @@ internal sealed class TranslationCoordinator
     internal static TranslationError ClassifyException(Exception ex)
     {
         var msg = ex.Message;
-        // The free engine fails TYPED: classification must not guess from the
-        // message. A free-endpoint 401/403 has no API key to check, and a
-        // transport timeout/DNS miss is not the "网络翻译已关闭" setting —
-        // both used to be misclassified by the string rules below.
+        if (ex is TranslationErrorException typedFailure)
+        {
+            return typedFailure.Kind switch
+            {
+                TranslationErrorKind.Cancelled => new(TranslationErrorKind.Cancelled, msg),
+                TranslationErrorKind.Timeout => new(TranslationErrorKind.Timeout, msg,
+                    "请检查连接状态后重试。", IsTransient: true),
+                TranslationErrorKind.Transport => new(TranslationErrorKind.Transport, msg,
+                    "请检查本机网络连接后重试。", IsTransient: true),
+                TranslationErrorKind.OfflineOnly => new(TranslationErrorKind.OfflineOnly, msg,
+                    "可在设置中关闭安全离线模式或配置本地模型服务。"),
+                TranslationErrorKind.RateLimited => new(TranslationErrorKind.RateLimited, msg,
+                    "请稍候重试，或在设置中配置独立 API Key。", IsTransient: true),
+                TranslationErrorKind.Unauthorized => new(TranslationErrorKind.Unauthorized, msg,
+                    "请检查 API Key 是否正确或已过期。"),
+                TranslationErrorKind.ParseError => new(TranslationErrorKind.ParseError, msg,
+                    "请稍候重试，或在设置中配置自己的模型服务。"),
+                _ => new(TranslationErrorKind.Unknown, msg, "请检查网络或服务配置后重试。"),
+            };
+        }
         if (ex is FreeTranslateException freeFailure)
         {
             return freeFailure.Kind switch
             {
                 FreeTranslateFailureKind.RateLimited => new TranslationError(
-                    TranslationErrorKind.RateLimited,
-                    msg,
-                    "请稍候重试，或在设置中配置自己的模型服务。",
-                    IsTransient: true),
+                    TranslationErrorKind.RateLimited, msg,
+                    "请稍候重试，或在设置中配置自己的模型服务。", IsTransient: true),
                 FreeTranslateFailureKind.Unauthorized => new TranslationError(
-                    TranslationErrorKind.Unknown,
-                    msg,
+                    TranslationErrorKind.Unknown, msg,
                     "内置免费引擎无需 API Key；请稍后重试，或在设置中配置自己的模型服务。"),
                 FreeTranslateFailureKind.NetworkOrTimeout => new TranslationError(
-                    TranslationErrorKind.Unknown,
-                    msg,
+                    TranslationErrorKind.Unknown, msg,
                     "请检查本机网络连接后重试。"),
                 FreeTranslateFailureKind.LongContent => new TranslationError(
-                    TranslationErrorKind.Unknown,
-                    msg,
+                    TranslationErrorKind.Unknown, msg,
                     "请缩短内容，或在设置中配置自己的模型服务。"),
                 FreeTranslateFailureKind.Unparsable => new TranslationError(
-                    TranslationErrorKind.ParseError,
-                    msg,
+                    TranslationErrorKind.ParseError, msg,
                     "请稍候重试，或在设置中配置自己的模型服务。"),
-                _ => new TranslationError(
-                    TranslationErrorKind.Unknown,
-                    msg,
+                _ => new TranslationError(TranslationErrorKind.Unknown, msg,
                     "请稍后重试，或在设置中配置自己的模型服务。"),
             };
         }
-        if (msg.Contains("离线") || msg.Contains("SafeDevMode") || msg.Contains("offline", StringComparison.OrdinalIgnoreCase))
-        {
-            return new TranslationError(
-                TranslationErrorKind.OfflineOnly,
-                msg,
-                "可在设置中关闭安全离线模式或配置本地模型服务。");
-        }
-        if (msg.Contains("网络") || msg.Contains("NetworkDisabled") || msg.Contains("network", StringComparison.OrdinalIgnoreCase))
-        {
-            return new TranslationError(
-                TranslationErrorKind.NetworkDisabled,
-                msg,
-                "可在设置中允许联网翻译。");
-        }
         if (msg.Contains("429") || msg.Contains("限流") || msg.Contains("rate", StringComparison.OrdinalIgnoreCase))
         {
-            return new TranslationError(
-                TranslationErrorKind.RateLimited,
-                msg,
-                "请稍候重试，或在设置中配置独立 API Key。",
-                IsTransient: true);
+            return new TranslationError(TranslationErrorKind.RateLimited, msg,
+                "请稍候重试，或在设置中配置独立 API Key。", IsTransient: true);
         }
-        if (msg.Contains("401") || msg.Contains("403") || msg.Contains("Unauthorized") || msg.Contains("Key"))
+        if (msg.Contains("401") || msg.Contains("403") || msg.Contains("Unauthorized"))
         {
-            return new TranslationError(
-                TranslationErrorKind.Unauthorized,
-                msg,
+            return new TranslationError(TranslationErrorKind.Unauthorized, msg,
                 "请检查 API Key 是否正确或已过期。");
         }
         if (msg.Contains("OCR"))
         {
-            return new TranslationError(
-                TranslationErrorKind.OcrFailed,
-                msg,
+            return new TranslationError(TranslationErrorKind.OcrFailed, msg,
                 "请框选更清晰的高对比度文字区域。");
         }
-
-        return new TranslationError(
-            TranslationErrorKind.Unknown,
-            msg,
+        return new TranslationError(TranslationErrorKind.Unknown, msg,
             "请检查网络或服务配置后重试。");
     }
 }

@@ -1,3 +1,5 @@
+using System.Text;
+using PopGlot.Windows.Services;
 namespace PopGlot.Windows;
 
 /// <summary>
@@ -113,4 +115,53 @@ internal static class LanguageCatalog
         }
         return (normalizedTarget, normalizedSource);
     }
+
+    /// <summary>Identifies a dominant supported script without inspecting code or URLs.</summary>
+    internal static string? DetectScript(string text)
+    {
+        var prose = LanguageText.Prose(text);
+        var letters = 0;
+        var latin = 0;
+        var han = 0;
+        var cyrillic = 0;
+        var hasKana = false;
+        var hasHangul = false;
+
+        foreach (var rune in prose.EnumerateRunes())
+        {
+            if (!Rune.IsLetter(rune)) continue;
+            letters++;
+            var value = rune.Value;
+            if (value is >= 0x3040 and <= 0x30ff or >= 0x31f0 and <= 0x31ff) hasKana = true;
+            if (value is >= 0xac00 and <= 0xd7af or >= 0x1100 and <= 0x11ff or >= 0x3130 and <= 0x318f)
+                hasHangul = true;
+            if (value is >= 0x4e00 and <= 0x9fff) han++;
+            if (value is >= 0x0400 and <= 0x052f) cyrillic++;
+            if (IsLatinLetter(value)) latin++;
+        }
+
+        if (hasKana) return "ja";
+        if (hasHangul) return "ko";
+        if (letters == 0) return null;
+        if (cyrillic * 100 >= letters * 30) return "ru";
+        if (han > 0 && han >= latin) return "zh-CN";
+        if (latin > 0 && han == 0 && letters >= 2) return "en";
+        return null;
+    }
+
+    /// <summary>Chooses a sensible target for an auto-detected source language.</summary>
+    internal static string ResolveAutoTarget(string sourceText, string currentTarget) =>
+        DetectScript(sourceText) switch
+        {
+            "zh-CN" or "zh-TW" => "en",
+            not null => "zh-CN",
+            _ => currentTarget,
+        };
+
+    private static bool IsLatinLetter(int value) => value is
+        >= 0x0041 and <= 0x005a or >= 0x0061 and <= 0x007a or
+        >= 0x00c0 and <= 0x02e4 or >= 0x1d00 and <= 0x1d7f or
+        >= 0x1d80 and <= 0x1dbf or >= 0x1e00 and <= 0x1eff or
+        >= 0x2c60 and <= 0x2c7f or >= 0xa720 and <= 0xa7ff or
+        >= 0xab30 and <= 0xab6f;
 }

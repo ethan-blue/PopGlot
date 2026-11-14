@@ -238,18 +238,15 @@ internal static class TtsService
             ?? SpeechSynthesizer.DefaultVoice;
     }
 
-    private static string DetectLanguagePrefix(string text)
+    private static string DetectLanguagePrefix(string text) => LanguageCatalog.DetectScript(text) switch
     {
-        foreach (var character in text)
-        {
-            if (character is >= '一' and <= '鿿') return "zh";
-            if (character is >= '぀' and <= 'ヿ') return "ja";
-            if (character is >= '가' and <= '힯') return "ko";
-            if (character is >= 'Ѐ' and <= 'ӿ') return "ru";
-            if (character is >= '؀' and <= 'ۿ') return "ar";
-        }
-        return "en";
-    }
+        "zh-CN" or "zh-TW" => "zh",
+        "ja" => "ja",
+        "ko" => "ko",
+        "ru" => "ru",
+        "en" => "en",
+        _ => "en",
+    };
 
     /// <summary>
     /// Cleans up any stale temporary TTS audio files from prior sessions —

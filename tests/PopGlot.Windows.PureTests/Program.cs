@@ -74,14 +74,22 @@ internal static partial class Program
         Run("R03 route capability evaluates all five states accurately", RouteCapabilityEvaluatesAllFiveStates);
         Run("P05 execution kinds stay typed: CLI unsupported, never free fallback", ExecutionKindsStayTypedNeverFreeFallback);
         Run("free engine provider round-trips and stays on Google when missing", FreeEngineProviderRoundTrip);
+        Run("free engine whole request timeout budget covers long text", FreeEngineTimeoutBudget);
+        Run("quick search speak hint follows recorded binding", QuickSearchSpeakHintFollowsRecordedBinding);
+        Run("budget rejection maps to friendly headline", BudgetRejectionMapsToFriendlyHeadline);
         await RunAsync("alternate free engine contacts only MyMemory", AlternateFreeEngineContactsMyMemory);
         await RunAsync("free HTTP limits body before buffering, including unknown or false length", FreeResponseStreamingCap);
+        Run("incomplete translation status copy distinguishes truncation, early close, failure, and cancellation", TranslationStatusCopyClassification);
         Run("translation quality warns without rejecting code or same-language content", TranslationLanguageQuality);
+        Run("language script detection classifies supported dominant scripts", DetectScriptClassifiesSupportedScripts);
+        Run("auto target follows detected source or preserves fallback", ResolveAutoTargetUsesSourceAndFallback);
+        Run("translation round-trip cache matches and invalidates", TranslationRoundTripCacheMatchesAndInvalidates);
+        Run("history dedup includes source language", () => HistoryDedupIncludesSourceLanguage(root));
         Run("OCR scales long images within the per-edge engine limit", OcrDimensionLimits);
         Run("OCR collapses engine-inserted spaces between CJK characters", OcrCjkSpaceCollapse);
         Run("OCR upscale candidates follow line height and engine limits", OcrScaleCandidates);
         Run("OCR dual-pass score prefers solid text over fragments", OcrScoreFunction);
-        Run("MyMemory never guesses unsupported scripts as English", MyMemoryScriptBoundaries);
+        Run("MyMemory shares script detection and refuses ambiguous text", MyMemoryScriptBoundaries);
         Run("OMP resolves official Bun package without executing shims", () => OmpBunDiscovery(root));
         Run("session store enforces max 5 sessions and LRU eviction", SessionStoreCapacityAndLru);
         Run("session store enforces 2MiB byte budget", SessionStoreByteBudget);
@@ -811,8 +819,10 @@ internal static partial class Program
             consentPath());
         string? host = null;
         string? body = null;
+        var sends = 0;
         FreeTranslateService.HttpSenderOverride = async (request, _) =>
         {
+            sends++;
             host = request.RequestUri?.Host;
             body = request.Content is null ? null : await request.Content.ReadAsStringAsync();
             var payload = request.RequestUri?.Host == "api.mymemory.translated.net"
@@ -826,12 +836,18 @@ internal static partial class Program
         try
         {
             True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var auth), "allowed consent issues a token");
+            var sourceText = $"缓存探针中文{DateTime.UtcNow.Ticks}";
             var alternate = await FreeTranslateService.TranslateAsync(
-                "你好", "auto", "en", auth, provider: FreeEngineProvider.MyMemory);
+                sourceText, "auto", "en", auth, provider: FreeEngineProvider.MyMemory);
             Equal("api.mymemory.translated.net", host, "the alternate engine must not contact Google");
             Equal("你好", alternate.Result.TranslatedText, "MyMemory text is parsed");
             True(body?.Contains("langpair=zh-CN%7Cen") == true || body?.Contains("langpair=zh-CN|en") == true,
                 $"MyMemory must send an explicit pair, got {body}");
+            var explicitSource = await FreeTranslateService.TranslateAsync(
+                sourceText, "zh-CN", "en", auth, provider: FreeEngineProvider.MyMemory);
+            Equal(1, sends, "auto and explicit Chinese must share one MyMemory request");
+            Equal(0UL, explicitSource.Diagnostics!.ElapsedMs,
+                "a normalized-source cache hit must not claim fresh request timing");
 
             host = null;
             var google = await FreeTranslateService.TranslateAsync(
@@ -849,6 +865,74 @@ internal static partial class Program
             FreeTranslateService.HttpSenderOverride = originalSender;
             ShellSettingsStore.Save(ShellSettings.Default, consentPath());
         }
+    }
+
+    private static void FreeEngineTimeoutBudget()
+    {
+        Equal(TimeSpan.FromSeconds(30), FreeTranslateService.WholeRequestTimeout,
+            "the free engine whole-request budget must stay at 30s for near-capacity long text");
+        True(FreeTranslateService.WholeRequestTimeout < TimeSpan.FromSeconds(120),
+            "the free endpoint budget must stay well under the 120s streaming idle budget");
+    }
+
+    private static void QuickSearchSpeakHintFollowsRecordedBinding()
+    {
+        var previous = InterfaceKeys.Snapshot;
+        try
+        {
+            // Default speak binding is Ctrl+P: the completed hint names it.
+            InterfaceKeys.Apply(ShellSettings.Default);
+            var state = new QuickSearchState();
+            state.StartNewSearch("hello");
+            state.OnSessionCompleted(new TranslationSession
+            {
+                Stage = TranslationSessionStage.Completed,
+                TranslatedText = "你好",
+            }, state.CurrentEpoch, "hello");
+            True(state.HintsText.Contains("Ctrl+P 朗读"),
+                $"the default completed hint must name Ctrl+P, got '{state.HintsText}'");
+
+            // Rebind speak to Alt+P: the hint must follow, fixed keys stay literal.
+            InterfaceKeys.Apply(ShellSettings.Default with
+            {
+                InterfaceSpeakHotkey = new HotkeyBinding(HotkeyBinding.ModAlt, 0x50),
+            });
+            var rebound = new QuickSearchState();
+            rebound.StartNewSearch("hello");
+            rebound.OnSessionCompleted(new TranslationSession
+            {
+                Stage = TranslationSessionStage.Completed,
+                TranslatedText = "你好",
+            }, rebound.CurrentEpoch, "hello");
+            True(rebound.HintsText.Contains("Alt+P 朗读"),
+                $"the completed hint must follow the recorded speak key, got '{rebound.HintsText}'");
+            True(!rebound.HintsText.Contains("Ctrl+P"),
+                "the stale Ctrl+P literal must be gone after rebinding");
+            True(rebound.HintsText.Contains("Ctrl+Shift+C 复制") && rebound.HintsText.Contains("Ctrl+S 收藏"),
+                "the fixed copy/star keys must stay literal in the hint");
+        }
+        finally
+        {
+            InterfaceKeys.Apply(previous);
+        }
+    }
+
+    private static void BudgetRejectionMapsToFriendlyHeadline()
+    {
+        // The coordinator's plan-rejection messages must surface a dedicated
+        // headline, not the generic "这次没有翻译成功".
+        var budgetMessage = $"内容超出一次会话的翻译预算（最多 {CoreBridge.MaxSegments} 段、每段 {CoreBridge.MaxSegmentChars} 字符）。请缩短或分批提交。";
+        Equal("内容超出单次翻译上限，请缩短后分批提交", TranslationPanelWindow.FriendlyError(budgetMessage),
+            "the budget rejection must map to the dedicated over-limit headline");
+        Equal("内容超出单次翻译上限，请缩短后分批提交",
+            TranslationPanelWindow.FriendlyError("内容里有一个超过单段预算的代码块，无法安全切分。请缩短该代码块后重试。"),
+            "the oversized-code-block split rejection must map to the same headline");
+        Equal("内容超出单次翻译上限，请缩短后分批提交",
+            TranslationPanelWindow.FriendlyError("内容过长，未发送任何请求。"),
+            "the free-engine long-content rejection must map to the same headline");
+        // The generic fallback stays for genuinely unknown failures.
+        Equal("这次没有翻译成功", TranslationPanelWindow.FriendlyError("某种未知错误"),
+            "an unknown failure must keep the generic headline");
     }
 
     private static void AuthorizationTokenBasics()

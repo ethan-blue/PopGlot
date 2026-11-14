@@ -93,6 +93,8 @@ struct Envelope<T: Serialize> {
     ok: bool,
     data: Option<T>,
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_kind: Option<&'static str>,
 }
 
 fn success<T: Serialize>(data: T) -> *mut c_char {
@@ -100,20 +102,41 @@ fn success<T: Serialize>(data: T) -> *mut c_char {
         ok: true,
         data: Some(data),
         error: None,
+        error_kind: None,
     })
 }
 
 fn failure(message: impl Into<String>) -> *mut c_char {
+    failure_with_kind(message, "unknown")
+}
+
+fn failure_with_kind(message: impl Into<String>, error_kind: &'static str) -> *mut c_char {
     to_c_string(&Envelope::<()> {
         ok: false,
         data: None,
         error: Some(message.into()),
+        error_kind: Some(error_kind),
     })
+}
+
+fn provider_failure(error: popglot_core::provider::ProviderError) -> *mut c_char {
+    use popglot_core::provider::ProviderErrorKind as Kind;
+    let kind = match error.kind {
+        Kind::Cancelled => "cancelled",
+        Kind::Timeout => "timeout",
+        Kind::Transport | Kind::Server => "transport",
+        Kind::Authentication | Kind::MissingCredential => "auth",
+        Kind::RateLimited => "rate_limit",
+        Kind::NetworkDisabled => "offline",
+        Kind::InvalidResponse => "parse",
+        _ => "unknown",
+    };
+    failure_with_kind(error.message, kind)
 }
 
 fn to_c_string<T: Serialize>(value: &T) -> *mut c_char {
     let json = serde_json::to_string(value).unwrap_or_else(|error| {
-        format!(r#"{{"ok":false,"data":null,"error":"serialization failed: {error}"}}"#)
+        format!(r#"{{"ok":false,"data":null,"error":"serialization failed: {error}","error_kind":"unknown"}}"#)
     });
     CString::new(json).map_or(ptr::null_mut(), CString::into_raw)
 }
@@ -375,27 +398,25 @@ pub unsafe extern "C" fn popglot_test_connection(api_key: *const c_char) -> *mut
         let runtime = provider_runtime()?;
         let ticket = begin_request(None);
         let request_id = ticket.id.clone();
-        let response = runtime
-            .block_on(async {
-                let provider = popglot_core::provider::provider_for(settings.provider_type);
-                let request = popglot_core::provider::TranslationRequest::text(
-                    "Connection test",
-                    LanguagePair::new("en", &settings.target_language),
+        let response = runtime.block_on(async {
+            let provider = popglot_core::provider::provider_for(settings.provider_type);
+            let request = popglot_core::provider::TranslationRequest::text(
+                "Connection test",
+                LanguagePair::new("en", &settings.target_language),
+            )
+            .with_explanation(false);
+            client
+                .execute(
+                    provider.as_ref(),
+                    &settings,
+                    api_key,
+                    &request_id,
+                    &request,
+                    &ticket.token,
                 )
-                .with_explanation(false);
-                client
-                    .execute(
-                        provider.as_ref(),
-                        &settings,
-                        api_key,
-                        &request_id,
-                        &request,
-                        &ticket.token,
-                    )
-                    .await
-            })
-            .map_err(|error| error.to_string());
-        Ok(response.map_or_else(failure, success))
+                .await
+        });
+        Ok(response.map_or_else(provider_failure, success))
     })
 }
 
@@ -421,15 +442,13 @@ pub unsafe extern "C" fn popglot_test_connection_draft(
 
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
-        let response = runtime
-            .block_on(AppCore::test_connection_draft(
-                &draft_settings,
-                api_key,
-                Some(&ticket.id),
-                &ticket.token,
-            ))
-            .map_err(|error| error.to_string());
-        Ok(response.map_or_else(failure, success))
+        let response = runtime.block_on(AppCore::test_connection_draft(
+            &draft_settings,
+            api_key,
+            Some(&ticket.id),
+            &ticket.token,
+        ));
+        Ok(response.map_or_else(provider_failure, success))
     })
 }
 
@@ -530,21 +549,19 @@ pub unsafe extern "C" fn popglot_translate_text_v3(
         let languages = resolve_languages(&settings, source_lang, target_lang);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
-        let response = runtime
-            .block_on(AppCore::execute_translate_text_snapshot_with_preference(
-                &settings,
-                &client,
-                api_key,
-                source,
-                &languages,
-                &ticket.id,
-                pref_str,
-                tid_str,
-                rev_val,
-                &ticket.token,
-            ))
-            .map_err(|error| error.to_string());
-        Ok(response.map_or_else(failure, success))
+        let response = runtime.block_on(AppCore::execute_translate_text_snapshot_with_preference(
+            &settings,
+            &client,
+            api_key,
+            source,
+            &languages,
+            &ticket.id,
+            pref_str,
+            tid_str,
+            rev_val,
+            &ticket.token,
+        ));
+        Ok(response.map_or_else(provider_failure, success))
     })
 }
 
@@ -587,23 +604,21 @@ pub unsafe extern "C" fn popglot_text_task_stream_v1(
         let languages = resolve_languages(&settings, source_lang, target_lang);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
-        let response = runtime
-            .block_on(AppCore::execute_text_task_stream_snapshot(
-                &settings,
-                &client,
-                api_key,
-                source,
-                &languages,
-                &ticket.id,
-                task,
-                preference,
-                template_id,
-                preference.map(|_| template_revision),
-                &ticket.token,
-                |delta| emit_text_delta(callback, user_data, delta, &ticket.token),
-            ))
-            .map_err(|error| error.to_string());
-        Ok(response.map_or_else(failure, success))
+        let response = runtime.block_on(AppCore::execute_text_task_stream_snapshot(
+            &settings,
+            &client,
+            api_key,
+            source,
+            &languages,
+            &ticket.id,
+            task,
+            preference,
+            template_id,
+            preference.map(|_| template_revision),
+            &ticket.token,
+            |delta| emit_text_delta(callback, user_data, delta, &ticket.token),
+        ));
+        Ok(response.map_or_else(provider_failure, success))
     })
 }
 
@@ -645,23 +660,21 @@ pub unsafe extern "C" fn popglot_text_task_draft_stream_v1(
         let languages = resolve_languages(&settings, source_lang, target_lang);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
-        let response = runtime
-            .block_on(AppCore::execute_text_task_stream_snapshot(
-                &settings,
-                &client,
-                api_key,
-                source,
-                &languages,
-                &ticket.id,
-                task,
-                preference,
-                template_id,
-                preference.map(|_| template_revision),
-                &ticket.token,
-                |delta| emit_text_delta(callback, user_data, delta, &ticket.token),
-            ))
-            .map_err(|error| error.to_string());
-        Ok(response.map_or_else(failure, success))
+        let response = runtime.block_on(AppCore::execute_text_task_stream_snapshot(
+            &settings,
+            &client,
+            api_key,
+            source,
+            &languages,
+            &ticket.id,
+            task,
+            preference,
+            template_id,
+            preference.map(|_| template_revision),
+            &ticket.token,
+            |delta| emit_text_delta(callback, user_data, delta, &ticket.token),
+        ));
+        Ok(response.map_or_else(provider_failure, success))
     })
 }
 
@@ -694,18 +707,16 @@ pub unsafe extern "C" fn popglot_translate_text_draft_v1(
         let languages = resolve_languages(&settings, source_lang, target_lang);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
-        let response = runtime
-            .block_on(AppCore::execute_translate_text_snapshot(
-                &settings,
-                &client,
-                api_key,
-                source,
-                &languages,
-                &ticket.id,
-                &ticket.token,
-            ))
-            .map_err(|error| error.to_string());
-        Ok(response.map_or_else(failure, success))
+        let response = runtime.block_on(AppCore::execute_translate_text_snapshot(
+            &settings,
+            &client,
+            api_key,
+            source,
+            &languages,
+            &ticket.id,
+            &ticket.token,
+        ));
+        Ok(response.map_or_else(provider_failure, success))
     })
 }
 
@@ -770,20 +781,18 @@ pub unsafe extern "C" fn popglot_translate_vision_v2(
         let languages = resolve_languages(&settings, source_lang, target_lang);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
-        let response = runtime
-            .block_on(AppCore::execute_translate_vision_snapshot(
-                &settings,
-                &client,
-                api_key,
-                "",
-                media_type,
-                image,
-                &languages,
-                &ticket.id,
-                &ticket.token,
-            ))
-            .map_err(|error| error.to_string());
-        Ok(response.map_or_else(failure, success))
+        let response = runtime.block_on(AppCore::execute_translate_vision_snapshot(
+            &settings,
+            &client,
+            api_key,
+            "",
+            media_type,
+            image,
+            &languages,
+            &ticket.id,
+            &ticket.token,
+        ));
+        Ok(response.map_or_else(provider_failure, success))
     })
 }
 
@@ -840,20 +849,18 @@ pub unsafe extern "C" fn popglot_translate_vision_v3(
         let languages = resolve_languages(&settings, source_lang, target_lang);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
-        let response = runtime
-            .block_on(AppCore::execute_translate_vision_snapshot(
-                &settings,
-                &client,
-                api_key,
-                vision_api_key,
-                media_type,
-                image,
-                &languages,
-                &ticket.id,
-                &ticket.token,
-            ))
-            .map_err(|error| error.to_string());
-        Ok(response.map_or_else(failure, success))
+        let response = runtime.block_on(AppCore::execute_translate_vision_snapshot(
+            &settings,
+            &client,
+            api_key,
+            vision_api_key,
+            media_type,
+            image,
+            &languages,
+            &ticket.id,
+            &ticket.token,
+        ));
+        Ok(response.map_or_else(provider_failure, success))
     })
 }
 
@@ -950,24 +957,22 @@ pub unsafe extern "C" fn popglot_translate_text_stream_v2(
         let languages = resolve_languages(&settings, source_lang, target_lang);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
-        let response = runtime
-            .block_on(
-                AppCore::execute_translate_text_stream_snapshot_with_preference(
-                    &settings,
-                    &client,
-                    api_key,
-                    source,
-                    &languages,
-                    &ticket.id,
-                    pref_str,
-                    tid_str,
-                    rev_val,
-                    &ticket.token,
-                    |delta| emit_text_delta(callback, user_data, delta, &ticket.token),
-                ),
-            )
-            .map_err(|error| error.to_string());
-        Ok(response.map_or_else(failure, success))
+        let response = runtime.block_on(
+            AppCore::execute_translate_text_stream_snapshot_with_preference(
+                &settings,
+                &client,
+                api_key,
+                source,
+                &languages,
+                &ticket.id,
+                pref_str,
+                tid_str,
+                rev_val,
+                &ticket.token,
+                |delta| emit_text_delta(callback, user_data, delta, &ticket.token),
+            ),
+        );
+        Ok(response.map_or_else(provider_failure, success))
     })
 }
 
@@ -1064,24 +1069,22 @@ pub unsafe extern "C" fn popglot_translate_text_draft_stream_v2(
         let languages = resolve_languages(&settings, source_lang, target_lang);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
-        let response = runtime
-            .block_on(
-                AppCore::execute_translate_text_stream_snapshot_with_preference(
-                    &settings,
-                    &client,
-                    api_key,
-                    source,
-                    &languages,
-                    &ticket.id,
-                    pref_str,
-                    tid_str,
-                    rev_val,
-                    &ticket.token,
-                    |delta| emit_text_delta(callback, user_data, delta, &ticket.token),
-                ),
-            )
-            .map_err(|error| error.to_string());
-        Ok(response.map_or_else(failure, success))
+        let response = runtime.block_on(
+            AppCore::execute_translate_text_stream_snapshot_with_preference(
+                &settings,
+                &client,
+                api_key,
+                source,
+                &languages,
+                &ticket.id,
+                pref_str,
+                tid_str,
+                rev_val,
+                &ticket.token,
+                |delta| emit_text_delta(callback, user_data, delta, &ticket.token),
+            ),
+        );
+        Ok(response.map_or_else(provider_failure, success))
     })
 }
 
@@ -1134,21 +1137,19 @@ pub unsafe extern "C" fn popglot_translate_vision_draft_stream_v1(
         let languages = resolve_languages(&settings, source_lang, target_lang);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
-        let response = runtime
-            .block_on(AppCore::execute_translate_vision_stream_snapshot(
-                &settings,
-                &client,
-                api_key,
-                vision_api_key,
-                media_type,
-                image,
-                &languages,
-                &ticket.id,
-                &ticket.token,
-                |delta| emit_text_delta(callback, user_data, delta, &ticket.token),
-            ))
-            .map_err(|error| error.to_string());
-        Ok(response.map_or_else(failure, success))
+        let response = runtime.block_on(AppCore::execute_translate_vision_stream_snapshot(
+            &settings,
+            &client,
+            api_key,
+            vision_api_key,
+            media_type,
+            image,
+            &languages,
+            &ticket.id,
+            &ticket.token,
+            |delta| emit_text_delta(callback, user_data, delta, &ticket.token),
+        ));
+        Ok(response.map_or_else(provider_failure, success))
     })
 }
 
@@ -1907,6 +1908,23 @@ mod tests {
         // SAFETY: the pointer was produced by this library and not yet freed.
         unsafe { popglot_free_string(value) };
         text
+    }
+
+    #[test]
+    fn error_envelope_round_trips_kind_and_success_omits_it() {
+        let failure = take_envelope(failure_with_kind(
+            "无法连接模型提供商，请检查网络与 Base URL。",
+            "transport",
+        ));
+        let failure: serde_json::Value =
+            serde_json::from_str(&failure).expect("failure envelope JSON");
+        assert_eq!(failure["ok"], false);
+        assert_eq!(failure["error_kind"], "transport");
+        let success = take_envelope(success("ready"));
+        let success: serde_json::Value =
+            serde_json::from_str(&success).expect("success envelope JSON");
+        assert_eq!(success["ok"], true);
+        assert!(success.get("error_kind").is_none());
     }
 
     // Initializes the process-global core exactly once per test binary, against

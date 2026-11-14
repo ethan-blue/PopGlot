@@ -7,6 +7,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using System.Runtime.CompilerServices;
 using PopGlot.Windows.Services;
 using PopGlot.Windows.Services.AiConnections;
 
@@ -78,6 +79,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     /// <summary>Action queued behind an unresolved editor draft.</summary>
     private Action? _pendingAfterDraft;
     private ConfirmButton? _deleteConfirm;
+    private readonly ConditionalWeakTable<Button, ConfirmButton> _rowDeleteConfirms = new();
+    private ConfirmButton? _forgetAccountConfirm;
     private ConfirmButton? _clearKeyConfirm;
     private bool? _compactEditor;
     private bool _detailWidthReported;
@@ -117,6 +120,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             RefreshRecommendations();
         };
         _deleteConfirm = ConfirmButton.Attach(DeleteServiceButton, "确认删除？", DeleteSelectedProfile);
+        _forgetAccountConfirm = ConfirmButton.Attach(ChatGptForgetAccountButton, "确认删除？",
+            () => ChatGptForgetAccount_Click(ChatGptForgetAccountButton, new RoutedEventArgs()));
         _clearKeyConfirm = ConfirmButton.Attach(ClearKeyButton, "确认清除？", ClearKeyForCurrentProfile);
         EditorScroll.ScrollChanged += EditorScroll_ScrollChanged;
         _editorCombos = [ProviderTypeComboBox, TextModelCombo, VisionModelCombo, CliModelCombo,
@@ -686,7 +691,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     private void HideDraftGuard()
     {
         DraftGuardBar.Visibility = Visibility.Collapsed;
-        if (EditorForm.Visibility == Visibility.Visible && ConfigFormPanel.Visibility == Visibility.Visible)
+        if (EditorForm.Visibility == Visibility.Visible &&
+            (ConfigFormPanel.Visibility == Visibility.Visible || CliConnectionsPanel.Visibility == Visibility.Visible))
         {
             EditorActionBar.Visibility = Visibility.Visible;
         }
@@ -961,7 +967,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             return new ProfilesRow(
                 profile.Id,
                 profile.Name,
-                string.IsNullOrWhiteSpace(profile.TextModel) ? "未填模型" : profile.TextModel,
+                ProfileRowSummary(profile),
                 stateText,
                 ToneBrush(stateTone),
                 ToneTextBrush(stateTone),
@@ -1018,6 +1024,27 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 }
             }
         }
+    }
+
+    /// <summary>托管引擎在列表行的摘要带上账号/提供方归属，与路由菜单口径一致。</summary>
+    private static string ProfileRowSummary(ProviderProfile profile)
+    {
+        var model = string.IsNullOrWhiteSpace(profile.TextModel) ? "未填模型" : profile.TextModel;
+        string? owner = profile.ResolvedExecutionKind switch
+        {
+            EngineExecutionKind.ChatGptDirect when profile.DirectConnection is { AccountId: { Length: > 0 } accountId }
+                => TryAccountLabel(accountId),
+            EngineExecutionKind.OmpRpc when !string.IsNullOrWhiteSpace(profile.CliConnection?.UpstreamProviderId)
+                => profile.CliConnection?.UpstreamProviderId,
+            _ => null,
+        };
+        return owner is null ? model : $"{model} · {owner}";
+    }
+
+    private static string? TryAccountLabel(string accountId)
+    {
+        try { return ChatGptAccountStore.Get(accountId).Label; }
+        catch (InvalidOperationException) { return null; }
     }
 
     private static string? LoadStoredKey(ProviderProfile profile, string? activeProfileId = null)
@@ -1090,7 +1117,12 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             if (!ProfileManager.IsTextEngineExecutable(profile)) return ("已断开 · 需重新连接", StatusTone.Warning);
             var valid = ProfileVerification.EvidenceFingerprint(profile, false) == profile.LastTestFingerprint;
-            return valid && profile.LastTestOutcome == "ok" ? ("上次测试成功", StatusTone.Success) : ("已连接 · 请求待验证", StatusTone.Info);
+            if (valid && profile.LastTestOutcome == "ok")
+            {
+                var when = profile.LastTestedAtUtc is { } testedAt ? $" · {testedAt.ToLocalTime():MM-dd HH:mm}" : "";
+                return ($"上次测试成功{when}", StatusTone.Success);
+            }
+            return ("已连接 · 请求待验证", StatusTone.Info);
         }
         var currentFingerprint = CreateProfileFingerprint(profile, hasKey);
         var persistedMatches = !string.IsNullOrWhiteSpace(profile.LastTestFingerprint) &&
@@ -1333,13 +1365,16 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         var isTextDefault = profile.Id == config.ActiveProfileId;
         var isVisionDefault = profile.Id == config.VisionProfileId;
         var nextDefault = config.Profiles.FirstOrDefault(p => p.Id != profile.Id);
+        var accountManaged = profile.ExecutionFacts.IsCliExecution || profile.ResolvedExecutionKind == EngineExecutionKind.ChatGptDirect;
+        var retainedAccount = accountManaged ? " 删除引擎不会删除账号登录。" : "";
         DeleteServiceButton.ToolTip = isTextDefault
             ? (nextDefault is null
-                ? "它是当前默认文字引擎；删除后没有其他可用引擎，翻译将回退到已授权的内置免费引擎。"
-                : $"它是当前默认文字引擎；删除后默认路由将切换为「{nextDefault.Name}」。")
+                ? "它是当前默认文字引擎；删除后没有其他可用引擎，翻译将回退到已授权的内置免费引擎。" + retainedAccount
+                : $"它是当前默认文字引擎；删除后默认路由将切换为「{nextDefault.Name}」。" + retainedAccount)
             : isVisionDefault
-                ? "它是当前默认视觉引擎；删除后视觉翻译将跟随默认文字引擎。"
-                : "默认路由不受影响。该引擎保存的 API Key 也会一并删除。";
+                ? "它是当前默认视觉引擎；删除后视觉翻译将跟随默认文字引擎。" + retainedAccount
+                : accountManaged ? "默认路由不受影响。删除引擎不会删除账号登录。"
+                    : "默认路由不受影响。该引擎保存的 API Key 也会一并删除。";
     }
 
     private ProviderProfile? SelectedProfile()
@@ -2245,7 +2280,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 if (response.Result.IsPartial || string.IsNullOrWhiteSpace(response.Result.TranslatedText))
                 {
                     throw new InvalidOperationException(
-                        response.Result.Warnings.FirstOrDefault() ?? "工具返回了不完整的翻译。");
+                        TranslationStatusText.FailureReason(response.Result.Warnings) ?? "工具返回了不完整的翻译。");
                 }
                 return "ok";
             }, operation.Token);
@@ -2597,6 +2632,17 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         // click; deleting here too would wipe on the first click.
     }
 
+    private void DeleteProfileRow_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button button && !_rowDeleteConfirms.TryGetValue(button, out _))
+            _rowDeleteConfirms.Add(button, ConfirmButton.Attach(button, "确认删除？", DeleteSelectedProfile));
+    }
+
+    private void DeleteProfileRow_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: ProfilesRow row }) ProfilesListBox.SelectedItem = row;
+    }
+
     private async void DeleteSelectedProfile()
     {
         var profile = SelectedProfile();
@@ -2616,13 +2662,16 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             await ProfileManager.SaveAsync(config);
 
             // 2. Delete credential after config is persisted
-            try
+            if (!string.IsNullOrWhiteSpace(profile.CredentialTarget))
             {
-                CredentialStore.DeleteApiKey(profile.CredentialTarget);
-            }
-            catch
-            {
-                // Vault delete failure shouldn't crash or corrupt profile state
+                try
+                {
+                    CredentialStore.DeleteApiKey(profile.CredentialTarget);
+                }
+                catch
+                {
+                    // Vault delete failure shouldn't crash or corrupt profile state
+                }
             }
 
             // 3. Clear or update running core configuration when the default service changed or emptied

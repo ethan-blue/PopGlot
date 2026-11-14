@@ -99,8 +99,16 @@ internal static partial class Program
                 }
                 await WriteSummarySseDeltaAsync(stream, (index == 0 ? "保留的查询结果" : "的查询结果") +
                     "\n" + marker + "\n{\"detected_source_lang\":\"en\",\"explanation\":\"\",\"warnings\":[]}");
-                await WriteSummaryHttpChunkAsync(stream, "data: [DONE]\n\n"u8.ToArray());
-                await stream.WriteAsync("0\r\n\r\n"u8.ToArray());
+                // The delta above carries the metadata the test asserts; the
+                // [DONE]/terminator tail is best-effort because the client may
+                // close once it has the terminal (Release clients close sooner).
+                try
+                {
+                    await WriteSummaryHttpChunkAsync(stream, "data: [DONE]\n\n"u8.ToArray());
+                    await stream.WriteAsync("0\r\n\r\n"u8.ToArray());
+                }
+                catch (IOException) { }
+                catch (System.Net.Sockets.SocketException) { }
             }
         });
         QuickSearchWindow? window = null;

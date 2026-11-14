@@ -32,6 +32,7 @@
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
                     <!-- Prominent Spotlight search icon -->
@@ -49,7 +50,15 @@
                              TextChanged="SearchBox_TextChanged"
                              KeyDown="SearchBox_KeyDown" />
 
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0">
+                    <Button x:Name="SearchClearButton" Grid.Column="2" Style="{StaticResource IconButton}"
+                            Width="24" Height="24" Padding="0" Margin="0,0,8,0" VerticalAlignment="Center"
+                            Visibility="Collapsed" AutomationProperties.Name="清空输入"
+                            ToolTip="清空输入" Click="SearchClear_Click">
+                        <Path Width="11" Height="11" Stretch="Uniform"
+                              Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              Data="{StaticResource IconClear}" />
+                    </Button>
+                    <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0">
                         <!-- Enter keycap affordance inside the search bar -->
                         <Button x:Name="SearchEnterKeycap" Background="{DynamicResource SurfaceRaisedBrush}"
                                 BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
@@ -181,7 +190,7 @@
 
             <!-- Live Result Container: Spotlight Card Hierarchy -->
             <Border x:Name="ResultContainer" Grid.Row="1" Padding="16,14" Visibility="Collapsed">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <ScrollViewer x:Name="ResultScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                 <StackPanel>
                     <!-- Result Card Box: clean elevated container -->
                     <Border Background="{DynamicResource ResultSurfaceBrush}"
@@ -242,6 +251,14 @@
                                               Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                               Data="{StaticResource IconCopy}" />
                                     </Button>
+                                    <Button x:Name="CopySourceButton" Style="{StaticResource IconButton}" Width="32" Height="32"
+                                            Margin="4,0,0,0"
+                                            AutomationProperties.Name="复制原文"
+                                            ToolTip="复制原文" Click="CopySource_Click">
+                                        <Path Width="12" Height="12" Stretch="Uniform"
+                                              Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                              Data="{StaticResource IconCopy}" />
+                                    </Button>
                                     <Button x:Name="StarButton" Style="{StaticResource IconButton}" Width="32" Height="32"
                                             Margin="4,0,0,0"
                                             AutomationProperties.Name="收藏到生词本"
@@ -267,15 +284,14 @@
                                      Focusable="False"
                                      IsHitTestVisible="True"
                                      MinHeight="24"
-                                     MaxHeight="220"
-                                     VerticalScrollBarVisibility="Auto"
+                                     VerticalScrollBarVisibility="Disabled"
                                      Visibility="Collapsed"
                                      AutomationProperties.LiveSetting="Off"
                                      AutomationProperties.Name="流式翻译中" />
 
                             <!-- RichTextBox for final one-off Markdown rendering -->
                             <RichTextBox x:Name="ResultRichBox" Style="{StaticResource FlatRichTextBox}"
-                                         FontSize="14.5" MaxHeight="220" VerticalScrollBarVisibility="Auto"
+                                         FontSize="14.5" VerticalScrollBarVisibility="Disabled"
                                          MinHeight="24"
                                          IsReadOnly="True" IsDocumentEnabled="True"
                                          Background="Transparent" BorderThickness="0"
@@ -319,9 +335,14 @@
                                            Foreground="{DynamicResource TextSecondaryBrush}"
                                            TextWrapping="Wrap" Margin="0,3,0,0" />
                             </StackPanel>
-                            <Button x:Name="ErrorSettingsBtn" Grid.Column="2" Style="{StaticResource GhostButton}"
-                                    Content="打开设置" VerticalAlignment="Center" Padding="10,6"
-                                    Click="SettingsButton_Click" />
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button x:Name="ErrorRetryBtn" Style="{StaticResource GhostButton}"
+                                        Content="重试" VerticalAlignment="Center" Padding="10,6"
+                                        AutomationProperties.Name="重试翻译" Click="Retry_Click" />
+                                <Button x:Name="ErrorSettingsBtn" Style="{StaticResource GhostButton}"
+                                        Content="打开设置" VerticalAlignment="Center" Padding="10,6" Margin="6,0,0,0"
+                                        Click="SettingsButton_Click" />
+                            </StackPanel>
                         </Grid>
                     </Border>
                 </StackPanel>

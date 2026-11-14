@@ -46,6 +46,16 @@ internal sealed class TranslationPanelStreamGate
         return updateEpoch == Volatile.Read(ref _currentEpoch);
     }
 
+    /// <summary>
+    /// 终态（完成/失败/取消的最终会话）不因窗口隐藏而丢弃：隐藏只抑制
+    /// 自动副作用（自动复制另有可见性门），重显即得到正确终态。
+    /// </summary>
+    public bool ShouldAcceptTerminal(long updateEpoch, bool isClosed)
+    {
+        if (isClosed) return false;
+        return updateEpoch == Volatile.Read(ref _currentEpoch);
+    }
+
     public bool ApplyUpdate(TranslationStreamUpdate update)
     {
         if (update.Epoch != Volatile.Read(ref _currentEpoch))
@@ -156,10 +166,18 @@ internal sealed class TranslationPanelStreamGate
         (Stage is TranslationPanelStage.CancelledWithPartial or TranslationPanelStage.FailedWithPartial) &&
         !string.IsNullOrWhiteSpace(StreamedText);
 
-    public string? GetPartialWarningBanner() => Stage switch
-    {
-        TranslationPanelStage.CancelledWithPartial => "已取消，内容不完整",
-        TranslationPanelStage.FailedWithPartial => "生成中断，内容不完整",
-        _ => null,
-    };
+    public TranslationStatusCopy GetStatusCopy() => TranslationStatusText.Resolve(
+        Stage switch
+        {
+            TranslationPanelStage.CancelledWithPartial or TranslationPanelStage.CancelledWithoutPartial =>
+                TranslationSessionStage.Cancelled,
+            TranslationPanelStage.FailedWithPartial or TranslationPanelStage.FailedWithoutPartial =>
+                TranslationSessionStage.Failed,
+            _ => TranslationSessionStage.Completed,
+        },
+        HasPartialText,
+        ErrorMessage,
+        warnings: null);
+
+    public string? GetPartialWarningBanner() => GetStatusCopy().BannerText;
 }

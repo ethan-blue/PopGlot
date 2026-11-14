@@ -57,16 +57,21 @@ internal static class UiScenario
             Click("CliTestButton");
             Console.WriteLine("UI test submitted");
             Until(() => ((TextBlock)section.FindName("CliConnectionStatus")).Text.StartsWith("测试通过"), "UI test translation should pass");
+            ((TextBox)section.FindName("ConnectionNameTextBox")).Text = "UI 改名引擎";
             Click("CliSaveUseButton");
             Console.WriteLine("UI save submitted");
             Until(() => ((TextBlock)section.FindName("CliConnectionStatus")).Text.StartsWith("已保存并切换"), "save/use should persist");
             Program.Assert(ProfileManager.Load().TryGetActiveProfile()?.ExecutionFacts.TextCapable == true, "UI saved an executable CLI profile");
             var savedCli = ProfileManager.Load().TryGetActiveProfile()!;
+            Program.Assert(savedCli.Name == "UI 改名引擎",
+                $"the managed display-name field must rename the saved engine, got {savedCli.Name}");
             var profileCount = ProfileManager.Load().Profiles.Count;
             typeof(ServicesSection).GetMethod("OpenProfileInEditor", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                 .Invoke(section, new object[] { savedCli.Id });
             Program.Assert(((ComboBox)section.FindName("CliModelCombo")).SelectedItem is CliModel { Id: "fixture" } &&
                 !Find("CliSaveUseButton").IsEnabled, "saved CLI model echoes without inventing a live connection");
+            Program.Assert(((TextBox)section.FindName("ConnectionNameTextBox")).Text == savedCli.Name,
+                "reopening a managed engine must echo its saved display name");
             Click("CliConnectButton");
             Until(() => Find("CliSaveUseButton").IsEnabled, "saved CLI reconnects");
             Click("CliSaveUseButton");
@@ -87,26 +92,44 @@ internal static class UiScenario
             Program.Assert(!Find("CliSaveUseButton").IsEnabled && ProfileManager.Load().TryGetActiveProfile()?.ExecutionFacts.TextCapable == false,
                 "disconnected UI and saved profile must both be disabled");
             var directProfile = DirectTests.UiProfile();
-            typeof(ServicesSection).GetMethod("OpenDirectProfile", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(section, new object[] { directProfile });
-            Program.Assert(!Find("ChatGptTestButton").IsEnabled && !Find("ChatGptSaveUseButton").IsEnabled,
-                "restored direct model is not a fresh account catalog");
+            Click("BackToListHeaderButton");
+            Click("AddEngineHeaderButton");
+            Click("ChatGptSourceButton");
+            var accountCombo = (ComboBox)section.FindName("ChatGptAccountCombo");
+            var fixtureAccount = accountCombo.Items.OfType<ChatGptAccount>()
+                .First(account => account.Id == directProfile.DirectConnection!.AccountId);
+            accountCombo.SelectedItem = fixtureAccount;
+            Program.Assert(accountCombo.SelectedItem is ChatGptAccount selectedFixtureAccount && selectedFixtureAccount.Id == fixtureAccount.Id,
+                "direct UI must select its fixture account before refreshing models");
             Click("ChatGptRefreshButton");
-            Until(() => Find("ChatGptTestButton").IsEnabled, "direct model list should enable testing");
+            Until(() => ((TextBlock)section.FindName("ChatGptStatus")).Text == "模型已刷新，可测试或保存。",
+                "direct model list should refresh before testing");
             DirectTests.HoldUiRequest(); Click("ChatGptTestButton");
             Until(() => DirectTests.UiRequestEntered, "direct UI request must reach the pending boundary");
             Program.Assert(Find("ChatGptCancelButton").Visibility == Visibility.Visible, "cancel is visible beside direct login/model actions");
             Click("ChatGptCancelButton");
-            Until(() => ((TextBlock)section.FindName("ChatGptStatus")).Text == "操作已取消。" && Find("ChatGptTestButton").IsEnabled,
+            Until(() => ((TextBlock)section.FindName("ChatGptStatus")).Text == "操作已取消。",
                 "cancel must clear waiting state without saving a success");
             DirectTests.ReleaseUiScenario();
             Click("ChatGptTestButton");
             Until(() => ((TextBlock)section.FindName("ChatGptStatus")).Text.StartsWith("直连测试通过"), "direct UI translation must pass");
             Click("ChatGptSaveUseButton");
-            Until(() => ProfileManager.Load().ActiveProfileId == directProfile.Id &&
-                ProfileManager.Load().TryGetActiveProfile()?.ExecutionFacts.TextCapable == true &&
-                Find("ChatGptSaveUseButton").IsEnabled, "direct UI save/use must persist the selected executable profile");
-            Program.Assert(ProfileManager.Load().TryGetActiveProfile()?.ResolvedExecutionKind == EngineExecutionKind.ChatGptDirect,
-                "direct UI must activate the HTTP route");
+            Until(() => ((TextBlock)section.FindName("ChatGptStatus")).Text == "已保存并使用 ChatGPT。",
+                "direct UI save/use must persist the selected executable profile");
+            var savedDirect = ProfileManager.Load().TryGetActiveProfile()!;
+            Program.Assert(savedDirect.ResolvedExecutionKind == EngineExecutionKind.ChatGptDirect &&
+                savedDirect.ExecutionFacts.TextCapable, "direct UI must activate the HTTP route");
+            typeof(ServicesSection).GetMethod("OpenDirectProfile", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .Invoke(section, new object[] { savedDirect });
+            var actionPanel = (WrapPanel?)section.FindName("ChatGptActionRow");
+            Program.Assert(actionPanel?.Visibility == Visibility.Collapsed && section.EditorActionBar.Visibility == Visibility.Visible,
+                "editing a saved direct profile hides floating actions and restores the shared footer");
+            Click("ChatGptRefreshButton");
+            Until(() => ((TextBlock)section.FindName("ChatGptStatus")).Text == "模型已刷新，可测试或保存。",
+                "direct editor refresh completes before saving");
+            Click("SaveServiceButton");
+            Until(() => ((TextBlock)section.FindName("ChatGptStatus")).Text == "已保存 ChatGPT 连接。" && Find("SaveServiceButton").IsEnabled,
+                "shared footer saves the direct editor");
             window.UpdateLayout();
             var directBitmap = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
             directBitmap.Render(window); var directEncoder = new PngBitmapEncoder(); directEncoder.Frames.Add(BitmapFrame.Create(directBitmap));
@@ -114,6 +137,17 @@ internal static class UiScenario
             Click("ChatGptDisconnectButton");
             Until(() => ((TextBlock)section.FindName("ChatGptStatus")).Text.StartsWith("已断开"), "direct UI disconnect must complete");
             Program.Assert(ProfileManager.Load().TryGetActiveProfile()?.ExecutionFacts.TextCapable == false, "direct route disabled after disconnect");
+            var loggedOutAccountId = directProfile.DirectConnection!.AccountId;
+            DirectTests.FailNextUiRevoke();
+            Click("ChatGptLogoutButton");
+            Until(() => ((TextBlock)section.FindName("ChatGptStatus")).Text.Contains("官方会话撤销失败", StringComparison.Ordinal),
+                "failed official revoke must still report local account removal");
+            var accountSelector = (ComboBox)section.FindName("ChatGptAccountCombo");
+            var remainingAccounts = ChatGptAccountStore.List();
+            var selectedAccount = accountSelector.SelectedItem as ChatGptAccount;
+            Program.Assert(!remainingAccounts.Any(account => account.Id == loggedOutAccountId) &&
+                accountSelector.Items.Count == remainingAccounts.Count && selectedAccount?.Id != loggedOutAccountId,
+                $"failed logout removes only the local registration and refreshes the account selector (removed={remainingAccounts.All(account => account.Id != loggedOutAccountId)}, items={accountSelector.Items.Count}, stored={remainingAccounts.Count}, selected={selectedAccount?.Id})");
             DirectTests.Restore();
             Environment.SetEnvironmentVariable("POPGLOT_FAKE_PROTOCOL", "omp");
             Click("BackToListHeaderButton");

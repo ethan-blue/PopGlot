@@ -16,6 +16,7 @@ public partial class QuickSearchWindow : Window
     private readonly EventHandler _themeChangedHandler;
     private readonly Action<string?>? _openSettings;
     private readonly QuickSearchState _state = new();
+    private readonly TranslationRoundTripCache _roundTripCache = new();
     private readonly DispatcherTimer _debounceTimer = new()
     {
         Interval = TimeSpan.FromMilliseconds(150),
@@ -427,6 +428,9 @@ public partial class QuickSearchWindow : Window
         if (_isClosed) return;
 
         UpdateEmptyStateVisuals();
+        SearchClearButton.Visibility = string.IsNullOrEmpty(SearchBox.Text)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
 
         var text = SearchBox.Text;
         _pendingStyleNotice = null;
@@ -566,31 +570,54 @@ public partial class QuickSearchWindow : Window
             var settings = CoreBridge.GetSettings();
             var sourceLang = settings.SourceLanguage ?? LanguageCatalog.Auto;
             var targetLang = settings.TargetLanguage ?? "zh-CN";
+            if (LanguageCatalog.Normalize(sourceLang) == LanguageCatalog.Auto)
+            {
+                targetLang = LanguageCatalog.ResolveAutoTarget(text, targetLang);
+            }
             _sessionSourceLanguage = sourceLang;
             _sessionTargetLanguage = targetLang;
             RefreshLangBadge();
 
-            var session = await _coordinator.TranslateTextAsync(
-                text,
-                sourceLang,
-                targetLang,
-                TranslationInputSource.QuickSearch,
-                token,
-                onStageChanged: stage =>
-                {
-                    if (_isClosed) return;
-                    Dispatcher.InvokeAsync(() =>
+            var configVersion = ProfileManager.Revision;
+            var styleIdentity = TranslationStyleMenu.ActiveIdentity();
+            TranslationRoundTripResult? cached = null;
+            if (styleIdentity is not null && _roundTripCache.TryGet(
+                    text, sourceLang, targetLang, configVersion, styleIdentity, out var cachedResult))
+            {
+                cached = cachedResult;
+            }
+            var isCached = cached is not null;
+            TranslationSession session;
+            if (cached is not null)
+            {
+                _pendingStyleNotice = null;
+                session = cached.CreateSession(
+                    text, sourceLang, targetLang, TranslationInputSource.QuickSearch);
+            }
+            else
+            {
+                session = await _coordinator.TranslateTextAsync(
+                    text,
+                    sourceLang,
+                    targetLang,
+                    TranslationInputSource.QuickSearch,
+                    token,
+                    onStageChanged: stage =>
                     {
-                        if (_isClosed || token.IsCancellationRequested || !ReferenceEquals(_cts, cts)) return;
-                        if (_state.OnStageChanged(stage, epoch, SearchBox.Text.Trim()))
+                        if (_isClosed) return;
+                        Dispatcher.InvokeAsync(() =>
                         {
-                            SyncUiWithState();
-                        }
-                    });
-                },
-                progress: progress,
-                epoch: epoch,
-                trace: queryTrace);
+                            if (_isClosed || token.IsCancellationRequested || !ReferenceEquals(_cts, cts)) return;
+                            if (_state.OnStageChanged(stage, epoch, SearchBox.Text.Trim()))
+                            {
+                                SyncUiWithState();
+                            }
+                        });
+                    },
+                    progress: progress,
+                    epoch: epoch,
+                    trace: queryTrace);
+            }
 
             if (_isClosed) return;
             if (token.IsCancellationRequested)
@@ -599,8 +626,19 @@ public partial class QuickSearchWindow : Window
                 return;
             }
 
-            if (_state.OnSessionCompleted(session, epoch, SearchBox.Text.Trim()))
+            if (isCached
+                    ? _state.OnCachedSessionCompleted(session, epoch, SearchBox.Text.Trim())
+                    : _state.OnSessionCompleted(session, epoch, SearchBox.Text.Trim()))
             {
+                if (!isCached && session.IsCleanCompletion && styleIdentity is not null &&
+                    configVersion == ProfileManager.Revision &&
+                    string.Equals(styleIdentity, TranslationStyleMenu.ActiveIdentity(), StringComparison.Ordinal))
+                {
+                    _roundTripCache.Set(
+                        text, sourceLang, targetLang, session.TranslatedText,
+                        TranslationRoundTripCache.ExplanationFor(session), configVersion, styleIdentity,
+                        session.PipelineLabel, session.PromptTemplateName);
+                }
                 _richRenderFailed = false;
                 if (_state.IsRichBoxVisible && !string.IsNullOrWhiteSpace(_state.FinalRenderedText))
                 {
@@ -672,7 +710,7 @@ public partial class QuickSearchWindow : Window
         {
             // Stick-to-bottom: follow the stream only while the reader sits at
             // the bottom, so scrolling up to re-read is never overridden.
-            var stickToBottom = Ui.IsScrolledToBottom(Ui.FindScrollViewer(ResultStreamBox));
+            var stickToBottom = Ui.IsScrolledToBottom(ResultScroll);
             // Append-only when the accumulated text simply grew: wholesale
             // reassignment re-layouts the whole box on every pump tick and
             // makes the window edge flicker.
@@ -687,7 +725,7 @@ public partial class QuickSearchWindow : Window
             }
             if (stickToBottom)
             {
-                ResultStreamBox.ScrollToEnd();
+                ResultScroll.ScrollToEnd();
             }
         }
 
@@ -742,7 +780,16 @@ public partial class QuickSearchWindow : Window
         AutomationProperties.SetHelpText(SearchBox, _state.HintsText);
         RouteSelectorButton.IsEnabled = !_switchingRoute;
 
-        if (_state.Stage == QuickSearchUiStage.Failed || _state.PendingNotice is not null && _state.IsPendingNoticeError)
+        if (_state.PendingNotice is not null && _state.IsPendingNoticeError)
+        {
+            FooterStatus.SetResourceReference(TextBlock.ForegroundProperty, "DangerBrush");
+        }
+        else if (_state.IsIncompleteBadgeVisible)
+        {
+            FooterStatus.SetResourceReference(TextBlock.ForegroundProperty,
+                _state.IsPartialWarningTone ? "WarningBrush" : "DangerBrush");
+        }
+        else if (_state.Stage == QuickSearchUiStage.Failed)
         {
             FooterStatus.SetResourceReference(TextBlock.ForegroundProperty, "DangerBrush");
         }
@@ -757,8 +804,9 @@ public partial class QuickSearchWindow : Window
 
         if (_state.IsIncompleteBadgeVisible)
         {
-            IncompleteBadge.Text = _state.Stage == QuickSearchUiStage.Cancelled ? "已取消" : "未完成";
-            IncompleteBadge.SetResourceReference(TextBlock.ForegroundProperty, "WarningBrush");
+            IncompleteBadge.Text = _state.IncompleteBadgeText;
+            IncompleteBadge.SetResourceReference(TextBlock.ForegroundProperty,
+                _state.IsPartialWarningTone ? "WarningBrush" : "DangerBrush");
         }
 
 
@@ -793,7 +841,11 @@ public partial class QuickSearchWindow : Window
             ExplanationCard.Visibility = Visibility.Collapsed;
         }
 
-        if (_state.Stage == QuickSearchUiStage.Failed && !string.IsNullOrWhiteSpace(_state.ErrorMessage))
+        // T9.30：Partial 带错误时也显示错误卡（含「打开设置」恢复入口），
+        // 不再只把截断原因塞进页脚。警告色调的截断徽标仍避免与错误卡重复。
+        if (_state.Stage is QuickSearchUiStage.Failed or QuickSearchUiStage.Partial &&
+            !(_state.IsIncompleteBadgeVisible && _state.IsPartialWarningTone) &&
+            !string.IsNullOrWhiteSpace(_state.ErrorMessage))
         {
             ErrorCard.Visibility = Visibility.Visible;
             ErrorTitle.Text = TranslationPanelWindow.FriendlyError(_state.ErrorMessage);
@@ -852,15 +904,18 @@ public partial class QuickSearchWindow : Window
     private void UpdateStatusDot()
     {
         if (_isClosed || StatusDot is null) return;
-        var resourceKey = _state.Stage switch
-        {
-            QuickSearchUiStage.Failed => "DangerBrush",
-            QuickSearchUiStage.Cancelled or QuickSearchUiStage.Partial => "WarningBrush",
-            QuickSearchUiStage.Streaming or QuickSearchUiStage.Finalizing => "AccentBrush",
-            QuickSearchUiStage.Completed => "SuccessBrush",
-            _ => "TextTertiaryBrush",
-        };
-        if (_state.PendingNotice is not null && _state.IsPendingNoticeError) resourceKey = "DangerBrush";
+        var resourceKey = _state.PendingNotice is not null && _state.IsPendingNoticeError
+            ? "DangerBrush"
+            : _state.IsIncompleteBadgeVisible
+                ? _state.IsPartialWarningTone ? "WarningBrush" : "DangerBrush"
+                : _state.Stage switch
+                {
+                    QuickSearchUiStage.Failed => "DangerBrush",
+                    QuickSearchUiStage.Cancelled or QuickSearchUiStage.Partial => "WarningBrush",
+                    QuickSearchUiStage.Streaming or QuickSearchUiStage.Finalizing => "AccentBrush",
+                    QuickSearchUiStage.Completed => "SuccessBrush",
+                    _ => "TextTertiaryBrush",
+                };
         StatusDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, resourceKey);
     }
 
@@ -978,6 +1033,18 @@ public partial class QuickSearchWindow : Window
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e) => OpenSettings();
 
+    private async void Retry_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isClosed) return;
+        await PerformTranslateAsync();
+    }
+
+    private void SearchClear_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isClosed) return;
+        SearchBox.Clear();
+    }
+
     // ================= Language badge =================
 
     /// <summary>
@@ -1030,11 +1097,18 @@ public partial class QuickSearchWindow : Window
             var settings = CoreBridge.GetSettings();
             var currentSource = _sessionSourceLanguage ?? settings.SourceLanguage ?? LanguageCatalog.Auto;
             var currentTarget = _sessionTargetLanguage ?? settings.TargetLanguage ?? "zh-CN";
+            var previousTranslation = MarkdownPresenter.ToPlainText(
+                _state.FinalRenderedText,
+                preserveListStructure: true);
             var (source, target) = LanguageCatalog.Swap(currentSource, currentTarget);
             _sessionSourceLanguage = source;
             _sessionTargetLanguage = target;
+            if (!string.IsNullOrWhiteSpace(previousTranslation))
+            {
+                SearchBox.Text = previousTranslation;
+            }
             RefreshLangBadge();
-            await CoreBridge.SaveSettingsAsync(settings with
+            await CoreBridge.UpdateSettingsAsync(current => current with
             {
                 SourceLanguage = source,
                 TargetLanguage = target,
@@ -1228,6 +1302,16 @@ public partial class QuickSearchWindow : Window
 
     }
 
+    private async void CopySource_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isClosed) return;
+        var text = SearchBox.Text;
+        if (string.IsNullOrWhiteSpace(text)) return;
+        FooterStatus.Text = await PopGlot.Windows.Sections.Helpers.CopyToClipboardAsync(text)
+            ? "已复制原文到剪贴板"
+            : "剪贴板被其他应用占用，未复制";
+    }
+
 
 
     private void Star_Click(object sender, RoutedEventArgs e)
@@ -1328,7 +1412,7 @@ public partial class QuickSearchWindow : Window
         {
             StarButton.ClearValue(Button.BackgroundProperty);
         }
-        StarButton.ToolTip = starred ? "从生词本移除" : "收藏到生词本";
+        StarButton.ToolTip = starred ? "从生词本移除 (Ctrl+S)" : "收藏到生词本 (Ctrl+S)";
         // The static XAML name must follow the dynamic state so screen
         // readers announce the action the click will actually perform.
         System.Windows.Automation.AutomationProperties.SetName(StarButton, (string)StarButton.ToolTip);
@@ -1534,7 +1618,9 @@ public partial class QuickSearchWindow : Window
         var (state, isPartial) = _state.Stage switch
         {
             QuickSearchUiStage.Completed => (TranslationSessionState.Completed, false),
-            QuickSearchUiStage.Partial => (TranslationSessionState.Failed, true),
+            // T9.34：Partial 存「已取消 · 不完整」（与浮窗/工作台一致），
+            // 恢复时标不完整而非失败；保留文本、不重发。
+            QuickSearchUiStage.Partial => (TranslationSessionState.Cancelled, hasResult),
             QuickSearchUiStage.Failed => (TranslationSessionState.Failed, hasResult),
             _ => (TranslationSessionState.Cancelled, hasResult),
         };

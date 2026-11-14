@@ -995,7 +995,7 @@ internal static class WaveRegressionTests
             {
                 quickSearch.SearchBox.Text = "wave_star_word";
                 InvokePrivate(quickSearch, "UpdateStarButton");
-                Equal("收藏到生词本", AutomationProperties.GetName(quickSearch.StarButton),
+                Equal("收藏到生词本 (Ctrl+S)", AutomationProperties.GetName(quickSearch.StarButton),
                     "an unstarred word must announce the star action");
                 Equal(quickSearch.StarButton.ToolTip as string, AutomationProperties.GetName(quickSearch.StarButton),
                     "tooltip and accessibility name must agree");
@@ -1003,7 +1003,7 @@ internal static class WaveRegressionTests
                 var result = vocab.ToggleStar("wave_star_word", "wave translation", "", "", "en", "zh-CN");
                 True(result.Persisted && result.Starred, "setup: the word is starred");
                 InvokePrivate(quickSearch, "UpdateStarButton");
-                Equal("从生词本移除", AutomationProperties.GetName(quickSearch.StarButton),
+                Equal("从生词本移除 (Ctrl+S)", AutomationProperties.GetName(quickSearch.StarButton),
                     "a starred word must announce the remove action");
                 Equal(quickSearch.StarButton.ToolTip as string, AutomationProperties.GetName(quickSearch.StarButton),
                     "tooltip and accessibility name must agree after starring");
@@ -2331,7 +2331,7 @@ internal static class WaveRegressionTests
             //    references, never baked brushes.
             True(panel.TranslationTextBox.ReadLocalValue(Control.ForegroundProperty) is not Brush,
                 "the error headline foreground must be a dynamic resource reference");
-            True(panel.ExplanationText.ReadLocalValue(TextBlock.ForegroundProperty) is not Brush,
+            True(panel.ExplanationText.ReadLocalValue(Control.ForegroundProperty) is not Brush,
                 "the error explanation foreground must be a dynamic resource reference");
             True(panel.EngineBadge.ReadLocalValue(TextBlock.ForegroundProperty) is not Brush,
                 "the result badge foreground must be a dynamic resource reference");
@@ -2341,7 +2341,7 @@ internal static class WaveRegressionTests
             // 2) The resolved colors must be the DARK palette while dark.
             var darkSecondary = (Color)ColorConverter.ConvertFromString("#A8B0BD");
             var darkDanger = (Color)ColorConverter.ConvertFromString("#FF6B7D");
-            Equal(darkSecondary, ((SolidColorBrush)panel.ExplanationText.GetValue(TextBlock.ForegroundProperty)!).Color,
+            Equal(darkSecondary, ((SolidColorBrush)panel.ExplanationText.GetValue(Control.ForegroundProperty)!).Color,
                 "the error explanation must resolve the dark TextSecondaryBrush");
             Equal(darkDanger, ((SolidColorBrush)panel.EngineBadge.GetValue(TextBlock.ForegroundProperty)!).Color,
                 "the failed badge must resolve the dark DangerBrush");
@@ -2353,7 +2353,7 @@ internal static class WaveRegressionTests
             ThemeService.Apply(ThemePreference.Light);
             var lightSecondary = (Color)ColorConverter.ConvertFromString("#4D545F");
             var lightDanger = (Color)ColorConverter.ConvertFromString("#C93148");
-            Equal(lightSecondary, ((SolidColorBrush)panel.ExplanationText.GetValue(TextBlock.ForegroundProperty)!).Color,
+            Equal(lightSecondary, ((SolidColorBrush)panel.ExplanationText.GetValue(Control.ForegroundProperty)!).Color,
                 "the error explanation must follow the theme switch to light");
             Equal(lightDanger, ((SolidColorBrush)panel.EngineBadge.GetValue(TextBlock.ForegroundProperty)!).Color,
                 "the failed badge must follow the theme switch to light");
@@ -2531,12 +2531,12 @@ internal static class WaveRegressionTests
         var section = new TranslateSection();
         section.Initialize(new TranslationCoordinator(IsolatedHistory, IsolatedVocabulary), null);
         InvokePrivate(section, "UpdateStarVisualState", true);
-        Equal("从生词本移除", AutomationProperties.GetName(section.StarButton),
+        Equal("从生词本移除 (Ctrl+S)", AutomationProperties.GetName(section.StarButton),
             "a starred workbench entry must announce the remove action");
         Equal(section.StarButton.ToolTip as string, AutomationProperties.GetName(section.StarButton),
             "the workbench tooltip and accessibility name must agree");
         InvokePrivate(section, "UpdateStarVisualState", false);
-        Equal("收藏到生词本", AutomationProperties.GetName(section.StarButton),
+        Equal("收藏到生词本 (Ctrl+S)", AutomationProperties.GetName(section.StarButton),
             "an unstarred workbench entry must announce the star action");
         Equal(section.StarButton.ToolTip as string, AutomationProperties.GetName(section.StarButton),
             "the workbench tooltip and accessibility name must agree after unstarring");
@@ -2546,12 +2546,12 @@ internal static class WaveRegressionTests
         try
         {
             InvokePrivate(panel, "UpdateStarIcon", true);
-            Equal("从生词本移除", AutomationProperties.GetName(panel.StarToggle),
+            Equal("从生词本移除 (Ctrl+S)", AutomationProperties.GetName(panel.StarToggle),
                 "a starred panel result must announce the remove action");
             Equal(panel.StarToggle.ToolTip as string, AutomationProperties.GetName(panel.StarToggle),
                 "the panel tooltip and accessibility name must agree");
             InvokePrivate(panel, "UpdateStarIcon", false);
-            Equal("收藏到生词本", AutomationProperties.GetName(panel.StarToggle),
+            Equal("收藏到生词本 (Ctrl+S)", AutomationProperties.GetName(panel.StarToggle),
                 "an unstarred panel result must announce the star action");
             Equal(panel.StarToggle.ToolTip as string, AutomationProperties.GetName(panel.StarToggle),
                 "the panel tooltip and accessibility name must agree after unstarring");

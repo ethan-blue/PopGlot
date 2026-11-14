@@ -15,11 +15,13 @@ internal sealed record LibraryRow(
     string Title,
     string Detail,
     string Timestamp,
+    string FullTimestamp,
     string Kind,
     string LanguagePair,
     string Source,
     string Translation,
     string Explanation,
+    IReadOnlyList<string> ProtectedTerms,
     TranslationHistoryEntry? History,
     VocabularyWord? Word)
 {
@@ -88,7 +90,9 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             Interval = TimeSpan.FromSeconds(1),
         };
         _undoTimer.Tick += (_, _) => RefreshUndoBar();
+        _clearConfirm = ConfirmButton.Attach(ClearCurrentButton, "确认清空?", ClearCurrent);
     }
+    private ConfirmButton _clearConfirm = null!;
 
     private bool FilterRow(object item)
     {
@@ -234,8 +238,8 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         {
             return;
         }
-        RefreshUndoBar();
         _mode = ModeVocabulary.IsChecked == true ? LibraryMode.Vocabulary : LibraryMode.History;
+        RefreshUndoBar();
         if (_mode == LibraryMode.Vocabulary)
         {
             ReloadVocabulary();
@@ -273,11 +277,13 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         entry.Source,
         entry.Translation,
         entry.CreatedAt.ToLocalTime().ToString("MM-dd HH:mm", System.Globalization.CultureInfo.CurrentCulture),
+        entry.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.CurrentCulture),
         entry.SourceKind,
         $"{LanguageCatalog.DisplayName(entry.SourceLanguage)} → {LanguageCatalog.DisplayName(entry.TargetLanguage)}",
         entry.Source,
         entry.Translation,
         entry.Explanation,
+        entry.ProtectedTerms ?? [],
         entry,
         null);
 
@@ -286,6 +292,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         word.Word,
         word.Translation,
         word.CreatedAt.ToLocalTime().ToString("MM-dd HH:mm", System.Globalization.CultureInfo.CurrentCulture),
+        word.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.CurrentCulture),
         "生词",
         word.Phonetic is { Length: > 0 } phonetic
             ? $"{phonetic} · {LanguageCatalog.DisplayName(word.SourceLanguage)} → {LanguageCatalog.DisplayName(word.TargetLanguage)}"
@@ -293,6 +300,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         word.Word,
         word.Translation,
         word.Explanation,
+        [],
         null,
         word);
 
@@ -382,7 +390,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         DetailScroll.Visibility = Visibility.Visible;
         DetailContent.ScrollToTop();
 
-        DetailKind.Text = $"{row.Kind} · {row.Timestamp}";
+        DetailKind.Text = $"{row.Kind} · {row.FullTimestamp}";
         DetailLanguagePair.Text = row.LanguagePair;
         DetailSource.Text = row.Source;
         try
@@ -397,9 +405,13 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
                 new System.Windows.Documents.Run(row.Translation)));
         }
         DetailExplanation.Text = row.Explanation;
-        DetailExplanation.Visibility = string.IsNullOrWhiteSpace(row.Explanation)
+        var explanationVisible = string.IsNullOrWhiteSpace(row.Explanation)
             ? Visibility.Collapsed
             : Visibility.Visible;
+        DetailExplanation.Visibility = explanationVisible;
+        DetailExplanationHeader.Visibility = explanationVisible;
+        DetailTermsList.ItemsSource = row.ProtectedTerms.Distinct().ToArray();
+        DetailTermsList.Visibility = row.ProtectedTerms.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void LibraryList_KeyDown(object sender, KeyEventArgs e)
@@ -431,6 +443,27 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             CardCopy_Click(this, new RoutedEventArgs());
         }
     }
+
+    /// <summary>根级快捷键：焦点在详情或操作栏时 Ctrl+Shift+C / Ctrl+P 仍然生效。</summary>
+    private void Section_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (HandleSectionShortcut(e.Key, Keyboard.Modifiers)) e.Handled = true;
+    }
+
+    internal bool HandleSectionShortcut(System.Windows.Input.Key key, ModifierKeys modifiers)
+    {
+        if (key == System.Windows.Input.Key.C && (modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == (ModifierKeys.Control | ModifierKeys.Shift))
+        {
+            CardCopy_Click(this, new RoutedEventArgs());
+            return true;
+        }
+        if (key == System.Windows.Input.Key.P && (modifiers & ModifierKeys.Control) != 0 && (modifiers & ModifierKeys.Shift) == 0)
+        {
+            CardSpeak_Click(this, new RoutedEventArgs());
+            return true;
+        }
+        return false;
+    }
     // ================= Detail actions =================
 
     private void CardSpeak_Click(object sender, RoutedEventArgs e)
@@ -453,6 +486,49 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             await Helpers.CopyToClipboardAsync(MarkdownPresenter.ToPlainText(row.Translation, preserveListStructure: true)))
         {
             StatusChanged?.Invoke("已复制译文。", StatusTone.Info);
+        }
+        else if (SelectedRow() is not null)
+        {
+            StatusChanged?.Invoke("复制失败，剪贴板被占用", StatusTone.Error);
+        }
+    }
+
+    private async void CardCopySource_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedRow() is { } row && await Helpers.CopyToClipboardAsync(row.Source))
+        {
+            StatusChanged?.Invoke("已复制原文。", StatusTone.Info);
+        }
+        else if (SelectedRow() is not null)
+        {
+            StatusChanged?.Invoke("复制失败，剪贴板被占用", StatusTone.Error);
+        }
+    }
+
+    private async void CardCopyExplanation_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedRow() is not { Explanation: { Length: > 0 } explanation }) return;
+        if (await Helpers.CopyToClipboardAsync(explanation))
+        {
+            StatusChanged?.Invoke("已复制解释。", StatusTone.Info);
+        }
+        else
+        {
+            StatusChanged?.Invoke("复制失败，剪贴板被占用", StatusTone.Error);
+        }
+    }
+
+    private async void DetailTermChip_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as System.Windows.Controls.Button)?.Content is not string term ||
+            string.IsNullOrWhiteSpace(term)) return;
+        if (await Helpers.CopyToClipboardAsync(term))
+        {
+            StatusChanged?.Invoke("已复制术语。", StatusTone.Info);
+        }
+        else
+        {
+            StatusChanged?.Invoke("复制失败，剪贴板被占用", StatusTone.Error);
         }
     }
 
@@ -538,9 +614,19 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             row.History?.TargetLanguage ?? row.Word?.TargetLanguage,
             _mode == LibraryMode.History ? "历史记录" : "生词本");
 
+    private void LibraryList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is DependencyObject source &&
+            System.Windows.Controls.ItemsControl.ContainerFromElement(LibraryListBox, source) is System.Windows.Controls.ListBoxItem &&
+            SelectedRow() is { } row)
+        {
+            LoadRow(row);
+        }
+    }
+
     // ================= Export & clear =================
 
-    private void ClearCurrent_Click(object sender, RoutedEventArgs e) => ClearCurrent();
+    // 清空走两步确认（构造函数里 ConfirmButton.Attach 接管点击）。
 
     private void ExportMenuButton_Click(object sender, RoutedEventArgs e)
     {
@@ -678,11 +764,22 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         var current = _undoTicketId is { } id
             ? LibraryUndoJournal.Current(DateTime.UtcNow)
             : null;
-        if (current is null || _undoTicketId != current.Id)
+        var stale = current is null || _undoTicketId != current.Id;
+        var foreignMode = current is not null &&
+            (current.Surface == LibrarySurface.History) != (_mode == LibraryMode.History);
+        if (stale)
         {
             _undoTicketId = null;
             LibraryUndoBar.Visibility = Visibility.Collapsed;
             _undoTimer.Stop();
+        }
+        else if (foreignMode)
+        {
+            LibraryUndoBar.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            LibraryUndoBar.Visibility = Visibility.Visible;
         }
     }
 
@@ -704,11 +801,24 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
 
         if (ticket.Surface == LibrarySurface.History)
         {
-            if (!_history.InsertMissing(ticket.HistoryItems, out var inserted) || inserted == 0)
+            if (!_history.InsertMissing(ticket.HistoryItems, out var inserted, out var remaining))
             {
                 var again = LibraryUndoJournal.OfferHistory(ticket.HistoryItems, DateTime.UtcNow);
                 ShowUndo(again, "撤销没有写回。");
                 StatusChanged?.Invoke("撤销没有写回。请确认历史文件可写后重试。", StatusTone.Error);
+                return;
+            }
+            if (remaining.Count > 0)
+            {
+                ReloadHistory();
+                var retry = LibraryUndoJournal.OfferHistory(remaining, DateTime.UtcNow);
+                ShowUndo(retry, $"已恢复 {inserted} 条，{remaining.Count} 条因容量或内容限制未恢复。");
+                StatusChanged?.Invoke($"已恢复 {inserted} 条，{remaining.Count} 条因容量或内容限制未恢复。", StatusTone.Warning);
+                return;
+            }
+            if (inserted == 0)
+            {
+                StatusChanged?.Invoke("这些条目已在历史中。", StatusTone.Info);
                 return;
             }
 
@@ -718,15 +828,26 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         }
 
         if (_vocabulary is null ||
-            !_vocabulary.InsertMissing(ticket.VocabularyItems, out var restored) ||
-            restored == 0)
+            !_vocabulary.InsertMissing(ticket.VocabularyItems, out var restored, out var vocabRemaining))
         {
             var again = LibraryUndoJournal.OfferVocabulary(ticket.VocabularyItems, DateTime.UtcNow);
             ShowUndo(again, "撤销没有写回。");
             StatusChanged?.Invoke("撤销没有写回。请确认生词本文件可写后重试。", StatusTone.Error);
             return;
         }
-
+        if (vocabRemaining.Count > 0)
+        {
+            ReloadVocabulary();
+            var retry = LibraryUndoJournal.OfferVocabulary(vocabRemaining, DateTime.UtcNow);
+            ShowUndo(retry, $"已恢复 {restored} 条，{vocabRemaining.Count} 条因容量或内容限制未恢复。");
+            StatusChanged?.Invoke($"已恢复 {restored} 条，{vocabRemaining.Count} 条因容量或内容限制未恢复。", StatusTone.Warning);
+            return;
+        }
+        if (restored == 0)
+        {
+            StatusChanged?.Invoke("这些条目已在生词本中。", StatusTone.Info);
+            return;
+        }
         ReloadVocabulary();
         StatusChanged?.Invoke("已恢复刚才删除的生词。", StatusTone.Success);
     }

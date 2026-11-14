@@ -23,6 +23,24 @@ internal static class InterfaceKeys
     public static HotkeyBinding TranslateHotkey => _settings.InterfaceTranslateHotkey;
     public static HotkeyBinding SpeakHotkey => _settings.InterfaceSpeakHotkey;
 
+    /// <summary>
+    /// T9.22：翻译键文案统一从录制绑定生成；Ctrl+Enter 仅作未录制时的
+    /// 固定兜底显示（功能上 Ctrl+Enter 始终可用）。录制值即 Ctrl+Enter 时
+    /// 显示一致。
+    /// </summary>
+    internal static string TranslateKeyName =>
+        TranslateHotkey.IsValid ? TranslateHotkey.DisplayName : "Ctrl+Enter";
+
+    /// <summary>「{键} 翻译 · Enter 换行」——输入框帮助文本/工具栏提示。</summary>
+    internal static string TranslateHintText => $"{TranslateKeyName} 翻译 · Enter 换行";
+
+    /// <summary>浮窗原文占位符：「输入文本，{键} 翻译，Enter 换行」。</summary>
+    internal static string TranslateSourcePlaceholder => $"输入文本，{TranslateKeyName} 翻译，Enter 换行";
+
+    /// <summary>紧凑工具栏提示：Enter 缩写为 ↵，其余服从录制键。</summary>
+    internal static string TranslateHintCompactText =>
+        $"{TranslateKeyName.Replace("Enter", "↵")} 翻译 · ↵ 换行";
+
     public static void Apply(ShellSettings settings)
     {
         _settings = settings;
@@ -120,13 +138,18 @@ internal static class InterfaceKeys
         Hint("TranslateResultSpeakButton", speechAction, SpeakHotkey);
         Hint("ResultSpeakBtn", speechAction, SpeakHotkey);
         Hint("SpeakButton", speechAction, SpeakHotkey);
-        var translateHint = TranslateHotkey.IsValid
-            ? $"{TranslateHotkey.DisplayName} 翻译 · Enter 换行"
-            : "Ctrl+Enter 翻译 · Enter 换行";
         foreach (var name in new[] { "TranslateInput", "SourceInputBox" })
         {
             if (scope.FindName(name) is FrameworkElement editor)
-                System.Windows.Automation.AutomationProperties.SetHelpText(editor, translateHint);
+                System.Windows.Automation.AutomationProperties.SetHelpText(editor, TranslateHintText);
+        }
+        // T9.22：占位符与工具栏提示同样服从录制键，改绑后即时刷新。
+        if (scope.FindName("SourceInputBox") is System.Windows.Controls.TextBox panelSource)
+            panelSource.SetValue(Ui.PlaceholderProperty, TranslateSourcePlaceholder);
+        if (scope.FindName("TranslateShortcutHint") is System.Windows.Controls.TextBlock toolbarHint)
+        {
+            toolbarHint.Text = TranslateHintText;
+            if (toolbarHint.ToolTip is not null) toolbarHint.ToolTip = TranslateHintText;
         }
         if (scope.FindName("SearchBox") is FrameworkElement searchBox)
             System.Windows.Automation.AutomationProperties.SetHelpText(searchBox, "Enter 翻译");

@@ -747,8 +747,10 @@ public partial class MainWindow : Window
             SetStatus(ok ? "已切换" : error, ok ? StatusTone.Success : StatusTone.Error);
             if (ok)
             {
+                // T9.20：只有工作台可见时才重译。资料库页换引擎不得发起
+                // 看不见的网络翻译并写历史（与查词守卫同口径）。
                 var text = TranslateSection.InputBox.Text?.Trim();
-                if (!string.IsNullOrWhiteSpace(text))
+                if (TranslateSection.IsVisible && !string.IsNullOrWhiteSpace(text))
                 {
                     _ = TranslateSection.TranslateAsync();
                 }
@@ -809,8 +811,9 @@ public partial class MainWindow : Window
             SetStatus(ok ? "已切换" : error, ok ? StatusTone.Success : StatusTone.Error);
             if (ok)
             {
+                // T9.20：只有工作台可见时才重译（同上）。
                 var text = TranslateSection.InputBox.Text?.Trim();
-                if (!string.IsNullOrWhiteSpace(text))
+                if (TranslateSection.IsVisible && !string.IsNullOrWhiteSpace(text))
                 {
                     _ = TranslateSection.TranslateAsync();
                 }

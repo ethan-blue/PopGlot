@@ -33,7 +33,8 @@ internal sealed record TranslateUiState(
     bool AreResultActionsEnabled = false,
     bool IsTranslateButtonEnabled = true,
     bool IsExplanationVisible = false,
-    bool IsPartialIncomplete = false)
+    bool IsPartialIncomplete = false,
+    bool IsWarningTone = false)
 {
     public static TranslateUiState Initial => new(
         Epoch: 0,
@@ -51,7 +52,8 @@ internal sealed record TranslateUiState(
         AreResultActionsEnabled: false,
         IsTranslateButtonEnabled: true,
         IsExplanationVisible: false,
-        IsPartialIncomplete: false);
+        IsPartialIncomplete: false,
+        IsWarningTone: false);
 }
 
 internal static class TranslateSectionReducer
@@ -76,6 +78,7 @@ internal static class TranslateSectionReducer
             IsTranslateButtonEnabled = false,
             IsExplanationVisible = false,
             IsPartialIncomplete = false,
+            IsWarningTone = false,
         };
     }
 
@@ -177,12 +180,16 @@ internal static class TranslateSectionReducer
                 ProtectedTerms = session.ProtectedTerms,
                 IsExplanationVisible = notes.Count > 0,
                 IsPartialIncomplete = false,
+                IsWarningTone = false,
             };
         }
 
         if (session.Stage == TranslationSessionStage.Partial)
         {
             var text = !string.IsNullOrEmpty(session.TranslatedText) ? session.TranslatedText : current.StreamText;
+            var partialPresentation = TranslationStatusText.Resolve(
+                session.Stage, !string.IsNullOrWhiteSpace(text), session.Error?.Message, session.Warnings);
+            var partialExplanation = AppendGuidance(explanation, partialPresentation.RetryGuidance);
             return current with
             {
                 Phase = TranslateUiPhase.Partial,
@@ -193,12 +200,13 @@ internal static class TranslateSectionReducer
                 IsProgressVisible = false,
                 IsTranslateButtonEnabled = true,
                 AreResultActionsEnabled = false,
-                BadgeText = "内容不完整",
-                StatusText = $"内容不完整 · {TranslationElapsedText.ForTiming(session.Timing)}",
-                ExplanationText = explanation,
+                BadgeText = partialPresentation.BadgeText,
+                StatusText = partialPresentation.StatusText,
+                ExplanationText = partialExplanation,
                 ProtectedTerms = session.ProtectedTerms,
-                IsExplanationVisible = notes.Count > 0,
+                IsExplanationVisible = !string.IsNullOrWhiteSpace(partialExplanation),
                 IsPartialIncomplete = true,
+                IsWarningTone = partialPresentation.IsWarningTone,
             };
         }
 
@@ -215,11 +223,13 @@ internal static class TranslateSectionReducer
                 IsProgressVisible = false,
                 IsTranslateButtonEnabled = true,
                 AreResultActionsEnabled = false,
-                BadgeText = hasPartial ? "内容不完整" : "已取消",
+                BadgeText = hasPartial ? TranslationStatusText.Resolve(
+                    session.Stage, hasPartial, session.Error?.Message, session.Warnings).BadgeText : "已取消",
                 StatusText = hasPartial ? "内容不完整 · 已取消" : "已取消。",
                 ExplanationText = string.Empty,
                 IsExplanationVisible = false,
                 IsPartialIncomplete = hasPartial,
+                IsWarningTone = hasPartial,
             };
         }
 
@@ -229,6 +239,9 @@ internal static class TranslateSectionReducer
         var failExplanation = string.IsNullOrWhiteSpace(suggestion) ? message : $"{message}\n{suggestion}";
         var hasPartialFail = !string.IsNullOrWhiteSpace(current.StreamText);
 
+        var presentation = TranslationStatusText.Resolve(
+            session.Stage, hasPartialFail, message, session.Warnings);
+        failExplanation = AppendGuidance(failExplanation, presentation.RetryGuidance);
         return current with
         {
             Phase = hasPartialFail ? TranslateUiPhase.Partial : TranslateUiPhase.Failed,
@@ -240,11 +253,13 @@ internal static class TranslateSectionReducer
             IsProgressVisible = false,
             IsTranslateButtonEnabled = true,
             AreResultActionsEnabled = false,
-            BadgeText = hasPartialFail ? "内容不完整" : "未完成",
-            StatusText = hasPartialFail ? "生成中断 · 内容不完整" : "翻译失败",
+            BadgeText = hasPartialFail ? presentation.BadgeText : "未完成",
+            StatusText = session.Error?.Kind == TranslationErrorKind.SameLanguagePair
+                ? message : hasPartialFail ? presentation.StatusText : "翻译失败",
             ExplanationText = failExplanation,
             IsExplanationVisible = true,
             IsPartialIncomplete = hasPartialFail,
+            IsWarningTone = hasPartialFail && presentation.IsWarningTone,
         };
     }
 
@@ -265,15 +280,20 @@ internal static class TranslateSectionReducer
                 IsProgressVisible = false,
                 IsTranslateButtonEnabled = true,
                 AreResultActionsEnabled = false,
-                BadgeText = hasPartial ? "内容不完整" : "已取消",
+                BadgeText = hasPartial ? TranslationStatusText.Resolve(
+                    TranslationSessionStage.Cancelled, hasPartial, null, warnings: null).BadgeText : "已取消",
                 StatusText = hasPartial ? "内容不完整 · 已取消" : "已取消。",
                 ExplanationText = string.Empty,
                 IsExplanationVisible = false,
                 IsPartialIncomplete = hasPartial,
+                IsWarningTone = hasPartial,
             };
         }
 
         var hasPartialErr = !string.IsNullOrWhiteSpace(current.StreamText);
+        var presentation = TranslationStatusText.Resolve(
+            TranslationSessionStage.Failed, hasPartialErr, exception.Message, warnings: null);
+        var errorExplanation = AppendGuidance(exception.Message, presentation.RetryGuidance);
         return current with
         {
             Phase = hasPartialErr ? TranslateUiPhase.Partial : TranslateUiPhase.Failed,
@@ -284,13 +304,20 @@ internal static class TranslateSectionReducer
             IsProgressVisible = false,
             IsTranslateButtonEnabled = true,
             AreResultActionsEnabled = false,
-            BadgeText = hasPartialErr ? "内容不完整" : "未完成",
-            StatusText = hasPartialErr ? "生成中断 · 内容不完整" : "翻译失败",
-            ExplanationText = exception.Message,
+            BadgeText = hasPartialErr ? presentation.BadgeText : "未完成",
+            StatusText = hasPartialErr ? presentation.StatusText : "翻译失败",
+            ExplanationText = errorExplanation,
             IsExplanationVisible = true,
             IsPartialIncomplete = hasPartialErr,
+            IsWarningTone = hasPartialErr && presentation.IsWarningTone,
         };
     }
+    private static string AppendGuidance(string text, string? guidance)
+    {
+        if (string.IsNullOrWhiteSpace(guidance) || text.Contains(guidance, StringComparison.Ordinal)) return text;
+        return string.IsNullOrWhiteSpace(text) ? guidance : $"{text}\n{guidance}";
+    }
+
 }
 
 public partial class TranslateSection : System.Windows.Controls.UserControl
@@ -302,6 +329,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     private long _currentEpoch;
     private TranslateUiState _currentState = TranslateUiState.Initial;
     private readonly ReadingModeState _reading = new();
+    private readonly TranslationRoundTripCache _roundTripCache = new();
     private bool _holdingSummary;
     private long _summaryViewGeneration;
     private string _summaryStreamText = string.Empty;
@@ -319,6 +347,8 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     {
         InitializeComponent();
         InterfaceKeys.RefreshHints(this);
+        // T9.26：详情块默认绑定引擎徽标 ToolTip（引擎/风格），错误时再覆盖。
+        SetSummaryStatusDetail(null);
         Ui.AttachCompositionTracker(TranslateInput);
         TranslateSourceLang.ItemsSource = LanguageCatalog.Sources;
         TranslateTargetLang.ItemsSource = LanguageCatalog.Targets;
@@ -442,7 +472,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     internal Action? OpenOfflineUsageFlow { get; set; }
     internal System.Windows.Controls.Grid PaneGrid => TranslatePaneGrid;
     internal Border StreamIndicator => TranslateStreamIndicator;
-    internal TextBlock ExplanationText => TranslateExplanation;
+    internal System.Windows.Controls.TextBox ExplanationText => TranslateExplanation;
     internal StackPanel ExplanationBox => TranslateExplanationBox;
     internal ScrollViewer ResultScroll => TranslateResultScroll;
     internal TranslateUiState CurrentState => _currentState;
@@ -457,13 +487,13 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     {
         if (compact)
         {
-            TranslateShortcutHint.Text = "Ctrl+↵ 翻译 · ↵ 换行";
-            TranslateShortcutHint.ToolTip = "Ctrl+Enter 翻译 · Enter 换行";
+            TranslateShortcutHint.Text = Services.InterfaceKeys.TranslateHintCompactText;
+            TranslateShortcutHint.ToolTip = Services.InterfaceKeys.TranslateHintText;
             TranslateStatus.MaxWidth = 160;
         }
         else
         {
-            TranslateShortcutHint.Text = "Ctrl+Enter 翻译 · Enter 换行";
+            TranslateShortcutHint.Text = Services.InterfaceKeys.TranslateHintText;
             TranslateShortcutHint.ToolTip = null;
             TranslateStatus.MaxWidth = 260;
         }
@@ -763,8 +793,40 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
     private void SetSummaryStatusDetail(string? detail)
     {
-        TranslateStatus.ToolTip = detail;
+        // T9.26：只写结构化 ToolTip 内的详情文本块，绝不替换 ToolTip 对象——
+        // 替换会让内嵌的 TranslateEngineBadge 脱离视觉树，引擎/风格信息永不可达。
+        // 详情非空时覆盖引擎绑定显示错误原因；清空时恢复绑定让引擎/风格重新可达。
+        if (detail is null)
+        {
+            // ToolTip 弹出层有独立 namescope，ElementName 解析不到徽标；
+            // 直接从 ToolTip 内容树取徽标作绑定源（构造期即可达），
+            // 保证引擎/风格始终可达。
+            var badge = TranslateStatus.ToolTip is System.Windows.Controls.ToolTip tip && tip.Content is DependencyObject content
+                ? FindLogicalDescendant<TextBlock>(content, "TranslateEngineBadge")
+                : null;
+            if (badge is not null)
+            {
+                var binding = new System.Windows.Data.Binding("ToolTip") { Source = badge };
+                TranslateStatusDetail.SetBinding(TextBlock.TextProperty, binding);
+            }
+        }
+        else
+        {
+            System.Windows.Data.BindingOperations.ClearBinding(TranslateStatusDetail, TextBlock.TextProperty);
+            TranslateStatusDetail.Text = detail;
+        }
         System.Windows.Automation.AutomationProperties.SetHelpText(TranslateStatus, detail ?? string.Empty);
+    }
+
+    private static T? FindLogicalDescendant<T>(DependencyObject root, string name) where T : FrameworkElement
+    {
+        foreach (var child in LogicalTreeHelper.GetChildren(root))
+        {
+            if (child is T match && match.Name == name) return match;
+            if (child is DependencyObject nested && FindLogicalDescendant<T>(nested, name) is { } found)
+                return found;
+        }
+        return null;
     }
 
     internal void PaintSummaryStream(string text, bool running)
@@ -897,6 +959,12 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
 
     private async void TranslateSection_KeyDown(object sender, KeyEventArgs e)
     {
+        if (e.Key == Key.Escape && _restoreMenu is { IsOpen: true })
+        {
+            e.Handled = true;
+            _restoreMenu.IsOpen = false;
+            return;
+        }
         if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.C)
         {
             if (TranslateResultCopyButton?.IsEnabled == true)
@@ -1018,6 +1086,46 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             return;
         }
 
+        var sourceLang = Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto);
+        var targetLang = Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN");
+        if (LanguageCatalog.Normalize(sourceLang) == LanguageCatalog.Auto)
+        {
+            var autoTarget = LanguageCatalog.ResolveAutoTarget(source, targetLang);
+            if (autoTarget != targetLang)
+            {
+                targetLang = autoTarget;
+                _languageChangeSuspended = true;
+                try { TranslateTargetLang.SelectedItem = LanguageCatalog.ResolveTarget(targetLang); }
+                finally { _languageChangeSuspended = false; }
+                PersistLanguagePair();
+            }
+        }
+
+        var configVersion = ProfileManager.Revision;
+        var styleIdentity = TranslationStyleMenu.ActiveIdentity();
+        if (styleIdentity is not null && _roundTripCache.TryGet(
+                source, sourceLang, targetLang, configVersion, styleIdentity, out var cached))
+        {
+            var cacheEpoch = Interlocked.Increment(ref _currentEpoch);
+            _translateOperation?.Cancel();
+            _translateOperation?.Dispose();
+            _translateOperation = null;
+            _holdingSummary = false;
+            _pendingStyleNotice = null;
+            _reading.ShowTranslation();
+            ShowTranslationChoice.IsChecked = true;
+            var cachedSession = cached.CreateSession(
+                source, sourceLang, targetLang, TranslationInputSource.Manual);
+            var cachedState = TranslateSectionReducer.ApplyCompletion(
+                TranslateUiState.Initial with { Epoch = cacheEpoch }, cachedSession, cacheEpoch)
+                with { StatusText = TranslationRoundTripCache.ReusedStatus };
+            ApplyState(cachedState);
+            TranslateEngineBadge.ToolTip = string.IsNullOrWhiteSpace(cachedSession.PromptTemplateName)
+                ? $"引擎：{cachedSession.PipelineLabel}"
+                : $"引擎：{cachedSession.PipelineLabel}\n风格：{cachedSession.PromptTemplateName}";
+            return;
+        }
+
         var epoch = Interlocked.Increment(ref _currentEpoch);
         _translateOperation?.Cancel();
         _translateOperation?.Dispose();
@@ -1029,9 +1137,6 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         // the session's terminal close publishes the full timeline.
         var trace = new Services.InteractionTrace("workbench-text");
         trace.Mark(Services.TracePoint.DispatcherEntered);
-
-        var sourceLang = Helpers.SelectedLanguage(TranslateSourceLang, LanguageCatalog.Auto);
-        var targetLang = Helpers.SelectedLanguage(TranslateTargetLang, "zh-CN");
 
         // Honest pre-flight notice when the route cannot be proven to honour
         // the active style (the free engine never personalizes): state it
@@ -1110,6 +1215,15 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             }
 
             ApplyState(TranslateSectionReducer.ApplyCompletion(_currentState, session, epoch));
+            if (session.IsCleanCompletion && styleIdentity is not null &&
+                configVersion == ProfileManager.Revision &&
+                string.Equals(styleIdentity, TranslationStyleMenu.ActiveIdentity(), StringComparison.Ordinal))
+            {
+                _roundTripCache.Set(
+                    source, sourceLang, targetLang, session.TranslatedText,
+                    TranslationRoundTripCache.ExplanationFor(session), configVersion, styleIdentity,
+                    session.PipelineLabel, session.PromptTemplateName);
+            }
             if (!_holdingSummary)
             {
                 TranslateEngineBadge.ToolTip = string.IsNullOrWhiteSpace(session.PromptTemplateName)
@@ -1161,12 +1275,11 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             _reading.CaptureTranslation(state.StreamText, state.ExplanationText);
         }
         TranslateButton.IsEnabled = state.IsTranslateButtonEnabled;
-        // The language pair is part of the request snapshot. Keep the headers
-        // immutable until that request terminates so a late response can never
-        // be shown under a direction it was not translated for.
+        // Keep the selectors fixed to the active request snapshot. Swap is the
+        // exception: it starts a new epoch and cancels/fences the old request.
         TranslateSourceLang.IsEnabled = state.IsTranslateButtonEnabled;
         TranslateTargetLang.IsEnabled = state.IsTranslateButtonEnabled;
-        TranslateSwapButton.IsEnabled = state.IsTranslateButtonEnabled;
+        TranslateSwapButton.IsEnabled = true;
 
         // A translation that is still arriving must not take the result
         // surface back from the summary. A new translation clears the flag
@@ -1176,7 +1289,12 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             return;
         }
 
-        SetSummaryStatusDetail(null);
+        // T9.28：新翻译发起时复位结果滚动，长译文滚到底后再译短文也能看到开头。
+        if (state.Phase == TranslateUiPhase.Preparing)
+        {
+            TranslateResultScroll.ScrollToTop();
+        }
+
         TranslateProgress.Visibility = state.IsProgressVisible ? Visibility.Visible : Visibility.Collapsed;
         TranslateStreamIndicator.Visibility = state.IsStreamIndicatorVisible ? Visibility.Visible : Visibility.Collapsed;
 
@@ -1239,6 +1357,16 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         TranslateEngineBadge.Text = state.BadgeText;
         TranslateEngineBadge.ToolTip = null;
         TranslateStatus.Text = state.StatusText;
+        var statusTone = state.IsPartialIncomplete
+            ? state.IsWarningTone ? "WarningBrush" : "DangerBrush"
+            : state.Phase == TranslateUiPhase.Cancelled ? "WarningBrush"
+            : state.Phase == TranslateUiPhase.Failed ? "DangerBrush" : "TextSecondaryBrush";
+        var badgeTone = state.IsPartialIncomplete
+            ? state.IsWarningTone ? "WarningBrush" : "DangerBrush"
+            : state.Phase == TranslateUiPhase.Cancelled ? "WarningBrush"
+            : state.Phase == TranslateUiPhase.Failed ? "DangerBrush" : "TextTertiaryBrush";
+        TranslateEngineBadge.SetResourceReference(TextBlock.ForegroundProperty, badgeTone);
+        TranslateStatus.SetResourceReference(TextBlock.ForegroundProperty, statusTone);
         if (!HasConfiguredUserEngine() && state.Phase == TranslateUiPhase.Idle && string.IsNullOrWhiteSpace(state.FinalText))
         {
             TranslateEngineBadge.Text = string.Empty;
@@ -1333,12 +1461,12 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         if (isStarred)
         {
             TranslateStarIcon.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "AccentBrush");
-            TranslateStarButton.ToolTip = "从生词本移除";
+            TranslateStarButton.ToolTip = "从生词本移除 (Ctrl+S)";
         }
         else
         {
             TranslateStarIcon.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "TextSecondaryBrush");
-            TranslateStarButton.ToolTip = "收藏到生词本";
+            TranslateStarButton.ToolTip = "收藏到生词本 (Ctrl+S)";
         }
         // The accessibility name must follow the dynamic state so screen
         // readers announce the action the click will actually perform.
@@ -1488,7 +1616,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             {
                 GuideDescription.Text = hasFallbackRoute
                     ? "整理要点与自定风格需要模型服务。"
-                    : "免配置即开即用；仅传输文本，保障隐私安全。";
+                    : "无需配置即可使用公共直译；仅发送待翻译文本，不发送截图或本地数据。";
             }
         }
         if (EnableFreeEngineButton is not null)
@@ -1661,6 +1789,11 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         TranslateCounter.Text = $"{length} 字符";
         // 空输入时隐藏「0 字符」：数字零没有信息量，只会在页脚占位。
         TranslateCounter.Visibility = length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        // T9.27：接近单次会话输入上限（800×8=6400 字符）时计数变警告色，
+        // 提前提示用户缩短或分批，而不是提交后才失败。
+        TranslateCounter.SetResourceReference(TextBlock.ForegroundProperty,
+            length >= CoreBridge.MaxSegmentChars * CoreBridge.MaxSegments * 9 / 10
+                ? "WarningBrush" : "TextTertiaryBrush");
         CancelSummary();
         _summaryStreamText = string.Empty;
         _summaryComplete = false;
@@ -1689,6 +1822,8 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         }
         PersistLanguagePair();
         ClearResultForLanguageChange();
+        if (_translateOperation is null && !string.IsNullOrWhiteSpace(TranslateInput.Text))
+            _ = TranslateAsync();
     }
 
     private void TargetLang_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1701,6 +1836,8 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         }
         PersistLanguagePair();
         ClearResultForLanguageChange();
+        if (_translateOperation is null && !string.IsNullOrWhiteSpace(TranslateInput.Text))
+            _ = TranslateAsync();
     }
 
     private void ClearResultForLanguageChange()
@@ -1801,22 +1938,21 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         }
         PersistLanguagePair();
 
-        if (!string.IsNullOrWhiteSpace(TranslateResult.Text))
+        var displayedTranslation = _currentState.Phase is TranslateUiPhase.Streaming or TranslateUiPhase.Finalizing
+            ? _currentState.StreamText
+            : TranslateResult.Text;
+        var plain = MarkdownPresenter.ToPlainText(
+            displayedTranslation,
+            preserveListStructure: true);
+        if (!string.IsNullOrWhiteSpace(plain))
         {
-            // 结果层保存的是原始 Markdown；换回原文方向时必须携带约定的
-            // 纯文本（与浮窗/极速查词相同的 ToPlainText 格式化器），而不是
-            // 把标记符号塞进输入框。
-            var plain = MarkdownPresenter.ToPlainText(
-                TranslateResult.Text,
-                preserveListStructure: true);
-            if (string.IsNullOrWhiteSpace(plain))
-            {
-                return;
-            }
             TranslateInput.Text = plain;
             var epoch = Interlocked.Increment(ref _currentEpoch);
             ApplyState(TranslateUiState.Initial with { Epoch = epoch });
         }
+
+        if (!string.IsNullOrWhiteSpace(TranslateInput.Text))
+            _ = TranslateAsync();
     }
 
     // ================= Result actions =================
@@ -2016,8 +2152,12 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
         menu.HorizontalOffset = -10;
         menu.VerticalOffset = -2;
+        _restoreMenu = menu;
+        menu.Closed += (_, _) => { if (ReferenceEquals(_restoreMenu, menu)) _restoreMenu = null; };
         menu.IsOpen = true;
     }
+
+    private System.Windows.Controls.ContextMenu? _restoreMenu;
 
     /// <summary>
     /// 恢复暂存按钮按会话仓的真实库存决定显示状态：有暂存可恢复时可用，
