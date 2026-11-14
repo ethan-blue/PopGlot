@@ -241,7 +241,9 @@ public partial class ServicesSection
         return new ProviderProfile
         {
             Id = _cliProfileId ?? $"cli-{Guid.NewGuid():N}",
-            Name = (ConnectionNameTextBox.Text.Trim() is { Length: > 0 } customName ? customName : null) ?? existing?.Name ?? $"{row.ToolName} · {model.DisplayName}",
+            Name = (ConnectionNameTextBox.Text.Trim() is { Length: > 0 } customName ? customName : null)
+                ?? existing?.Name
+                ?? (_cliKind == EngineExecutionKind.OmpRpc ? TextRouteMenu.OmpProviderShortName(model.Provider) : "Codex"),
             ExecutionKind = EngineExecutionKindNames.Format(_cliKind), CliConnection = _cliConnection.Clone(),
             TextModel = model.Id, SupportsText = true, SupportsVision = false, VisionModel = "",
             ApiBaseUrl = "", TextEndpoint = "", VisionEndpoint = "", CredentialTarget = "", IsLocal = false,

@@ -22,17 +22,39 @@ internal static class WindowPositioner
 
     public static Point NearAnchor(Rect anchor, Size window, Rect workArea)
     {
-        var candidates = new[]
-        {
-            new Point(anchor.Right + Gap, anchor.Top),
-            new Point(anchor.Left, anchor.Bottom + Gap),
-            new Point(anchor.Left - window.Width - Gap, anchor.Top),
-            new Point(anchor.Left, anchor.Top - window.Height - Gap),
-        };
+        var minLeft = workArea.Left + Edge;
+        var maxLeft = workArea.Right - window.Width - Edge;
+        var minTop = workArea.Top + Edge;
+        var maxTop = workArea.Bottom - window.Height - Edge;
+        var clampedX = ClampToRange(anchor.Left, minLeft, maxLeft);
+        var clampedY = ClampToRange(anchor.Top, minTop, maxTop);
+
+        // For cursor/text-line anchors (height <= 64px), prefer Below then Above so the
+        // floating panel stays off the horizontal text line being read (especially when
+        // dragging right-to-left). Because Below/Above are vertically disjoint from the
+        // anchor, X can safely clamp to [minLeft, maxLeft] without ever overlapping it.
+        // Likewise, Right/Left are horizontally disjoint from the anchor so Y can safely
+        // clamp to [minTop, maxTop] without overlapping it.
+        var isLineAnchor = anchor.Height <= 64;
+        var candidates = isLineAnchor
+            ? new[]
+            {
+                new Point(clampedX, anchor.Bottom + Gap),
+                new Point(clampedX, anchor.Top - window.Height - Gap),
+                new Point(anchor.Right + Gap, clampedY),
+                new Point(anchor.Left - window.Width - Gap, clampedY),
+            }
+            : new[]
+            {
+                new Point(anchor.Right + Gap, clampedY),
+                new Point(clampedX, anchor.Bottom + Gap),
+                new Point(anchor.Left - window.Width - Gap, clampedY),
+                new Point(clampedX, anchor.Top - window.Height - Gap),
+            };
         foreach (var candidate in candidates)
         {
-            if (candidate.X >= workArea.Left + Edge &&
-                candidate.Y >= workArea.Top + Edge &&
+            if (candidate.X >= minLeft &&
+                candidate.Y >= minTop &&
                 candidate.X + window.Width <= workArea.Right - Edge &&
                 candidate.Y + window.Height <= workArea.Bottom - Edge)
             {
@@ -40,11 +62,29 @@ internal static class WindowPositioner
             }
         }
 
-        // Nothing fits cleanly: clamp inside the work area. Math.Clamp throws
+        // Nothing fits cleanly without edge clamping: for line anchors push toward
+        // the side with more vertical clearance (below vs above) and away from
+        // anchor horizontally when space permits, instead of landing right over it.
+        if (isLineAnchor)
+        {
+            var spaceBelow = workArea.Bottom - Edge - anchor.Bottom;
+            var spaceAbove = anchor.Top - (workArea.Top + Edge);
+            var fallbackY = spaceBelow >= spaceAbove
+                ? ClampToRange(anchor.Bottom + Gap, minTop, maxTop)
+                : ClampToRange(anchor.Top - window.Height - Gap, minTop, maxTop);
+            var anchorCenterX = anchor.Left + (anchor.Width / 2);
+            var workCenterX = workArea.Left + (workArea.Width / 2);
+            var fallbackX = anchorCenterX <= workCenterX
+                ? Math.Max(clampedX, maxLeft)
+                : minLeft;
+            return new Point(ClampToRange(fallbackX, minLeft, maxLeft), fallbackY);
+        }
+
+        // Clamp inside the work area. Math.Clamp throws
         // when the window is larger than the monitor, so order the bounds.
         return new Point(
-            ClampToRange(anchor.Right + Gap, workArea.Left + Edge, workArea.Right - window.Width - Edge),
-            ClampToRange(anchor.Top, workArea.Top + Edge, workArea.Bottom - window.Height - Edge));
+            ClampToRange(anchor.Right + Gap, minLeft, maxLeft),
+            ClampToRange(anchor.Top, minTop, maxTop));
     }
 
     private static double ClampToRange(double value, double low, double high) =>

@@ -697,7 +697,7 @@ public partial class MainWindow : Window
     internal ContextMenu BuildEngineSwitchMenu()
     {
         var config = ProfileManager.Load();
-        var menu = new ContextMenu { MinWidth = 190, MaxWidth = 264, MaxHeight = 420 };
+        var menu = new ContextMenu { MinWidth = 190, MaxWidth = 320, MaxHeight = 420 };
         TextRouteMenu.AddTextChoices(menu, SwitchTextEngine, SwitchToFreeEngineAsync);
         menu.Items.Add(new Separator());
         menu.Items.Add(TextRouteMenu.Header("图片"));

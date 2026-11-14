@@ -148,7 +148,7 @@
 
                     <Button x:Name="EngineHealthButton" Grid.Column="1" Style="{StaticResource GhostButton}"
                             VerticalAlignment="Center"
-                            Padding="8,4" MaxWidth="220" AutomationProperties.Name="翻译引擎快速切换"
+                            Padding="8,4" MaxWidth="240" AutomationProperties.Name="翻译引擎快速切换"
                             ToolTip="切换文字与图片引擎"
                             Click="EngineHealthButton_Click">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -176,7 +176,7 @@
                             </Border>
                             <TextBlock x:Name="EngineSummary" Margin="6,0,4,0"
                                        Style="{StaticResource Metadata}"
-                                       VerticalAlignment="Center" MaxWidth="112"
+                                       VerticalAlignment="Center" MaxWidth="168"
                                        TextTrimming="CharacterEllipsis"
                                        ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                        Foreground="{DynamicResource TextSecondaryBrush}"

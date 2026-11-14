@@ -880,15 +880,30 @@ internal static partial class Program
     {
         var workArea = new Rect(0, 0, 1920, 1080);
         var anchor = new Rect(1800, 1000, 50, 20);
+        var windowSize = new Size(400, 300);
         var point = WindowPositioner.NearAnchor(
             anchor,
-            new Size(400, 300),
+            windowSize,
             workArea);
 
         True(point.X >= workArea.Left + 12, "left out of bounds");
         True(point.X + 400 <= workArea.Right - 12, "right out of bounds");
         True(point.Y >= workArea.Top + 12, "top out of bounds");
         True(point.Y + 300 <= workArea.Bottom - 12, "bottom out of bounds");
+        True(!new Rect(point, windowSize).IntersectsWith(anchor),
+            "panel must not occlude bottom-right selection anchor");
+
+        var midRightAnchor = new Rect(1800, 400, 50, 20);
+        var midRightPoint = WindowPositioner.NearAnchor(midRightAnchor, windowSize, workArea);
+        True(!new Rect(midRightPoint, windowSize).IntersectsWith(midRightAnchor),
+            "panel must not occlude mid-right selection anchor");
+
+        var tightWorkArea = new Rect(0, 0, 1024, 640);
+        var centerAnchor = new Rect(400, 300, 20, 28);
+        var tightWindow = new Size(540, 380);
+        var tightPoint = WindowPositioner.NearAnchor(centerAnchor, tightWindow, tightWorkArea);
+        True(!new Rect(tightPoint, tightWindow).IntersectsWith(centerAnchor),
+            "panel must avoid overlapping center anchor even on a compact work area");
     }
 
     private static void PanelPositionSupportsNegativeCoordinates()

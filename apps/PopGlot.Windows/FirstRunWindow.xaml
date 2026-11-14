@@ -42,7 +42,7 @@
                 <TextBlock Text="欢迎使用 PopGlot" Style="{StaticResource PageTitle}"
                            FontSize="22" FontWeight="SemiBold" />
                 <TextBlock Margin="0,10,0,0" TextWrapping="Wrap" FontSize="13.5"
-                           Text="划词即译、截图识别、本地朗读。默认已经可以开箱即用——内置免费引擎不需要任何配置。" />
+                           Text="支持划词翻译、截图识别与本地朗读，内置公共翻译无需配置即可使用。" />
                 <TextBlock Margin="0,18,0,6" Text="三个快捷键" Style="{StaticResource SectionTitle}" />
                 <Border Style="{StaticResource Card}" Padding="14,10">
                     <StackPanel>
@@ -52,7 +52,7 @@
                     </StackPanel>
                 </Border>
                 <TextBlock Margin="0,14,0,0" Style="{StaticResource Caption}" TextWrapping="Wrap"
-                           Text="下一步是隐私设置。全部按推荐值默认开启，你可以逐项关掉；之后随时能在「设置」里再改。" />
+                           Text="下一步可调整隐私与联网选项，所有设置后续均可在「设置」中修改。" />
             </StackPanel>
 
             <!-- ==================== Step 2: privacy ==================== -->
@@ -61,7 +61,7 @@
                            FontSize="22" FontWeight="SemiBold" />
                 <TextBlock Margin="0,8,0,14" TextWrapping="Wrap" FontSize="13"
                            Foreground="{DynamicResource TextSecondaryBrush}"
-                           Text="以下选择只影响这台机器。关闭任何一项都不会丢失已保存的数据。" />
+                           Text="以下设置仅作用于当前设备，关闭不会影响已保存的数据。" />
 
                 <Border Style="{StaticResource Card}" Padding="14,6">
                     <StackPanel>
@@ -73,7 +73,7 @@
                             <StackPanel VerticalAlignment="Center">
                                 <TextBlock Text="允许连接云端翻译服务" Style="{StaticResource RowTitle}" />
                                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
-                                           Text="关掉后完全不出网，只使用本机模型（如 Ollama）" />
+                                           Text="关闭后不再发起联网请求，仅使用本机模型（如 Ollama）" />
                             </StackPanel>
                             <ToggleButton x:Name="CloudToggle" Grid.Column="1" VerticalAlignment="Center"
                                           Style="{StaticResource ToggleSwitch}" IsChecked="True"
@@ -90,7 +90,7 @@
                             <StackPanel VerticalAlignment="Center">
                                 <TextBlock Text="使用内置免费引擎" Style="{StaticResource RowTitle}" />
                                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
-                                           Text="无需配置即可翻译；会把待译文本发送给你选中的公共服务" />
+                                           Text="免配置翻译，仅将待译文本发送至所选公共翻译服务" />
                             </StackPanel>
                             <ToggleButton x:Name="FreeEngineToggle" Grid.Column="1" VerticalAlignment="Center"
                                           Style="{StaticResource ToggleSwitch}" IsChecked="True"
@@ -141,7 +141,7 @@
                             <StackPanel VerticalAlignment="Center">
                                 <TextBlock Text="允许上报诊断信息" Style="{StaticResource RowTitle}" />
                                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
-                                           Text="崩溃时把脱敏后的诊断发到 GitHub Issues；默认关闭" />
+                                           Text="崩溃时发送脱敏诊断信息至 GitHub Issues（默认关闭）" />
                             </StackPanel>
                             <ToggleButton x:Name="DiagnosticsToggle" Grid.Column="1" VerticalAlignment="Center"
                                           Style="{StaticResource ToggleSwitch}" IsChecked="False"
@@ -157,10 +157,10 @@
                            FontSize="22" FontWeight="SemiBold" />
                 <TextBlock x:Name="DoneSummary" Margin="0,12,0,0" TextWrapping="Wrap" FontSize="13.5" />
                 <TextBlock Margin="0,16,0,0" TextWrapping="Wrap" FontSize="13.5"
-                           Text="想要更稳定、更高质量的翻译，可以在「设置 → 服务」里填上自己的模型服务（OpenAI 兼容、DeepSeek、本地 Ollama 等）。不配置也完全能用。" />
+                           Text="如需接入自有模型（OpenAI、DeepSeek、Claude、Gemini、Ollama 等），可在「设置 → 引擎」中添加。" />
                 <Button x:Name="OpenServicesButton" Margin="0,16,0,0" HorizontalAlignment="Left"
                         Style="{StaticResource GhostButton}" Padding="12,6"
-                        Content="打开设置 → 服务" Click="OpenServices_Click" />
+                        Content="打开设置 → 引擎" Click="OpenServices_Click" />
             </StackPanel>
 
             <!-- ==================== Footer ==================== -->

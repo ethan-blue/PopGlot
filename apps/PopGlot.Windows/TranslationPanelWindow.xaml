@@ -99,11 +99,11 @@
 
                     <!-- Center: Language selection -->
                     <Grid Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <Grid Width="172" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Grid Width="188" HorizontalAlignment="Center" VerticalAlignment="Center">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" MinWidth="68" MaxWidth="110" />
+                                <ColumnDefinition Width="*" MinWidth="74" MaxWidth="116" />
                                 <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" MinWidth="68" MaxWidth="110" />
+                                <ColumnDefinition Width="*" MinWidth="74" MaxWidth="116" />
                             </Grid.ColumnDefinitions>
                             <ComboBox x:Name="SourceLangCombo" Grid.Column="0" Style="{StaticResource LanguagePickerComboBox}"
                                       Height="26" HorizontalAlignment="Stretch" ToolTip="原文语言"
@@ -271,12 +271,12 @@
                             <RadioButton x:Name="ShowTranslationChoice" Content="译文" GroupName="PanelReading"
                                          Style="{StaticResource SegmentChoice}" IsChecked="True"
                                          AutomationProperties.Name="显示译文"
-                                         ToolTip="翻译结果。说明附在译文下面，不用再单独解释。"
+                                         ToolTip="查看译文与词汇说明"
                                          Click="ShowTranslation_Click" />
                             <RadioButton x:Name="ShowSummaryChoice" Content="要点" GroupName="PanelReading"
                                          Style="{StaticResource SegmentChoice}"
                                          AutomationProperties.Name="显示要点"
-                                         ToolTip="提炼原文核心要点与摘要"
+                                         ToolTip="提炼核心要点"
                                          Click="ShowSummary_Click" />
                             </StackPanel>
                             <TextBlock x:Name="EngineBadge" Grid.Column="1" Style="{StaticResource Metadata}"
@@ -298,37 +298,18 @@
                         </Grid>
 
                         <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                            <Button x:Name="RouteSelectorButton" Style="{StaticResource IconButton}"
-                                    Width="Auto" MinWidth="32" Height="32" Padding="6,0" Margin="0,0,4,0"
-                                    AutomationProperties.Name="文字翻译模型"
-                                    ToolTipService.ShowOnDisabled="True"
-                                    ToolTip="文字翻译模型（点击切换）"
-                                    Click="RouteSelector_Click">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Path Width="12" Height="12" Stretch="Uniform"
-                                          Fill="{DynamicResource AccentBrush}"
-                                          Data="{StaticResource IconProvider}" VerticalAlignment="Center" />
-                                    <TextBlock x:Name="RouteSelectorLabel" Text="模型" FontSize="11.5"
-                                               Margin="4,0,0,0" VerticalAlignment="Center" MaxWidth="72"
-                                               TextTrimming="CharacterEllipsis"
-                                               Foreground="{DynamicResource TextPrimaryBrush}" />
-                                    <Path Width="8" Height="5" Stretch="Uniform" Margin="3,0,0,0"
-                                          Fill="{DynamicResource TextTertiaryBrush}"
-                                          Data="{StaticResource IconChevronDown}" VerticalAlignment="Center" />
-                                </StackPanel>
-                            </Button>
                             <Button x:Name="StyleSelectorButton" Style="{StaticResource IconButton}"
                                     Width="Auto" MinWidth="32" Height="32" Padding="6,0" Margin="0,0,6,0"
                                     AutomationProperties.Name="文字翻译风格"
                                     ToolTipService.ShowOnDisabled="True"
-                                    ToolTip="风格（点击选择）"
+                                    ToolTip="切换翻译风格"
                                     Click="StyleSelector_Click">
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                     <Path Width="12" Height="12" Stretch="Uniform"
                                           Fill="{DynamicResource AccentBrush}"
                                           Data="{StaticResource IconStyle}" VerticalAlignment="Center" />
                                     <TextBlock x:Name="StyleSelectorLabel" Text="风格" FontSize="11.5"
-                                               Margin="4,0,0,0" VerticalAlignment="Center" MaxWidth="60"
+                                               Margin="4,0,0,0" VerticalAlignment="Center" MaxWidth="92"
                                                TextTrimming="CharacterEllipsis"
                                                Foreground="{DynamicResource TextPrimaryBrush}" />
                                     <Path Width="7" Height="4" Stretch="Uniform" Margin="4,0,0,0"
@@ -473,20 +454,40 @@
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <Border x:Name="StatusDot" Width="6" Height="6" CornerRadius="3"
                             Background="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center" />
                     <TextBlock x:Name="StatusText" Grid.Column="1" Style="{StaticResource Metadata}" VerticalAlignment="Center"
-                               Margin="6,0,0,0" MaxWidth="180"
+                               Margin="6,0,0,0" MaxWidth="150"
                                TextTrimming="CharacterEllipsis"
                                ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                AutomationProperties.LiveSetting="Polite"
                                AutomationProperties.Name="翻译状态" />
                     <TextBlock x:Name="RouteText" Grid.Column="2" Style="{StaticResource Metadata}" VerticalAlignment="Center"
-                               Margin="8,0,0,0" MaxWidth="360" TextTrimming="CharacterEllipsis"
+                               Margin="8,0,8,0" MaxWidth="220" TextTrimming="CharacterEllipsis"
                                HorizontalAlignment="Left"
                                Foreground="{DynamicResource TextTertiaryBrush}"
                                ToolTip="{Binding RelativeSource={RelativeSource Self}, Path=Text}" />
+                    <Button x:Name="RouteSelectorButton" Grid.Column="3" Style="{StaticResource GhostButton}"
+                            Height="26" MinWidth="72" MaxWidth="168" Padding="8,0"
+                            AutomationProperties.Name="文字翻译模型"
+                            ToolTipService.ShowOnDisabled="True"
+                            ToolTip="切换翻译模型"
+                            Click="RouteSelector_Click">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Path Width="11" Height="11" Stretch="Uniform"
+                                  Fill="{DynamicResource AccentBrush}"
+                                  Data="{StaticResource IconProvider}" VerticalAlignment="Center" />
+                            <TextBlock x:Name="RouteSelectorLabel" Text="模型" FontSize="11.5"
+                                       Margin="5,0,0,0" VerticalAlignment="Center" MaxWidth="128"
+                                       TextTrimming="CharacterEllipsis"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                            <Path Width="8" Height="5" Stretch="Uniform" Margin="4,0,0,0"
+                                  Fill="{DynamicResource TextTertiaryBrush}"
+                                  Data="{StaticResource IconChevronDown}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
                 </Grid>
             </Grid>
         </Grid>

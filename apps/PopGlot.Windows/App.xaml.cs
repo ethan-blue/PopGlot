@@ -1039,7 +1039,7 @@ public partial class App : Application
         {
             OpenSettings = page => ShowSettings(page: page),
             OpenAddEngineFlow = () => ShowSettings(startAddEngineFlow: true),
-            RouteChanged = () => _activeQuickSearch?.RefreshRouteSelection(),
+            RouteChanged = RefreshAllRouteSurfaces,
             NotifyTray = (title, message) => Notify(title, message, Forms.ToolTipIcon.Info),
             RequestExit = () => ExitApplication(),
         };
@@ -1070,15 +1070,10 @@ public partial class App : Application
             SetHotkeysSuspended = suspended => _hotkeys?.SetSuspended(suspended),
         };
         window.LocalDataCleared += () => _mainWindow?.ReloadHistory();
-        window.ProfileChanged += () =>
-        {
-            _mainWindow?.RefreshEngineStatus();
-            _activeQuickSearch?.RefreshRouteSelection();
-        };
+        window.ProfileChanged += RefreshAllRouteSurfaces;
         window.Closed += (_, _) =>
         {
-            _mainWindow?.RefreshEngineStatus();
-            _activeQuickSearch?.RefreshRouteSelection();
+            RefreshAllRouteSurfaces();
             if (ReferenceEquals(_settingsWindow, window))
             {
                 _settingsWindow = null;
@@ -1464,6 +1459,13 @@ public partial class App : Application
         });
     }
 
+    private void RefreshAllRouteSurfaces()
+    {
+        _mainWindow?.RefreshEngineStatus();
+        _activeQuickSearch?.RefreshRouteSelection();
+        _activePanel?.RefreshRouteSelection();
+    }
+
     private TranslationPanelWindow CreatePanel(Rect anchorPixels, InteractionTrace? trace = null)
     {
         DestroyActivePanel();
@@ -1475,7 +1477,10 @@ public partial class App : Application
             () => ShellSettingsStore.Load(),
             page => ShowSettings(page: page),
             OpenInMainWindow,
-            _vocabulary.Value);
+            _vocabulary.Value)
+        {
+            RouteChanged = RefreshAllRouteSurfaces,
+        };
         trace?.Mark(TracePoint.WindowConstructionEnded);
         _activePanel = panel;
         panel.Closed += (_, _) =>
@@ -1511,6 +1516,7 @@ public partial class App : Application
                 // C05: the instance may be hidden (X/Esc/focus-loss); Show
                 // restores it with its previous session intact.
                 trace?.Mark(TracePoint.ShowRequested);
+                _activeQuickSearch.RefreshRouteSelection();
                 _activeQuickSearch.Show();
 
                 _activeQuickSearch.Activate();
@@ -1531,7 +1537,7 @@ public partial class App : Application
             trace?.Mark(TracePoint.WindowConstructionStarted);
             _activeQuickSearch = new QuickSearchWindow(_history.Value, _vocabulary.Value, page => ShowSettings(page: page))
             {
-                RouteChanged = () => _mainWindow?.RefreshEngineStatus(),
+                RouteChanged = RefreshAllRouteSurfaces,
             };
             trace?.Mark(TracePoint.WindowConstructionEnded);
             _activeQuickSearch.Closed += (_, _) => _activeQuickSearch = null;
@@ -1667,14 +1673,20 @@ public partial class App : Application
     /// <remarks>
     /// The text caret is a better anchor than the mouse when the user selected
     /// with the keyboard, so it is preferred when the foreground app exposes it.
+    /// A line-height vertical clearance around the caret/cursor prevents Below/Above
+    /// placement from clipping into the selected text line.
     /// </remarks>
     private static Rect CursorAnchorPixels()
     {
-        var point = TryGetCaretPixels() ?? ScreenGeometry.CursorPixels();
-        return new Rect(point.X - 2, point.Y - 2, 4, 4);
+        if (TryGetCaretRectPixels() is { } caretRect)
+        {
+            return caretRect;
+        }
+        var point = ScreenGeometry.CursorPixels();
+        return new Rect(point.X - 4, point.Y - 14, 8, 28);
     }
 
-    private static Point? TryGetCaretPixels()
+    private static Rect? TryGetCaretRectPixels()
     {
         var foreground = NativeMethods.GetForegroundWindow();
         if (foreground == 0)
@@ -1690,10 +1702,16 @@ public partial class App : Application
         {
             return null;
         }
-        var point = new NativePoint(info.CaretRect.Left, info.CaretRect.Bottom);
-        return NativeMethods.ClientToScreen(info.CaretWindow, ref point)
-            ? new Point(point.X, point.Y)
-            : null;
+        var topLeft = new NativePoint(info.CaretRect.Left, info.CaretRect.Top);
+        var bottomRight = new NativePoint(info.CaretRect.Right, info.CaretRect.Bottom);
+        if (!NativeMethods.ClientToScreen(info.CaretWindow, ref topLeft) ||
+            !NativeMethods.ClientToScreen(info.CaretWindow, ref bottomRight))
+        {
+            return null;
+        }
+        var height = Math.Max(24, bottomRight.Y - topLeft.Y);
+        var width = Math.Max(8, bottomRight.X - topLeft.X);
+        return new Rect(topLeft.X - 2, topLeft.Y - 4, width + 4, height + 8);
     }
 
     /// <summary>

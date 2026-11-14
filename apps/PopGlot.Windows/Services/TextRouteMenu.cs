@@ -97,7 +97,7 @@ internal static class TextRouteMenu
         var selected = config.PreferFreeEngine || allowed;
         if (!selected || !allowed)
         {
-            return ("选择模型", "选择翻译引擎；已有文本时会重新翻译。", null, false, StatusTone.Warning);
+            return ("选择模型", "未启用内置引擎；点击选择或配置模型", null, false, StatusTone.Warning);
         }
 
         // For free engine, tone reflects probed reachability evidence.
@@ -115,8 +115,35 @@ internal static class TextRouteMenu
         EngineExecutionKind.CodexAppServer => "Codex",
         EngineExecutionKind.ChatGptDirect => "ChatGPT",
         EngineExecutionKind.OmpRpc => OmpProviderShortName(profile.CliConnection?.UpstreamProviderId),
-        _ => string.IsNullOrWhiteSpace(profile.Name) ? "模型" : profile.Name,
+        _ => CompactProviderName(profile.Name),
     };
+
+    internal static string CompactProviderName(string? name) => (name ?? string.Empty).Trim() switch
+    {
+        "" => "模型",
+        "OpenAI (官方)" => "OpenAI",
+        "DeepSeek (官方)" => "DeepSeek",
+        "Google Gemini" => "Gemini",
+        "Anthropic Claude" => "Claude",
+        "Ollama（本地）" or "Ollama (本地)" => "Ollama",
+        "LiteLLM Proxy" => "LiteLLM",
+        var custom => custom,
+    };
+
+    internal static string CompactModelName(string? model)
+    {
+        var trimmed = (model ?? string.Empty).Trim();
+        if (trimmed.StartsWith("models/", StringComparison.OrdinalIgnoreCase))
+        {
+            trimmed = trimmed["models/".Length..];
+        }
+        var slash = trimmed.LastIndexOf('/');
+        if (slash >= 0 && slash + 1 < trimmed.Length)
+        {
+            trimmed = trimmed[(slash + 1)..];
+        }
+        return trimmed;
+    }
 
     /// <summary>
     /// OMP 连接的统一命名：以「提供方」为显示主体（配置维度是 提供方+模型，
@@ -132,7 +159,7 @@ internal static class TextRouteMenu
         "github-copilot" => "Copilot",
         "anthropic" or "claude-code" => "Claude",
         "openai" => "OpenAI",
-        "google" => "Gemini",
+        "google" or "google-gemini-cli" => "Gemini",
         _ => providerId,
     };
 
@@ -148,7 +175,7 @@ internal static class TextRouteMenu
 
     internal static ContextMenu Create(Action<string> selectProfile, Func<FreeEngineProvider, Task> selectFree, Action manage)
     {
-        var menu = new ContextMenu { MinWidth = 190, MaxWidth = 264, MaxHeight = 420 };
+        var menu = new ContextMenu { MinWidth = 190, MaxWidth = 380, MaxHeight = 420 };
         AddTextChoices(menu, selectProfile, selectFree);
         menu.Items.Add(new Separator());
         var settings = new MenuItem { Header = "管理引擎" };
@@ -217,15 +244,17 @@ internal static class TextRouteMenu
 
     internal static MenuItem ProfileItem(ProviderProfile profile, string model, bool active)
     {
-        // Keep the model once; the OMP provider disambiguates rows that share
-        // a model id across providers; connection and profile details belong
-        // in the tooltip.
-        var secondary = profile.ResolvedExecutionKind == EngineExecutionKind.OmpRpc
-            ? OmpProviderShortName(profile.CliConnection?.UpstreamProviderId)
+        // Primary shows the concise engine name (matching the route button after selection);
+        // secondary shows the compact model identifier so both engine and model are clear.
+        var primary = ShortName(profile);
+        var compactModel = CompactModelName(model);
+        var secondary = !string.IsNullOrWhiteSpace(compactModel) &&
+            !string.Equals(compactModel, primary, StringComparison.OrdinalIgnoreCase)
+            ? compactModel
             : null;
         var item = new MenuItem
         {
-            Header = CheckRow(string.IsNullOrWhiteSpace(model) ? ShortName(profile) : model, secondary, active),
+            Header = CheckRow(primary, secondary, active),
             ToolTip = Detail(profile, model),
             FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal,
         };
@@ -255,7 +284,7 @@ internal static class TextRouteMenu
             var detail = Label(secondary);
             detail.FontSize = 11;
             detail.Margin = new Thickness(8, 0, 0, 0);
-            detail.MaxWidth = 120;
+            detail.MaxWidth = 200;
             detail.VerticalAlignment = VerticalAlignment.Center;
             detail.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
             row.Children.Add(detail);
@@ -293,13 +322,16 @@ internal static class TextRouteMenu
     {
         var source = profile.ResolvedExecutionKind switch
         {
-            EngineExecutionKind.CodexAppServer => "Codex 当前登录 · 独立会话",
-            EngineExecutionKind.OmpRpc => $"{OmpProviderShortName(profile.CliConnection?.UpstreamProviderId)} 经 OMP 登录 · 提供方 {profile.CliConnection?.UpstreamProviderId}",
-            EngineExecutionKind.ChatGptDirect => "ChatGPT 账号授权 · 独立会话",
+            EngineExecutionKind.CodexAppServer => "Codex 登录",
+            EngineExecutionKind.OmpRpc => $"OMP · {OmpProviderShortName(profile.CliConnection?.UpstreamProviderId)}",
+            EngineExecutionKind.ChatGptDirect => "ChatGPT 账号直连",
             EngineExecutionKind.Unknown => "不支持的连接类型",
             _ => ProviderSettings.ClassifyEndpoint(profile.ApiBaseUrl) == EndpointClass.Loopback ? "本机服务" : "API 服务",
         };
-        return $"{profile.Name}\n{model}\n{source}";
+        var title = ShortName(profile);
+        return string.IsNullOrWhiteSpace(model)
+            ? $"{title}\n{source}"
+            : $"{title} · {CompactModelName(model)}\n{source}";
     }
 
     private static string FreeDetail(FreeEngineProvider provider) => provider switch

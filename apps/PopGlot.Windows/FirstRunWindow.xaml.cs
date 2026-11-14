@@ -48,7 +48,7 @@ public partial class FirstRunWindow : Window
             ? "已允许连接云端翻译服务"
             : "已关闭云端翻译（只使用本机模型）");
         parts.Add(FreeEngineToggle.IsChecked == true
-            ? "内置免费引擎已开启（开箱即用）"
+            ? "已开启内置免费引擎"
             : "内置免费引擎已关闭，不会发送任何文本");
         parts.Add(HistoryToggle.IsChecked == true ? "翻译历史会保存在本机" : "不保存翻译历史");
         parts.Add(StartupToggle.IsChecked == true ? "开机自动启动" : "开机不自动启动");

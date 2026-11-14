@@ -99,7 +99,7 @@ public partial class ServicesSection
         var existing = ProfileManager.Load().Profiles.FirstOrDefault(p => p.Id == _directProfileId);
         var customName = ConnectionNameTextBox.Text.Trim();
         return new ProviderProfile { Id = _directProfileId ?? "chatgpt-" + Guid.NewGuid().ToString("N"),
-            Name = (customName.Length > 0 ? customName : null) ?? existing?.Name ?? $"ChatGPT · {account.DisplayName} · {model.DisplayName}", ExecutionKind = EngineExecutionKindNames.ChatGptDirect,
+            Name = (customName.Length > 0 ? customName : null) ?? existing?.Name ?? "ChatGPT", ExecutionKind = EngineExecutionKindNames.ChatGptDirect,
             DirectConnection = new() { AccountId = account.Id, ModelId = model.Id, Enabled = true }, TextModel = model.Id,
             ApiBaseUrl = "https://api.openai.com/v1", TextEndpoint = "/responses", CredentialTarget = "", SupportsVision = false, VisionModel = "" };
     }

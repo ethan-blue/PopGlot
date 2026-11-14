@@ -649,8 +649,8 @@ internal sealed class TranslationCoordinator
                 session.PromptSupport = promptSnapshot is not null || session.PromptTemplateId is not null
                     ? TranslationPromptSupport.Applied
                     : TranslationPromptSupport.Unknown;
-                session.PipelineLabel = !string.IsNullOrWhiteSpace(textRoute?.Profile.Name)
-                    ? textRoute.Profile.Name
+                session.PipelineLabel = textRoute?.Profile is { } activeTextProfile
+                    ? TextRouteMenu.ShortName(activeTextProfile)
                     : (isLocal ? EngineWording.LocalModelName : DescribeProvider(textRuntimeSettings?.ProviderType ?? settings.ProviderType));
 
                 response = await TranslateProviderTextAsync(
@@ -919,8 +919,8 @@ internal sealed class TranslationCoordinator
                 task: snapshot.Identity.TaskKind.ToString().ToLowerInvariant());
             return await PumpSummaryDeltasAsync(stream, onDelta, requestCancellation, snapshot.Identity.ConfigVersion);
         }
-        var engineLabel = !string.IsNullOrWhiteSpace(textRoute?.Profile.Name)
-            ? textRoute.Profile.Name
+        var engineLabel = textRoute?.Profile is { } activeSummaryProfile
+            ? TextRouteMenu.ShortName(activeSummaryProfile)
             : (isLocal ? EngineWording.LocalModelName : DescribeProvider(routeSettings?.ProviderType ?? settings.ProviderType));
         // One request: terminal data comes from the same streaming session.
         var sessionId = $"summary-{Guid.NewGuid():N}";
@@ -1119,7 +1119,7 @@ internal sealed class TranslationCoordinator
                     TranslationErrorKind.OcrFailed,
                     "没有可用的截图翻译线路。",
                     "任选其一：安装 Windows OCR 语言包（设置 → 时间和语言 → 语言和区域 → 语言选项 → 光学字符识别）；" +
-                    "在服务页配置并启用支持图片的视觉模型；或在「隐私与数据」中允许截图上传。");
+                    "在「设置 → 引擎」配置并启用支持图片的模型；或在「设置 → 隐私与数据」中允许截图上传。");
                 onStageChanged?.Invoke(session.Stage);
                 return session;
             }
@@ -1203,6 +1203,11 @@ internal sealed class TranslationCoordinator
 
                         session.SourceText = recognized;
                         session.Transcription = recognized;
+                        if (LanguageCatalog.Normalize(sourceLang) == LanguageCatalog.Auto)
+                        {
+                            targetLang = LanguageCatalog.ResolveAutoTarget(recognized, targetLang);
+                            session.TargetLanguage = targetLang;
+                        }
                         session.Stage = TranslationSessionStage.Translating;
                         onStageChanged?.Invoke(session.Stage);
 
@@ -1261,6 +1266,11 @@ internal sealed class TranslationCoordinator
 
                     session.SourceText = recognized;
                     session.Transcription = recognized;
+                    if (LanguageCatalog.Normalize(sourceLang) == LanguageCatalog.Auto)
+                    {
+                        targetLang = LanguageCatalog.ResolveAutoTarget(recognized, targetLang);
+                        session.TargetLanguage = targetLang;
+                    }
                     pipelineLabel = EngineWording.LocalOcrStepName;
                     routingReason = $"视觉模型失败（{visionError.Message}），已回退到本地 OCR。";
 
@@ -1348,6 +1358,11 @@ internal sealed class TranslationCoordinator
 
                 session.SourceText = recognized;
                 session.Transcription = recognized;
+                if (LanguageCatalog.Normalize(sourceLang) == LanguageCatalog.Auto)
+                {
+                    targetLang = LanguageCatalog.ResolveAutoTarget(recognized, targetLang);
+                    session.TargetLanguage = targetLang;
+                }
 
                 session.Stage = TranslationSessionStage.Translating;
                 onStageChanged?.Invoke(session.Stage);

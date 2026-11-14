@@ -93,6 +93,8 @@ public partial class TranslationPanelWindow : Window
     private bool _dpiRepositionPending;
     private bool _languageChangeSuspended = true;
     private bool _readyForKeyboard;
+
+    internal Action? RouteChanged { get; set; }
     private bool _closing;
     private string _sessionId = Guid.NewGuid().ToString("N");
     private int _openDropDowns;
@@ -192,12 +194,22 @@ public partial class TranslationPanelWindow : Window
         // bar was clipped exactly on short sources. The top tier keeps a
         // full 80 DIP explanation row plus the result floor visible.
         var length = source?.Trim().Length ?? 0;
-        Height = length switch
+        var nextHeight = length switch
         {
             <= 80 => 380,
             <= 420 => 420,
             _ => 460,
         };
+        if (Math.Abs(Height - nextHeight) > 0.5)
+        {
+            Height = nextHeight;
+            _lockedTopLeftPixels = null;
+            PositionNearAnchor();
+        }
+        else
+        {
+            Height = nextHeight;
+        }
     }
 
     private void OnTtsSpeakingStateChanged(object? sender, bool isSpeaking)
@@ -751,7 +763,25 @@ public partial class TranslationPanelWindow : Window
         }
         var sourceLanguage = SourceLanguage;
         var targetLanguage = TargetLanguage;
-        if (LanguageCatalog.Normalize(sourceLanguage) == LanguageCatalog.Auto)
+        if (_sourceKind == "划词")
+        {
+            var (resolvedSource, resolvedTarget) = LanguageCatalog.ResolveSelectionDirection(
+                source, sourceLanguage, targetLanguage);
+            if (resolvedSource != sourceLanguage || resolvedTarget != targetLanguage)
+            {
+                sourceLanguage = resolvedSource;
+                targetLanguage = resolvedTarget;
+                _languageChangeSuspended = true;
+                try
+                {
+                    SourceLangCombo.SelectedItem = LanguageCatalog.ResolveSource(sourceLanguage);
+                    TargetLangCombo.SelectedItem = LanguageCatalog.ResolveTarget(targetLanguage);
+                }
+                finally { _languageChangeSuspended = false; }
+                PersistLanguagePair();
+            }
+        }
+        else if (LanguageCatalog.Normalize(sourceLanguage) == LanguageCatalog.Auto)
         {
             var autoTarget = LanguageCatalog.ResolveAutoTarget(source, targetLanguage);
             if (autoTarget != targetLanguage)
@@ -869,6 +899,15 @@ public partial class TranslationPanelWindow : Window
         if (!_gate.ShouldAcceptTerminal(epoch, _closing))
         {
             return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(session.TargetLanguage) &&
+            LanguageCatalog.Normalize(session.TargetLanguage) != TargetLanguage)
+        {
+            _languageChangeSuspended = true;
+            try { TargetLangCombo.SelectedItem = LanguageCatalog.ResolveTarget(session.TargetLanguage); }
+            finally { _languageChangeSuspended = false; }
+            PersistLanguagePair();
         }
 
         SourceInputBox.SetValue(Ui.PlaceholderProperty, Services.InterfaceKeys.TranslateSourcePlaceholder);
@@ -2067,6 +2106,10 @@ public partial class TranslationPanelWindow : Window
     {
         if (_switchingRoute) return;
         CancelOperation();
+        if (_summaryLifecycle.IsRunning)
+        {
+            CancelSummary();
+        }
         _switchingRoute = true;
         if (RouteSelectorButton is not null) RouteSelectorButton.IsEnabled = false;
         StatusText.Text = "正在切换…";
@@ -2077,9 +2120,14 @@ public partial class TranslationPanelWindow : Window
             {
                 StatusText.Text = "已切换模型";
                 var text = SourceInputBox.Text?.Trim();
-                if (!string.IsNullOrWhiteSpace(text))
+                if (!string.IsNullOrWhiteSpace(text) && text != "（模型未回传识别文本）")
                 {
-                    _ = RetranslateCurrentTextAsync();
+                    _ = RetranslateCurrentTextAsync(forceRefresh: true);
+                }
+                else if (_screenshot is { Length: > 0 } screenshot)
+                {
+                    _retry = (token, ep) => TranslateScreenshotAsync(screenshot, token, ep);
+                    _ = RunOperationAsync((cancellation, ep) => TranslateScreenshotAsync(screenshot, cancellation, ep));
                 }
             }
             else
@@ -2097,6 +2145,7 @@ public partial class TranslationPanelWindow : Window
             RefreshRouteSelection();
             RefreshStyleSelector();
             RefreshSummaryCapability();
+            RouteChanged?.Invoke();
         }
     }
 
@@ -2106,7 +2155,7 @@ public partial class TranslationPanelWindow : Window
         var canSummarize = capability.State is RouteCapabilityState.Available or RouteCapabilityState.Unknown;
         ShowSummaryChoice.IsEnabled = canSummarize || _holdingSummary;
         ShowSummaryChoice.ToolTip = canSummarize
-            ? "提炼原文核心要点与摘要"
+            ? "提炼核心要点"
             : capability.Reason;
         if (!canSummarize && _summaryLifecycle.IsRunning)
         {
@@ -2148,14 +2197,16 @@ public partial class TranslationPanelWindow : Window
         }
     }
 
-    private async Task RetranslateCurrentTextAsync()
+    private Task RetranslateCurrentTextAsync() => RetranslateCurrentTextAsync(forceRefresh: false);
+
+    private async Task RetranslateCurrentTextAsync(bool forceRefresh)
     {
         var text = SourceInputBox.Text?.Trim();
-        if (string.IsNullOrWhiteSpace(text)) return;
+        if (string.IsNullOrWhiteSpace(text) || text == "（模型未回传识别文本）") return;
         _screenshot = null;
         _retry = (token, ep) => TranslateTextAsync(text, token, ep, forceRefresh: true);
         var styleNotice = NotifyStyleBeforeTranslate();
-        await RunOperationAsync((cancellation, ep) => TranslateTextAsync(text, cancellation, ep), styleNotice);
+        await RunOperationAsync((cancellation, ep) => TranslateTextAsync(text, cancellation, ep, forceRefresh: forceRefresh), styleNotice);
     }
 
     /// <summary>
@@ -2758,7 +2809,9 @@ public partial class TranslationPanelWindow : Window
         var widthDip = ActualWidth > 0 ? ActualWidth : (Width > 0 ? Width : 540);
         // Fallback matches the XAML Height/MinHeight (380): the old 360
         // fallback disagreed with the real minimum and clipped the footer.
-        var heightDip = ActualHeight > 0 ? ActualHeight : (Height > 0 ? Height : 380);
+        var heightDip = !double.IsNaN(Height) && Height > 0
+            ? Math.Max(ActualHeight, Height)
+            : (ActualHeight > 0 ? ActualHeight : 380);
         var sizePixels = new Size(widthDip * scale.X, heightDip * scale.Y);
         var workArea = ScreenGeometry.WorkAreaForAnchor(_anchorPixels);
 

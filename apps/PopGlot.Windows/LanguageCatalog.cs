@@ -119,7 +119,7 @@ internal static class LanguageCatalog
     /// <summary>Identifies a dominant supported script without inspecting code or URLs.</summary>
     internal static string? DetectScript(string text)
     {
-        var prose = LanguageText.Prose(text);
+        var prose = StripCodeAndUrls(text);
         var letters = 0;
         var latin = 0;
         var han = 0;
@@ -144,9 +144,28 @@ internal static class LanguageCatalog
         if (hasHangul) return "ko";
         if (letters == 0) return null;
         if (cyrillic * 100 >= letters * 30) return "ru";
-        if (han > 0 && han >= latin) return "zh-CN";
-        if (latin > 0 && han == 0 && letters >= 2) return "en";
+        if (han > 0 && (han >= latin || (han >= 3 && han * 3 >= latin))) return "zh-CN";
+        if ((latin > 0 && han == 0 && letters >= 2) || (latin >= 10 && latin >= han * 4)) return "en";
         return null;
+    }
+
+    private static string StripCodeAndUrls(string text)
+    {
+        if (string.IsNullOrEmpty(text) || text.Length > 32_768) return string.Empty;
+        try
+        {
+            var stripped = System.Text.RegularExpressions.Regex.Replace(
+                text,
+                @"```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\r\n]*`|https?://\S+|\{[^{}\r\n]{1,40}\}",
+                " ",
+                System.Text.RegularExpressions.RegexOptions.None,
+                TimeSpan.FromMilliseconds(100));
+            return stripped.IndexOf('`') >= 0 ? string.Empty : stripped.Trim();
+        }
+        catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
+        {
+            return string.Empty;
+        }
     }
 
     /// <summary>Chooses a sensible target for an auto-detected source language.</summary>
@@ -157,6 +176,46 @@ internal static class LanguageCatalog
             not null => "zh-CN",
             _ => currentTarget,
         };
+
+    /// <summary>
+    /// Resolves the effective (Source, Target) pair for selection translation ("划词").
+    /// When the source is Auto, picks the target from the detected script.
+    /// When a previous manual swap left an explicit direction that conflicts with
+    /// the newly selected text (e.g. zh-CN → en on English text, or en → zh-CN on
+    /// Chinese text), resets Source to Auto and switches Target so selection
+    /// translation never stalls on same-language output.
+    /// </summary>
+    internal static (string Source, string Target) ResolveSelectionDirection(
+        string sourceText, string currentSource, string currentTarget)
+    {
+        var normalizedSource = Normalize(currentSource);
+        var normalizedTarget = Normalize(currentTarget);
+        if (normalizedSource == Auto)
+        {
+            return (Auto, ResolveAutoTarget(sourceText, normalizedTarget));
+        }
+
+        var detected = DetectScript(sourceText);
+        if (detected is null)
+        {
+            return (normalizedSource, normalizedTarget);
+        }
+
+        var detectedIsZh = detected.StartsWith("zh", StringComparison.Ordinal);
+        var sourceIsZh = normalizedSource.StartsWith("zh", StringComparison.Ordinal);
+        var targetIsZh = normalizedTarget.StartsWith("zh", StringComparison.Ordinal);
+
+        if (detectedIsZh && (targetIsZh || !sourceIsZh))
+        {
+            return (Auto, "en");
+        }
+        if (!detectedIsZh && (normalizedTarget == detected || sourceIsZh))
+        {
+            return (Auto, "zh-CN");
+        }
+
+        return (normalizedSource, normalizedTarget);
+    }
 
     private static bool IsLatinLetter(int value) => value is
         >= 0x0041 and <= 0x005a or >= 0x0061 and <= 0x007a or

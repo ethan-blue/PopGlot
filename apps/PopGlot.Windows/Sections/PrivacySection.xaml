@@ -135,7 +135,7 @@
                         <TextBlock Text="{x:Static services:EngineWording.FreePublicTranslationName}" Style="{StaticResource RowTitle}" />
                         <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap"
                                    ToolTip="{x:Static services:EngineWording.FreeEngineOnlineServiceNote}"
-                                   Text="无需配置，开箱即用；会发送待译文本至所选公共服务" />
+                                   Text="无需密钥即可使用；待译文本会发往所选公共服务" />
                         <TextBlock x:Name="FreeEngineConsentState" Style="{StaticResource Caption}"
                                    Margin="0,4,0,0" />
                         <TextBlock Style="{StaticResource Caption}" Margin="0,2,0,0" TextWrapping="Wrap"
