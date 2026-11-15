@@ -104,6 +104,10 @@ Select text, press `Ctrl+Alt+W`, read the translation next to the cursor. Built 
 
 提需求前先看 [PRODUCT_SPEC.md](PRODUCT_SPEC.md) 的「当前未实现与明确排除」，已在计划里的不重复收。遇到问题开 Issue，贴日志前脱敏。
 
+## 社区
+
+- 社区链接：[LINUX DO](https://linux.do/)
+
 ## 许可
 
 [MIT](LICENSE)

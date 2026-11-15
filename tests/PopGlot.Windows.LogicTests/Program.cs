@@ -5854,7 +5854,7 @@ internal static partial class Program
                 section.ClearCurrentButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 FlushDispatcher(2);
                 Equal(2, history.Load().Count, "the first clear click must not delete anything");
-                Equal("确认清空?", section.ClearCurrentButton.Content as string, "the armed button states its confirmation");
+                Equal("确认清空？", section.ClearCurrentButton.Content as string, "the armed button states its confirmation");
                 section.ClearCurrentButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 FlushDispatcher(3);
                 Equal(0, history.Load().Count, "the second clear click wipes the collection");
@@ -6088,7 +6088,7 @@ internal static partial class Program
             section.ClearCurrentButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             FlushDispatcher(2);
             Equal(1, history.Load().Count, "T9.2: the first clear click only arms the confirmation");
-            Equal("确认清空?", section.ClearCurrentButton.Content as string, "the armed button states its confirmation");
+            Equal("确认清空？", section.ClearCurrentButton.Content as string, "the armed button states its confirmation");
             section.ClearCurrentButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             FlushDispatcher(3);
             Equal(0, history.Load().Count, "the second clear click wipes the active list");
