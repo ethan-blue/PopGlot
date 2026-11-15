@@ -12,18 +12,18 @@ Select text, press `Ctrl+Alt+W`, read the translation next to the cursor. Built 
 
 两个包都自带 .NET 10 运行时，装完即用。Windows 10 / 11 x64。
 
-[![下载安装包](docs/badges/download-setup.svg)](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.38/PopGlot-v0.1.38-win-x64-setup.exe)
-[![下载便携包](docs/badges/download-portable.svg)](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.38/PopGlot-v0.1.38-win-x64.zip)
+[![下载安装包](docs/badges/download-setup.svg)](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.39/PopGlot-v0.1.39-win-x64-setup.exe)
+[![下载便携包](docs/badges/download-portable.svg)](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.39/PopGlot-v0.1.39-win-x64.zip)
 
 | 形态 | 文件 | 说明 |
 | --- | --- | --- |
-| 安装包 | `PopGlot-v0.1.38-win-x64-setup.exe`（约 57 MB） | 向导安装、开始菜单、卸载入口。升级直接跑新安装包，原地覆盖。 |
-| 便携 zip | `PopGlot-v0.1.38-win-x64.zip`（约 84 MB） | 解压运行 `PopGlot.exe`，不写注册表。 |
+| 安装包 | `PopGlot-v0.1.39-win-x64-setup.exe`（约 57 MB） | 向导安装、开始菜单、卸载入口。升级直接跑新安装包，原地覆盖。 |
+| 便携 zip | `PopGlot-v0.1.39-win-x64.zip`（约 84 MB） | 解压运行 `PopGlot.exe`，不写注册表。 |
 
 安装包未签名，首次运行会有 SmartScreen 提示：点「更多信息」→「仍要运行」。校验文件完整性：
 
 ```powershell
-(Get-FileHash .\PopGlot-v0.1.38-win-x64-setup.exe -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash .\PopGlot-v0.1.39-win-x64-setup.exe -Algorithm SHA256).Hash.ToLower()
 ```
 
 和发布页同名附件的 `.sha256` 比对。全部版本见 [Releases](https://github.com/ethan-blue/PopGlot/releases)。
