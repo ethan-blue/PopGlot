@@ -166,7 +166,6 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         try
         {
             CloudSpeechToggle.IsChecked = _shellSettings.CloudSpeechEnabled;
-        FreeEngineConsentToggle.IsChecked = _shellSettings.FreeEngineConsent != FreeEngineConsent.Denied;
         }
         finally
         {
@@ -216,6 +215,7 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
 
     private void FreeEngineConsent_Changed(object sender, RoutedEventArgs e)
     {
+        UpdateSafeModeGating();
         if (_loading)
         {
             return;
@@ -237,7 +237,15 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         }
         catch (Exception exception)
         {
-            FreeEngineConsentToggle.IsChecked = !enabled;
+            _loading = true;
+            try
+            {
+                FreeEngineConsentToggle.IsChecked = !enabled;
+            }
+            finally
+            {
+                _loading = false;
+            }
             StatusChanged?.Invoke($"保存公共翻译设置失败：{exception.Message}", StatusTone.Error);
         }
     }
@@ -247,6 +255,18 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         if (FreeEngineConsentState is null)
         {
             return;
+        }
+        if (FreeEngineConsentToggle is not null)
+        {
+            _loading = true;
+            try
+            {
+                FreeEngineConsentToggle.IsChecked = _shellSettings.FreeEngineConsent != FreeEngineConsent.Denied;
+            }
+            finally
+            {
+                _loading = false;
+            }
         }
         FreeEngineConsentState.Text = _shellSettings.FreeEngineConsent switch
         {
@@ -272,6 +292,10 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         if (CloudSpeechToggle is not null)
         {
             CloudSpeechToggle.IsEnabled = !safe;
+        }
+        if (FreeEngineConsentToggle is not null)
+        {
+            FreeEngineConsentToggle.IsEnabled = !safe;
         }
         SafeModeGateNote.Visibility = safe ? Visibility.Visible : Visibility.Collapsed;
     }

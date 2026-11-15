@@ -137,6 +137,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
 
     private void RetryVocabularyButton_Click(object sender, RoutedEventArgs e)
     {
+        _clearConfirm?.Disarm();
         if (_vocabulary is null)
         {
             return;
@@ -234,6 +235,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
 
     private void Mode_Checked(object sender, RoutedEventArgs e)
     {
+        _clearConfirm?.Disarm();
         if (!IsLoaded)
         {
             return;

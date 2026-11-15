@@ -82,6 +82,14 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     private readonly ConditionalWeakTable<Button, ConfirmButton> _rowDeleteConfirms = new();
     private ConfirmButton? _forgetAccountConfirm;
     private ConfirmButton? _clearKeyConfirm;
+
+    private void DisarmAllConfirms()
+    {
+        _deleteConfirm?.Disarm();
+        _clearKeyConfirm?.Disarm();
+        _forgetAccountConfirm?.Disarm();
+        ConfirmButton.DisarmCurrent();
+    }
     private bool? _compactEditor;
     private bool _detailWidthReported;
     private readonly System.Windows.Threading.DispatcherTimer _recommendationDebounce;
@@ -1271,6 +1279,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     internal void SelectProfileInList(string profileId)
     {
+        DisarmAllConfirms();
         var items = ProfilesListBox.ItemsSource as IEnumerable<ProfilesRow> ?? [];
         var index = items.ToList().FindIndex(row => row.Id == profileId);
         ProfilesListBox.SelectedIndex = index >= 0 ? index : -1;
@@ -1280,6 +1289,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private void ShowEditorForm(bool addMode)
     {
+        DisarmAllConfirms();
         _catalogOperation?.Cancel();
         CancelCliOperation();
         CliConnectionsPanel.Visibility = Visibility.Collapsed;
@@ -1308,6 +1318,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     // overview (SettingsWindow.xaml.cs "ProviderSection.ShowOverview()").
     internal void ShowOverview()
     {
+        DisarmAllConfirms();
         if (_cliCommitInProgress || _saveInProgress) return;
         _catalogOperation?.Cancel();
         if (AddEngineHeaderButton is not null)
@@ -2516,6 +2527,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private void ProfilesListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        DisarmAllConfirms();
         if (_suppressListEvents)
         {
             return;
@@ -2600,6 +2612,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private void OpenProfileInEditor(string profileId)
     {
+        DisarmAllConfirms();
         var profile = ProfileManager.Load().Profiles.FirstOrDefault(p => p.Id == profileId);
         if (profile is null)
         {
@@ -2645,6 +2658,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private async void DeleteSelectedProfile()
     {
+        DisarmAllConfirms();
         var profile = SelectedProfile();
         if (profile is null)
         {

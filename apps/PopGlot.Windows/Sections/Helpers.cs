@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 
@@ -61,56 +62,106 @@ internal enum StatusTone
 internal sealed class ConfirmButton
 {
     private static readonly TimeSpan ArmTimeout = TimeSpan.FromSeconds(3);
+    private static ConfirmButton? _currentlyArmed;
 
     private readonly Button _button;
-    private readonly string? _normalContent;
-    private readonly string _normalAutomationName;
     private readonly Func<string> _armedContentProvider;
     private readonly Action _fire;
     private readonly DispatcherTimer _timer;
     private bool _armed;
 
+    private PropertySnapshot? _widthSnapshot;
+    private PropertySnapshot? _minWidthSnapshot;
+    private PropertySnapshot? _paddingSnapshot;
+    private PropertySnapshot? _contentSnapshot;
+    private PropertySnapshot? _automationNameSnapshot;
+    private PropertySnapshot? _backgroundSnapshot;
+    private PropertySnapshot? _foregroundSnapshot;
+
+    internal bool IsArmed => _armed;
+
     private ConfirmButton(Button button, Func<string> armedContentProvider, Action fire)
     {
         _button = button;
-        _normalContent = button.Content as string;
-        _normalAutomationName = System.Windows.Automation.AutomationProperties.GetName(button);
         _armedContentProvider = armedContentProvider;
         _fire = fire;
         _timer = new DispatcherTimer { Interval = ArmTimeout };
         _timer.Tick += (_, _) => Disarm();
         button.Click += OnClick;
         button.Unloaded += (_, _) => Disarm();
+        button.PreviewKeyDown += OnPreviewKeyDown;
     }
 
-    public static ConfirmButton Attach(Button button, string armedContent, Action fire) =>
+    internal static ConfirmButton Attach(Button button, string armedContent, Action fire) =>
         new(button, () => armedContent, fire);
 
-    public static ConfirmButton Attach(Button button, Func<string> armedContentProvider, Action fire) =>
+    internal static ConfirmButton Attach(Button button, Func<string> armedContentProvider, Action fire) =>
         new(button, armedContentProvider, fire);
+
+    internal static void DisarmCurrent()
+    {
+        _currentlyArmed?.Disarm();
+    }
+
+    private void OnPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (_armed && e.Key == Key.Escape)
+        {
+            Disarm();
+            e.Handled = true;
+        }
+    }
 
     private void OnClick(object sender, RoutedEventArgs e)
     {
         if (!_armed)
         {
+            if (_currentlyArmed != null && _currentlyArmed != this)
+            {
+                _currentlyArmed.Disarm();
+            }
+            _currentlyArmed = this;
             _armed = true;
+
             var armedText = _armedContentProvider();
+
+            // Snapshot and adjust geometry only as needed.
             // Icon buttons carry a fixed style width (32/36 DIP): an armed caption
             // such as "确认删除？" does not fit and clips. Let the button grow to
             // the caption for the armed window, then restore the original metrics.
+            _widthSnapshot = PropertySnapshot.Capture(_button, FrameworkElement.WidthProperty);
             if (!double.IsNaN(_button.ActualWidth) && _button.ActualWidth > 0)
             {
+                _minWidthSnapshot = PropertySnapshot.Capture(_button, FrameworkElement.MinWidthProperty);
                 _button.MinWidth = _button.ActualWidth;
             }
+            else
+            {
+                _minWidthSnapshot = null;
+            }
             _button.Width = double.NaN;
+
             if (_button.Padding.Left < 8 && _button.Padding.Right < 8)
             {
+                _paddingSnapshot = PropertySnapshot.Capture(_button, Control.PaddingProperty);
                 _button.Padding = new Thickness(10, 0, 10, 0);
             }
+            else
+            {
+                _paddingSnapshot = null;
+            }
+
+            _contentSnapshot = PropertySnapshot.Capture(_button, ContentControl.ContentProperty);
             _button.Content = armedText;
+
+            _automationNameSnapshot = PropertySnapshot.Capture(_button, System.Windows.Automation.AutomationProperties.NameProperty);
             System.Windows.Automation.AutomationProperties.SetName(_button, armedText);
-            _button.SetResourceReference(System.Windows.Controls.Control.BackgroundProperty, "DangerSoftBrush");
-            _button.SetResourceReference(System.Windows.Controls.Control.ForegroundProperty, "DangerBrush");
+
+            _backgroundSnapshot = PropertySnapshot.Capture(_button, Control.BackgroundProperty);
+            _foregroundSnapshot = PropertySnapshot.Capture(_button, Control.ForegroundProperty);
+            _button.SetResourceReference(Control.BackgroundProperty, "DangerSoftBrush");
+            _button.SetResourceReference(Control.ForegroundProperty, "DangerBrush");
+
             _timer.Start();
             return;
         }
@@ -118,7 +169,7 @@ internal sealed class ConfirmButton
         _fire();
     }
 
-    private void Disarm()
+    internal void Disarm()
     {
         _timer.Stop();
         if (!_armed)
@@ -126,15 +177,78 @@ internal sealed class ConfirmButton
             return;
         }
         _armed = false;
-        _button.ClearValue(System.Windows.Controls.Control.WidthProperty);
-        _button.ClearValue(System.Windows.Controls.Control.MinWidthProperty);
-        _button.ClearValue(System.Windows.Controls.Control.PaddingProperty);
-        _button.Content = _normalContent;
-        System.Windows.Automation.AutomationProperties.SetName(
-            _button,
-            string.IsNullOrEmpty(_normalAutomationName) ? _normalContent : _normalAutomationName);
-        _button.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
-        _button.ClearValue(System.Windows.Controls.Control.ForegroundProperty);
+        if (_currentlyArmed == this)
+        {
+            _currentlyArmed = null;
+        }
+
+        _widthSnapshot?.Restore(_button);
+        _widthSnapshot = null;
+        _minWidthSnapshot?.Restore(_button);
+        _minWidthSnapshot = null;
+        _paddingSnapshot?.Restore(_button);
+        _paddingSnapshot = null;
+        _contentSnapshot?.Restore(_button);
+        _contentSnapshot = null;
+        _automationNameSnapshot?.Restore(_button);
+        _automationNameSnapshot = null;
+        _backgroundSnapshot?.Restore(_button);
+        _backgroundSnapshot = null;
+        _foregroundSnapshot?.Restore(_button);
+        _foregroundSnapshot = null;
+    }
+
+    private readonly struct PropertySnapshot
+    {
+        private readonly DependencyProperty _dp;
+        private readonly System.Windows.Data.BindingBase? _binding;
+        private readonly object? _localValue;
+        private readonly bool _hadLocalValue;
+
+        private PropertySnapshot(DependencyProperty dp, System.Windows.Data.BindingBase? binding, object? localValue, bool hadLocalValue)
+        {
+            _dp = dp;
+            _binding = binding;
+            _localValue = localValue;
+            _hadLocalValue = hadLocalValue;
+        }
+
+        internal static PropertySnapshot Capture(DependencyObject target, DependencyProperty dp)
+        {
+            var binding = System.Windows.Data.BindingOperations.GetBindingBase(target, dp);
+            if (binding != null)
+            {
+                return new PropertySnapshot(dp, binding, null, true);
+            }
+            var local = target.ReadLocalValue(dp);
+            if (local == DependencyProperty.UnsetValue)
+            {
+                return new PropertySnapshot(dp, null, null, false);
+            }
+            return new PropertySnapshot(dp, null, local, true);
+        }
+
+        internal void Restore(DependencyObject target)
+        {
+            if (_binding != null)
+            {
+                System.Windows.Data.BindingOperations.SetBinding(target, _dp, _binding);
+                return;
+            }
+            if (!_hadLocalValue)
+            {
+                target.ClearValue(_dp);
+                return;
+            }
+            try
+            {
+                target.SetValue(_dp, _localValue);
+            }
+            catch
+            {
+                target.ClearValue(_dp);
+            }
+        }
     }
 }
 

@@ -292,6 +292,11 @@ internal static partial class Program
         await RunStaAsync("product summary streams and reuses its visible task", ProductSummaryStreamsAndReusesVisibleTask);
         RunSta("product quick route selection retranslates and stays switchable while streaming", ProductQuickRouteSwitchRetranslatesAndPreservesVision);
         RunSta("product quick menu closes on foreign deactivation", ProductQuickMenuClosesOnForeignDeactivation);
+        RunSta("confirm button armed disarm esc and timeout", ConfirmButtonArmedDisarmEscAndTimeout);
+        RunSta("confirm button preserves property semantics", ConfirmButtonPreservesPropertySemantics);
+        RunSta("library section mode switch disarms confirm", LibrarySectionModeSwitchDisarmsConfirm);
+        RunSta("privacy section free engine gating and state refresh", PrivacySectionFreeEngineGatingAndStateRefresh);
+        RunSta("services section inline row delete double confirm works", ServicesSectionInlineRowDeleteDoubleConfirmWorks);
         RunSta("product route snapshot is cached per revision", ProductRouteSnapshotIsCachedPerRevision);
         RunSta("product panel translation toggle keeps unrelated provenance", ProductPanelTranslationToggleKeepsUnrelatedProvenance);
         RunSta("product direct add discard returns to source picker", ProductDirectAddDiscardReturnsToSourcePicker);
