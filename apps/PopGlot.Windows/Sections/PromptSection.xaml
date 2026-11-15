@@ -354,18 +354,18 @@
                                 <Border Style="{StaticResource PromptSectionCard}">
                                     <StackPanel>
                                         <TextBlock Text="指令正文" Style="{StaticResource PromptSectionTitle}" />
-                                        <TextBlock Text="支持动态变量；如需输入字面花括号，请使用 \{{ "
+                                        <TextBlock Text="点下方变量可直接插入；想保留普通大括号请写 \{{"
                                                    Style="{StaticResource Caption}" Margin="0,4,0,10" />
                                         <TextBox x:Name="InstructionTextBox" Style="{StaticResource FormTextArea}"
                                                  MinHeight="150" VerticalAlignment="Stretch"
                                                  FontFamily="{StaticResource MonoFontFamily}"
                                                  FontSize="12.5"
-                                                 local:Ui.Placeholder="例如：请将原文准确翻译为 {{target_language}}，保持专业术语严谨与文意通顺。"
+                                                 local:Ui.Placeholder="例如：请把原文准确译成 {{target_language}}，用词自然，保留专有名词。"
                                                  AutomationProperties.Name="指令正文"
                                                  TextChanged="EditorField_Changed" />
                                         <WrapPanel Margin="0,4,0,0">
                                             <TextBlock Style="{StaticResource Caption}" Margin="0,0,12,0"
-                                                       Text="上限 8192 UTF-8 字节" />
+                                                       Text="最多 8192 字节" />
                                             <TextBlock x:Name="InstructionCounterText"
                                                        Style="{StaticResource CounterText}" Margin="0"
                                                        AutomationProperties.Name="指令正文用量计数"
@@ -398,7 +398,7 @@
                                 <Border Style="{StaticResource PromptSectionCard}">
                                     <StackPanel>
                                         <TextBlock Text="默认领域与受众" Style="{StaticResource PromptSectionTitle}" />
-                                        <TextBlock Text="模板留空时使用；上限 256 字符"
+                                        <TextBlock Text="没有单独指定时默认套用；最多 256 字"
                                                    Style="{StaticResource Caption}" Margin="0,4,0,12" />
                                         <Grid x:Name="DomainAudienceGrid">
                                             <Grid.ColumnDefinitions>
@@ -451,7 +451,7 @@
                                                     Click="CopyPreview_Click" />
                                         </Grid>
                                         <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0"
-                                                   Text="本地编译，无需联网；示例目标为中文（简体）" />
+                                                   Text="仅在本机生成预览效果（以简体中文为例）" />
                                         <TextBox x:Name="PreviewTextBox" Style="{StaticResource FormTextArea}"
                                                  Height="132" Margin="0,8,0,0"
                                                  FontFamily="{StaticResource MonoFontFamily}"

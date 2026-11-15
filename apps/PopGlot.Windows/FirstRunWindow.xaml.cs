@@ -15,6 +15,7 @@ public partial class FirstRunWindow : Window
 {
     private const int StepCount = 3;
     private int _step;
+    private bool _alreadyCompletedOnboarding;
 
     /// <summary>True when the user asked to jump straight to 设置 → 服务.</summary>
     internal bool OpenServicesRequested { get; private set; }
@@ -22,7 +23,46 @@ public partial class FirstRunWindow : Window
     public FirstRunWindow()
     {
         InitializeComponent();
+        ThemeService.ApplyWindowChrome(this);
+        LoadCurrentState();
         ApplyStep();
+    }
+
+    private void LoadCurrentState()
+    {
+        try
+        {
+            var shell = ShellSettingsStore.Load();
+            _alreadyCompletedOnboarding = shell.HasCompletedOnboarding;
+            SelectionShortcutText.Text = $"划词翻译　{shell.SelectionHotkey.DisplayName}";
+            ScreenshotShortcutText.Text = $"截图翻译　{shell.ScreenshotHotkey.DisplayName}";
+            QuickSearchShortcutText.Text = $"极速查词　{shell.QuickSearchHotkey.DisplayName}";
+            if (shell.HasCompletedOnboarding)
+            {
+                FreeEngineToggle.IsChecked = shell.FreeEngineConsent != FreeEngineConsent.Denied;
+                HistoryToggle.IsChecked = shell.HistoryEnabled;
+                StartupToggle.IsChecked = shell.StartWithWindows;
+                DiagnosticsToggle.IsChecked = shell.IssueUploadConsent;
+                CloseBtn.ToolTip = "关闭";
+            }
+        }
+        catch
+        {
+            // Keep default onboarding preview if settings cannot be read yet.
+        }
+
+        try
+        {
+            var core = CoreBridge.GetSettings();
+            if (_alreadyCompletedOnboarding)
+            {
+                CloudToggle.IsChecked = core.NetworkEnabled;
+            }
+        }
+        catch
+        {
+            // Core settings may not be initialized in standalone test runs.
+        }
     }
 
     private void ApplyStep()
@@ -76,8 +116,11 @@ public partial class FirstRunWindow : Window
 
     private void CloseButton_Click(object sender, RoutedEventArgs e)
     {
-        // 直接关闭：按推荐值落盘，再也不打扰。
-        Persist();
+        if (!_alreadyCompletedOnboarding)
+        {
+            // 初次使用直接关闭：按当前展示的默认推荐值落盘，以后不再打扰。
+            Persist();
+        }
         DialogResult = false;
         Close();
     }

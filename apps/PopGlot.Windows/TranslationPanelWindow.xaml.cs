@@ -198,7 +198,8 @@ public partial class TranslationPanelWindow : Window
         {
             <= 80 => 380,
             <= 420 => 420,
-            _ => 460,
+            <= 900 => 480,
+            _ => 540,
         };
         if (Math.Abs(Height - nextHeight) > 0.5)
         {

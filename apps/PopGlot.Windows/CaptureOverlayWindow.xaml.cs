@@ -26,11 +26,22 @@ public partial class CaptureOverlayWindow : Window
     private double _workLocalWidth;
     private double _workLocalHeight;
     private int _dpiGeneration;
+    private FrozenDesktopSnapshot? _frozenSnapshot;
     private readonly DispatcherTimer _tinySelectionTimer;
 
-    public CaptureOverlayWindow()
+    public CaptureOverlayWindow() : this(null)
+    {
+    }
+
+    internal CaptureOverlayWindow(FrozenDesktopSnapshot? frozenSnapshot)
     {
         InitializeComponent();
+        _frozenSnapshot = frozenSnapshot;
+        if (frozenSnapshot?.PreviewSource is { } preview)
+        {
+            FrozenDesktopImage.Source = preview;
+            FrozenDesktopImage.Visibility = Visibility.Visible;
+        }
         // 选区过小的提醒只强调一小段时间，然后自动恢复常规尺寸徽标。
         _tinySelectionTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.6) };
         _tinySelectionTimer.Tick += (_, _) => RestoreBadgeAfterTinyWarning();
@@ -224,26 +235,48 @@ public partial class CaptureOverlayWindow : Window
     {
         _closing = true;
         _tinySelectionTimer.Stop();
+        _frozenSnapshot?.Dispose();
+        _frozenSnapshot = null;
+        FrozenDesktopImage.Source = null;
         base.OnClosing(e);
     }
 
     private async Task CaptureAndCloseAsync(Rect pixelRect, bool isOcrOnly = false)
     {
+        var frozenSnapshot = _frozenSnapshot;
+        _frozenSnapshot = null;
         Hide();
+        FrozenDesktopImage.Source = null;
         try
         {
-            // Yield through render priority so the hidden overlay is committed
-            // before capture. The old fixed 60 ms delay made every screenshot
-            // feel sticky even on a fast compositor.
-            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Render);
-            await Task.Delay(16);
+            byte[] png;
+            if (frozenSnapshot is not null)
+            {
+                try
+                {
+                    png = await ScreenCaptureService.CropPngAsync(frozenSnapshot, pixelRect);
+                }
+                finally
+                {
+                    frozenSnapshot.Dispose();
+                }
+            }
+            else
+            {
+                // Yield through render priority so the hidden overlay is committed
+                // before capture. The old fixed 60 ms delay made every screenshot
+                // feel sticky even on a fast compositor.
+                await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Render);
+                await Task.Delay(16);
 
-            var png = await ScreenCaptureService.CapturePngAsync(pixelRect);
+                png = await ScreenCaptureService.CapturePngAsync(pixelRect);
+            }
             Close();
             Captured?.Invoke(this, new ScreenCapture(pixelRect, png, isOcrOnly));
         }
         catch (Exception exception)
         {
+            frozenSnapshot?.Dispose();
             Close();
             Failed?.Invoke(this, exception.Message);
         }

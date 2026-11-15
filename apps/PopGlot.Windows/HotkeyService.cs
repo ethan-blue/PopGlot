@@ -1,8 +1,26 @@
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using PopGlot.Windows.Services;
 
 namespace PopGlot.Windows;
+
+internal enum ShortcutIssueKind
+{
+    Invalid,
+    Reserved,
+    Duplicate,
+    SystemOccupied,
+}
+
+internal sealed record ShortcutIssue(
+    string SlotKey,
+    string ActionLabel,
+    HotkeyAction? GlobalAction,
+    HotkeyBinding Binding,
+    ShortcutIssueKind Kind,
+    string Message,
+    HotkeyBinding? SuggestedBinding = null);
 
 internal readonly record struct HotkeyRegistrationFailure(
     HotkeyAction Action,
@@ -361,6 +379,331 @@ internal sealed partial class HotkeyService : IDisposable
         win32Error == ErrorHotkeyAlreadyRegistered
             ? $"{ShellSettings.ActionName(action)}：{binding.DisplayName} 可能已被其他程序占用"
             : $"{ShellSettings.ActionName(action)}：{binding.DisplayName} 暂时无法使用";
+
+    private static readonly HotkeyBinding[] SelectionCandidates =
+    [
+        new(HotkeyBinding.ModAlt, 0x51), // Alt+Q
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModShift, 0x44), // Ctrl+Shift+D
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x44), // Ctrl+Alt+D
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x54), // Ctrl+Alt+T
+        new(HotkeyBinding.ModAlt, 0x45), // Alt+E
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x45), // Ctrl+Alt+E
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x46), // Ctrl+Alt+F
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModShift, 0x57), // Ctrl+Shift+W
+    ];
+
+    private static readonly HotkeyBinding[] ScreenshotCandidates =
+    [
+        // Prefer Alt-free combinations first: pressing Alt dismisses Win32/browser
+        // hover menus and tooltips before the second key completes.
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModShift, 0x20), // Ctrl+Shift+Space
+        new(0, 0x70), // F1
+        new(0, 0x71), // F2
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModShift, 0x58), // Ctrl+Shift+X
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModShift, 0x41), // Ctrl+Shift+A
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModShift, 0x53), // Ctrl+Shift+S
+        new(0, 0x2C), // PrintScreen
+        new(HotkeyBinding.ModAlt, 0x41), // Alt+A
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x41), // Ctrl+Alt+A
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x53), // Ctrl+Alt+S
+        new(HotkeyBinding.ModAlt, 0x53), // Alt+S
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x43), // Ctrl+Alt+C
+    ];
+
+    private static readonly HotkeyBinding[] QuickSearchCandidates =
+    [
+        new(HotkeyBinding.ModAlt, 0x20), // Alt+Space
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModShift, 0x51), // Ctrl+Shift+Q
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x47), // Ctrl+Alt+G
+        new(HotkeyBinding.ModAlt, 0x44), // Alt+D
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x4B), // Ctrl+Alt+K
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x4A), // Ctrl+Alt+J
+    ];
+
+    private static readonly HotkeyBinding[] ShowWindowCandidates =
+    [
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x4D), // Ctrl+Alt+M
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModShift, 0x4F), // Ctrl+Shift+O
+        new(HotkeyBinding.ModAlt, 0x4F), // Alt+O
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x48), // Ctrl+Alt+H
+    ];
+
+    private static readonly HotkeyBinding[] ClosePanelCandidates =
+    [
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x5A), // Ctrl+Alt+Z
+        new(HotkeyBinding.ModAlt, 0x58), // Alt+X
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x42), // Ctrl+Alt+B
+    ];
+
+    private static IEnumerable<HotkeyBinding> FallbackGlobalCandidates()
+    {
+        for (uint vk = 0x70; vk <= 0x7A; vk++) // F1..F11 (avoid F12 which is debugger-reserved on Windows)
+        {
+            yield return new HotkeyBinding(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, vk);
+        }
+        for (uint vk = 0x70; vk <= 0x7A; vk++)
+        {
+            yield return new HotkeyBinding(HotkeyBinding.ModControl | HotkeyBinding.ModShift, vk);
+        }
+        for (uint vk = 0x31; vk <= 0x39; vk++) // 1..9
+        {
+            yield return new HotkeyBinding(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, vk);
+        }
+    }
+
+    private static IEnumerable<HotkeyBinding> InterfaceCandidates()
+    {
+        yield return new HotkeyBinding(HotkeyBinding.ModControl, 0x4D); // Ctrl+M
+        yield return new HotkeyBinding(HotkeyBinding.ModControl, 0x54); // Ctrl+T
+        yield return new HotkeyBinding(HotkeyBinding.ModControl, 0x4C); // Ctrl+L
+        yield return new HotkeyBinding(HotkeyBinding.ModControl, 0x50); // Ctrl+P
+        yield return new HotkeyBinding(HotkeyBinding.ModControl, 0x4B); // Ctrl+K
+        yield return new HotkeyBinding(HotkeyBinding.ModControl, 0x4A); // Ctrl+J
+        yield return new HotkeyBinding(HotkeyBinding.ModControl, 0x47); // Ctrl+G
+        yield return new HotkeyBinding(HotkeyBinding.ModControl, 0x45); // Ctrl+E
+        yield return new HotkeyBinding(HotkeyBinding.ModControl, 0x44); // Ctrl+D
+        yield return new HotkeyBinding(HotkeyBinding.ModControl, 0x0D); // Ctrl+Enter
+        for (uint vk = 0x31; vk <= 0x39; vk++)
+        {
+            yield return new HotkeyBinding(HotkeyBinding.ModControl, vk);
+        }
+        for (uint vk = 0x70; vk <= 0x7A; vk++)
+        {
+            yield return new HotkeyBinding(HotkeyBinding.ModControl, vk);
+        }
+    }
+
+    /// <summary>
+    /// Probes whether a global shortcut is currently available on Windows.
+    /// Bindings already owned by this process (<paramref name="ownedByApp"/>)
+    /// count as available so PopGlot does not flag its own active hotkeys.
+    /// </summary>
+    internal static bool IsBindingAvailable(
+        HotkeyBinding binding,
+        IReadOnlyCollection<HotkeyBinding>? ownedByApp = null)
+    {
+        if (!binding.IsValid)
+        {
+            return false;
+        }
+        if (ownedByApp is not null && ownedByApp.Any(owned =>
+                !owned.IsUnset &&
+                string.Equals(owned.DisplayName, binding.DisplayName, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        const int probeId = 0x50FE;
+        var parameters = new HwndSourceParameters("PopGlotHotkeyProbe")
+        {
+            Width = 0,
+            Height = 0,
+            WindowStyle = 0,
+            ParentWindow = new nint(-3), // HWND_MESSAGE: hidden message-only window
+        };
+        using var probe = new HwndSource(parameters);
+        if (probe.Handle == 0)
+        {
+            return true;
+        }
+        if (NativeMethods.RegisterHotKey(probe.Handle, probeId, binding.Modifiers | NativeMethods.ModNoRepeat, binding.VirtualKey))
+        {
+            NativeMethods.UnregisterHotKey(probe.Handle, probeId);
+            return true;
+        }
+        return Marshal.GetLastWin32Error() != ErrorHotkeyAlreadyRegistered;
+    }
+
+    internal static HotkeyBinding? FindFirstFreeAlternative(
+        HotkeyAction action,
+        ShellSettings draft,
+        IReadOnlyCollection<HotkeyBinding>? ownedByApp = null,
+        Func<HotkeyBinding, bool>? probeAvailable = null)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        var usedNames = CollectAllBindingNames(draft);
+        var primary = action switch
+        {
+            HotkeyAction.TranslateSelection => SelectionCandidates,
+            HotkeyAction.CaptureScreen => ScreenshotCandidates,
+            HotkeyAction.QuickSearch => QuickSearchCandidates,
+            HotkeyAction.ShowWindow => ShowWindowCandidates,
+            HotkeyAction.ClosePanel => ClosePanelCandidates,
+            _ => SelectionCandidates,
+        };
+        var checker = probeAvailable ?? (b => IsBindingAvailable(b, ownedByApp));
+        foreach (var candidate in primary.Concat(FallbackGlobalCandidates()))
+        {
+            if (!candidate.IsValid ||
+                InterfaceKeys.IsFixedAction(candidate) ||
+                usedNames.Contains(candidate.DisplayName))
+            {
+                continue;
+            }
+            if (checker(candidate))
+            {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    internal static HotkeyBinding? FindFirstFreeInterfaceAlternative(ShellSettings draft)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        var usedNames = CollectAllBindingNames(draft);
+        foreach (var candidate in InterfaceCandidates())
+        {
+            if (!candidate.IsValid ||
+                InterfaceKeys.IsReserved(candidate) ||
+                usedNames.Contains(candidate.DisplayName))
+            {
+                continue;
+            }
+            return candidate;
+        }
+        return null;
+    }
+
+    internal static IReadOnlyList<ShortcutIssue> DiagnoseDraft(
+        ShellSettings draft,
+        IReadOnlyCollection<HotkeyBinding>? ownedByApp = null,
+        bool probeSystem = true,
+        Func<HotkeyBinding, bool>? probeAvailable = null,
+        string? preferredFixSlotKey = null)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        var issues = new List<ShortcutIssue>();
+        var checker = probeAvailable ?? (b => IsBindingAvailable(b, ownedByApp));
+
+        var slots = new (string Key, string Label, HotkeyAction? GlobalAction, HotkeyBinding Binding)[]
+        {
+            ("Selection", ShellSettings.ActionName(HotkeyAction.TranslateSelection), HotkeyAction.TranslateSelection, draft.SelectionHotkey),
+            ("Screenshot", ShellSettings.ActionName(HotkeyAction.CaptureScreen), HotkeyAction.CaptureScreen, draft.ScreenshotHotkey),
+            ("QuickSearch", ShellSettings.ActionName(HotkeyAction.QuickSearch), HotkeyAction.QuickSearch, draft.QuickSearchHotkey),
+            ("ShowWindow", ShellSettings.ActionName(HotkeyAction.ShowWindow), HotkeyAction.ShowWindow, draft.ShowWindowHotkey),
+            ("Close", ShellSettings.ActionName(HotkeyAction.ClosePanel), HotkeyAction.ClosePanel, draft.CloseHotkey),
+            ("InterfaceModel", "切换模型", null, draft.InterfaceModelHotkey),
+            ("InterfaceStyle", "切换风格", null, draft.InterfaceStyleHotkey),
+            ("InterfaceSwap", "互换语言", null, draft.InterfaceSwapHotkey),
+            ("InterfaceTranslate", "发起翻译", null, draft.InterfaceTranslateHotkey),
+            ("InterfaceSpeak", "朗读译文", null, draft.InterfaceSpeakHotkey),
+            ("InterfaceWorkbench", "打开工作台", null, draft.InterfaceWorkbenchHotkey),
+            ("InterfaceLibrary", "打开资料库", null, draft.InterfaceLibraryHotkey),
+            ("InterfaceSettings", "打开设置", null, draft.InterfaceSettingsHotkey),
+        };
+
+        var activeSlots = slots.Where(s => !s.Binding.IsUnset).ToList();
+        var counts = activeSlots
+            .GroupBy(s => s.Binding.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Select(x => x.Label).ToList(), StringComparer.OrdinalIgnoreCase);
+
+        HotkeyBinding? SuggestFor((string Key, string Label, HotkeyAction? GlobalAction, HotkeyBinding Binding) slot) =>
+            slot.GlobalAction is { } ga
+                ? FindFirstFreeAlternative(ga, draft, ownedByApp, checker)
+                : FindFirstFreeInterfaceAlternative(draft);
+
+        foreach (var slot in activeSlots)
+        {
+            if (!slot.Binding.IsValid)
+            {
+                issues.Add(new ShortcutIssue(
+                    slot.Key,
+                    slot.Label,
+                    slot.GlobalAction,
+                    slot.Binding,
+                    ShortcutIssueKind.Invalid,
+                    $"{slot.Label}的「{slot.Binding.DisplayName}」无效，需包含 Ctrl、Alt、Win，或使用 F1–F12 / PrintScreen",
+                    SuggestFor(slot)));
+                continue;
+            }
+
+            if (counts.TryGetValue(slot.Binding.DisplayName, out var dupLabels) && dupLabels.Count > 1)
+            {
+                var others = string.Join("、", dupLabels.Where(l => l != slot.Label));
+                issues.Add(new ShortcutIssue(
+                    slot.Key,
+                    slot.Label,
+                    slot.GlobalAction,
+                    slot.Binding,
+                    ShortcutIssueKind.Duplicate,
+                    $"{slot.Binding.DisplayName} 与「{others}」重复",
+                    SuggestFor(slot)));
+                continue;
+            }
+
+            var isReserved = slot.GlobalAction is not null
+                ? InterfaceKeys.IsFixedAction(slot.Binding)
+                : InterfaceKeys.IsReserved(slot.Binding);
+            if (isReserved)
+            {
+                issues.Add(new ShortcutIssue(
+                    slot.Key,
+                    slot.Label,
+                    slot.GlobalAction,
+                    slot.Binding,
+                    ShortcutIssueKind.Reserved,
+                    $"{slot.Label}的「{slot.Binding.DisplayName}」与系统编辑或保留快捷键冲突",
+                    SuggestFor(slot)));
+                continue;
+            }
+
+            if (probeSystem && slot.GlobalAction is { } action && !checker(slot.Binding))
+            {
+                var suggestion = FindFirstFreeAlternative(action, draft, ownedByApp, checker);
+                var message = suggestion is not null
+                    ? $"「{slot.Label}」的 {slot.Binding.DisplayName} 已被其他软件占用"
+                    : $"「{slot.Label}」的 {slot.Binding.DisplayName} 已被其他软件占用，建议更换组合";
+                issues.Add(new ShortcutIssue(
+                    slot.Key,
+                    slot.Label,
+                    action,
+                    slot.Binding,
+                    ShortcutIssueKind.SystemOccupied,
+                    message,
+                    suggestion));
+            }
+        }
+
+        if (!string.IsNullOrEmpty(preferredFixSlotKey) && issues.Count > 1)
+        {
+            var preferredIndex = issues.FindIndex(i => i.SlotKey == preferredFixSlotKey);
+            if (preferredIndex > 0)
+            {
+                var preferred = issues[preferredIndex];
+                issues.RemoveAt(preferredIndex);
+                issues.Insert(0, preferred);
+            }
+        }
+
+        return issues;
+    }
+
+    private static HashSet<string> CollectAllBindingNames(ShellSettings draft)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Add(HotkeyBinding binding)
+        {
+            if (!binding.IsUnset && binding.IsValid)
+            {
+                names.Add(binding.DisplayName);
+            }
+        }
+        Add(draft.SelectionHotkey);
+        Add(draft.ScreenshotHotkey);
+        Add(draft.QuickSearchHotkey);
+        Add(draft.ShowWindowHotkey);
+        Add(draft.CloseHotkey);
+        Add(draft.InterfaceModelHotkey);
+        Add(draft.InterfaceStyleHotkey);
+        Add(draft.InterfaceSwapHotkey);
+        Add(draft.InterfaceTranslateHotkey);
+        Add(draft.InterfaceSpeakHotkey);
+        Add(draft.InterfaceWorkbenchHotkey);
+        Add(draft.InterfaceLibraryHotkey);
+        Add(draft.InterfaceSettingsHotkey);
+        return names;
+    }
 
     /// <summary>
     /// Leaves the degraded state when a full set is live again, firing

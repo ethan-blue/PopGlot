@@ -221,8 +221,8 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="保护代码与变量" Style="{StaticResource RowTitle}" />
-                        <TextBlock Text="避免改写代码标识符与变量名" Style="{StaticResource RowHint}" />
+                        <TextBlock Text="保留代码与变量" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="翻译技术内容时尽量原样保留代码、变量名和路径" Style="{StaticResource RowHint}" />
                     </StackPanel>
                     <ToggleButton x:Name="ProtectTokensToggle" Grid.Column="1"
                             AutomationProperties.Name="保留代码与变量名原文"
@@ -263,7 +263,7 @@
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="启动时检查更新" Style="{StaticResource RowTitle}" />
                 <TextBlock x:Name="UpdateStatusText" Style="{StaticResource Caption}" TextWrapping="Wrap"
-                           Text="只在启动时静默查一次 GitHub Releases；有新版只提示，不自动下载安装。" />
+                           Text="启动时检查一次新版，有更新会提醒你，不会自动下载。" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                 <ToggleButton x:Name="AutoUpdateCheckToggle" VerticalAlignment="Center"

@@ -166,11 +166,18 @@ public partial class FloatingTriggerWindow : Window
         var cursorXDip = ScreenGeometry.PixelToDip(_screenPos.X, scaleX);
         var cursorYDip = ScreenGeometry.PixelToDip(_screenPos.Y, scaleY);
 
-        var targetLeft = cursorXDip + CursorOffsetX;
-        var targetTop = cursorYDip - CursorOffsetY;
-
         var widthDip = Width > 0 ? Width : 48;
         var heightDip = Height > 0 ? Height : 48;
+
+        // Flip to the opposite side of the cursor near screen edges so the trigger
+        // doesn't clamp directly on top of the pointer / selected word.
+        var targetLeft = cursorXDip + CursorOffsetX;
+        if (targetLeft + widthDip > workRightDip - MinScreenMargin)
+            targetLeft = cursorXDip - widthDip - 8;
+
+        var targetTop = cursorYDip - CursorOffsetY;
+        if (targetTop < workTopDip + MinScreenMargin)
+            targetTop = cursorYDip + 18;
 
         var leftDip = Math.Clamp(targetLeft, workLeftDip + MinScreenMargin, Math.Max(workLeftDip + MinScreenMargin, workRightDip - widthDip - MinScreenMargin));
         var topDip = Math.Clamp(targetTop, workTopDip + MinScreenMargin, Math.Max(workTopDip + MinScreenMargin, workBottomDip - heightDip - MinScreenMargin));

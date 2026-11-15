@@ -1333,7 +1333,8 @@ pub const MAX_SEGMENT_CHARS: usize = 800;
 
 /// A session translates at most this many segments; beyond that the request
 /// is refused BEFORE anything is sent instead of silently truncating.
-pub const MAX_SEGMENTS: usize = 8;
+/// Sized for 25k+ token contexts (~32,000 chars) via sequential batching.
+pub const MAX_SEGMENTS: usize = 64;
 
 /// Why a source cannot be translated as one budgeted session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -2316,5 +2317,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn long_document_25k_plans_losslessly_within_segment_cap() {
+        use std::fmt::Write as _;
+        let mut source = String::new();
+        for idx in 1..=50 {
+            if !source.is_empty() {
+                source.push_str("\n\n");
+            }
+            let _ = write!(source, "Paragraph {idx:02}: ");
+            source.push_str(&"sentence ".repeat(54));
+        }
+        assert!(source.chars().count() >= 25_000);
+        let plan = plan_translation_segments(&source, MAX_SEGMENT_CHARS, MAX_SEGMENTS);
+        let SegmentPlan::Segments(segments) = plan else {
+            panic!("expected 25k document to segment cleanly, got {plan:?}");
+        };
+        assert!(segments.len() > 1 && segments.len() <= MAX_SEGMENTS);
+        assert_eq!(segments.concat(), source);
     }
 }

@@ -42,26 +42,27 @@
                 <TextBlock Text="欢迎使用 PopGlot" Style="{StaticResource PageTitle}"
                            FontSize="22" FontWeight="SemiBold" />
                 <TextBlock Margin="0,10,0,0" TextWrapping="Wrap" FontSize="13.5"
-                           Text="支持划词翻译、截图识别与本地朗读，内置公共翻译无需配置即可使用。" />
-                <TextBlock Margin="0,18,0,6" Text="三个快捷键" Style="{StaticResource SectionTitle}" />
+                           Text="选中文字或框选屏幕就能翻译，自带公共翻译，打开就能用。" />
+                <TextBlock Margin="0,18,0,6" Text="常用快捷键" Style="{StaticResource SectionTitle}" />
                 <Border Style="{StaticResource Card}" Padding="14,10">
                     <StackPanel>
-                        <TextBlock Text="划词翻译　Ctrl + Alt + W" FontSize="13" Margin="0,2" />
-                        <TextBlock Text="截图翻译　Ctrl + Alt + Space" FontSize="13" Margin="0,2" />
+                        <TextBlock x:Name="SelectionShortcutText" Text="划词翻译　Ctrl+Alt+W" FontSize="13" Margin="0,2" />
+                        <TextBlock x:Name="ScreenshotShortcutText" Text="截图翻译　Ctrl+Alt+Space" FontSize="13" Margin="0,2" />
+                        <TextBlock x:Name="QuickSearchShortcutText" Text="极速查词　Ctrl+Alt+Q" FontSize="13" Margin="0,2" />
                         <TextBlock Text="关闭浮窗　Esc" FontSize="13" Margin="0,2" />
                     </StackPanel>
                 </Border>
                 <TextBlock Margin="0,14,0,0" Style="{StaticResource Caption}" TextWrapping="Wrap"
-                           Text="下一步可调整隐私与联网选项，所有设置后续均可在「设置」中修改。" />
+                           Text="这些快捷键和下面的联网选项，之后随时都能在「设置」里改。" />
             </StackPanel>
 
             <!-- ==================== Step 2: privacy ==================== -->
             <StackPanel x:Name="PrivacyStep" Grid.Row="1" Margin="32,12,32,0" Visibility="Collapsed">
-                <TextBlock Text="隐私与联网" Style="{StaticResource PageTitle}"
+                <TextBlock Text="联网与隐私" Style="{StaticResource PageTitle}"
                            FontSize="22" FontWeight="SemiBold" />
                 <TextBlock Margin="0,8,0,14" TextWrapping="Wrap" FontSize="13"
                            Foreground="{DynamicResource TextSecondaryBrush}"
-                           Text="以下设置仅作用于当前设备，关闭不会影响已保存的数据。" />
+                           Text="这些开关只影响当前这台电脑，随时可以回「设置」调整。" />
 
                 <Border Style="{StaticResource Card}" Padding="14,6">
                     <StackPanel>
@@ -73,7 +74,7 @@
                             <StackPanel VerticalAlignment="Center">
                                 <TextBlock Text="允许连接云端翻译服务" Style="{StaticResource RowTitle}" />
                                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
-                                           Text="关闭后不再发起联网请求，仅使用本机模型（如 Ollama）" />
+                                           Text="关闭后不再联网，只使用本地模型（如 Ollama）" />
                             </StackPanel>
                             <ToggleButton x:Name="CloudToggle" Grid.Column="1" VerticalAlignment="Center"
                                           Style="{StaticResource ToggleSwitch}" IsChecked="True"
@@ -88,13 +89,13 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <StackPanel VerticalAlignment="Center">
-                                <TextBlock Text="使用内置免费引擎" Style="{StaticResource RowTitle}" />
+                                <TextBlock Text="开启免配置公共翻译" Style="{StaticResource RowTitle}" />
                                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
-                                           Text="免配置翻译，仅将待译文本发送至所选公共翻译服务" />
+                                           Text="不用填 API Key，直接把待翻译文字发给所选公共服务" />
                             </StackPanel>
                             <ToggleButton x:Name="FreeEngineToggle" Grid.Column="1" VerticalAlignment="Center"
                                           Style="{StaticResource ToggleSwitch}" IsChecked="True"
-                                          AutomationProperties.Name="使用内置免费引擎" />
+                                          AutomationProperties.Name="开启免配置公共翻译" />
                         </Grid>
 
                         <Border Style="{StaticResource SettingsDivider}" Margin="0,8" />
@@ -107,7 +108,8 @@
                             <StackPanel VerticalAlignment="Center">
                                 <TextBlock Text="保存翻译历史" Style="{StaticResource RowTitle}" />
                                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
-                                           Text="历史与生词本只写在本机 %LOCALAPPDATA%\PopGlot" />
+                                           ToolTip="数据保存在 %LOCALAPPDATA%\PopGlot"
+                                           Text="历史和生词本只保存在本机，不会上传云端" />
                             </StackPanel>
                             <ToggleButton x:Name="HistoryToggle" Grid.Column="1" VerticalAlignment="Center"
                                           Style="{StaticResource ToggleSwitch}" IsChecked="True"
@@ -124,7 +126,7 @@
                             <StackPanel VerticalAlignment="Center">
                                 <TextBlock Text="开机自动启动" Style="{StaticResource RowTitle}" />
                                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
-                                           Text="登录后静默驻留托盘，随时可用" />
+                                           Text="开机后留在系统托盘里，按快捷键随时就能用" />
                             </StackPanel>
                             <ToggleButton x:Name="StartupToggle" Grid.Column="1" VerticalAlignment="Center"
                                           Style="{StaticResource ToggleSwitch}" IsChecked="True"
@@ -139,13 +141,13 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <StackPanel VerticalAlignment="Center">
-                                <TextBlock Text="允许上报诊断信息" Style="{StaticResource RowTitle}" />
+                                <TextBlock Text="崩溃时发送诊断报告" Style="{StaticResource RowTitle}" />
                                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
-                                           Text="崩溃时发送脱敏诊断信息至 GitHub Issues（默认关闭）" />
+                                           Text="仅用于排查程序闪退，不含翻译记录和密钥（默认关闭）" />
                             </StackPanel>
                             <ToggleButton x:Name="DiagnosticsToggle" Grid.Column="1" VerticalAlignment="Center"
                                           Style="{StaticResource ToggleSwitch}" IsChecked="False"
-                                          AutomationProperties.Name="允许上报诊断信息" />
+                                          AutomationProperties.Name="崩溃时发送诊断报告" />
                         </Grid>
                     </StackPanel>
                 </Border>
@@ -153,11 +155,11 @@
 
             <!-- ==================== Step 3: done ==================== -->
             <StackPanel x:Name="DoneStep" Grid.Row="1" Margin="32,12,32,0" Visibility="Collapsed">
-                <TextBlock Text="配置完成" Style="{StaticResource PageTitle}"
+                <TextBlock Text="一切就绪" Style="{StaticResource PageTitle}"
                            FontSize="22" FontWeight="SemiBold" />
                 <TextBlock x:Name="DoneSummary" Margin="0,12,0,0" TextWrapping="Wrap" FontSize="13.5" />
                 <TextBlock Margin="0,16,0,0" TextWrapping="Wrap" FontSize="13.5"
-                           Text="如需接入自有模型（OpenAI、DeepSeek、Claude、Gemini、Ollama 等），可在「设置 → 引擎」中添加。" />
+                           Text="如果你想用自己的模型或 API Key（OpenAI、DeepSeek、Claude、Gemini、Ollama 等），可以在「设置 → 引擎」里添加。" />
                 <Button x:Name="OpenServicesButton" Margin="0,16,0,0" HorizontalAlignment="Left"
                         Style="{StaticResource GhostButton}" Padding="12,6"
                         Content="打开设置 → 引擎" Click="OpenServices_Click" />

@@ -697,7 +697,7 @@ public partial class MainWindow : Window
     internal ContextMenu BuildEngineSwitchMenu()
     {
         var config = ProfileManager.Load();
-        var menu = new ContextMenu { MinWidth = 190, MaxWidth = 320, MaxHeight = 420 };
+        var menu = new ContextMenu { MinWidth = 172, MaxWidth = 300, MaxHeight = 420 };
         TextRouteMenu.AddTextChoices(menu, SwitchTextEngine, SwitchToFreeEngineAsync);
         menu.Items.Add(new Separator());
         menu.Items.Add(TextRouteMenu.Header("图片"));
@@ -719,11 +719,11 @@ public partial class MainWindow : Window
             menu.Items.Add(item);
         }
         menu.Items.Add(new Separator());
-        var manage = new MenuItem { Header = "管理引擎" };
+        var manage = new MenuItem { Header = TextRouteMenu.ActionRow("IconSettings", "管理引擎") };
         System.Windows.Automation.AutomationProperties.SetName(manage, "管理引擎");
         manage.Click += (_, _) => OpenSettings?.Invoke("Provider");
         menu.Items.Add(manage);
-        var reprobe = new MenuItem { Header = "检测公共翻译" };
+        var reprobe = new MenuItem { Header = TextRouteMenu.ActionRow("IconRetry", "检测公共翻译") };
         System.Windows.Automation.AutomationProperties.SetName(reprobe, "重新检测免费引擎");
         reprobe.Click += async (_, _) => await UpdateFreeEngineHealthAsync(force: true);
         menu.Items.Add(reprobe);

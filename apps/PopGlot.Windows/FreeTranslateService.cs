@@ -197,6 +197,31 @@ internal static class FreeTranslateService
     private static FreeEndpoint[] EndpointsFor(FreeEngineProvider provider) =>
         DefaultEndpoints.Where(endpoint => endpoint.Provider == provider).ToArray();
 
+    internal static FreeEngineProvider CurrentProvider() => ReadSelectedProvider();
+
+    /// <summary>
+    /// Returns true when <paramref name="text"/> is short enough for the active
+    /// engine's per-request limit (5,000 chars total) yet exceeds a single
+    /// GET URL / query byte budget, so callers can send it in ordered batches.
+    /// </summary>
+    internal static bool NeedsBatching(string text, out int recommendedChunkChars)
+    {
+        var provider = ReadSelectedProvider();
+        if (string.IsNullOrWhiteSpace(text) || text.Length > MaxSourceCharacters)
+        {
+            recommendedChunkChars = 0;
+            return false;
+        }
+        if (provider == FreeEngineProvider.MyMemory)
+        {
+            recommendedChunkChars = 140;
+            return Encoding.UTF8.GetByteCount(text) > MyMemoryMaxQueryBytes - 40;
+        }
+        recommendedChunkChars = 160;
+        // Estimate URL-encoded payload against MaxRequestUrlLength (leaving ~220 chars for host/query params).
+        return Uri.EscapeDataString(text).Length > MaxRequestUrlLength - 220;
+    }
+
     private static FreeEngineProvider ReadSelectedProvider()
     {
         try

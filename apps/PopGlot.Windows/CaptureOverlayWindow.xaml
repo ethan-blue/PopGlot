@@ -19,6 +19,15 @@
 
     <Canvas x:Name="SelectionCanvas" ClipToBounds="True" Background="{StaticResource CaptureHitTestBrush}">
 
+        <!-- Pre-captured virtual desktop so hover tooltips, popups, and menus
+             stay frozen under the dim scrim while selecting. -->
+        <Image x:Name="FrozenDesktopImage" Canvas.Left="0" Canvas.Top="0"
+               Stretch="Fill" IsHitTestVisible="False" Visibility="Collapsed"
+               RenderOptions.BitmapScalingMode="HighQuality"
+               SnapsToDevicePixels="True" UseLayoutRounding="True"
+               Width="{Binding ActualWidth, ElementName=SelectionCanvas}"
+               Height="{Binding ActualHeight, ElementName=SelectionCanvas}" />
+
         <!-- Dim everything, then punch a hole where the user is dragging. -->
         <Rectangle x:Name="ShadeFull" Fill="{DynamicResource OverlayScrimBrush}"
                    Width="{Binding ActualWidth, ElementName=SelectionCanvas}"

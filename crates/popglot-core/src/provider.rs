@@ -16,7 +16,8 @@ pub const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_REQUEST_BYTES: usize = 12 * 1024 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 pub const STREAM_PROMPT_VERSION: &str = "popglot-translation-stream-v1";
-const MAX_MODEL_OUTPUT_TOKENS: u32 = 4_096;
+const MAX_MODEL_OUTPUT_TOKENS: u32 = 25_600;
+const MAX_VISION_OUTPUT_TOKENS: u32 = 8_192;
 const MIN_STREAM_DELIMITER_CHARS: usize = 16;
 const MAX_STREAM_DELIMITER_CHARS: usize = 64;
 const MAX_EXTRA_HEADERS: usize = 16;
@@ -414,7 +415,10 @@ pub(crate) fn output_token_limit(request: &TranslationRequest) -> u32 {
                 TextTask::Explain => unreachable!("Explain returns its fixed budget above"),
             }
         }
-        TranslationInput::Vision { .. } => ceiling,
+        TranslationInput::Vision { .. } => match request.task {
+            TextTask::Translate => MAX_VISION_OUTPUT_TOKENS,
+            _ => ceiling,
+        },
     }
 }
 
@@ -2524,11 +2528,22 @@ mod tests {
     }
 
     #[test]
-    fn translation_output_budget_scales_with_source_and_caps_at_4096() {
+    fn translation_output_budget_scales_with_source_and_caps_at_max_budget() {
         assert_eq!(output_token_limit(&text_request("hello")), 527);
         assert_eq!(output_token_limit(&text_request(&"a".repeat(300))), 1_412);
-        assert_eq!(output_token_limit(&text_request(&"a".repeat(2_000))), 4_096);
-        assert_eq!(output_token_limit(&vision_request()), 4_096);
+        assert_eq!(output_token_limit(&text_request(&"a".repeat(2_000))), 6_512);
+        assert_eq!(
+            output_token_limit(&text_request(&"a".repeat(10_000))),
+            MAX_MODEL_OUTPUT_TOKENS
+        );
+        assert_eq!(
+            output_token_limit(&text_request(&"a".repeat(25_000))),
+            25_600
+        );
+        assert_eq!(
+            output_token_limit(&vision_request()),
+            MAX_VISION_OUTPUT_TOKENS
+        );
     }
 
     #[test]

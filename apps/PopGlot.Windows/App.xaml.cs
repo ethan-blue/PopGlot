@@ -1068,6 +1068,7 @@ public partial class App : Application
         {
             ApplyShellSettings = s => TryApplyShellSettings(s, allowDisableOccupiedDefaults: false),
             SetHotkeysSuspended = suspended => _hotkeys?.SetSuspended(suspended),
+            OwnedHotkeys = () => _hotkeys?.CurrentHotkeys.Values.ToArray() ?? [],
         };
         window.LocalDataCleared += () => _mainWindow?.ReloadHistory();
         window.ProfileChanged += RefreshAllRouteSurfaces;
@@ -1417,10 +1418,28 @@ public partial class App : Application
     {
         Dispatcher.Invoke(() =>
         {
+            var hadOwnVisibleWindow =
+                (_activePanel is not null && _activePanel.IsVisible) ||
+                (_activeOverlay is not null && _activeOverlay.IsVisible) ||
+                (_activeQuickSearch is not null && _activeQuickSearch.IsVisible);
             DestroyActivePanel();
             CloseActiveOverlay();
+            if (_activeQuickSearch is { IsVisible: true } quickSearch)
+            {
+                quickSearch.Hide();
+            }
+            if (hadOwnVisibleWindow)
+            {
+                // Let DWM present the hidden/closed PopGlot window before grabbing
+                // the virtual desktop so our own transient UI does not appear in
+                // the frozen frame, without stealing focus from the hovered app.
+                FlushCompositionFrameForCapture();
+            }
 
-            var overlay = new CaptureOverlayWindow();
+            // Snapshot the desktop BEFORE showing/activating the fullscreen overlay so
+            // hover tooltips, IntelliSense popups, and context menus stay intact.
+            var frozenSnapshot = ScreenCaptureService.TryCaptureVirtualDesktop();
+            var overlay = new CaptureOverlayWindow(frozenSnapshot);
             if (ocrOnly)
             {
                 overlay.SetOcrOnlyMode(true);
@@ -2148,6 +2167,26 @@ public partial class App : Application
 
         [LibraryImport("kernel32.dll")]
         internal static partial nint GetCurrentProcess();
+
+        [LibraryImport("dwmapi.dll")]
+        internal static partial int DwmFlush();
+    }
+
+    internal static bool FlushCompositionFrameForCapture(Func<int>? dwmFlush = null)
+    {
+        try
+        {
+            if ((dwmFlush ?? NativeMethods.DwmFlush)() == 0)
+            {
+                return true;
+            }
+        }
+        catch
+        {
+            // Best effort only; fall back to a brief frame wait below.
+        }
+        Thread.Sleep(16);
+        return false;
     }
 
     /// <summary>

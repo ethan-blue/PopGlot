@@ -63,21 +63,54 @@ internal static class WindowPositioner
         }
 
         // Nothing fits cleanly without edge clamping: for line anchors push toward
-        // the side with more vertical clearance (below vs above) and away from
-        // anchor horizontally when space permits, instead of landing right over it.
+        // the side with more vertical clearance (below vs above) or horizontal flank,
+        // picking the non-overlapping clamped slot closest to the anchor (or lowest overlap).
         if (isLineAnchor)
         {
             var spaceBelow = workArea.Bottom - Edge - anchor.Bottom;
             var spaceAbove = anchor.Top - (workArea.Top + Edge);
-            var fallbackY = spaceBelow >= spaceAbove
-                ? ClampToRange(anchor.Bottom + Gap, minTop, maxTop)
-                : ClampToRange(anchor.Top - window.Height - Gap, minTop, maxTop);
+            var yBelow = ClampToRange(anchor.Bottom + Gap, minTop, maxTop);
+            var yAbove = ClampToRange(anchor.Top - window.Height - Gap, minTop, maxTop);
+            var yAlign = ClampToRange(anchor.Top, minTop, maxTop);
+            var ys = spaceBelow >= spaceAbove
+                ? new[] { yBelow, yAbove, yAlign, maxTop, minTop }
+                : new[] { yAbove, yBelow, yAlign, minTop, maxTop };
+
             var anchorCenterX = anchor.Left + (anchor.Width / 2);
             var workCenterX = workArea.Left + (workArea.Width / 2);
-            var fallbackX = anchorCenterX <= workCenterX
-                ? Math.Max(clampedX, maxLeft)
-                : minLeft;
-            return new Point(ClampToRange(fallbackX, minLeft, maxLeft), fallbackY);
+            var xRight = ClampToRange(anchor.Right + Gap, minLeft, maxLeft);
+            var xLeft = ClampToRange(anchor.Left - window.Width - Gap, minLeft, maxLeft);
+            var xs = anchorCenterX <= workCenterX
+                ? new[] { clampedX, xRight, maxLeft, xLeft, minLeft }
+                : new[] { clampedX, xLeft, minLeft, xRight, maxLeft };
+
+            Point? bestPoint = null;
+            double bestOverlap = double.PositiveInfinity;
+            double bestDistance = double.PositiveInfinity;
+
+            foreach (var cy in ys)
+            {
+                foreach (var cx in xs)
+                {
+                    var candidate = new Rect(cx, cy, window.Width, window.Height);
+                    var intersection = Rect.Intersect(candidate, anchor);
+                    var overlapArea = intersection.IsEmpty ? 0 : intersection.Width * intersection.Height;
+                    var dx = (cx + window.Width / 2) - anchorCenterX;
+                    var dy = (cy + window.Height / 2) - (anchor.Top + anchor.Height / 2);
+                    var distSq = (dx * dx) + (dy * dy);
+
+                    if (overlapArea < bestOverlap - 0.5 ||
+                        (Math.Abs(overlapArea - bestOverlap) <= 0.5 && distSq < bestDistance))
+                    {
+                        bestOverlap = overlapArea;
+                        bestDistance = distSq;
+                        bestPoint = new Point(cx, cy);
+                    }
+                }
+            }
+
+            if (bestPoint.HasValue)
+                return bestPoint.Value;
         }
 
         // Clamp inside the work area. Math.Clamp throws

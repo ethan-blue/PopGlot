@@ -174,9 +174,11 @@
                                     </Style>
                                 </Border.Style>
                             </Border>
-                            <TextBlock x:Name="EngineSummary" Margin="6,0,4,0"
+                            <Path Width="11" Height="11" Margin="6,0,0,0" Stretch="Uniform" VerticalAlignment="Center"
+                                  Fill="{DynamicResource TextSecondaryBrush}" Data="{StaticResource IconProvider}" />
+                            <TextBlock x:Name="EngineSummary" Margin="5,0,4,0"
                                        Style="{StaticResource Metadata}"
-                                       VerticalAlignment="Center" MaxWidth="168"
+                                       VerticalAlignment="Center" MaxWidth="128"
                                        TextTrimming="CharacterEllipsis"
                                        ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                        Foreground="{DynamicResource TextSecondaryBrush}"

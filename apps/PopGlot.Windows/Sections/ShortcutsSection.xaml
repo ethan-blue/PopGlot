@@ -25,42 +25,86 @@
             <Setter Property="ContentTemplate">
                 <Setter.Value>
                     <DataTemplate>
-                        <TextBlock Text="{Binding}" TextTrimming="CharacterEllipsis" ToolTip="{Binding}" />
+                        <TextBlock Text="{Binding}" TextTrimming="CharacterEllipsis" />
                     </DataTemplate>
                 </Setter.Value>
             </Setter>
-            <Setter Property="AutomationProperties.HelpText" Value="点击后按下组合键；Esc 取消，退格键停用该快捷键" />
-            <Setter Property="ToolTip" Value="点击后按下组合键；Esc 取消，退格键停用该快捷键" />
+            <Setter Property="AutomationProperties.HelpText" Value="点击后按下组合键，也支持单按 F1–F12 或 PrintScreen；Esc 取消，退格或右键可停用" />
+            <Setter Property="ToolTip" Value="点击后按下组合键，也支持单按 F1–F12 或 PrintScreen；Esc 取消，退格或右键可停用" />
+        </Style>
+        <Style x:Key="ClearShortcutButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
+            <Setter Property="Width" Value="26" />
+            <Setter Property="Height" Value="26" />
+            <Setter Property="Margin" Value="6,0,0,0" />
+            <Setter Property="ToolTip" Value="停用此快捷键" />
+            <Setter Property="AutomationProperties.Name" Value="停用此快捷键" />
         </Style>
     </UserControl.Resources>
     <StackPanel>
         <Grid Margin="0,0,0,10">
-            <TextBlock Text="常用翻译快捷键（点击修改，退格停用）" Style="{StaticResource Caption}" VerticalAlignment="Center" />
-            <Button x:Name="ResetDefaultsButton" Style="{StaticResource IconButton}"
-                    local:Ui.Icon="{StaticResource IconRetry}" Width="28" Height="28" HorizontalAlignment="Right"
-                    AutomationProperties.Name="恢复默认快捷键" ToolTip="恢复默认快捷键"
-                    Click="ResetDefaultsButton_Click" />
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="点击后直接按键录制（支持单按 F1–F12 / PrintScreen）；Esc 取消，点 × 停用" Style="{StaticResource Caption}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0">
+                <Button x:Name="ProbeAvailabilityButton" Content="检测占用" Style="{StaticResource GhostButton}"
+                        Height="26" Padding="10,2" Margin="0,0,6,0" FontSize="12"
+                        AutomationProperties.Name="检测快捷键占用" ToolTip="检查当前全局快捷键是否被其他软件占用"
+                        Click="ProbeAvailabilityButton_Click" />
+                <Button x:Name="ResetDefaultsButton" Style="{StaticResource IconButton}"
+                        local:Ui.Icon="{StaticResource IconRetry}" Width="26" Height="26"
+                        AutomationProperties.Name="恢复默认快捷键" ToolTip="恢复默认快捷键"
+                        Click="ResetDefaultsButton_Click" />
+            </StackPanel>
         </Grid>
 
         <!-- 常用翻译快捷键：开门见山，傻瓜式直达 -->
         <Border Style="{StaticResource ShortcutRow}"><Grid>
-            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="32"/></Grid.ColumnDefinitions>
             <TextBlock Text="划词翻译" Style="{StaticResource ShortcutLabel}"/>
             <local:HotkeyRecorder x:Name="SelectionHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}" AutomationProperties.Name="划词翻译"/>
+            <Button x:Name="ClearSelectionButton" Grid.Column="2" Style="{StaticResource ClearShortcutButton}" local:Ui.Icon="{StaticResource IconCaptionClose}" AutomationProperties.Name="停用划词翻译快捷键" Tag="Selection" Click="ClearShortcutButton_Click"/>
         </Grid></Border>
         <Border Style="{StaticResource ShortcutRow}"><Grid>
-            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-            <TextBlock Text="截图翻译" Style="{StaticResource ShortcutLabel}"/>
-            <local:HotkeyRecorder x:Name="ScreenshotHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}" AutomationProperties.Name="截图翻译"/>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="32"/></Grid.ColumnDefinitions>
+            <TextBlock Text="截图翻译" Style="{StaticResource ShortcutLabel}"
+                       ToolTip="推荐 F1、PrintScreen 或不含 Alt 的组合，截取时不会打断悬停菜单和提示框"
+                       AutomationProperties.HelpText="推荐 F1、PrintScreen 或不含 Alt 的组合，截取时不会打断悬停菜单和提示框"/>
+            <local:HotkeyRecorder x:Name="ScreenshotHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}"
+                                  AutomationProperties.Name="截图翻译"
+                                  AutomationProperties.HelpText="点击后按下组合键，也支持单按 F1–F12 或 PrintScreen；截悬停菜单或提示框时推荐 F1、PrintScreen 或不含 Alt 的组合；Esc 取消，退格或右键可停用"
+                                  HelpTip="点击后按下组合键，也支持单按 F1–F12 或 PrintScreen；截悬停菜单或提示框时推荐 F1、PrintScreen 或不含 Alt 的组合；Esc 取消，退格或右键可停用"
+                                  ToolTip="点击后按下组合键，也支持单按 F1–F12 或 PrintScreen；截悬停菜单或提示框时推荐 F1、PrintScreen 或不含 Alt 的组合；Esc 取消，退格或右键可停用"/>
+            <Button x:Name="ClearScreenshotButton" Grid.Column="2" Style="{StaticResource ClearShortcutButton}" local:Ui.Icon="{StaticResource IconCaptionClose}" AutomationProperties.Name="停用截图翻译快捷键" Tag="Screenshot" Click="ClearShortcutButton_Click"/>
         </Grid></Border>
         <Border Style="{StaticResource ShortcutRow}"><Grid>
-            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="32"/></Grid.ColumnDefinitions>
             <TextBlock Text="极速查词" Style="{StaticResource ShortcutLabel}"/>
             <local:HotkeyRecorder x:Name="QuickSearchHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}" AutomationProperties.Name="极速查词快捷键"/>
+            <Button x:Name="ClearQuickSearchButton" Grid.Column="2" Style="{StaticResource ClearShortcutButton}" local:Ui.Icon="{StaticResource IconCaptionClose}" AutomationProperties.Name="停用极速查词快捷键" Tag="QuickSearch" Click="ClearShortcutButton_Click"/>
         </Grid></Border>
 
+        <!-- 实时冲突与一键建议条（仅在冲突、被占用或手动检测时显示） -->
+        <Border x:Name="ShortcutDiagnosticBar" Visibility="Collapsed" Margin="0,10,0,0" Padding="10,7"
+                CornerRadius="{StaticResource ControlRadius}"
+                Background="{DynamicResource WarningSoftBrush}"
+                BorderBrush="{DynamicResource WarningBrush}" BorderThickness="1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="ShortcutDiagnosticText" VerticalAlignment="Center" TextWrapping="Wrap"
+                           FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}" />
+                <Button x:Name="ShortcutFixButton" Grid.Column="1" Margin="10,0,0,0"
+                        Style="{StaticResource GhostButton}" Height="26" Padding="10,2" FontSize="12"
+                        Visibility="Collapsed" Click="ShortcutFixButton_Click" />
+            </Grid>
+        </Border>
+
         <!-- 更多快捷键：默认折叠，降低配置负担 -->
-        <Expander x:Name="MoreShortcutsExpander" Header="更多快捷键（窗口管理与窗口内快捷键）" Margin="0,12,0,0" IsExpanded="False">
+        <Expander x:Name="MoreShortcutsExpander" Header="更多快捷键（窗口与界面操作）" Margin="0,12,0,0" IsExpanded="False">
             <Grid x:Name="ShortcutGroups" Margin="0,8,0,0">
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>

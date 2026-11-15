@@ -273,7 +273,7 @@
                                     </Grid.ColumnDefinitions>
                                     <StackPanel x:Name="PresetColumnLeft">
                                         <Button x:Name="ChatGptSourceButton" Style="{StaticResource ProviderPresetButton}" Click="ChatGptSource_Click"
-                                                ToolTip="官方浏览器授权；内容直接发送到 OpenAI，并使用所选 ChatGPT 计划的额度。无需 CLI 或 API Key。">
+                                                ToolTip="用浏览器登录 ChatGPT 账号直接使用，不需要额外填写 API Key。">
                                             <StackPanel><TextBlock Text="ChatGPT" FontWeight="SemiBold"/><TextBlock Text="官方账号直连 · 无需 Key" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel>
                                         </Button>
                                         <Button Style="{StaticResource ProviderPresetButton}" Tag="openai" AutomationProperties.Name="OpenAI 预设" Click="Preset_Click"><StackPanel><TextBlock Text="OpenAI" FontWeight="SemiBold"/><TextBlock Text="GPT · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
@@ -299,7 +299,7 @@
                                         <WrapPanel Margin="0,0,0,8">
                                             <TextBlock Text="本机工具" Style="{StaticResource EditorSectionTitle}" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                             <Button x:Name="DetectCliToolsButton" Content="检测 Codex / OMP" Style="{StaticResource GhostButton}" Click="DetectCliTools_Click"
-                                                    ToolTip="仅检测本机工具入口。选择后再连接，检查工具管理的账号和模型；不会导入 OAuth token。"/>
+                                                    ToolTip="扫描本机已安装的 Codex / OMP 工具，确认后再连接，不会直接导入登录凭证。"/>
                                             <Button x:Name="CancelCliDetectButton" Content="取消" Style="{StaticResource GhostButton}" Click="CliCancel_Click" Visibility="Collapsed" Margin="8,0,0,0"/>
                                         </WrapPanel>
                                         <TextBlock x:Name="CliDetectStatusText" Text="检测已安装的 Codex 和 OMP；选择后再确认连接。" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,8"/>
@@ -378,7 +378,7 @@
                                         </StackPanel>
                                     </Border>
                                     <WrapPanel x:Name="CliActionRow" HorizontalAlignment="Right" Margin="0,6,0,0">
-                                        <Button x:Name="CliTestButton" Content="测试翻译" Style="{StaticResource GhostButton}" Click="CliTest_Click" IsEnabled="False" Margin="0,0,8,8" ToolTip="发送 Hello world，会使用所选模型的少量额度。"/>
+                                        <Button x:Name="CliTestButton" Content="测试翻译" Style="{StaticResource GhostButton}" Click="CliTest_Click" IsEnabled="False" Margin="0,0,8,8" ToolTip="用一条短句测试模型是否正常响应（会消耗极少额度）。"/>
                                         <Button x:Name="CliSaveButton" Content="保存" Style="{StaticResource GhostButton}" Click="CliSave_Click" IsEnabled="False" Margin="0,0,8,8"/>
                                         <Button x:Name="CliSaveUseButton" Content="保存并使用" Style="{StaticResource PrimaryButton}" Click="CliSave_Click" IsEnabled="False" Margin="0,0,8,8"/>
                                     </WrapPanel>
@@ -412,7 +412,7 @@
                                         </Border>
 
                                         <WrapPanel x:Name="ChatGptActionRow" HorizontalAlignment="Right" Margin="0,6,0,0">
-                                            <Button x:Name="ChatGptTestButton" Content="测试翻译" Style="{StaticResource GhostButton}" Click="ChatGptTest_Click" Margin="0,0,8,8" ToolTip="发送 Hello world，会使用所选 ChatGPT 计划的少量额度。"/>
+                                            <Button x:Name="ChatGptTestButton" Content="测试翻译" Style="{StaticResource GhostButton}" Click="ChatGptTest_Click" Margin="0,0,8,8" ToolTip="发送一句测试文本，验证当前 ChatGPT 账号是否可用"/>
                                             <Button x:Name="ChatGptSaveButton" Content="保存" Style="{StaticResource GhostButton}" Click="ChatGptSaveUse_Click" Margin="0,0,8,8"/>
                                             <Button x:Name="ChatGptSaveUseButton" Content="保存并使用" Style="{StaticResource PrimaryButton}" Click="ChatGptSaveUse_Click" Margin="0,0,8,8"/>
                                         </WrapPanel>

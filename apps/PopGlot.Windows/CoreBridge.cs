@@ -978,18 +978,21 @@ internal static partial class CoreBridge
 
     /// <summary>Session output-budget constants shared with the Rust planner.</summary>
     internal const int MaxSegmentChars = 800;
-    internal const int MaxSegments = 8;
+    internal const int MaxSegments = 64;
 
     /// <summary>
     /// Plans how a long source is translated within one session: a single
     /// request, ordered segments (concatenation reproduces the source), or an
     /// explicit rejection that must surface BEFORE anything is sent.
     /// </summary>
-    public static SegmentPlanDto PlanSegments(string source)
+    public static SegmentPlanDto PlanSegments(
+        string source,
+        int maxSegmentChars = MaxSegmentChars,
+        int maxSegments = MaxSegments)
     {
         ArgumentException.ThrowIfNullOrEmpty(source);
         return EnsureSuccess<SegmentPlanDto>(Invoke(() =>
-            NativeMethods.PlanSegments(source, MaxSegmentChars, MaxSegments)));
+            NativeMethods.PlanSegments(source, maxSegmentChars, maxSegments)));
     }
 
     public static void CancelActiveRequest()

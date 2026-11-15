@@ -175,10 +175,11 @@ internal static class TextRouteMenu
 
     internal static ContextMenu Create(Action<string> selectProfile, Func<FreeEngineProvider, Task> selectFree, Action manage)
     {
-        var menu = new ContextMenu { MinWidth = 190, MaxWidth = 380, MaxHeight = 420 };
+        var menu = new ContextMenu { MinWidth = 172, MaxWidth = 300, MaxHeight = 420 };
         AddTextChoices(menu, selectProfile, selectFree);
         menu.Items.Add(new Separator());
-        var settings = new MenuItem { Header = "管理引擎" };
+        var settings = new MenuItem { Header = ActionRow("IconSettings", "管理引擎") };
+        System.Windows.Automation.AutomationProperties.SetName(settings, "管理引擎");
         settings.Click += (_, _) => manage();
         menu.Items.Add(settings);
         return menu;
@@ -202,7 +203,7 @@ internal static class TextRouteMenu
             };
             menu.Items.Add(item);
         }
-        menu.Items.Add(Header("内置"));
+        menu.Items.Add(Header("公共"));
         var freeSelected = current.IsFree;
         foreach (var provider in new[] { FreeEngineProvider.Google, FreeEngineProvider.MyMemory })
         {
@@ -284,11 +285,34 @@ internal static class TextRouteMenu
             var detail = Label(secondary);
             detail.FontSize = 11;
             detail.Margin = new Thickness(8, 0, 0, 0);
-            detail.MaxWidth = 200;
+            detail.MaxWidth = 160;
             detail.VerticalAlignment = VerticalAlignment.Center;
             detail.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
             row.Children.Add(detail);
         }
+        return row;
+    }
+
+    internal static StackPanel ActionRow(string iconResourceKey, string text)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 1, 0, 1) };
+        var slot = new Border { Width = 16, VerticalAlignment = VerticalAlignment.Center };
+        if (Application.Current?.TryFindResource(iconResourceKey) is Geometry geometry)
+        {
+            var icon = new System.Windows.Shapes.Path
+            {
+                Data = geometry,
+                Width = 11,
+                Height = 11,
+                Stretch = Stretch.Uniform,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center,
+            };
+            icon.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "TextSecondaryBrush");
+            slot.Child = icon;
+        }
+        row.Children.Add(slot);
+        row.Children.Add(Label(text));
         return row;
     }
 

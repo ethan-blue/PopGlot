@@ -44,7 +44,7 @@ use provider::{
 };
 
 const SETTINGS_FILE: &str = "provider-settings.json";
-const MAX_SOURCE_BYTES: usize = 64 * 1024;
+const MAX_SOURCE_BYTES: usize = 256 * 1024;
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug)]

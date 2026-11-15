@@ -167,8 +167,8 @@ impl PromptTemplate {
             id: BUILTIN_FAITHFUL_ID.to_owned(),
             schema_version: PROMPT_SCHEMA_VERSION,
             name: "准确".to_owned(),
-            description: "忠于原意，用词严谨，完整保留原文逻辑与细节。".to_owned(),
-            instruction: "请将原文准确翻译为 {{target_language}}。忠实传达原文含义，保持信息的完整性、逻辑关系与语气强度，不增添推测，不随意遗漏，用词严谨自然。".to_owned(),
+            description: "贴近原意、不增不减，适合看文档和核对细节。".to_owned(),
+            instruction: "请把原文准确译成{{target_language}}。不要漏翻或自己发挥，保留原本的意思、语气和专业词汇。".to_owned(),
             domain: String::new(),
             audience: String::new(),
             enabled: true,
@@ -187,8 +187,8 @@ impl PromptTemplate {
             id: BUILTIN_NATURAL_ID.to_owned(),
             schema_version: PROMPT_SCHEMA_VERSION,
             name: "自然".to_owned(),
-            description: "地道流畅，符合母语习惯，行文自然亲切。".to_owned(),
-            instruction: "请将原文翻译为地道流畅的 {{target_language}}。符合目标语言的表达习惯与行文质感，避免逐词生硬直译，同时完整保留原文核心语义、语境与情绪。".to_owned(),
+            description: "顺口好读、像日常母语表达，不生硬。".to_owned(),
+            instruction: "请把原文译成自然顺口的{{target_language}}。不要逐字硬译，用平时说话写字的习惯来表达，同时把原意和语气说完整。".to_owned(),
             domain: String::new(),
             audience: String::new(),
             enabled: true,
@@ -207,8 +207,8 @@ impl PromptTemplate {
             id: BUILTIN_FORMAL_ID.to_owned(),
             schema_version: PROMPT_SCHEMA_VERSION,
             name: "正式".to_owned(),
-            description: "专业规范，用语得体，适合商务沟通与正式文档。".to_owned(),
-            instruction: "请将原文翻译为专业、得体的 {{target_language}}。适合商务交流、技术文档与正式沟通场景，行文规范庄重，逻辑严密。领域：{{domain}}；受众：{{audience}}。".to_owned(),
+            description: "用语得体稳重，适合工作邮件和正式文档。".to_owned(),
+            instruction: "请把原文译成正式、得体的{{target_language}}。用词稳重、条理清楚，适合工作邮件、商务沟通和正式文档。".to_owned(),
             domain: String::new(),
             audience: String::new(),
             enabled: true,
@@ -501,8 +501,14 @@ mod tests {
             ["准确", "自然", "正式"],
             "built-in choices must use short, user-facing labels"
         );
+        let mut compiled_texts = std::collections::HashSet::new();
         for builtin in builtins {
             assert!(builtin.is_built_in);
+            assert!(
+                builtin.instruction.contains("{{target_language}}"),
+                "built-in {} must keep {{{{target_language}}}} placeholder",
+                builtin.id
+            );
             builtin.validate().expect("built-in template must be valid");
 
             let vars = PromptVariables {
@@ -515,7 +521,12 @@ mod tests {
             assert_eq!(compiled.template_id, builtin.id);
             assert_eq!(compiled.revision, builtin.revision);
             assert_ne!(compiled.compiled_text, "");
+            assert!(compiled.compiled_text.contains("zh-CN"));
             assert!(!compiled.compiled_text.contains("{{"));
+            assert!(
+                compiled_texts.insert(compiled.compiled_text.clone()),
+                "built-in templates must produce distinct instructions"
+            );
         }
     }
 

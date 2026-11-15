@@ -115,6 +115,7 @@ internal static partial class Program
         Run("panel positioning stays in work area", PanelPositionStaysInWorkArea);
         Run("panel positioning supports negative monitor coordinates", PanelPositionSupportsNegativeCoordinates);
         Run("panel positioning survives an oversized window", PanelPositionSurvivesOversizedWindow);
+        await RunAsync("25k planning and free-engine batched long translation", FreeEngineBatchedLongTextAnd25KPlanningAsync);
 
         Run("session states and friendly failures", SessionStateAndFailureText);
         Run("offline mode has its own failure headline", OfflineModeHasOwnHeadline);
@@ -535,6 +536,19 @@ internal static partial class Program
             ("provider editor model combobox wheel and popup template invariants", WaveRegressionTests.ProviderEditorModelComboBoxWheelAndPopupInvariants),
             ("provider editor shared model sync and unlocking invariants", WaveRegressionTests.ProviderEditorSharedModelSyncAndUnlockingInvariants));
 
+        Run("screen capture validate and clamp handles multi-monitor negative origin", ShortcutCaptureAndOnboardingTests.ValidateAndClampRegionMultiMonitorAndBounds);
+        await RunStaAsync("frozen snapshot crops PNG bytes and disposes on overlay close", ShortcutCaptureAndOnboardingTests.FrozenSnapshotCropPngAndOverlayDisposalAsync);
+        RunStaBatch(
+            ("hotkey recorder formats live modifiers and unbinds cleanly", ShortcutCaptureAndOnboardingTests.HotkeyRecorderLiveModifiersAndUnbind),
+            ("hotkey diagnostics detects conflicts and applies one-click fix", ShortcutCaptureAndOnboardingTests.HotkeyServiceDiagnoseDraftAndOneClickFix),
+            ("first run window preserves existing settings and displays live shortcuts on reopen", ShortcutCaptureAndOnboardingTests.FirstRunWindowPreservesExistingSettingsOnReopen),
+            ("standalone F8 and PrintScreen hotkeys parse and commit on keyup", ShortcutCaptureAndOnboardingTests.StandaloneFunctionAndPrintScreenHotkeys),
+            ("shortcut diagnostics prioritizes edited slot expands hidden section and uses fallback pool", ShortcutCaptureAndOnboardingTests.DiagnosticsPrioritizesEditedSlotExpandsHiddenAndUsesFallbackPool),
+            ("settings window revert clears stale shortcut conflict diagnostics", ShortcutCaptureAndOnboardingTests.SettingsWindowRevertClearsShortcutConflictDiagnostics),
+            ("screenshot suggestions prefer Alt-free bindings ahead of Alt combos", ShortcutCaptureAndOnboardingTests.ScreenshotSuggestionsPreferAltFreeBindings),
+            ("shortcuts section clear buttons preserve alignment and screenshot hover tip", ShortcutCaptureAndOnboardingTests.ShortcutsSectionClearButtonsPreserveAlignmentAndScreenshotHelpTip),
+            ("hotkey recorder invalid prompt fits inside 170px and DwmFlush handles fallback", ShortcutCaptureAndOnboardingTests.HotkeyRecorderInvalidPromptFitsAndDwmFlushFallbacksCleanly));
+
 
         if (Environment.GetEnvironmentVariable("POPGLOT_SMOKE_FREE") == "1")
         {
@@ -904,6 +918,13 @@ internal static partial class Program
         var tightPoint = WindowPositioner.NearAnchor(centerAnchor, tightWindow, tightWorkArea);
         True(!new Rect(tightPoint, tightWindow).IntersectsWith(centerAnchor),
             "panel must avoid overlapping center anchor even on a compact work area");
+
+        var clampedVerticalArea = new Rect(0, 0, 1000, 560);
+        var clampedCenterAnchor = new Rect(480, 270, 20, 22);
+        var clampedTallWindow = new Size(460, 380);
+        var clampedPoint = WindowPositioner.NearAnchor(clampedCenterAnchor, clampedTallWindow, clampedVerticalArea);
+        True(!new Rect(clampedPoint, clampedTallWindow).IntersectsWith(clampedCenterAnchor),
+            "panel fallback must flank narrow center anchor when neither above nor below clears cleanly");
     }
 
     private static void PanelPositionSupportsNegativeCoordinates()
@@ -930,6 +951,82 @@ internal static partial class Program
 
         Equal(tinyMonitor.Left + 12, point.X);
         Equal(tinyMonitor.Top + 12, point.Y);
+    }
+
+    private static async Task FreeEngineBatchedLongTextAnd25KPlanningAsync()
+    {
+        var paragraphs = new List<string>(50);
+        for (var i = 1; i <= 50; i++)
+        {
+            paragraphs.Add($"Paragraph {i:00}: " + string.Concat(Enumerable.Repeat("word ", 98)));
+        }
+        var doc25k = string.Join("\n\n", paragraphs);
+        True(doc25k.Length >= 25_000, "test doc must exceed 25k chars");
+        var plan = CoreBridge.PlanSegments(doc25k);
+        Equal("segments", plan.Mode);
+        True(plan.Segments is { Count: > 1 and <= CoreBridge.MaxSegments },
+            $"25k doc should plan cleanly within {CoreBridge.MaxSegments} segments, got {plan.Segments?.Count ?? 0}");
+        Equal(doc25k, string.Concat(plan.Segments!), "planned segments must reconstruct 25k document losslessly");
+
+        var longFreeInput = string.Join("\n\n", Enumerable.Range(1, 5).Select(i => $"第{i}段：" + new string('翻', 320)));
+        True(FreeTranslateService.NeedsBatching(longFreeInput, out var chunkChars) && chunkChars > 0,
+            "1600+ CJK input should trigger batched free translation");
+
+        var prevLoader = OutboundPolicy.SettingsLoader;
+        try
+        {
+            OutboundPolicy.SettingsLoader = () => ShellSettingsStore.Load() with
+            {
+                FreeEngineConsent = FreeEngineConsent.Allowed,
+                HistoryEnabled = true,
+            };
+            var history = new FakeHistoryRepository();
+            var executor = new FakeTranslationExecutor
+            {
+                ApiKey = null,
+                TextRoute = null,
+                VisionRoute = null,
+                Settings = CoreBridge.GetSettings() with
+                {
+                    ProviderType = ProviderType.OpenAiCompatible,
+                    ApiBaseUrl = "https://free-test.example.com",
+                    TextModel = "",
+                    VisionModel = "",
+                    NetworkEnabled = true,
+                    SafeDevMode = false,
+                },
+            };
+            var batchCalls = 0;
+            executor.OnTranslateFree = (segment, _, _, _) =>
+            {
+                var idx = Interlocked.Increment(ref batchCalls);
+                return Task.FromResult(new TranslationResponse(
+                    new TranslationResult($"[批{idx}:{segment.Length}]", "", "", [], []),
+                    new ProviderDiagnostics(FreeTranslateService.RequestId, ProviderType.OpenAiCompatible, "https://free.example.com", 1, 200, 10)));
+            };
+            var coordinator = new TranslationCoordinator(history: history, executor: executor);
+            var updates = new List<TranslationStreamUpdate>();
+            var progress = new SynchronousProgress<TranslationStreamUpdate>(u =>
+            {
+                lock (updates) updates.Add(u);
+            });
+            var session = await coordinator.TranslateTextAsync(
+                longFreeInput, "zh-CN", "en", TranslationInputSource.Manual, progress: progress);
+
+            Equal(TranslationSessionStage.Completed, session.Stage);
+            True(batchCalls > 1, $"expected multiple batches for long free text, got {batchCalls}");
+            True(session.TranslatedText.Contains("[批1:") && session.TranslatedText.Contains($"[批{batchCalls}:"),
+                "final translated text must combine all batch outputs");
+            lock (updates)
+            {
+                True(updates.Count >= batchCalls + 1, "batched free translation must stream Reset + per-batch Delta updates");
+                Equal(TranslationStreamUpdateKind.Reset, updates[0].Kind);
+            }
+        }
+        finally
+        {
+            OutboundPolicy.SettingsLoader = prevLoader;
+        }
     }
 
     // ================= Session state / error messages =================
@@ -5250,8 +5347,9 @@ internal static partial class Program
         var ns = doc.Root!.Name.Namespace;
         var xns = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml");
 
-        // (a) The text layer Grid that hosts TranslationTextBox must own
-        // Grid.Row="1" inside the result card, never the header's row 0.
+        // (a) The phonetic layer owns Grid.Row="1" directly under the engine
+        // header; the text layer Grid that hosts TranslationTextBox must own
+        // Grid.Row="2", never the header's row 0 or the phonetic row.
         var translationBox = doc.Descendants(ns + "TextBox")
             .FirstOrDefault(e => (string?)e.Attribute(xns + "Name") == "TranslationTextBox");
         True(translationBox is not null, "TranslationTextBox must be declared");
@@ -5259,8 +5357,13 @@ internal static partial class Program
         True(textLayerGrid is not null, "TranslationTextBox must sit inside a Grid");
         // Grid.Row is an unprefixed attribute name in raw XAML (the default
         // xmlns namespace applies to elements, not attributes).
-        Equal("1", (string?)textLayerGrid!.Attribute("Grid.Row"),
-            "the translation text layer must occupy Grid.Row=1 (the star row below the engine header)");
+        var phoneticText = doc.Descendants()
+            .FirstOrDefault(e => (string?)e.Attribute(xns + "Name") == "PhoneticText");
+        True(phoneticText is not null, "PhoneticText must be declared");
+        Equal("1", (string?)phoneticText!.Attribute("Grid.Row"),
+            "the phonetic layer must occupy Grid.Row=1 (under the engine header)");
+        Equal("2", (string?)textLayerGrid!.Attribute("Grid.Row"),
+            "the translation text layer must occupy Grid.Row=2 (the star row below the phonetic layer)");
 
         // (b) The explanation area's ScrollViewer ancestor must own Grid.Row=2
         // so explanations, token chips and warnings stay visible and capped.
@@ -5269,8 +5372,8 @@ internal static partial class Program
         True(explanationBox is not null, "ExplanationBox must be declared");
         var explanationScroller = explanationBox!.Ancestors(ns + "ScrollViewer").FirstOrDefault();
         True(explanationScroller is not null, "ExplanationBox must live inside a ScrollViewer");
-        Equal("2", (string?)explanationScroller!.Attribute("Grid.Row"),
-            "the explanation ScrollViewer must occupy Grid.Row=2 (the capped row under the text)");
+        Equal("3", (string?)explanationScroller!.Attribute("Grid.Row"),
+            "the explanation ScrollViewer must occupy Grid.Row=3 (the capped row under the text)");
     }
 
     /// <summary>

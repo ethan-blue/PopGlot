@@ -107,12 +107,18 @@ internal sealed record HotkeyBinding(uint Modifiers, uint VirtualKey)
     /// <summary>A combination Windows will actually hand back to us.</summary>
     /// <remarks>
     /// Bare keys and Shift-only combinations would swallow ordinary typing
-    /// system-wide, so at least one of Ctrl/Alt/Win is required.
+    /// system-wide, so at least one of Ctrl/Alt/Win is required—except
+    /// dedicated function/capture keys (F1–F24 and PrintScreen) which do not
+    /// interfere with typing and let users capture hover popups without
+    /// dismissing menus with Alt.
     /// </remarks>
     public bool IsValid =>
-        (Modifiers & (ModControl | ModAlt | ModWin)) != 0 &&
         VirtualKey != 0 &&
-        !IsModifierKey(VirtualKey);
+        !IsModifierKey(VirtualKey) &&
+        ((Modifiers & (ModControl | ModAlt | ModWin)) != 0 || IsStandaloneAllowedKey(VirtualKey));
+
+    public static bool IsStandaloneAllowedKey(uint virtualKey) =>
+        virtualKey is (>= 0x70 and <= 0x87) or 0x2C;
 
     public static bool IsModifierKey(uint virtualKey) => virtualKey is
         0x10 or 0x11 or 0x12 or 0x5B or 0x5C or // Shift, Ctrl, Alt, LWin, RWin
@@ -124,6 +130,7 @@ internal sealed record HotkeyBinding(uint Modifiers, uint VirtualKey)
         0x0D => "Enter",
         0x09 => "Tab",
         0x1B => "Esc",
+        0x2C => "PrintScreen",
         0xBC => ",",
         0xBE => ".",
         0xBF => "/",
@@ -178,7 +185,7 @@ internal sealed record HotkeyBinding(uint Modifiers, uint VirtualKey)
         }
 
         var tokens = text.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (tokens.Length < 2)
+        if (tokens.Length == 0)
         {
             return fallback;
         }
@@ -246,6 +253,7 @@ internal sealed record HotkeyBinding(uint Modifiers, uint VirtualKey)
             "ENTER" or "RETURN" => 0x0D,
             "TAB" => 0x09,
             "ESC" or "ESCAPE" => 0x1B,
+            "PRINTSCREEN" or "PRTSC" or "PRINT_SCREEN" or "SNAPSHOT" => 0x2C,
             _ => Enum.TryParse<Key>(upper, ignoreCase: true, out var wpfKey)
                 ? (uint)KeyInterop.VirtualKeyFromKey(wpfKey)
                 : 0,
@@ -521,7 +529,7 @@ internal sealed record ShellSettings(
         {
             if (!binding.IsValid)
             {
-                return $"{ActionName(action)}的快捷键“{binding.DisplayName}”无效：至少需要包含 Ctrl、Alt 或 Win，并搭配一个普通按键。";
+                return $"{ActionName(action)}的快捷键“{binding.DisplayName}”无效：需包含 Ctrl、Alt 或 Win，或使用 F1–F24 / PrintScreen。";
             }
             if (InterfaceKeys.IsFixedAction(binding))
             {
@@ -557,7 +565,7 @@ internal sealed record ShellSettings(
             }
             if (!binding.IsValid)
             {
-                return $"{name}的快捷键“{binding.DisplayName}”无效：至少需要包含 Ctrl、Alt 或 Win，并搭配一个普通按键。";
+                return $"{name}的快捷键“{binding.DisplayName}”无效：需包含 Ctrl、Alt 或 Win，或使用 F1–F24 / PrintScreen。";
             }
             if (InterfaceKeys.IsReserved(binding))
             {

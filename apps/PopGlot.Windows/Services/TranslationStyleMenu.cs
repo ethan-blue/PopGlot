@@ -233,10 +233,10 @@ internal static class TranslationStyleMenu
 
         var menu = new ContextMenu();
         menu.MinWidth = 150;
-        menu.MaxWidth = 260;
+        menu.MaxWidth = 240;
         if (ProbeNextTextRoute() == TranslationStyleSupport.FreeEngine)
         {
-            menu.Items.Add(MakeDisabledItem("当前为公共直译 · 切换专属引擎后生效"));
+            menu.Items.Add(MakeDisabledItem("公共翻译暂不支持风格"));
             menu.Items.Add(new Separator());
         }
         var builtInCount = 0;
@@ -263,7 +263,8 @@ internal static class TranslationStyleMenu
         }
 
         menu.Items.Add(new Separator());
-        var manage = new MenuItem { Header = "管理风格" };
+        var manage = new MenuItem { Header = TextRouteMenu.ActionRow("IconStyle", "管理风格") };
+        AutomationProperties.SetName(manage, "管理风格");
         manage.Click += (_, _) => managePrompts();
         menu.Items.Add(manage);
         return menu;
@@ -416,6 +417,7 @@ internal static class TranslationStyleMenu
         selectorButton.Visibility = probe == TranslationStyleSupport.FreeEngine
             ? Visibility.Collapsed : Visibility.Visible;
         selectorButton.ToolTip = message;
+        AutomationProperties.SetName(selectorButton, styleName is not null ? $"风格：{styleName}" : "文字翻译风格");
         AutomationProperties.SetHelpText(selectorButton, message);
         return probe;
     }
@@ -455,22 +457,6 @@ internal static class TranslationStyleMenu
         };
         title.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
         row.Children.Add(title);
-
-        if (!string.IsNullOrWhiteSpace(template.Description))
-        {
-            var info = new System.Windows.Shapes.Path
-            {
-                Data = (Geometry)Application.Current.FindResource("IconInfo"),
-                Width = 11,
-                Height = 11,
-                Stretch = Stretch.Uniform,
-                Margin = new Thickness(6, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center,
-                ToolTip = template.Description,
-            };
-            info.SetResourceReference(System.Windows.Shapes.Path.FillProperty, "TextTertiaryBrush");
-            row.Children.Add(info);
-        }
 
         var item = new MenuItem
         {

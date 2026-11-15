@@ -60,8 +60,8 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
             // 开关只影响一次后台检查，写盘失败不必打断界面。
         }
         UpdateStatusText.Text = enabled
-            ? "只在启动时静默查一次 GitHub Releases；有新版只提示，不自动下载安装。"
-            : "已关闭启动检查；你可以随时点「立即检查」。";
+            ? "启动时检查一次新版，有更新会提醒你，不会自动下载。"
+            : "已关闭启动检查；需要时可随时点「立即检查」。";
     }
 
     /// <summary>

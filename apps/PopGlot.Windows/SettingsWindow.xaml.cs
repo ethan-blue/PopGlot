@@ -143,6 +143,9 @@ public partial class SettingsWindow : Window
     /// <summary>Pauses global shortcuts while one shortcut field records.</summary>
     internal Action<bool>? SetHotkeysSuspended { get; init; }
 
+    /// <summary>Returns global hotkeys currently registered by this process so diagnostics won't flag self-owned bindings.</summary>
+    internal Func<IReadOnlyCollection<HotkeyBinding>>? OwnedHotkeys { get; init; }
+
     /// <summary>Raised after history or vocabulary was wiped so open windows can refresh.</summary>
     internal event Action? LocalDataCleared;
     internal event Action? ProfileChanged;
@@ -167,7 +170,13 @@ public partial class SettingsWindow : Window
         // still a draft until saved so a revert restores the applied theme.
         GeneralSection.ThemeCombo.SelectionChanged += MarkDirtyHandler;
 
-        ShortcutsSection.DefaultsReset += (_, _) => EvaluateDraftState();
+        ShortcutsSection.DefaultsReset += (_, _) =>
+        {
+            EvaluateDraftState();
+            RefreshShortcutDiagnostics();
+        };
+        ShortcutsSection.ProbeRequested += (_, _) =>
+            RefreshShortcutDiagnostics(forceSystemProbe: true, showCleanFeedback: true);
         ShortcutsSection.SelectionHotkey.Recorded += MarkDirtyHandler;
         ShortcutsSection.ScreenshotHotkey.Recorded += MarkDirtyHandler;
         ShortcutsSection.QuickSearchHotkey.Recorded += MarkDirtyHandler;
@@ -241,7 +250,43 @@ public partial class SettingsWindow : Window
             return;
         }
         RecomputeStateFromDraft();
+        if (ShortcutsSection.Visibility == Visibility.Visible)
+        {
+            RefreshShortcutDiagnostics();
+        }
     }
+
+    private ShellSettings BuildDraftShellSettings(ShellSettings? baseSettings = null) =>
+        (baseSettings ?? _shellSettings) with
+        {
+            SchemaVersion = ShellSettings.CurrentSchemaVersion,
+            SelectionHotkey = ShortcutsSection.SelectionHotkey.BindingValue ?? _shellSettings.SelectionHotkey,
+            ScreenshotHotkey = ShortcutsSection.ScreenshotHotkey.BindingValue ?? _shellSettings.ScreenshotHotkey,
+            CloseHotkey = ShortcutsSection.CloseHotkey.BindingValue ?? _shellSettings.CloseHotkey,
+            HistoryEnabled = DataSection.HistoryEnabled.IsChecked == true,
+            Theme = Helpers.SelectedEnum(GeneralSection.ThemeCombo, ThemePreference.System),
+            ClosePanelOnFocusLoss = GeneralSection.CloseOnFocusLoss.IsChecked == true,
+            CopyTranslationAutomatically = GeneralSection.AutoCopy.IsChecked == true,
+            StartWithWindows = GeneralSection.StartWithWindows.IsChecked == true,
+            ShowWindowHotkey = ShortcutsSection.ShowWindowHotkey.BindingValue ?? _shellSettings.ShowWindowHotkey ?? HotkeyBinding.ShowWindowDefault,
+            CloseMainWindowToTray = GeneralSection.CloseToTray.IsChecked == true,
+            QuickSearchHotkey = ShortcutsSection.QuickSearchHotkey.BindingValue ?? _shellSettings.QuickSearchHotkey,
+            InterfaceModelHotkey = ShortcutsSection.InterfaceModelHotkey.BindingValue ?? _shellSettings.InterfaceModelHotkey,
+            InterfaceStyleHotkey = ShortcutsSection.InterfaceStyleHotkey.BindingValue ?? _shellSettings.InterfaceStyleHotkey,
+            InterfaceSwapHotkey = ShortcutsSection.InterfaceSwapHotkey.BindingValue ?? _shellSettings.InterfaceSwapHotkey,
+            InterfaceWorkbenchHotkey = ShortcutsSection.InterfaceWorkbenchHotkey.BindingValue ?? _shellSettings.InterfaceWorkbenchHotkey,
+            InterfaceLibraryHotkey = ShortcutsSection.InterfaceLibraryHotkey.BindingValue ?? _shellSettings.InterfaceLibraryHotkey,
+            InterfaceSettingsHotkey = ShortcutsSection.InterfaceSettingsHotkey.BindingValue ?? _shellSettings.InterfaceSettingsHotkey,
+            InterfaceTranslateHotkey = ShortcutsSection.InterfaceTranslateHotkey.BindingValue ?? _shellSettings.InterfaceTranslateHotkey,
+            InterfaceSpeakHotkey = ShortcutsSection.InterfaceSpeakHotkey.BindingValue ?? _shellSettings.InterfaceSpeakHotkey,
+        };
+
+    private void RefreshShortcutDiagnostics(bool forceSystemProbe = false, bool showCleanFeedback = false) =>
+        ShortcutsSection.RefreshDiagnostics(
+            BuildDraftShellSettings(),
+            OwnedHotkeys?.Invoke(),
+            probeSystem: forceSystemProbe || OwnedHotkeys is not null,
+            showCleanFeedback: showCleanFeedback);
 
     /// <summary>
     /// Guard-free snapshot recompute: applies whatever the live draft says to
@@ -433,6 +478,8 @@ public partial class SettingsWindow : Window
         ShortcutsSection.InterfaceSettingsHotkey.BindingValue = settings.InterfaceSettingsHotkey;
         ShortcutsSection.InterfaceTranslateHotkey.BindingValue = settings.InterfaceTranslateHotkey;
         ShortcutsSection.InterfaceSpeakHotkey.BindingValue = settings.InterfaceSpeakHotkey;
+        ShortcutsSection.ClearLastEditedSlot();
+        ShortcutsSection.SyncClearButtons();
         DataSection.HistoryEnabled.IsChecked = settings.HistoryEnabled;
         GeneralSection.CloseOnFocusLoss.IsChecked = settings.ClosePanelOnFocusLoss;
         GeneralSection.AutoCopy.IsChecked = settings.CopyTranslationAutomatically;
@@ -643,6 +690,7 @@ public partial class SettingsWindow : Window
             case "Shortcuts":
                 SettingsScroll.Visibility = Visibility.Visible;
                 ShortcutsSection.Visibility = Visibility.Visible;
+                RefreshShortcutDiagnostics();
                 break;
             case "Privacy":
                 SettingsScroll.Visibility = Visibility.Visible;
@@ -888,6 +936,10 @@ public partial class SettingsWindow : Window
             _state = startupSaveFailed ? SettingsEditState.Dirty : SettingsEditState.Clean;
             UpdateSaveBar();
             CaptureSection.SetRouteDraftPending(false);
+            if (ShortcutsSection.Visibility == Visibility.Visible)
+            {
+                RefreshShortcutDiagnostics();
+            }
 
             if (CaptureSection.SafeMode.IsChecked == true || CaptureSection.NetworkEnabled.IsChecked != true)
             {
@@ -925,6 +977,7 @@ public partial class SettingsWindow : Window
         LoadAll();
         ThemeService.Apply(_shellSettings.Theme);
         ThemeService.ApplyWindowChrome(this);
+        RefreshShortcutDiagnostics();
         // 提示词模板编辑器有自己的保存/草稿守卫，独立于主表单保存条：
         // Revert 不动它，因此文案必须如实区分——不能声称丢弃了仍然存在的
         // 模板草稿。

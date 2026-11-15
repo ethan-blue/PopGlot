@@ -140,19 +140,16 @@
 
                         <!-- Global TEXT-translation style selector: consistent with the workbench and panel. -->
                         <Button x:Name="StyleSelectorButton" Style="{StaticResource IconButton}"
-                                Width="Auto" MinWidth="32" Height="32" Padding="4,0" Margin="4,0,0,0"
+                                Width="Auto" MinWidth="34" Height="32" Padding="6,0" Margin="4,0,0,0"
                                 AutomationProperties.Name="文字翻译风格"
                                 ToolTipService.ShowOnDisabled="True"
-                                ToolTip="风格（点击选择）"
+                                ToolTip="切换翻译风格"
                                 Click="StyleSelector_Click">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <Path Width="12" Height="12" Stretch="Uniform"
                                       Fill="{DynamicResource AccentBrush}"
                                       Data="{StaticResource IconStyle}" VerticalAlignment="Center" />
-                                <TextBlock x:Name="StyleSelectorLabel" Text="风格" FontSize="11.5"
-                                           Margin="4,0,0,0" VerticalAlignment="Center" MaxWidth="80"
-                                           TextTrimming="CharacterEllipsis"
-                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                                <TextBlock x:Name="StyleSelectorLabel" Text="风格" Visibility="Collapsed" />
                                 <Path Width="7" Height="4" Stretch="Uniform" Margin="4,0,0,0"
                                       Fill="{DynamicResource TextTertiaryBrush}"
                                       Data="{StaticResource IconChevronDown}" VerticalAlignment="Center" />
@@ -374,18 +371,18 @@
                                    AutomationProperties.Name="翻译状态" />
                     </Grid>
                     <Button x:Name="RouteSelectorButton" Grid.Column="1" Style="{StaticResource GhostButton}"
-                            Height="26" MinWidth="92" MaxWidth="184" Padding="8,0"
+                            Height="26" MinWidth="36" MaxWidth="136" Padding="7,0"
                             AutomationProperties.Name="切换文字模型" ToolTipService.ShowOnDisabled="True"
                             ToolTip="切换翻译模型"
                             Click="RouteSelector_Click">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <Path Data="{StaticResource IconProvider}" Width="12" Height="12" Stretch="Uniform"
-                                  Fill="{DynamicResource TextSecondaryBrush}" Margin="0,0,5,0" />
-                            <TextBlock x:Name="RouteSelectorLabel" Text="选择模型" MaxWidth="136"
+                            <Path Data="{StaticResource IconProvider}" Width="11" Height="11" Stretch="Uniform"
+                                  Fill="{DynamicResource AccentBrush}" Margin="0,0,4,0" />
+                            <TextBlock x:Name="RouteSelectorLabel" Text="选择模型" MaxWidth="94"
                                        TextTrimming="CharacterEllipsis" FontSize="11"
                                        Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
                             <Path Data="{StaticResource IconChevronDown}" Width="8" Height="5" Stretch="Uniform"
-                                  Fill="{DynamicResource TextTertiaryBrush}" Margin="5,0,0,0" VerticalAlignment="Center" />
+                                  Fill="{DynamicResource TextTertiaryBrush}" Margin="4,0,0,0" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                 </Grid>

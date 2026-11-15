@@ -448,6 +448,168 @@ internal sealed class TranslationCoordinator
         string sourceLang,
         string targetLang,
         FreeEngineAuthorization authorization,
+        CancellationToken cancellationToken,
+        IProgress<TranslationStreamUpdate>? progress = null,
+        TranslationSession? session = null,
+        long epoch = 0,
+        long startTimestampTicks = 0)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (FreeTranslateService.NeedsBatching(source, out var chunkChars))
+        {
+            var plan = CoreBridge.PlanSegments(source, chunkChars, maxSegments: 36);
+            if (plan.Mode == "segments" && plan.Segments is { Count: > 1 } batches)
+            {
+                return await TranslateFreeBatchedAsync(
+                    settings, sourceLang, targetLang, authorization, batches,
+                    progress, session, epoch, startTimestampTicks, cancellationToken);
+            }
+        }
+        var single = await TranslateFreeSingleWithTokenProtectionAsync(
+            settings, source, sourceLang, targetLang, authorization, cancellationToken);
+        if (progress is not null && session is not null)
+        {
+            progress.Report(new TranslationStreamUpdate(
+                SessionId: session.SessionId,
+                Epoch: epoch,
+                Kind: TranslationStreamUpdateKind.Reset,
+                Delta: string.Empty,
+                AccumulatedText: string.Empty,
+                AccumulatedCharCount: 0));
+            progress.Report(new TranslationStreamUpdate(
+                SessionId: session.SessionId,
+                Epoch: epoch,
+                Kind: TranslationStreamUpdateKind.Delta,
+                Delta: single.Result.TranslatedText,
+                AccumulatedText: single.Result.TranslatedText,
+                AccumulatedCharCount: single.Result.TranslatedText.Length,
+                Ttft: startTimestampTicks != 0
+                    ? Stopwatch.GetElapsedTime(startTimestampTicks, Stopwatch.GetTimestamp())
+                    : null,
+                IsPartial: true));
+        }
+        return single;
+    }
+
+    private async Task<TranslationResponse> TranslateFreeBatchedAsync(
+        ProviderSettings settings,
+        string sourceLang,
+        string targetLang,
+        FreeEngineAuthorization authorization,
+        IReadOnlyList<string> batches,
+        IProgress<TranslationStreamUpdate>? progress,
+        TranslationSession? session,
+        long epoch,
+        long startTimestampTicks,
+        CancellationToken cancellationToken)
+    {
+        var merged = new StringBuilder();
+        var warnings = new List<string>();
+        var protectedTerms = new List<string>();
+        TranslationResponse? last = null;
+        ulong elapsedTotal = 0;
+
+        if (progress is not null && session is not null)
+        {
+            progress.Report(new TranslationStreamUpdate(
+                SessionId: session.SessionId,
+                Epoch: epoch,
+                Kind: TranslationStreamUpdateKind.Reset,
+                Delta: string.Empty,
+                AccumulatedText: string.Empty,
+                AccumulatedCharCount: 0));
+        }
+
+        for (var i = 0; i < batches.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            TranslationResponse batchResponse;
+            try
+            {
+                batchResponse = await TranslateFreeSingleWithTokenProtectionAsync(
+                    settings, batches[i], sourceLang, targetLang, authorization, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception) when (merged.Length > 0)
+            {
+                var partialResult = new TranslationResult(
+                    merged.ToString(),
+                    last?.Result.Phonetic ?? string.Empty,
+                    string.Empty,
+                    protectedTerms.Distinct(StringComparer.Ordinal).ToList(),
+                    warnings.Append($"第 {i + 1}/{batches.Count} 段未完成，以下为已完成部分。").ToList(),
+                    IsPartial: true);
+                throw new SegmentSessionException(new TranslationResponse(
+                    partialResult,
+                    last?.Diagnostics is { } prevDiag ? prevDiag with { ElapsedMs = elapsedTotal } : null));
+            }
+
+            last = batchResponse;
+            elapsedTotal += batchResponse.Diagnostics?.ElapsedMs ?? 0;
+            merged.Append(batchResponse.Result.TranslatedText);
+            warnings.AddRange(batchResponse.Result.Warnings);
+            protectedTerms.AddRange(batchResponse.Result.ProtectedTerms);
+
+            var accumulated = merged.ToString();
+            if (progress is not null && session is not null)
+            {
+                session.TranslatedText = accumulated;
+                if (session.Timing.FirstDeltaMs == 0 && startTimestampTicks != 0)
+                {
+                    session.Timing = session.Timing with
+                    {
+                        FirstDeltaMs = (ulong)Stopwatch.GetElapsedTime(startTimestampTicks).TotalMilliseconds,
+                    };
+                }
+                progress.Report(new TranslationStreamUpdate(
+                    SessionId: session.SessionId,
+                    Epoch: epoch,
+                    Kind: TranslationStreamUpdateKind.Delta,
+                    Delta: batchResponse.Result.TranslatedText,
+                    AccumulatedText: accumulated,
+                    AccumulatedCharCount: accumulated.Length,
+                    Ttft: startTimestampTicks != 0 ? Stopwatch.GetElapsedTime(startTimestampTicks) : null,
+                    IsPartial: true));
+            }
+
+            if (batchResponse.Result.IsPartial || string.IsNullOrWhiteSpace(batchResponse.Result.TranslatedText))
+            {
+                return batchResponse with
+                {
+                    Result = batchResponse.Result with
+                    {
+                        TranslatedText = accumulated,
+                        ProtectedTerms = protectedTerms.Distinct(StringComparer.Ordinal).ToList(),
+                        Warnings = warnings.Append($"第 {i + 1}/{batches.Count} 段结果不完整，已保留前序片段。").ToList(),
+                        IsPartial = true,
+                    },
+                    Diagnostics = last.Diagnostics is { } diag ? diag with { ElapsedMs = elapsedTotal } : null,
+                };
+            }
+        }
+
+        return last! with
+        {
+            Result = last.Result with
+            {
+                TranslatedText = merged.ToString(),
+                ProtectedTerms = protectedTerms.Distinct(StringComparer.Ordinal).ToList(),
+                Warnings = warnings,
+                IsPartial = false,
+            },
+            Diagnostics = last.Diagnostics is { } finalDiag ? finalDiag with { ElapsedMs = elapsedTotal } : null,
+        };
+    }
+
+    private async Task<TranslationResponse> TranslateFreeSingleWithTokenProtectionAsync(
+        ProviderSettings settings,
+        string source,
+        string sourceLang,
+        string targetLang,
+        FreeEngineAuthorization authorization,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -691,25 +853,8 @@ internal sealed class TranslationCoordinator
                 session.PromptSupport = TranslationPromptSupport.NotSupported;
                 session.PipelineLabel = EngineWording.ActiveFreeEngineName();
                 response = await TranslateFreeWithTokenProtectionAsync(
-                    settings, trimmed, sourceLang, targetLang, freeAuth!, cancellationToken);
-
-                progress?.Report(new TranslationStreamUpdate(
-                    SessionId: session.SessionId,
-                    Epoch: epoch,
-                    Kind: TranslationStreamUpdateKind.Reset,
-                    Delta: string.Empty,
-                    AccumulatedText: string.Empty,
-                    AccumulatedCharCount: 0));
-
-                progress?.Report(new TranslationStreamUpdate(
-                    SessionId: session.SessionId,
-                    Epoch: epoch,
-                    Kind: TranslationStreamUpdateKind.Delta,
-                    Delta: response.Result.TranslatedText,
-                    AccumulatedText: response.Result.TranslatedText,
-                    AccumulatedCharCount: response.Result.TranslatedText.Length,
-                    Ttft: Stopwatch.GetElapsedTime(startTimestampTicks, Stopwatch.GetTimestamp()),
-                    IsPartial: true));
+                    settings, trimmed, sourceLang, targetLang, freeAuth!, cancellationToken,
+                    progress, session, epoch, startTimestampTicks);
             }
 
             netStopwatch.Stop();
@@ -1317,23 +1462,8 @@ internal sealed class TranslationCoordinator
                         MarkFreeTextStage(session);
 
                         response = await TranslateFreeWithTokenProtectionAsync(
-                            settings, recognized, sourceLang, targetLang, freeAuth!, cancellationToken);
-                        progress?.Report(new TranslationStreamUpdate(
-                            SessionId: session.SessionId,
-                            Epoch: epoch,
-                            Kind: TranslationStreamUpdateKind.Reset,
-                            Delta: string.Empty,
-                            AccumulatedText: string.Empty,
-                            AccumulatedCharCount: 0));
-                        progress?.Report(new TranslationStreamUpdate(
-                            SessionId: session.SessionId,
-                            Epoch: epoch,
-                            Kind: TranslationStreamUpdateKind.Delta,
-                            Delta: response.Result.TranslatedText,
-                            AccumulatedText: response.Result.TranslatedText,
-                            AccumulatedCharCount: response.Result.TranslatedText.Length,
-                            Ttft: Stopwatch.GetElapsedTime(fallbackStartTicks, Stopwatch.GetTimestamp()),
-                            IsPartial: true));
+                            settings, recognized, sourceLang, targetLang, freeAuth!, cancellationToken,
+                            progress, session, epoch, fallbackStartTicks);
                     }
 
                     fallbackNetStopwatch.Stop();
@@ -1548,25 +1678,9 @@ internal sealed class TranslationCoordinator
         // OCR（本地或视觉识别）+ 免费文字：诚实记录 —— 文本阶段未应用自定义风格。
         MarkFreeTextStage(session);
 
-        var response = await TranslateFreeWithTokenProtectionAsync(
-            settings, recognized, sourceLang, targetLang, freeAuth!, cancellationToken);
-        progress?.Report(new TranslationStreamUpdate(
-            SessionId: session.SessionId,
-            Epoch: epoch,
-            Kind: TranslationStreamUpdateKind.Reset,
-            Delta: string.Empty,
-            AccumulatedText: string.Empty,
-            AccumulatedCharCount: 0));
-        progress?.Report(new TranslationStreamUpdate(
-            SessionId: session.SessionId,
-            Epoch: epoch,
-            Kind: TranslationStreamUpdateKind.Delta,
-            Delta: response.Result.TranslatedText,
-            AccumulatedText: response.Result.TranslatedText,
-            AccumulatedCharCount: response.Result.TranslatedText.Length,
-            Ttft: Stopwatch.GetElapsedTime(startTicks, Stopwatch.GetTimestamp()),
-            IsPartial: true));
-        return response;
+        return await TranslateFreeWithTokenProtectionAsync(
+            settings, recognized, sourceLang, targetLang, freeAuth!, cancellationToken,
+            progress, session, epoch, startTicks);
     }
 
     /// <summary>
@@ -1663,7 +1777,10 @@ internal sealed class TranslationCoordinator
 
         // Sequential segments under ONE deadline and cancellation token.
         using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        sessionCts.CancelAfter(SessionDeadline);
+        var deadline = segments.Count > 10
+            ? TimeSpan.FromMinutes(Math.Clamp(segments.Count, 10, 25))
+            : SessionDeadline;
+        sessionCts.CancelAfter(deadline);
 
         var merged = new StringBuilder();
         long mergedBytes = 0;
