@@ -23,9 +23,8 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
     {
         var version = typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
         AppVersionText.Text = version;
-        AppVersionText.ToolTip = typeof(App).Assembly
-            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()
-            ?.InformationalVersion ?? version;
+        // 0.1.40: plain version only — the +commit hash reads as noise to users.
+        AppVersionText.ToolTip = version;
     }
 
     // ================= Public accessors for MainWindow =================

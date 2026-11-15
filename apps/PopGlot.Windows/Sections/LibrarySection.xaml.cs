@@ -90,7 +90,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             Interval = TimeSpan.FromSeconds(1),
         };
         _undoTimer.Tick += (_, _) => RefreshUndoBar();
-        _clearConfirm = ConfirmButton.Attach(ClearCurrentButton, "确认清空?", ClearCurrent);
+        _clearConfirm = ConfirmButton.Attach(ClearCurrentButton, "确认清空？", ClearCurrent);
     }
     private ConfirmButton _clearConfirm = null!;
 

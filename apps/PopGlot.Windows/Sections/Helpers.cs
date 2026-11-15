@@ -63,7 +63,7 @@ internal sealed class ConfirmButton
     private static readonly TimeSpan ArmTimeout = TimeSpan.FromSeconds(3);
 
     private readonly Button _button;
-    private readonly string _normalContent;
+    private readonly string? _normalContent;
     private readonly string _normalAutomationName;
     private readonly Func<string> _armedContentProvider;
     private readonly Action _fire;
@@ -73,7 +73,7 @@ internal sealed class ConfirmButton
     private ConfirmButton(Button button, Func<string> armedContentProvider, Action fire)
     {
         _button = button;
-        _normalContent = (string)button.Content;
+        _normalContent = button.Content as string;
         _normalAutomationName = System.Windows.Automation.AutomationProperties.GetName(button);
         _armedContentProvider = armedContentProvider;
         _fire = fire;
@@ -95,6 +95,18 @@ internal sealed class ConfirmButton
         {
             _armed = true;
             var armedText = _armedContentProvider();
+            // Icon buttons carry a fixed style width (32/36 DIP): an armed caption
+            // such as "确认删除？" does not fit and clips. Let the button grow to
+            // the caption for the armed window, then restore the original metrics.
+            if (!double.IsNaN(_button.ActualWidth) && _button.ActualWidth > 0)
+            {
+                _button.MinWidth = _button.ActualWidth;
+            }
+            _button.Width = double.NaN;
+            if (_button.Padding.Left < 8 && _button.Padding.Right < 8)
+            {
+                _button.Padding = new Thickness(10, 0, 10, 0);
+            }
             _button.Content = armedText;
             System.Windows.Automation.AutomationProperties.SetName(_button, armedText);
             _button.SetResourceReference(System.Windows.Controls.Control.BackgroundProperty, "DangerSoftBrush");
@@ -114,6 +126,9 @@ internal sealed class ConfirmButton
             return;
         }
         _armed = false;
+        _button.ClearValue(System.Windows.Controls.Control.WidthProperty);
+        _button.ClearValue(System.Windows.Controls.Control.MinWidthProperty);
+        _button.ClearValue(System.Windows.Controls.Control.PaddingProperty);
         _button.Content = _normalContent;
         System.Windows.Automation.AutomationProperties.SetName(
             _button,

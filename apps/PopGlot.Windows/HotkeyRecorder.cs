@@ -40,7 +40,7 @@ internal sealed class HotkeyRecorder : Button
         Cursor = Cursors.Hand;
         Focusable = true;
         HorizontalContentAlignment = HorizontalAlignment.Center;
-        Content = HotkeyBinding.SelectionDefault.DisplayName;
+        Content = "未设置";
         ContextMenu = BuildContextMenu();
     }
 

@@ -138,9 +138,12 @@
                                    Text="无需密钥即可使用；待译文本会发往所选公共服务" />
                         <TextBlock x:Name="FreeEngineConsentState" Style="{StaticResource Caption}"
                                    Margin="0,4,0,0" />
-                        <TextBlock Style="{StaticResource Caption}" Margin="0,2,0,0" TextWrapping="Wrap"
-                                   Text="默认开启。要关闭，请在「设置 → 通用 → 重新显示引导」的隐私一页取消勾选。" />
                     </StackPanel>
+                    <ToggleButton x:Name="FreeEngineConsentToggle"
+                                  AutomationProperties.Name="允许公共翻译" Grid.Column="1"
+                                  VerticalAlignment="Center"
+                                  Style="{StaticResource ToggleSwitch}"
+                                  Checked="FreeEngineConsent_Changed" Unchecked="FreeEngineConsent_Changed" />
                 </Grid>
 
                 <Border Style="{StaticResource SettingsDivider}" Margin="0,6,0,14" />

@@ -166,6 +166,7 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         try
         {
             CloudSpeechToggle.IsChecked = _shellSettings.CloudSpeechEnabled;
+        FreeEngineConsentToggle.IsChecked = _shellSettings.FreeEngineConsent != FreeEngineConsent.Denied;
         }
         finally
         {
@@ -210,9 +211,36 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
 
     // ================= Free engine consent =================
     //
-    // 0.1.35：内置免费引擎默认允许，这里只做状态陈述，不再放允许/拒绝按钮。
-    // 唯一的关闭入口是首次配置向导的隐私一页（设置 → 通用 → 重新显示引导），
-    // 以及上面的总开关「允许连接云端翻译服务」。
+    // 0.1.40：恢复就地开关——绕路到首次向导关公共翻译的指引已删；
+    // 总开关「允许连接云端翻译服务」仍然优先于此。
+
+    private void FreeEngineConsent_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading)
+        {
+            return;
+        }
+        var enabled = FreeEngineConsentToggle.IsChecked == true;
+        try
+        {
+            _shellSettings = ShellSettingsStore.Update(current => current with
+            {
+                FreeEngineConsent = enabled ? FreeEngineConsent.Allowed : FreeEngineConsent.Denied
+            });
+            SidebarChanged?.Invoke();
+            RefreshFreeEngineState();
+            StatusChanged?.Invoke(
+                enabled
+                    ? "已允许公共翻译：待译文本会发往所选公共服务。"
+                    : "已关闭公共翻译：请配置自己的翻译引擎。",
+                StatusTone.Info);
+        }
+        catch (Exception exception)
+        {
+            FreeEngineConsentToggle.IsChecked = !enabled;
+            StatusChanged?.Invoke($"保存公共翻译设置失败：{exception.Message}", StatusTone.Error);
+        }
+    }
 
     internal void RefreshFreeEngineState()
     {

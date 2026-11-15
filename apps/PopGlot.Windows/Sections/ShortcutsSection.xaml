@@ -73,9 +73,9 @@
                        AutomationProperties.HelpText="推荐 F1、PrintScreen 或不含 Alt 的组合，截取时不会打断悬停菜单和提示框"/>
             <local:HotkeyRecorder x:Name="ScreenshotHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}"
                                   AutomationProperties.Name="截图翻译"
-                                  AutomationProperties.HelpText="点击后按下组合键，也支持单按 F1–F12 或 PrintScreen；截悬停菜单或提示框时推荐 F1、PrintScreen 或不含 Alt 的组合；Esc 取消，退格或右键可停用"
-                                  HelpTip="点击后按下组合键，也支持单按 F1–F12 或 PrintScreen；截悬停菜单或提示框时推荐 F1、PrintScreen 或不含 Alt 的组合；Esc 取消，退格或右键可停用"
-                                  ToolTip="点击后按下组合键，也支持单按 F1–F12 或 PrintScreen；截悬停菜单或提示框时推荐 F1、PrintScreen 或不含 Alt 的组合；Esc 取消，退格或右键可停用"/>
+                                  AutomationProperties.HelpText="点击后按下组合键，也支持单按 F1–F12 或 PrintScreen；Esc 取消，退格或右键可停用"
+                                  HelpTip="点击后按下组合键，也支持单按 F1–F12 或 PrintScreen；Esc 取消，退格或右键可停用"
+                                  ToolTip="点击后按下组合键，也支持单按 F1–F12 或 PrintScreen；Esc 取消，退格或右键可停用"/>
             <Button x:Name="ClearScreenshotButton" Grid.Column="2" Style="{StaticResource ClearShortcutButton}" local:Ui.Icon="{StaticResource IconCaptionClose}" AutomationProperties.Name="停用截图翻译快捷键" Tag="Screenshot" Click="ClearShortcutButton_Click"/>
         </Grid></Border>
         <Border Style="{StaticResource ShortcutRow}"><Grid>

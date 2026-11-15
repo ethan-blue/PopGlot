@@ -577,7 +577,7 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBlock x:Name="TranslateStatus" Style="{StaticResource Metadata}"
-                                   Margin="0,0,8,0" VerticalAlignment="Center"
+                                   Margin="0,0,8,0" VerticalAlignment="Center" HorizontalAlignment="Left"
                                    MaxWidth="260" TextTrimming="CharacterEllipsis" Text="就绪"
                                    AutomationProperties.LiveSetting="Polite"
                                    AutomationProperties.Name="翻译状态">

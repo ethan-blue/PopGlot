@@ -1615,7 +1615,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             if (GuideDescription is not null)
             {
                 GuideDescription.Text = hasFallbackRoute
-                    ? "整理要点与自定风格需要模型服务。"
+                    ? "整理要点与自定义风格需要模型服务。"
                     : "无需配置即可使用公共直译；仅发送待翻译文本，不发送截图或本地数据。";
             }
         }

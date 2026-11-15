@@ -42,7 +42,7 @@
                     ToolTip="恢复刚才清空的历史" AutomationProperties.Name="撤销清空历史"
                     Click="UndoHistory_Click" />
             <Button x:Name="ClearHistoryButton" Content="清空历史"
-                    VerticalAlignment="Center"
+                    VerticalAlignment="Center" AutomationProperties.Name="清空历史"
                     Style="{StaticResource DangerButton}" Padding="12,5" ToolTip="清空全部历史记录"
                     Click="ClearHistory_Click" />
             </StackPanel>
@@ -67,7 +67,7 @@
                     ToolTip="恢复刚才清空的生词" AutomationProperties.Name="撤销清空生词本"
                     Click="UndoVocabulary_Click" />
             <Button x:Name="ClearVocabularyButton" Content="清空生词本"
-                    VerticalAlignment="Center"
+                    VerticalAlignment="Center" AutomationProperties.Name="清空生词本"
                     Style="{StaticResource DangerButton}" Padding="12,5" ToolTip="清空全部生词"
                     Click="ClearVocabulary_Click" />
             </StackPanel>
