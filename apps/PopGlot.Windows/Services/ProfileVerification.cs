@@ -43,6 +43,10 @@ internal static class ProfileVerification
             HeaderText(profile.ExtraHeaders),
             (profile.AnthropicVersion ?? string.Empty).Trim(),
             profile.AllowInsecureTls,
+            ServiceDraftCoordinator.NormalizeReasoningLevel(profile.ReasoningLevel),
+            profile.ContextTokens.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            profile.OutputTokens.ToString(System.Globalization.CultureInfo.InvariantCulture),
+
             // P05: the execution dimension changes what a "connection test"
             // means — evidence for an API route must never cover a CLI route
             // or vice versa, and a CLI connection change (path/version/model)

@@ -1783,16 +1783,34 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         }
     }
 
+    /// <summary>
+    /// 计数器警告阈值：默认（自动）会话预算的 9/10。缓存一次，避免每次按键
+    /// 都过 FFI；引擎配置了更小上下文时，真正的保护是提交前的显式预算拒绝，
+    /// 而非这个提示色。测试与界面共用这一个事实源。
+    /// </summary>
+    internal static long SessionWarnThreshold()
+    {
+        if (_sessionWarnThreshold is { } cached)
+        {
+            return cached;
+        }
+        var budget = CoreBridge.PlanSessionBudget();
+        _sessionWarnThreshold = budget.MaxSegmentChars * (long)budget.MaxSegments * 9 / 10;
+        return _sessionWarnThreshold.Value;
+    }
+
+    private static long? _sessionWarnThreshold;
+
     private void TranslateInput_TextChanged(object sender, TextChangedEventArgs e)
     {
         var length = TranslateInput.Text.Length;
         TranslateCounter.Text = $"{length} 字符";
         // 空输入时隐藏「0 字符」：数字零没有信息量，只会在页脚占位。
         TranslateCounter.Visibility = length == 0 ? Visibility.Collapsed : Visibility.Visible;
-        // T9.27：接近单次会话输入上限（800×8=6400 字符）时计数变警告色，
-        // 提前提示用户缩短或分批，而不是提交后才失败。
+        // 接近单次会话输入预算时计数变警告色，提前提示用户缩短或分批，
+        // 而不是提交后才失败。整篇优先：默认预算下绝大多数长文仍是一次请求。
         TranslateCounter.SetResourceReference(TextBlock.ForegroundProperty,
-            length >= CoreBridge.MaxSegmentChars * CoreBridge.MaxSegments * 9 / 10
+            length >= SessionWarnThreshold()
                 ? "WarningBrush" : "TextTertiaryBrush");
         CancelSummary();
         _summaryStreamText = string.Empty;

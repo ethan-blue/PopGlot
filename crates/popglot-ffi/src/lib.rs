@@ -1398,6 +1398,50 @@ pub unsafe extern "C" fn popglot_plan_segments(
     })
 }
 
+/// Pure helper: resolves the session chunk budget from the user's context
+/// window and output ceiling settings. Same planner constants as
+/// [`popglot_plan_segments`]; the shell calls this once per session so a
+/// whole article stays a single request until the configured budget is
+/// genuinely exceeded.
+///
+/// # Safety
+///
+/// The returned owned envelope must be released with `popglot_free_string`,
+/// exactly once. Input arguments contain no pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_session_char_budget(
+    context_tokens: u32,
+    output_tokens: u32,
+    reasoning_level: u32,
+) -> *mut c_char {
+    ffi_guard(|| {
+        use popglot_domain::ReasoningLevel;
+        let level = match reasoning_level {
+            0 => ReasoningLevel::Auto,
+            1 => ReasoningLevel::Off,
+            2 => ReasoningLevel::Low,
+            3 => ReasoningLevel::Medium,
+            4 => ReasoningLevel::High,
+            _ => return Err("未知的思考程度。".to_owned()),
+        };
+        let budget = popglot_domain::session_char_budget_with_reasoning(
+            context_tokens,
+            output_tokens,
+            level,
+        );
+        if budget.max_segment_chars == 0 {
+            return Err(
+                "上下文或输出预算无法容纳所选思考级别及完整译文，请降低思考程度或调整上下文和输出上限。".to_owned(),
+            );
+        }
+
+        Ok(success(serde_json::json!({
+            "max_segment_chars": budget.max_segment_chars,
+            "max_segments": budget.max_segments,
+        })))
+    })
+}
+
 // ==================== P06: versioned pure-text jobs ====================
 
 /// Prepares a pure-text job: the versioned system instructions, the

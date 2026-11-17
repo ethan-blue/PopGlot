@@ -24,7 +24,11 @@ internal sealed record SummaryRequestIdentity(
     string? ModelName,
     int ConfigVersion,
     string? PromptTemplateId = null,
-    ulong? PromptTemplateRevision = null);
+    ulong? PromptTemplateRevision = null,
+    // 生成参数改变输出本身：思考程度/输出上限不同即视为不同请求，缓存不得复用。
+    string ReasoningLevel = "auto",
+    uint ContextTokens = 0,
+    uint OutputTokens = 0);
 
 /// <summary>
 /// Snapshot tying a request identity to a specific UI generation.

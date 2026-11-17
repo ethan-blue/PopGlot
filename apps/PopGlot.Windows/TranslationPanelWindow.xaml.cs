@@ -165,7 +165,11 @@ public partial class TranslationPanelWindow : Window
 
         SourceInitialized += (_, _) => PositionNearAnchor();
         Loaded += OnLoaded;
-        SizeChanged += (_, _) => PositionNearAnchor();
+        SizeChanged += (_, _) =>
+        {
+            UpdateReadingBudget();
+            PositionNearAnchor();
+        };
         Closed += (_, _) =>
         {
             _closing = true;
@@ -188,19 +192,20 @@ public partial class TranslationPanelWindow : Window
             return;
         }
 
-        // Every tier sits at or above the window MinHeight (380): the old
-        // 320/360 tiers were below the fixed chrome (header, source area,
-        // engine bar, footer) plus the result floor, so the bottom status
-        // bar was clipped exactly on short sources. The top tier keeps a
-        // full 80 DIP explanation row plus the result floor visible.
+        // Open long selections with room to read the answer, not just the
+        // source. The monitor work area caps the preferred height below;
+        // user-resized windows retain their chosen size.
         var length = source?.Trim().Length ?? 0;
         var nextHeight = length switch
         {
-            <= 80 => 380,
-            <= 420 => 420,
-            <= 900 => 480,
-            _ => 540,
+            <= 80 => 440,
+            <= 420 => 480,
+            <= 900 => 560,
+            _ => 640,
         };
+        var scale = ScreenGeometry.ScaleOfMonitorAtPixel(new Point(_anchorPixels.Left, _anchorPixels.Top));
+        var workArea = ScreenGeometry.WorkAreaForAnchor(_anchorPixels);
+        nextHeight = (int)Math.Min(nextHeight, Math.Max(MinHeight, workArea.Height / scale.Y - 24));
         if (Math.Abs(Height - nextHeight) > 0.5)
         {
             Height = nextHeight;
@@ -211,6 +216,16 @@ public partial class TranslationPanelWindow : Window
         {
             Height = nextHeight;
         }
+    }
+
+    // Reserve the majority of the reading surface for the translation. Fixed
+    // source/explanation caps previously consumed almost all of a small panel.
+    private void UpdateReadingBudget()
+    {
+        var height = ActualHeight > 0 ? ActualHeight : Height;
+        var spare = Math.Max(0, height - 380);
+        SourceInputBox.MaxHeight = Math.Clamp(48 + spare * 0.20, 48, 112);
+        ExplanationScrollViewer.MaxHeight = Math.Clamp(32 + spare * 0.20, 32, 72);
     }
 
     private void OnTtsSpeakingStateChanged(object? sender, bool isSpeaking)

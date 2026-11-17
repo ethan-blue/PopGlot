@@ -7,6 +7,11 @@ namespace PopGlot.Windows;
 
 public partial class App : Application
 {
+    // The isolated resource-only WPF harness must not claim production
+    // single-instance state, register hotkeys, or perform startup network work.
+    // Internal and false in every normal application/measurement process.
+    internal static bool SuppressStartupForTests { get; set; }
+
     private const string InstanceMutexName = @"Local\PopGlot.SingleInstance";
     private const string ShowWindowSignalName = @"Local\PopGlot.ShowWindow";
     // The data root is selected in OnStartup, after Application construction.
@@ -378,6 +383,7 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (SuppressStartupForTests) return;
 
         // ---- Performance smoke mode (T15): `--smoke-startup <marker> [dataDir]` ----
         // Runs the REAL startup steps — settings, native core, hotkeys, tray —

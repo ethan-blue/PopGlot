@@ -870,7 +870,9 @@ internal static class RemediationBatchTests
             var counter = (TextBlock)section.FindName("TranslateCounter")!;
             var warning = section.TryFindResource("WarningBrush");
             var tertiary = section.TryFindResource("TextTertiaryBrush");
-            var budget = CoreBridge.MaxSegmentChars * CoreBridge.MaxSegments;
+            // 0.1.42：阈值随引擎级会话预算（Rust 规划器单一事实源），不再
+            // 是硬编码的 800×64；与界面共用 TranslateSection.SessionWarnThreshold。
+            var warnAt = TranslateSection.SessionWarnThreshold();
 
             // Comfortable usage stays tertiary.
             section.InputBox.Text = new string('a', 100);
@@ -878,14 +880,14 @@ internal static class RemediationBatchTests
             True(ReferenceEquals(counter.Foreground, tertiary),
                 "a short input counter must stay the neutral tertiary tone");
 
-            // At/above 90% of the session input budget the counter turns warning.
-            section.InputBox.Text = new string('a', budget * 9 / 10);
+            // At/above the session warn threshold the counter turns warning.
+            section.InputBox.Text = new string('a', (int)warnAt);
             PumpOnce();
             True(ReferenceEquals(counter.Foreground, warning),
                 "the counter must turn warning near the single-session input budget");
 
             // Over the budget stays warning (the request will be rejected).
-            section.InputBox.Text = new string('a', budget + 1);
+            section.InputBox.Text = new string('a', (int)(warnAt / 9 * 10) + 1);
             PumpOnce();
             True(ReferenceEquals(counter.Foreground, warning),
                 "an over-budget input counter must keep the warning tone");

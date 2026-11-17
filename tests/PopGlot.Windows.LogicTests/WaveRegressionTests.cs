@@ -655,6 +655,77 @@ internal static class WaveRegressionTests
         }
     }
 
+    public static void LongSourceReservesTranslationReadingSpace()
+    {
+        EnsureApp();
+        var panel = NewPanel();
+        try
+        {
+            var source = (TextBox)panel.FindName("SourceInputBox");
+            source.Text = string.Concat(Enumerable.Repeat("Long source paragraph with code and context." + Environment.NewLine, 2000));
+            var result = (TextBox)panel.FindName("TranslationTextBox");
+            result.Visibility = Visibility.Visible;
+            result.Text = new string('译', 20000);
+            ((FrameworkElement)panel.FindName("ExplanationBox")).Visibility = Visibility.Visible;
+            ((TextBox)panel.FindName("ExplanationText")).Text = new string('注', 4000);
+            ((FrameworkElement)panel.FindName("WarningBox")).Visibility = Visibility.Visible;
+            ((TextBlock)panel.FindName("WarningText")).Text = new string('警', 1000);
+            var budget = typeof(TranslationPanelWindow).GetMethod("UpdateReadingBudget", NonPublicInstance)!;
+            var content = (FrameworkElement)panel.Content;
+            foreach (var width in new[] { 460d, 540d })
+            foreach (var height in new[] { 380d, 480d, 640d })
+            {
+                panel.Height = height;
+                budget.Invoke(panel, null);
+                panel.Width = width;
+                content.Width = width;
+                content.Height = height;
+                content.Measure(new Size(width, height));
+                content.Arrange(new Rect(0, 0, width, height));
+                content.UpdateLayout();
+                True(result.ActualHeight >= 100,
+                    $"{height} DIP: long source must leave at least 100 DIP for translation, got {result.ActualHeight}");
+                True(source.ActualHeight <= source.MaxHeight + 0.5,
+                    "the complete original must scroll inside its bounded reading area");
+                Equal(20000, result.Text.Length, "layout must never trim the translated content");
+            }
+        }
+        finally { panel.ForceClose = true; panel.Close(); }
+    }
+
+    public static void GenerationParameterEditsAreTrackedAndValidated()
+    {
+        EnsureApp();
+        var profile = ProviderProfile.CreateOpenAi();
+        var originalEvidence = ProfileVerification.EvidenceFingerprint(profile, true);
+        profile.OutputTokens = 32768;
+        True(originalEvidence != ProfileVerification.EvidenceFingerprint(profile, true),
+            "generation changes must invalidate saved connection evidence");
+        var section = new ServicesSection();
+        section.LoadProfileIntoForm(ProviderProfile.CreateOpenAi());
+        InvokePrivate(section, "ShowEditorForm", false);
+        section.ClearEditorDirty();
+        var context = (TextBox)section.FindName("ContextTokensTextBox");
+        var output = (TextBox)section.FindName("OutputTokensTextBox");
+        var reasoning = (ComboBox)section.FindName("ReasoningLevelCombo");
+        context.Text = "131072";
+        True(section.IsEditorDirty, "context-only edits must show the unsaved state");
+        section.ClearEditorDirty();
+        output.Text = "32768";
+        True(section.IsEditorDirty, "output-only edits must show the unsaved state");
+        section.ClearEditorDirty();
+        reasoning.SelectedIndex = 4;
+        True(section.IsEditorDirty, "reasoning-only edits must show the unsaved state");
+        True(ServicesSection.ValidateGenerationSettings("invalid", "") is not null,
+            "invalid input must not silently become auto");
+        True(ServicesSection.ValidateGenerationSettings("4096", "65536") is not null,
+            "an output budget larger than context must be refused");
+        True(ServicesSection.ValidateGenerationSettings("131072", "32768") is null,
+            "valid large budgets must remain usable");
+        True(ServicesSection.ValidateGenerationSettings("", "") is null,
+            "legacy auto defaults must remain usable");
+    }
+
     // ===================== C: quick search =====================
 
     /// <summary>

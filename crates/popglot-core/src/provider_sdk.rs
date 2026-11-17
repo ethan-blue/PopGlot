@@ -7,7 +7,7 @@
 use crate::provider::{
     ImageInput, PreparedProviderRequest, ProviderError, ProviderErrorKind, StreamPrompt,
     TranslationInput, TranslationRequest, extra_headers, gemini_stream_endpoint,
-    glm_thinking_config, output_token_limit, require_model, validate_image, validate_image_url,
+    output_token_limit, require_model, validate_image, validate_image_url,
     validate_model_path_segment,
 };
 use base64::Engine as _;
@@ -62,7 +62,8 @@ pub(crate) fn prepare(
         |p| p.user_payload.clone(),
     );
     let user = user_message(kind, &request.input, text)?;
-    let mut options = ChatOptions::default().with_max_tokens(output_token_limit(request));
+    let output_limit = output_token_limit(request, settings);
+    let mut options = ChatOptions::default().with_max_tokens(output_limit);
     // A supplied SDK value prevents suffix inference. Zero is not Option::None
     // and does not prescribe gateway behavior: all generated reasoning controls
     // are removed below before the payload reaches PopGlot's transport.
@@ -111,11 +112,18 @@ pub(crate) fn prepare(
     {
         config.remove("thinkingConfig");
     }
-    if kind == ProviderType::OpenAiCompatible
-        && let Some(thinking) = glm_thinking_config(model)
-    {
-        body["thinking"] = thinking;
-    }
+    // The user's reasoning selection is the ONLY reasoning control that may
+    // enter the payload, mapped to each protocol's native field. `Auto` keeps
+    // the historical contract: nothing is sent and every gateway keeps its
+    // own default.
+    let mut policy_settings = settings.clone();
+    policy_settings.provider_type = kind;
+    crate::generation_policy::apply_generation_policy(
+        &policy_settings,
+        model,
+        output_limit,
+        &mut body,
+    )?;
     let mut headers = extra_headers(settings);
     if kind == ProviderType::AnthropicMessages {
         headers.push((
@@ -275,6 +283,62 @@ mod tests {
     }
 
     #[test]
+    fn configured_thinking_uses_capability_policy_without_raising_output_cap() {
+        let settings = ProviderSettings {
+            provider_type: ProviderType::GeminiGenerateContent,
+            text_model: "gemini-3-flash".to_owned(),
+            text_endpoint: "/v1beta/models/{model}:generateContent".to_owned(),
+            reasoning_level: popglot_domain::ReasoningLevel::High,
+            output_tokens: 4096,
+            ..ProviderSettings::default()
+        };
+        let request =
+            TranslationRequest::text("hello", popglot_domain::LanguagePair::new("en", "zh-CN"));
+        let prepared = prepare(settings.provider_type, &settings, &request, None).unwrap();
+        assert_eq!(prepared.body["generationConfig"]["maxOutputTokens"], 4096);
+        assert_eq!(
+            prepared.body["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "high"
+        );
+    }
+
+    #[test]
+    fn explicit_output_ceiling_sizes_every_protocol_request() {
+        let request =
+            TranslationRequest::text("hello", popglot_domain::LanguagePair::new("en", "zh-CN"));
+        let settings = ProviderSettings {
+            output_tokens: 12_000,
+            text_model: "custom-model".to_owned(),
+            ..ProviderSettings::default()
+        };
+        for (kind, pointer) in [
+            (ProviderType::OpenAiCompatible, "/max_tokens"),
+            (ProviderType::OpenAiResponses, "/max_output_tokens"),
+            (ProviderType::AnthropicMessages, "/max_tokens"),
+            (
+                ProviderType::GeminiGenerateContent,
+                "/generationConfig/maxOutputTokens",
+            ),
+        ] {
+            let mut tuned = settings.clone();
+            tuned.provider_type = kind;
+            tuned.text_endpoint = if kind == ProviderType::GeminiGenerateContent {
+                "/v1beta/models/{model}:generateContent".to_owned()
+            } else {
+                "/custom".to_owned()
+            };
+            let prepared = crate::provider::provider_for(kind)
+                .prepare(&tuned, &request)
+                .unwrap();
+            assert_eq!(
+                prepared.body.pointer(pointer).and_then(Value::as_u64),
+                Some(12_000),
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
     fn every_product_protocol_has_an_explicit_sdk_adapter() {
         assert_eq!(
             adapter_kind(ProviderType::OpenAiCompatible),
@@ -300,7 +364,10 @@ mod tests {
             "x".repeat(800),
             popglot_domain::LanguagePair::new("en", "zh-CN"),
         );
-        assert_eq!(output_token_limit(&request), 2_912);
+        assert_eq!(
+            output_token_limit(&request, &ProviderSettings::default()),
+            2_912
+        );
 
         for (kind, model, pointer) in [
             (
@@ -364,7 +431,10 @@ mod tests {
                 TranslationRequest::text(source, popglot_domain::LanguagePair::new("en", "zh-CN"))
                     .with_task(crate::provider::TextTask::Summarize)
                     .with_explanation(false);
-            assert_eq!(output_token_limit(&request), expected);
+            assert_eq!(
+                output_token_limit(&request, &ProviderSettings::default()),
+                expected
+            );
             for (kind, pointer) in [
                 (ProviderType::OpenAiCompatible, "/max_tokens"),
                 (ProviderType::OpenAiResponses, "/max_output_tokens"),

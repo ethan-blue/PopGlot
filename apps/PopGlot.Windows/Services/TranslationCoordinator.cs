@@ -984,7 +984,11 @@ internal sealed class TranslationCoordinator
             model,
             configVersion,
             prompt?.Id,
-            prompt?.Revision);
+            prompt?.Revision,
+            // 缓存键包含生成参数：思考程度或输出上限变化后不得复用旧要点。
+            ServiceDraftCoordinator.NormalizeReasoningLevel(textRoute?.Profile.ReasoningLevel ?? settings.ReasoningLevel),
+            textRoute?.Profile.ContextTokens ?? settings.ContextTokens,
+            textRoute?.Profile.OutputTokens ?? settings.OutputTokens);
         return new SummaryRequestSnapshot(identity, generation, prompt?.Anchor);
     }
 
@@ -1722,11 +1726,16 @@ internal sealed class TranslationCoordinator
     /// </summary>
     internal static readonly TimeSpan SessionDeadline = TimeSpan.FromMinutes(10);
 
+    /// <summary>预算拒绝文案：数字必须来自当次会话的真实块预算，不得硬编码。</summary>
+    internal static string BuildSegmentBudgetMessage(int maxSegments, int maxSegmentChars) =>
+        $"内容超出一次会话的翻译预算（最多 {maxSegments} 段、每段 {maxSegmentChars} 字符）。请缩短或分批提交。";
+
     /// <summary>
-    /// Translates provider text with an output budget that matches the input:
-    /// short sources stay one request; long sources are planned into ordered
-    /// ≤800-char segments by the Rust planner and translated sequentially,
-    /// with fragments visible if any segment fails. A rejected plan fails the
+    /// Translates provider text with a session budget sized by the ENGINE's
+    /// configured context window: whole sources stay ONE request; only a
+    /// source that genuinely exceeds the budget is planned into ordered
+    /// segments by the Rust planner and translated sequentially, with
+    /// fragments visible if any segment fails. A rejected plan fails the
     /// session BEFORE anything is sent.
     /// </summary>
     /// <remarks>
@@ -1748,13 +1757,17 @@ internal sealed class TranslationCoordinator
         Action<TranslationSessionStage>? onStageChanged,
         CancellationToken cancellationToken)
     {
-        var plan = CoreBridge.PlanSegments(source);
+        // CLI 托管执行不经原生 HTTP 栈，引擎级生成参数不适用：按自动预算规划。
+        var budget = session.TextEngineProfile?.ExecutionFacts.IsManagedExecution == true
+            ? CoreBridge.PlanSessionBudget()
+            : CoreBridge.PlanSessionBudget(textRuntimeSettings ?? _executor.GetSettings());
+        var plan = CoreBridge.PlanSegments(source, budget.MaxSegmentChars, budget.MaxSegments);
         if (plan.RejectedReason is not null)
         {
             throw new InvalidOperationException(
                 plan.RejectedReason == "oversized_code_block"
                     ? "内容里有一个超过单段预算的代码块，无法安全切分。请缩短该代码块后重试。"
-                    : $"内容超出一次会话的翻译预算（最多 {CoreBridge.MaxSegments} 段、每段 {CoreBridge.MaxSegmentChars} 字符）。请缩短或分批提交。");
+                    : BuildSegmentBudgetMessage(budget.MaxSegments, budget.MaxSegmentChars));
         }
 
         var segments = plan.Mode == "segments"

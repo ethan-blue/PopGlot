@@ -977,6 +977,13 @@ internal static partial class CoreBridge
     }
 
     /// <summary>Session output-budget constants shared with the Rust planner.</summary>
+    /// <remarks>
+    /// <see cref="MaxSegmentChars"/> is the legacy per-segment floor (still the
+    /// free-engine batch size); provider sessions are sized by
+    /// <see cref="PlanSessionBudget"/> from the engine's configured context
+    /// window, so a whole article stays ONE request until the configured
+    /// budget is genuinely exceeded.
+    /// </remarks>
     internal const int MaxSegmentChars = 800;
     internal const int MaxSegments = 64;
 
@@ -993,6 +1000,23 @@ internal static partial class CoreBridge
         ArgumentException.ThrowIfNullOrEmpty(source);
         return EnsureSuccess<SegmentPlanDto>(Invoke(() =>
             NativeMethods.PlanSegments(source, maxSegmentChars, maxSegments)));
+    }
+
+    /// <summary>
+    /// Rust-side session chunk budget: how many source characters one request
+    /// may carry and how many requests a session may spend. Derived from the
+    /// engine's context window / output ceiling with worst-case token math —
+    /// one source of truth for both the shell and the core. A null snapshot
+    /// plans with the auto defaults (0/0).
+    /// </summary>
+    public static SessionCharBudgetDto PlanSessionBudget(ProviderSettings? settings = null)
+    {
+        var contextTokens = settings?.ContextTokens ?? 0;
+        var outputTokens = settings?.OutputTokens ?? 0;
+        var reasoning = settings?.ReasoningLevel?.Trim().ToLowerInvariant() switch
+        { "off" => 1u, "low" => 2u, "medium" => 3u, "high" => 4u, _ => 0u };
+        return EnsureSuccess<SessionCharBudgetDto>(Invoke(() =>
+            NativeMethods.SessionCharBudget(contextTokens, outputTokens, reasoning)));
     }
 
     public static void CancelActiveRequest()
@@ -1303,7 +1327,13 @@ internal sealed record ProviderSettings(
     string TargetLanguage,
     bool IncludeExplanation,
     bool ProtectCodeTokens,
-    VisionProviderOverride? VisionProvider = null)
+    VisionProviderOverride? VisionProvider = null,
+    /// <summary>思考程度：auto（默认，不发送任何 reasoning 控制）| off | low | medium | high。</summary>
+    string ReasoningLevel = "auto",
+    /// <summary>模型上下文窗口 tokens；0 = 自动（PopGlot 保守默认）。</summary>
+    uint ContextTokens = 0,
+    /// <summary>单次请求输出上限 tokens；0 = 自适应（按原文长度预算）。</summary>
+    uint OutputTokens = 0)
 {
     public bool VisionIsConfigured => SupportsVision && !string.IsNullOrWhiteSpace(VisionModel);
     public bool TextIsConfigured => SupportsText && !string.IsNullOrWhiteSpace(TextModel);
@@ -1425,6 +1455,9 @@ internal sealed record SegmentPlanDto(
     string Mode,
     IReadOnlyList<string>? Segments = null,
     string? RejectedReason = null);
+
+/// <summary>Rust 会话块预算：单请求可携带的最大原文字符数与会话最大分段数。</summary>
+internal sealed record SessionCharBudgetDto(int MaxSegmentChars, int MaxSegments);
 
 // ---------------------------------------------------------------------------
 // Prompt template DTOs. Rust 域的四个 prompt 结构体均为

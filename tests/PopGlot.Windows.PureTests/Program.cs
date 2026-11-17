@@ -77,6 +77,7 @@ internal static partial class Program
         Run("free engine whole request timeout budget covers long text", FreeEngineTimeoutBudget);
         Run("quick search speak hint follows recorded binding", QuickSearchSpeakHintFollowsRecordedBinding);
         Run("budget rejection maps to friendly headline", BudgetRejectionMapsToFriendlyHeadline);
+        Run("generation params flow from editor draft to runtime settings and cache keys", GenerationParamsFlowThroughDraftToSettingsAndCacheKeys);
         await RunAsync("alternate free engine contacts only MyMemory", AlternateFreeEngineContactsMyMemory);
         await RunAsync("free HTTP limits body before buffering, including unknown or false length", FreeResponseStreamingCap);
         Run("incomplete translation status copy distinguishes truncation, early close, failure, and cancellation", TranslationStatusCopyClassification);
@@ -920,8 +921,12 @@ internal static partial class Program
     private static void BudgetRejectionMapsToFriendlyHeadline()
     {
         // The coordinator's plan-rejection messages must surface a dedicated
-        // headline, not the generic "这次没有翻译成功".
-        var budgetMessage = $"内容超出一次会话的翻译预算（最多 {CoreBridge.MaxSegments} 段、每段 {CoreBridge.MaxSegmentChars} 字符）。请缩短或分批提交。";
+        // headline, not the generic "这次没有翻译成功". The numbers come from
+        // the session budget helper — never a hardcoded 800/64 assumption.
+        var budgetMessage = Services.TranslationCoordinator.BuildSegmentBudgetMessage(
+            maxSegments: 64, maxSegmentChars: 6712);
+        Equal("内容超出一次会话的翻译预算（最多 64 段、每段 6712 字符）。请缩短或分批提交。", budgetMessage,
+            "the rejection copy must quote the real session budget numbers");
         Equal("内容超出单次翻译上限，请缩短后分批提交", TranslationPanelWindow.FriendlyError(budgetMessage),
             "the budget rejection must map to the dedicated over-limit headline");
         Equal("内容超出单次翻译上限，请缩短后分批提交",
@@ -933,6 +938,59 @@ internal static partial class Program
         // The generic fallback stays for genuinely unknown failures.
         Equal("这次没有翻译成功", TranslationPanelWindow.FriendlyError("某种未知错误"),
             "an unknown failure must keep the generic headline");
+    }
+
+    /// <summary>
+    /// 0.1.42 生成参数链路（纯 C# 部分）：编辑器草稿 → 持久化 profile →
+    /// 运行时 ProviderSettings，以及要点缓存键对思考程度/输出上限的区分。
+    /// </summary>
+    private static void GenerationParamsFlowThroughDraftToSettingsAndCacheKeys()
+    {
+        // 归一：仅五个合法值；未知/脏值回 auto，绝不变成网关不认识的负载。
+        Equal("auto", ServiceDraftCoordinator.NormalizeReasoningLevel(null));
+        Equal("auto", ServiceDraftCoordinator.NormalizeReasoningLevel("turbo"));
+        Equal("off", ServiceDraftCoordinator.NormalizeReasoningLevel(" OFF "));
+        Equal("high", ServiceDraftCoordinator.NormalizeReasoningLevel("High"));
+
+        // 草稿 → profile：生成参数原样落盘（归一后）。
+        var draft = ServiceDraftCoordinator.BuildDraft(new ServiceDraftInputs(
+            "Srv", "https://api.example.com/v1", ProviderType.OpenAiCompatible,
+            "/chat/completions", "/chat/completions", "m", "",
+            new Dictionary<string, string>(), "2023-06-01", AllowInsecureTls: false,
+            ReasoningLevel: "HIGH", ContextTokens: 131_072, OutputTokens: 32_768));
+        Equal("high", draft.ReasoningLevel, "draft levels are normalized before persistence");
+        Equal(131_072u, draft.ContextTokens);
+        Equal(32_768u, draft.OutputTokens);
+
+        // profile → 运行时设置：原生 API 执行把生成参数带给核心。
+        var baseSettings = new ProviderSettings(
+            3, ProviderType.OpenAiCompatible, "https://api.example.com/v1", "/chat/completions", "/chat/completions",
+            "", "", new Dictionary<string, string>(), "2023-06-01", true, false, true,
+            TranslationMode.Auto, false, false, false, false, false, "auto", "zh-CN", true, true);
+        var runtime = draft.ToProviderSettings(baseSettings);
+        Equal("high", runtime.ReasoningLevel);
+        Equal(131_072u, runtime.ContextTokens);
+        Equal(32_768u, runtime.OutputTokens);
+
+        // 要点缓存键：生成参数不同即不同请求，旧缓存不得复用。
+        var identityBase = new SummaryRequestIdentity(
+            "source", "en", "zh-CN", TextTaskKind.Summarize, "engine", "model", 7);
+        var identityHigh = identityBase with { ReasoningLevel = "high", OutputTokens = 32_768 };
+        True(identityBase != identityHigh,
+            "a different reasoning level or output ceiling must invalidate the summary cache");
+
+        // 旧 profile JSON（无生成参数字段）反序列化保持默认。
+        var legacyProfileJson = JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["Id"] = "p1", ["Name"] = "Legacy", ["SchemaVersion"] = 7,
+        });
+        var parsed = JsonSerializer.Deserialize<ProviderProfile>(legacyProfileJson, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+        });
+        Equal("auto", parsed!.ReasoningLevel, "legacy profiles keep the auto reasoning default");
+        Equal(0u, parsed.ContextTokens);
+        Equal(0u, parsed.OutputTokens);
     }
 
     private static void AuthorizationTokenBasics()

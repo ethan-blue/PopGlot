@@ -329,6 +329,8 @@ internal static partial class Program
         await RunAsync("segmented output has one session byte budget", SegmentedOutputHasOneSessionByteBudgetAsync);
         await RunAsync("budget refusal sends nothing", BudgetRefusalSendsNothingAsync);
         Run("short source stays single and planner agrees across ffi", ShortSourceStaysSingleAndPlannerAgreesAcrossFfi);
+        Run("session budget keeps whole articles single and plans safe segments", SessionBudgetKeepsWholeArticlesSingle);
+        await RunAsync("whole article uses one actual coordinator request", WholeArticleUsesOneActualCoordinatorRequestAsync);
         await RunAsync("coordinator vision failure with deltas does not fallback to OCR", CoordinatorVisionWithDeltaFailureDoesNotOcrFallbackAsync);
         await RunAsync("coordinator screenshot with cli text engine fails before any work", CoordinatorScreenshotCliTextEngineFailsBeforeAnyWorkAsync);
         await RunAsync("coordinator vision failure with zero deltas falls back to OCR", CoordinatorVisionZeroDeltaFailureFallsBackToOcrAsync);
@@ -463,6 +465,8 @@ internal static partial class Program
             ("panel without partial stores no fake text", WaveRegressionTests.PanelWithoutPartialStoresNoFakeText),
             ("panel restore keeps failed cancelled and completed states distinct", WaveRegressionTests.PanelRestoreKeepsStatesDistinct),
             ("panel height tiers stay above the window minheight", WaveRegressionTests.PanelHeightTiersRespectMinHeight),
+            ("long source reserves translation reading space", WaveRegressionTests.LongSourceReservesTranslationReadingSpace),
+            ("generation parameter edits are tracked and validated", WaveRegressionTests.GenerationParameterEditsAreTrackedAndValidated),
             ("quick search re-show repaints the language badge from persisted state", WaveRegressionTests.QuickSearchReshowRefreshesLangBadge),
             ("quick search star automation name follows the starred state", WaveRegressionTests.QuickSearchStarAutomationNameFollowsState),
             ("quick search clamp keeps an oversized window inside the work area", WaveRegressionTests.QuickSearchClampToWorkArea),
@@ -6917,10 +6921,45 @@ internal static partial class Program
     /// short source stays a single request. The mock tags every segment so
     /// the concatenation order is provable, and code fences stay intact.
     /// </summary>
+    // Explicit 800-char capacity belongs to these small-model fixtures, not
+    // the production defaults. Keep cancellation/partial tests multi-segment.
+    private static FakeTranslationExecutor CreateSmallBudgetExecutor()
+    {
+        var executor = new FakeTranslationExecutor();
+        executor.Settings = executor.Settings with { ContextTokens = 6160, OutputTokens = 2912 };
+        executor.TextRoute!.Profile.ContextTokens = 6160;
+        executor.TextRoute.Profile.OutputTokens = 2912;
+        return executor;
+    }
+
+    private static async Task WholeArticleUsesOneActualCoordinatorRequestAsync()
+    {
+        var executor = new FakeTranslationExecutor();
+        var requested = new List<string>();
+        executor.OnStreamText = (key, text, from, to, id, epoch, ct) =>
+        {
+            requested.Add(text);
+            var buffer = new TranslationStreamBuffer(id, id, epoch);
+            buffer.TryAppend("complete long translation");
+            buffer.Complete();
+            return new TranslationStreamSession(buffer, Task.FromResult(
+                new TranslationResponse(new TranslationResult("complete long translation", "", "", [], []), null)));
+        };
+        // 会话协调器把原文先 Trim 再送翻译（历史行为）：fixture 预先去尾随
+        // 空白，断言的就是「整篇一次请求、逐字符不裁剪」本身。
+        var source = string.Concat(Enumerable.Repeat("A technical paragraph with context and preserved terms. ", 100)).TrimEnd();
+        var result = await new TranslationCoordinator(executor: executor).TranslateTextAsync(
+            source, "en", "zh-CN", TranslationInputSource.Manual);
+        Equal(TranslationSessionStage.Completed, result.Stage);
+        Equal(1, requested.Count, "a whole 5k article must cause exactly ONE transport request");
+        Equal(source, requested[0], "the actual request must contain the entire source without trimming");
+        Equal("complete long translation", result.TranslatedText);
+    }
+
     private static async Task LongInputPlansIntoOrderedSegmentsAsync()
     {
         var history = new FakeHistoryRepository();
-        var executor = new FakeTranslationExecutor();
+        var executor = CreateSmallBudgetExecutor();
         var requestedSources = new List<string>();
         var coordinator = new TranslationCoordinator(history: history, executor: executor);
 
@@ -6984,7 +7023,7 @@ internal static partial class Program
     private static async Task CancelBetweenSegmentsStopsLaterRequestsAsync()
     {
         var history = new FakeHistoryRepository();
-        var executor = new FakeTranslationExecutor();
+        var executor = CreateSmallBudgetExecutor();
         var requestCount = 0;
         var coordinator = new TranslationCoordinator(history: history, executor: executor);
 
@@ -7035,7 +7074,7 @@ internal static partial class Program
     private static async Task SegmentFailureKeepsFragmentsAsPartialAsync()
     {
         var history = new FakeHistoryRepository();
-        var executor = new FakeTranslationExecutor();
+        var executor = CreateSmallBudgetExecutor();
         var requestCount = 0;
         var coordinator = new TranslationCoordinator(history: history, executor: executor);
 
@@ -7087,7 +7126,7 @@ internal static partial class Program
     private static async Task IncompleteSegmentStopsSessionAsPartialAsync()
     {
         var history = new FakeHistoryRepository();
-        var executor = new FakeTranslationExecutor();
+        var executor = CreateSmallBudgetExecutor();
         var requestCount = 0;
         var coordinator = new TranslationCoordinator(history: history, executor: executor);
 
@@ -7140,7 +7179,7 @@ internal static partial class Program
     private static async Task SegmentedOutputHasOneSessionByteBudgetAsync()
     {
         var history = new FakeHistoryRepository();
-        var executor = new FakeTranslationExecutor();
+        var executor = CreateSmallBudgetExecutor();
         var requestCount = 0;
         var coordinator = new TranslationCoordinator(history: history, executor: executor);
         var perSegmentOutput = new string('译', 750_000); // 2.25 MiB in UTF-8.
@@ -7376,12 +7415,12 @@ internal static partial class Program
         {
             Interlocked.Increment(ref requestCount);
             var buffer = new TranslationStreamBuffer(sessionId, sessionId, epoch);
-            var tcs = new TaskCompletionSource<TranslationResponse>();
-            return new TranslationStreamSession(buffer, tcs.Task);
+            var response = new TranslationResponse(new TranslationResult("unexpected send", "", "", [], []), null);
+            return new TranslationStreamSession(buffer, Task.FromResult(response));
         };
 
         // 1. An atomic code block larger than the per-segment budget.
-        var bigCode = $"```text\n{new string('x', 2000)}\n```\n";
+        var bigCode = $"```text\n{new string('x', CoreBridge.PlanSessionBudget().MaxSegmentChars + 1)}\n```\n";
         var refused = await coordinator.TranslateTextAsync(
             bigCode, "en", "zh-CN", TranslationInputSource.Manual);
         Equal(TranslationSessionStage.Failed, refused.Stage);
@@ -7390,7 +7429,7 @@ internal static partial class Program
         Equal(0, Volatile.Read(ref requestCount), "a refused session sends nothing");
 
         // 2. 64 KiB of CJK would need ~80 segments: refused up front.
-        var mass = new string('翻', 64 * 1024);
+        var mass = new string('翻', CoreBridge.PlanSessionBudget().MaxSegmentChars * CoreBridge.MaxSegments + 1);
         var refusedMany = await coordinator.TranslateTextAsync(
             mass, "zh-CN", "en", TranslationInputSource.Manual);
         Equal(TranslationSessionStage.Failed, refusedMany.Stage);
@@ -7424,6 +7463,60 @@ internal static partial class Program
         // The oversized code block rejection crosses the FFI boundary too.
         var codePlan = CoreBridge.PlanSegments($"```text\n{new string('x', 2000)}\n```\n");
         Equal("oversized_code_block", codePlan.RejectedReason);
+    }
+
+    /// <summary>
+    /// 0.1.42 修复链路：引擎级上下文/输出预算决定分段 —— 默认（自动）预算下
+    /// 一篇 5000 字长文必须仍是单次请求（历史 800 字分段是断续根因）；只有
+    /// 超过配置预算后才分段，且分段仍满足拼接无损、超预算显式拒绝、不静默
+    /// 截断的会话契约。
+    /// </summary>
+    private static void SessionBudgetKeepsWholeArticlesSingle()
+    {
+        // 默认预算来自 Rust 规划器（FFI），与核心单一事实源。
+        var auto = CoreBridge.PlanSessionBudget();
+        True(auto.MaxSegmentChars > CoreBridge.MaxSegmentChars,
+            $"auto budget ({auto.MaxSegmentChars}) must exceed the legacy 800-char segments");
+        Equal(64, auto.MaxSegments);
+
+        // 整篇优先：5000 字长文在默认预算下一次请求完成。
+        var paragraph = "这是一段用来验证整篇翻译预算的技术文字，包含 config.json 与 foo_bar_baz。" +
+                        "This mixed-language sentence keeps the tokenizer honest. ";
+        var article = string.Concat(Enumerable.Repeat(paragraph, 60));
+        True(article.Length > 5000, "fixture must be a genuinely long article");
+        var whole = CoreBridge.PlanSegments(article, auto.MaxSegmentChars, auto.MaxSegments);
+        Equal("single", whole.Mode, "a 5k+ article must stay ONE request under the auto budget");
+
+        // 超出配置预算（小上下文引擎）才分段：拼接无损，段数受预算约束。
+        var small = CoreBridge.PlanSessionBudget(new ProviderSettings(
+            3, ProviderType.OpenAiCompatible, "https://api.example.com/v1", "/chat/completions", "/chat/completions",
+            "m", "", new Dictionary<string, string>(), "2023-06-01", true, false, true,
+            TranslationMode.Auto, false, false, false, false, true, "auto", "zh-CN",
+            true, true, null,
+            ReasoningLevel: "auto", ContextTokens: 8192, OutputTokens: 0));
+        True(small.MaxSegmentChars < auto.MaxSegmentChars,
+            "a smaller context window must buy a smaller chunk");
+        var planned = CoreBridge.PlanSegments(article, small.MaxSegmentChars, small.MaxSegments);
+        Equal("segments", planned.Mode, "over-budget sources must be planned, never silently truncated");
+        Equal(article, string.Concat(planned.Segments!), "segment concatenation must reproduce the source");
+        True(planned.Segments!.Count <= small.MaxSegments, "segment count must respect the session budget");
+        foreach (var segment in planned.Segments)
+        {
+            True(segment.Length <= small.MaxSegmentChars, "every segment must fit the configured chunk");
+        }
+
+        // 调大上下文+输出两项才会扩大块预算；拒绝文案反映真实预算数字。
+        var wide = CoreBridge.PlanSessionBudget(new ProviderSettings(
+            3, ProviderType.OpenAiCompatible, "https://api.example.com/v1", "/chat/completions", "/chat/completions",
+            "m", "", new Dictionary<string, string>(), "2023-06-01", true, false, true,
+            TranslationMode.Auto, false, false, false, false, true, "auto", "zh-CN",
+            true, true, null,
+            ReasoningLevel: "auto", ContextTokens: 131072, OutputTokens: 32768));
+        True(wide.MaxSegmentChars > auto.MaxSegmentChars,
+            "raising BOTH context and output must enlarge the chunk");
+        var message = TranslationCoordinator.BuildSegmentBudgetMessage(wide.MaxSegments, wide.MaxSegmentChars);
+        True(message.Contains(wide.MaxSegmentChars.ToString()),
+            "the rejection copy must quote the real budget numbers");
     }
 
     /// <summary>
@@ -10477,6 +10570,7 @@ internal static partial class Program
         try
         {
             Console.WriteLine($"[harness] creating Application on '{thread.Name}' #{thread.ManagedThreadId} apartment={thread.GetApartmentState()}");
+            App.SuppressStartupForTests = true;
             var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown };
             // OPT-021 残留排查：套件仍偶发「成片失败」，症状是所有需要
             // LoadComponent 的用例抛「应用程序对象正在关闭」——即有人在套件

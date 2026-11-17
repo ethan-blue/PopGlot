@@ -13,7 +13,10 @@ internal sealed record ServiceDraftInputs(
     string VisionModel,
     IReadOnlyDictionary<string, string> ExtraHeaders,
     string AnthropicVersion,
-    bool AllowInsecureTls);
+    bool AllowInsecureTls,
+    string ReasoningLevel = "auto",
+    uint ContextTokens = 0,
+    uint OutputTokens = 0);
 
 /// <summary>
 /// Pure draft validation, profile construction and model
@@ -47,6 +50,19 @@ internal static class ServiceDraftCoordinator
         return null;
     }
 
+    /// <summary>
+    /// 归一思考程度：仅接受 auto/off/low/medium/high（大小写与空白宽容），
+    /// 未知值一律回 auto —— 脏数据绝不能变成一个网关不认识的负载字段。
+    /// </summary>
+    public static string NormalizeReasoningLevel(string? value) => value?.Trim().ToLowerInvariant() switch
+    {
+        "off" => "off",
+        "low" => "low",
+        "medium" => "medium",
+        "high" => "high",
+        _ => "auto",
+    };
+
     /// <summary>Builds the persisted profile from plain values. Pure.</summary>
     public static ProviderProfile BuildDraft(ServiceDraftInputs inputs)
     {
@@ -71,6 +87,9 @@ internal static class ServiceDraftCoordinator
             SupportsVision = !string.IsNullOrWhiteSpace(inputs.VisionModel),
             AllowInsecureTls = inputs.AllowInsecureTls,
             IsLocal = isLocal,
+            ReasoningLevel = NormalizeReasoningLevel(inputs.ReasoningLevel),
+            ContextTokens = inputs.ContextTokens,
+            OutputTokens = inputs.OutputTokens,
         };
     }
 

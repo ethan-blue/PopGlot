@@ -581,6 +581,44 @@
                                                     <TextBlock Text="仅用于受信任的本地或内网服务" Style="{StaticResource Caption}" Margin="24,4,0,0"/>
                                                 </StackPanel>
                                             </Grid>
+
+                                            <Border Height="1" Margin="0,16,0,16" Background="{DynamicResource BorderSubtleBrush}" />
+                                            <TextBlock Text="生成参数" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,4" />
+                                            <TextBlock Style="{StaticResource Caption}" Margin="0,0,0,12" Foreground="{DynamicResource TextTertiaryBrush}"
+                                                       Text="决定整篇翻译的分段预算与思考程度；留空使用保守默认，仅在超出预算后才安全分段" />
+                                            <Grid x:Name="GenerationParamsGrid">
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                                <StackPanel>
+                                                    <TextBlock Text="思考程度" Style="{StaticResource FieldLabel}"/>
+                                                    <ComboBox x:Name="ReasoningLevelCombo" Style="{StaticResource EditorComboField}"
+                                                              AutomationProperties.Name="思考程度">
+                                                        <ComboBoxItem Content="跟随服务（默认）" Tag="auto" IsSelected="True"/>
+                                                        <ComboBoxItem Content="关闭" Tag="off"/>
+                                                        <ComboBoxItem Content="低" Tag="low"/>
+                                                        <ComboBoxItem Content="中" Tag="medium"/>
+                                                        <ComboBoxItem Content="高" Tag="high"/>
+                                                    </ComboBox>
+                                                    <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" Foreground="{DynamicResource TextTertiaryBrush}"
+                                                               Text="默认跟随服务；不支持所选思考级别的模型会明确提示"/>
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="2">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                                        <StackPanel>
+                                                            <TextBlock Text="上下文窗口（tokens）" Style="{StaticResource FieldLabel}"/>
+                                                            <TextBox x:Name="ContextTokensTextBox" Style="{StaticResource EditorTextField}" FontFamily="{StaticResource MonoFontFamily}"
+                                                                     local:Ui.Placeholder="自动" AutomationProperties.Name="上下文窗口 tokens"/>
+                                                        </StackPanel>
+                                                        <StackPanel Grid.Column="2">
+                                                            <TextBlock Text="输出上限（tokens）" Style="{StaticResource FieldLabel}"/>
+                                                            <TextBox x:Name="OutputTokensTextBox" Style="{StaticResource EditorTextField}" FontFamily="{StaticResource MonoFontFamily}"
+                                                                     local:Ui.Placeholder="自适应" AutomationProperties.Name="输出上限 tokens"/>
+                                                        </StackPanel>
+                                                    </Grid>
+                                                    <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" Foreground="{DynamicResource TextTertiaryBrush}"
+                                                               Text="上下文 4096–262144；输出 512–65536（含思考）。请按模型实际能力填写"/>
+                                                </StackPanel>
+                                            </Grid>
                                         </StackPanel>
                                     </Expander>
                                 </Border>

@@ -82,6 +82,36 @@ pub struct ProviderSettings {
     /// reusing the text provider's connection details.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vision_provider: Option<VisionProviderSettings>,
+    /// Thinking depth requested from the model. `Auto` (the default) sends no
+    /// reasoning control at all — the historical payload contract for every
+    /// existing gateway. The other levels map to each protocol's native
+    /// control inside the core, never to SDK-inferred defaults.
+    #[serde(default)]
+    pub reasoning_level: ReasoningLevel,
+    /// Model context window in tokens used to plan translation sessions.
+    /// `0` keeps `PopGlot`'s conservative default; explicit values are clamped
+    /// by [`resolve_context_tokens`], never enlarged silently.
+    #[serde(default)]
+    pub context_tokens: u32,
+    /// Per-request output token ceiling. `0` keeps the adaptive source-sized
+    /// budget; explicit values are clamped by [`resolve_output_tokens`].
+    #[serde(default)]
+    pub output_tokens: u32,
+}
+
+/// User-selected thinking depth. Serialized `snake_case`; unknown strings from
+/// newer builds fail deserialization loudly instead of guessing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningLevel {
+    /// Send nothing: each gateway keeps its own default behavior.
+    #[default]
+    Auto,
+    /// Explicitly disable thinking where the protocol supports it.
+    Off,
+    Low,
+    Medium,
+    High,
 }
 
 /// Complete connection details for a dedicated vision provider. The API key
@@ -134,6 +164,9 @@ impl Default for ProviderSettings {
             include_explanation: true,
             protect_code_tokens: true,
             vision_provider: None,
+            reasoning_level: ReasoningLevel::Auto,
+            context_tokens: 0,
+            output_tokens: 0,
         }
     }
 }
@@ -193,6 +226,12 @@ impl ProviderSettings {
             protect_code_tokens: bool,
             #[serde(default)]
             vision_provider: Option<VisionProviderSettings>,
+            #[serde(default)]
+            reasoning_level: ReasoningLevel,
+            #[serde(default)]
+            context_tokens: u32,
+            #[serde(default)]
+            output_tokens: u32,
         }
 
         impl Default for Shadow {
@@ -222,6 +261,9 @@ impl ProviderSettings {
                     include_explanation: defaults.include_explanation,
                     protect_code_tokens: defaults.protect_code_tokens,
                     vision_provider: None,
+                    reasoning_level: defaults.reasoning_level,
+                    context_tokens: defaults.context_tokens,
+                    output_tokens: defaults.output_tokens,
                 }
             }
         }
@@ -251,6 +293,9 @@ impl ProviderSettings {
             include_explanation: shadow.include_explanation,
             protect_code_tokens: shadow.protect_code_tokens,
             vision_provider: shadow.vision_provider,
+            reasoning_level: shadow.reasoning_level,
+            context_tokens: shadow.context_tokens,
+            output_tokens: shadow.output_tokens,
         })
     }
 
@@ -533,6 +578,9 @@ impl ProviderProfile {
             include_explanation: prefs.include_explanation,
             protect_code_tokens: prefs.protect_code_tokens,
             vision_provider: None,
+            reasoning_level: ReasoningLevel::Auto,
+            context_tokens: 0,
+            output_tokens: 0,
         }
     }
 }
@@ -1336,6 +1384,150 @@ pub const MAX_SEGMENT_CHARS: usize = 800;
 /// Sized for 25k+ token contexts (~32,000 chars) via sequential batching.
 pub const MAX_SEGMENTS: usize = 64;
 
+// ==================== Context/output budget resolution ====================
+
+/// Context window assumed when the user leaves `context_tokens` at 0 (auto).
+/// Conservative on purpose: large enough that a whole article usually stays
+/// ONE request, small enough to fit every mainstream hosted model.
+pub const DEFAULT_CONTEXT_TOKENS: u32 = 32_768;
+
+/// Explicit context windows are clamped into this range: below the minimum a
+/// single instruction + answer no longer fits; above the maximum `PopGlot`'s
+/// other request caps (body size, output bytes) would silently dominate.
+pub const MIN_CONTEXT_TOKENS: u32 = 4_096;
+pub const MAX_CONTEXT_TOKENS: u32 = 262_144;
+
+/// Explicit per-request output ceilings are clamped into this range. The
+/// upper bound is a deliberate product cap: raising output beyond it must go
+/// through a reviewed constant change, not a settings field.
+pub const MIN_OUTPUT_TOKENS: u32 = 512;
+pub const MAX_OUTPUT_TOKENS: u32 = 65_536;
+
+/// The adaptive (source-sized) output budget's hard ceiling. Must equal the
+/// core's `MAX_MODEL_OUTPUT_TOKENS`; the core owns the per-protocol wire
+/// field, the domain plans sessions against the same number.
+pub const ADAPTIVE_OUTPUT_TOKEN_CEILING: u32 = 25_600;
+
+/// Resolves the configured context window. `0` keeps the default; explicit
+/// values are clamped, never silently enlarged.
+#[must_use]
+pub fn resolve_context_tokens(context_tokens: u32) -> u32 {
+    if context_tokens == 0 {
+        return DEFAULT_CONTEXT_TOKENS;
+    }
+    context_tokens.clamp(MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS)
+}
+
+/// Resolves the configured per-request output ceiling. `0` means "auto": the
+/// core's adaptive source-sized budget applies and planning reserves output
+/// proportionally to the chunk instead.
+#[must_use]
+pub fn resolve_output_tokens(output_tokens: u32) -> u32 {
+    if output_tokens == 0 {
+        return 0;
+    }
+    output_tokens.clamp(MIN_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS)
+}
+
+/// How one session's requests are sized: the largest source chunk a single
+/// request may carry, and how many such requests the session may spend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionCharBudget {
+    pub max_segment_chars: usize,
+    pub max_segments: usize,
+}
+
+/// Plans the session chunk budget from the configured context window and
+/// output ceiling.
+///
+/// The token model is deliberately worst-case:
+/// - input: up to 1.5 tokens per character (CJK-heavy text);
+/// - output: the adaptive translation budget reserves 3 tokens per source
+///   character plus 512 for the answer, capped at
+///   [`ADAPTIVE_OUTPUT_TOKEN_CEILING`];
+/// - the prompt scaffold (system instructions, source-as-data wrapper,
+///   delimiter machinery) is reserved at 2048 tokens.
+///
+/// With an explicit output ceiling, both the remaining context and the
+/// output's translation capacity constrain the input. Zero means this
+/// context/output combination cannot fit even one source character and must
+/// be rejected before any request. These are planning estimates, not a
+/// guarantee about a provider's tokenizer or the model's chosen answer.
+#[must_use]
+pub fn session_char_budget(context_tokens: u32, output_tokens: u32) -> SessionCharBudget {
+    session_char_budget_with_reasoning(context_tokens, output_tokens, ReasoningLevel::Auto)
+}
+
+/// Reserved thinking allowance. Also used by the payload's adaptive output
+/// calculation; explicit user ceilings are never increased by this reserve.
+#[must_use]
+pub const fn reasoning_token_reserve(level: ReasoningLevel) -> u32 {
+    match level {
+        ReasoningLevel::Low => 1024,
+        ReasoningLevel::Medium => 4096,
+        ReasoningLevel::High => 8192,
+        ReasoningLevel::Auto | ReasoningLevel::Off => 0,
+    }
+}
+
+/// Plans against the same total output, thinking floor and context reserve
+/// as the generated request. Zero capacity must be rejected by the caller.
+#[must_use]
+pub fn session_char_budget_with_reasoning(
+    context_tokens: u32,
+    output_tokens: u32,
+    level: ReasoningLevel,
+) -> SessionCharBudget {
+    const PROMPT_OVERHEAD_TOKENS: u64 = 2_048;
+    const ANSWER_FLOOR_TOKENS: u64 = 512;
+    /// Worst-case input tokens per source char (3/2, kept integral).
+    const INPUT_TOKENS_NUM: u64 = 3;
+    const INPUT_TOKENS_DEN: u64 = 2;
+    /// Adaptive output tokens per source char (must match the core's
+    /// `output_token_limit` translate formula).
+    const OUTPUT_TOKENS_PER_CHAR: u64 = 3;
+
+    let context = u64::from(resolve_context_tokens(context_tokens));
+    let explicit_output = u64::from(resolve_output_tokens(output_tokens));
+
+    let usable = context.saturating_sub(PROMPT_OVERHEAD_TOKENS);
+    let thinking = u64::from(reasoning_token_reserve(level));
+    let thinking_floor = thinking * 3;
+    if usable <= thinking_floor || explicit_output > 0 && explicit_output < thinking_floor {
+        return SessionCharBudget {
+            max_segment_chars: 0,
+            max_segments: MAX_SEGMENTS,
+        };
+    }
+    let budget = if explicit_output > 0 {
+        // A small output ceiling must shrink input, not unlock a giant
+        // document. Keep both context capacity and translation capacity.
+        let context_capacity = usable
+            .saturating_sub(explicit_output)
+            .saturating_mul(INPUT_TOKENS_DEN)
+            / INPUT_TOKENS_NUM;
+        let answer_capacity =
+            explicit_output.saturating_sub(thinking + 256) / OUTPUT_TOKENS_PER_CHAR;
+        context_capacity.min(answer_capacity)
+    } else {
+        // Auto output: input + proportional output both scale with the chunk.
+        // 1.5·C input + (3·C + 512) output ≤ usable  →  C ≤ (usable−512)/4.5
+        let adaptive = usable.saturating_sub(thinking + ANSWER_FLOOR_TOKENS) * 2
+            / (INPUT_TOKENS_NUM + 2 * OUTPUT_TOKENS_PER_CHAR);
+        // The adaptive output budget itself is capped, which caps the chunk
+        // even on huge windows: 3·C + 512 ≤ ceiling.
+        let output_capped =
+            (u64::from(ADAPTIVE_OUTPUT_TOKEN_CEILING - 512) / OUTPUT_TOKENS_PER_CHAR).min(adaptive);
+        // A tiny context must still produce a usable chunk.
+        let floor_context_capacity = usable.saturating_sub(thinking_floor) * 2 / 3;
+        output_capped.min(floor_context_capacity)
+    };
+    SessionCharBudget {
+        max_segment_chars: usize::try_from(budget).unwrap_or(usize::MAX),
+        max_segments: MAX_SEGMENTS,
+    }
+}
+
 /// Why a source cannot be translated as one budgeted session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2098,6 +2290,122 @@ mod tests {
         let json = serde_json::to_string(&ProviderSettings::default()).expect("serialize");
         let parsed: ProviderSettings = serde_json::from_str(&json).expect("parse own output");
         assert_eq!(parsed, ProviderSettings::default());
+    }
+
+    // ==================== context/output budget ====================
+
+    #[test]
+    fn auto_budget_translates_whole_articles_in_one_request() {
+        // Defaults: 32k context, adaptive output. Worst-case token math
+        // (1.5 in + 3 out per char, 2048 scaffold + 512 answer floor) yields
+        // a chunk far above the historical 800-char segments.
+        let budget = session_char_budget(0, 0);
+        assert_eq!(budget.max_segment_chars, 6_712);
+        assert_eq!(budget.max_segments, MAX_SEGMENTS);
+        assert!(budget.max_segment_chars > MAX_SEGMENT_CHARS);
+    }
+
+    #[test]
+    fn auto_output_ceiling_caps_the_chunk_even_on_huge_contexts() {
+        // A 256k window with auto output cannot grow the chunk past the
+        // adaptive output budget's own ceiling: 3·C + 512 ≤ 25_600.
+        let budget = session_char_budget(MAX_CONTEXT_TOKENS, 0);
+        assert_eq!(
+            budget.max_segment_chars,
+            usize::try_from(ADAPTIVE_OUTPUT_TOKEN_CEILING - 512).unwrap() / 3
+        );
+    }
+
+    #[test]
+    fn explicit_output_ceiling_bounds_both_context_and_visible_translation() {
+        // Raising BOTH knobs is required for bigger chunks — the defaults
+        // alone never inflate the budget.
+        let budget = session_char_budget(131_072, 32_768);
+        assert_eq!(budget.max_segment_chars, (32_768 - 256) / 3);
+        let tiny_output = session_char_budget(MAX_CONTEXT_TOKENS, 512);
+        assert_eq!(tiny_output.max_segment_chars, (512 - 256) / 3);
+        assert_eq!(session_char_budget(4096, 65536).max_segment_chars, 0);
+    }
+
+    #[test]
+    fn budget_values_are_clamped_not_inflated() {
+        // Nonsense values fall back to clamps, never to unbounded requests.
+        assert_eq!(resolve_context_tokens(1), MIN_CONTEXT_TOKENS);
+        assert_eq!(resolve_context_tokens(u32::MAX), MAX_CONTEXT_TOKENS);
+        assert_eq!(resolve_output_tokens(1), MIN_OUTPUT_TOKENS);
+        assert_eq!(resolve_output_tokens(u32::MAX), MAX_OUTPUT_TOKENS);
+        assert_eq!(resolve_output_tokens(0), 0);
+        // A minimal window still plans a usable (if small) chunk.
+        let tiny = session_char_budget(MIN_CONTEXT_TOKENS, 0);
+        assert_eq!(tiny.max_segment_chars, 341);
+        // A contradictory configuration (output ceiling + scaffold cannot fit
+        // the window) is the zero sentinel, never a micro-chunk plan.
+        assert_eq!(
+            session_char_budget(MIN_CONTEXT_TOKENS, MAX_OUTPUT_TOKENS).max_segment_chars,
+            0
+        );
+        assert_eq!(session_char_budget(0, u32::MAX).max_segment_chars, 0);
+    }
+
+    #[test]
+    fn thinking_is_reserved_inside_context_and_explicit_output() {
+        let high = session_char_budget_with_reasoning(32768, 0, ReasoningLevel::High);
+        assert_eq!(high.max_segment_chars, 4096);
+        assert!(high.max_segment_chars < session_char_budget(0, 0).max_segment_chars);
+        assert_eq!(
+            session_char_budget_with_reasoning(4096, 0, ReasoningLevel::High).max_segment_chars,
+            0
+        );
+        assert_eq!(
+            session_char_budget_with_reasoning(32768, 512, ReasoningLevel::High).max_segment_chars,
+            0
+        );
+        let explicit = session_char_budget_with_reasoning(131_072, 32_768, ReasoningLevel::High);
+        assert!(explicit.max_segment_chars * 3 + 8192 + 256 <= 32768);
+    }
+
+    #[test]
+    fn legacy_settings_files_keep_the_auto_generation_defaults() {
+        let legacy = serde_json::json!({
+            "schema_version": 3,
+            "provider_type": "OpenAiCompatible",
+            "api_base_url": "https://api.example.com/v1",
+            "text_endpoint": "/chat/completions",
+            "vision_endpoint": "/chat/completions",
+            "text_model": "m",
+            "vision_model": "",
+            "extra_headers": {},
+            "anthropic_version": "2023-06-01",
+            "supports_text": true,
+            "supports_vision": false,
+            "network_enabled": true,
+            "mode": "Auto",
+            "allow_image_upload_in_auto": false,
+            "safe_dev_mode": false,
+            "allow_insecure_tls": false,
+            "api_key_configured": true,
+            "source_language": "auto",
+            "target_language": "zh-CN",
+            "include_explanation": true,
+            "protect_code_tokens": true
+        });
+        let settings: ProviderSettings = serde_json::from_value(legacy).unwrap();
+        assert_eq!(settings.reasoning_level, ReasoningLevel::Auto);
+        assert_eq!(settings.context_tokens, 0);
+        assert_eq!(settings.output_tokens, 0);
+        // Round trip preserves explicit values.
+        let tuned = ProviderSettings {
+            reasoning_level: ReasoningLevel::High,
+            context_tokens: 131_072,
+            output_tokens: 32_768,
+            ..settings
+        };
+        let json = serde_json::to_value(&tuned).unwrap();
+        assert_eq!(json["reasoning_level"], "high");
+        assert_eq!(json["context_tokens"], 131_072);
+        assert_eq!(json["output_tokens"], 32_768);
+        let back: ProviderSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(back, tuned);
     }
 
     // ==================== plan_translation_segments ====================

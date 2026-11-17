@@ -5,6 +5,7 @@
 //! network request implicitly.
 
 pub mod benchmark;
+mod generation_policy;
 pub mod prompt_store;
 pub mod provider;
 pub mod provider_sdk;

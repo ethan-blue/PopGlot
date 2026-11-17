@@ -132,7 +132,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             () => ChatGptForgetAccount_Click(ChatGptForgetAccountButton, new RoutedEventArgs()));
         _clearKeyConfirm = ConfirmButton.Attach(ClearKeyButton, "确认清除？", ClearKeyForCurrentProfile);
         EditorScroll.ScrollChanged += EditorScroll_ScrollChanged;
-        _editorCombos = [ProviderTypeComboBox, TextModelCombo, VisionModelCombo, CliModelCombo,
+        _editorCombos = [ProviderTypeComboBox, TextModelCombo, VisionModelCombo, ReasoningLevelCombo, CliModelCombo,
             OmpLoginProviderCombo, ChatGptAccountCombo, ChatGptModelCombo];
         foreach (var combo in _editorCombos)
         {
@@ -550,6 +550,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         WatchText(VisionEndpointTextBox);
         WatchText(ExtraHeadersTextBox);
         WatchText(AnthropicVersionTextBox);
+        ContextTokensTextBox.TextChanged += (_, _) => MarkEditorDirty();
+        OutputTokensTextBox.TextChanged += (_, _) => MarkEditorDirty();
+        ReasoningLevelCombo.SelectionChanged += (_, _) => MarkEditorDirty();
+
         WatchCombo(TextModelCombo);
         WatchCombo(VisionModelCombo);
         WatchToggle(SupportsTextCheckBox);
@@ -629,7 +633,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             SupportsVisionCheckBox.IsChecked == true,
             UseTextModelForVisionCheckBox.IsChecked == true,
             AllowInsecureTlsCheckBox.IsChecked == true,
-            ApiKeyPasswordBox.Password).Serialize();
+            ApiKeyPasswordBox.Password).Serialize()
+            + "|generation|" + ServiceDraftCoordinator.NormalizeReasoningLevel(
+                (ReasoningLevelCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString())
+            + "|" + ContextTokensTextBox.Text.Trim()
+            + "|" + OutputTokensTextBox.Text.Trim();
     }
 
     /// <summary>Canonical single-line value: CRLF→LF, trimmed, no outer noise.</summary>
@@ -819,6 +827,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 Environment.NewLine,
                 profile.ExtraHeaders.Select(pair => $"{pair.Key}: {pair.Value}"));
             AnthropicVersionTextBox.Text = profile.AnthropicVersion;
+            Helpers.SelectComboByTag(
+                ReasoningLevelCombo, ServiceDraftCoordinator.NormalizeReasoningLevel(profile.ReasoningLevel));
+            ContextTokensTextBox.Text = FormatTokenSetting(profile.ContextTokens);
+            OutputTokensTextBox.Text = FormatTokenSetting(profile.OutputTokens);
             SupportsTextCheckBox.IsChecked = !string.IsNullOrWhiteSpace(profile.TextModel);
             SupportsVisionCheckBox.IsChecked = !string.IsNullOrWhiteSpace(profile.VisionModel);
             AllowInsecureTlsCheckBox.IsChecked = profile.AllowInsecureTls;
@@ -1183,6 +1195,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             AnthropicVersion = draft.AnthropicVersion,
             AllowInsecureTls = draft.AllowInsecureTls,
             CredentialRevision = revision,
+            ReasoningLevel = draft.ReasoningLevel,
+            ContextTokens = draft.ContextTokens,
+            OutputTokens = draft.OutputTokens,
         };
         return ProfileVerification.EvidenceFingerprint(probe, hasCredential);
     }
@@ -1487,6 +1502,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             TextModelCombo.Text = string.Empty;
             VisionModelCombo.Text = string.Empty;
             AnthropicVersionTextBox.Text = "2023-06-01";
+            // 新引擎从保守默认开始：自动思考、自动上下文、自适应输出。
+            Helpers.SelectComboByTag(ReasoningLevelCombo, "auto");
+            ContextTokensTextBox.Text = string.Empty;
+            OutputTokensTextBox.Text = string.Empty;
             SupportsTextCheckBox.IsChecked = true;
             SupportsVisionCheckBox.IsChecked = false;
             _visionTracker.Reset();
@@ -2030,6 +2049,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     /// <summary>Builds the core settings a draft test would use; nothing is saved.</summary>
     private ProviderSettings BuildDraftSettings()
     {
+        ValidateGenerationForm();
         var current = CoreBridge.GetSettings();
         var textModel = TextModelCombo.Text.Trim();
         var visionModel = UseTextModelForVisionCheckBox.IsChecked == true
@@ -2050,6 +2070,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             SupportsVision = !string.IsNullOrWhiteSpace(visionModel),
             AllowInsecureTls = AllowInsecureTlsCheckBox.IsChecked == true,
             ApiKeyConfigured = CredentialStore.HasApiKey(CurrentCredentialTarget()),
+            // 连接测试用与真实翻译一致的生成参数，测试结果才有代表性。
+            ReasoningLevel = ServiceDraftCoordinator.NormalizeReasoningLevel(
+                (ReasoningLevelCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString()),
+            ContextTokens = ParseTokenSetting(ContextTokensTextBox.Text),
+            OutputTokens = ParseTokenSetting(OutputTokensTextBox.Text),
         };
     }
 
@@ -2747,6 +2772,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             {
                 throw new InvalidOperationException(validationError);
             }
+            ValidateGenerationForm();
             var draft = BuildProfileFromForm(name);
             var config = ProfileManager.Load();
             var pendingOutcome = _pendingTestOutcome;
@@ -2964,7 +2990,51 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 : VisionModelCombo.Text.Trim(),
             ExtraHeaders: ParseExtraHeaders(ExtraHeadersTextBox.Text),
             AnthropicVersion: AnthropicVersionTextBox.Text,
-            AllowInsecureTls: AllowInsecureTlsCheckBox.IsChecked == true);
+            AllowInsecureTls: AllowInsecureTlsCheckBox.IsChecked == true,
+            ReasoningLevel: ServiceDraftCoordinator.NormalizeReasoningLevel(
+                (ReasoningLevelCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString()),
+            ContextTokens: ParseTokenSetting(ContextTokensTextBox.Text),
+            OutputTokens: ParseTokenSetting(OutputTokensTextBox.Text));
         return ServiceDraftCoordinator.BuildDraft(inputs);
     }
+
+    private void ValidateGenerationForm()
+    {
+        var error = ValidateGenerationSettings(ContextTokensTextBox.Text, OutputTokensTextBox.Text);
+        if (error is not null) throw new InvalidOperationException(error);
+        _ = CoreBridge.PlanSessionBudget(CoreBridge.GetSettings() with
+        {
+            ContextTokens = ParseTokenSetting(ContextTokensTextBox.Text),
+            OutputTokens = ParseTokenSetting(OutputTokensTextBox.Text),
+            ReasoningLevel = ServiceDraftCoordinator.NormalizeReasoningLevel(
+                (ReasoningLevelCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString()),
+        });
+    }
+
+    internal static string? ValidateGenerationSettings(string? context, string? output)
+    {
+        static bool Valid(string? text, uint min, uint max) => string.IsNullOrWhiteSpace(text)
+            || uint.TryParse(text.Trim(), System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var value)
+                && (value == 0 || value >= min && value <= max);
+        if (!Valid(context, 4096, 262144))
+            return "上下文窗口请输入 4096–262144 的整数，留空或 0 使用自动预算。";
+        if (!Valid(output, 512, 65536))
+            return "输出上限请输入 512–65536 的整数，留空或 0 使用自适应预算。";
+        var contextValue = ParseTokenSetting(context);
+        var outputValue = ParseTokenSetting(output);
+        if (outputValue > 0 && outputValue + 2048 >= (contextValue == 0 ? 32768u : contextValue))
+            return "输出上限与提示词不能占满上下文窗口，请降低输出上限或增大上下文窗口。";
+        return null;
+    }
+
+    /// <summary>0 显示为空（自动/自适应）；非法输入按 0 处理，绝不上传脏值。</summary>
+    internal static uint ParseTokenSetting(string? text) =>
+        uint.TryParse(text?.Trim(), System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture, out var value)
+            ? value
+            : 0;
+
+    private static string FormatTokenSetting(uint value) =>
+        value == 0 ? string.Empty : value.ToString(System.Globalization.CultureInfo.InvariantCulture);
 }

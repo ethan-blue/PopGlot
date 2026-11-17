@@ -166,6 +166,9 @@ internal static partial class CoreBridge
         [LibraryImport(LibraryName, EntryPoint = "popglot_plan_segments", StringMarshalling = StringMarshalling.Utf8)]
         internal static partial nint PlanSegments(string text, int maxSegmentChars, int maxSegments);
 
+        [LibraryImport(LibraryName, EntryPoint = "popglot_session_char_budget")]
+        internal static partial nint SessionCharBudget(uint contextTokens, uint outputTokens, uint reasoningLevel);
+
         [LibraryImport(LibraryName, EntryPoint = "popglot_cancel_active_request")]
         internal static partial int CancelActiveRequest();
 

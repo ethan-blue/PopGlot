@@ -394,13 +394,22 @@ fn validate_stream_delimiter(delimiter: &str) -> Result<(), StreamPromptError> {
 /// Source-sized text budgets include room for metadata. Reading a short
 /// selection should not reserve the full summary ceiling; explanations may
 /// expand the source and retain their separate ceiling.
-pub(crate) fn output_token_limit(request: &TranslationRequest) -> u32 {
+///
+/// An explicit user-configured ceiling (`settings.output_tokens`) replaces
+/// the adaptive sizing for every task: the user asked for a fixed budget,
+/// and the domain's clamp keeps it a per-request cap rather than an
+/// unbounded one.
+pub(crate) fn output_token_limit(request: &TranslationRequest, settings: &ProviderSettings) -> u32 {
+    let explicit = popglot_domain::resolve_output_tokens(settings.output_tokens);
+    if explicit != 0 {
+        return explicit;
+    }
     let ceiling = match request.task {
         TextTask::Summarize => 700,
-        TextTask::Explain => return 900,
+        TextTask::Explain => 900,
         TextTask::Translate => MAX_MODEL_OUTPUT_TOKENS,
     };
-    match &request.input {
+    let visible_budget = match &request.input {
         TranslationInput::Text { source } => {
             let source_chars = u32::try_from(source.chars().count()).unwrap_or(u32::MAX);
             match request.task {
@@ -412,14 +421,19 @@ pub(crate) fn output_token_limit(request: &TranslationRequest) -> u32 {
                     .saturating_mul(2)
                     .saturating_add(256)
                     .clamp(384, ceiling),
-                TextTask::Explain => unreachable!("Explain returns its fixed budget above"),
+                TextTask::Explain => 900,
             }
         }
         TranslationInput::Vision { .. } => match request.task {
             TextTask::Translate => MAX_VISION_OUTPUT_TOKENS,
             _ => ceiling,
         },
-    }
+    };
+    let thinking = popglot_domain::reasoning_token_reserve(settings.reasoning_level);
+    visible_budget
+        .saturating_add(thinking)
+        .max(thinking.saturating_mul(3))
+        .min(popglot_domain::MAX_OUTPUT_TOKENS)
 }
 
 pub(crate) fn glm_thinking_config(model: &str) -> Option<Value> {
@@ -1650,6 +1664,9 @@ fn gemini_candidate_text(candidate: &Value) -> String {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        // Thinking summaries are not translated text, even when a gateway
+        // includes them without an explicit includeThoughts request.
+        .filter(|part| part.get("thought").and_then(Value::as_bool) != Some(true))
         .filter_map(|part| part.get("text").and_then(Value::as_str))
         .collect()
 }
@@ -2529,20 +2546,45 @@ mod tests {
 
     #[test]
     fn translation_output_budget_scales_with_source_and_caps_at_max_budget() {
-        assert_eq!(output_token_limit(&text_request("hello")), 527);
-        assert_eq!(output_token_limit(&text_request(&"a".repeat(300))), 1_412);
-        assert_eq!(output_token_limit(&text_request(&"a".repeat(2_000))), 6_512);
+        let auto = &ProviderSettings::default();
+        assert_eq!(output_token_limit(&text_request("hello"), auto), 527);
         assert_eq!(
-            output_token_limit(&text_request(&"a".repeat(10_000))),
+            output_token_limit(&text_request(&"a".repeat(300)), auto),
+            1_412
+        );
+        assert_eq!(
+            output_token_limit(&text_request(&"a".repeat(2_000)), auto),
+            6_512
+        );
+        assert_eq!(
+            output_token_limit(&text_request(&"a".repeat(10_000)), auto),
             MAX_MODEL_OUTPUT_TOKENS
         );
         assert_eq!(
-            output_token_limit(&text_request(&"a".repeat(25_000))),
+            output_token_limit(&text_request(&"a".repeat(25_000)), auto),
             25_600
         );
         assert_eq!(
-            output_token_limit(&vision_request()),
+            output_token_limit(&vision_request(), auto),
             MAX_VISION_OUTPUT_TOKENS
+        );
+        // An explicit user ceiling replaces the adaptive sizing everywhere…
+        let explicit = ProviderSettings {
+            output_tokens: 12_000,
+            ..ProviderSettings::default()
+        };
+        assert_eq!(
+            output_token_limit(&text_request(&"a".repeat(25_000)), &explicit),
+            12_000
+        );
+        // …but is clamped by the domain, never inflated past the product cap.
+        let inflated = ProviderSettings {
+            output_tokens: u32::MAX,
+            ..ProviderSettings::default()
+        };
+        assert_eq!(
+            output_token_limit(&text_request("hello"), &inflated),
+            popglot_domain::MAX_OUTPUT_TOKENS
         );
     }
 
@@ -3256,6 +3298,23 @@ mod tests {
         .unwrap();
         let err = gemini_content_text(&empty_content).unwrap_err();
         assert_eq!(err.kind, ProviderErrorKind::InvalidResponse);
+    }
+
+    #[test]
+    fn gemini_thought_parts_never_enter_visible_translation() {
+        let data = json!({"candidates":[{"content":{"parts":[
+            {"text":"private reasoning summary", "thought":true},
+            {"text":"visible translation"}
+        ]},"finishReason":"STOP"}]})
+        .to_string();
+        assert!(matches!(parse_gemini_stream_event(&data).unwrap(),
+            Some(ProviderStreamEvent::TextDeltaCompleted(text)) if text == "visible translation"));
+        // gemini_content_text returns (text, truncation); the thought part
+        // must not leak into the visible text either.
+        assert_eq!(
+            gemini_content_text(data.as_bytes()).unwrap().0,
+            "visible translation"
+        );
     }
 
     #[test]

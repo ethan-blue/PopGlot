@@ -39,6 +39,9 @@ internal sealed class ProviderProfile
         ExecutionKind = source.ExecutionKind;
         CliConnection = source.CliConnection?.Clone();
         DirectConnection = source.DirectConnection?.Clone();
+        ReasoningLevel = source.ReasoningLevel;
+        ContextTokens = source.ContextTokens;
+        OutputTokens = source.OutputTokens;
     }
 
     public ProviderProfile Clone() => new(this);
@@ -58,6 +61,19 @@ internal sealed class ProviderProfile
     public bool AllowInsecureTls { get; set; }
     public string CredentialTarget { get; set; } = "PopGlot/provider/openai-default";
     public bool IsLocal { get; set; }
+
+    /// <summary>
+    /// 思考程度：auto（默认，不发送任何 reasoning 控制，保持历史负载契约）
+    /// | off | low | medium | high。由核心按各协议原生字段映射，未知值按
+    /// <see cref="ServiceDraftCoordinator.NormalizeReasoningLevel"/> 归一。
+    /// </summary>
+    public string ReasoningLevel { get; set; } = "auto";
+
+    /// <summary>模型上下文窗口 tokens；0 = 自动（核心保守默认，整篇优先）。</summary>
+    public uint ContextTokens { get; set; }
+
+    /// <summary>单次请求输出上限 tokens；0 = 自适应（按原文长度预算）。</summary>
+    public uint OutputTokens { get; set; }
 
     /// <summary>
     /// Explicit permission for a service on another LAN device. Never derived
@@ -232,6 +248,10 @@ internal sealed class ProviderProfile
             SupportsVision = SupportsVision,
             AllowInsecureTls = AllowInsecureTls || baseSettings.AllowInsecureTls,
             AllowLanEndpoints = AllowLanEndpoints || baseSettings.AllowLanEndpoints,
+            // 生成参数随引擎：会话块预算与 reasoning 负载都从这里进入核心。
+            ReasoningLevel = ServiceDraftCoordinator.NormalizeReasoningLevel(ReasoningLevel),
+            ContextTokens = ContextTokens,
+            OutputTokens = OutputTokens,
         };
 }
 
