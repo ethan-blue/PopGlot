@@ -1,5 +1,6 @@
 using System.Drawing.Imaging;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -42,11 +43,14 @@ internal sealed class FrozenDesktopSnapshot : IDisposable
 /// per-monitor DPI aware, so <c>CopyFromScreen</c> maps one-to-one onto the
 /// virtual desktop with no scaling applied by the OS.
 /// </remarks>
-internal static class ScreenCaptureService
+internal static partial class ScreenCaptureService
 {
     private const long MaxPixels = 16_000_000;
     private const int MaxEncodedBytes = 8 * 1024 * 1024;
     private const int MinimumSide = 6;
+
+    private const int RasterOperationSourceCopy = 0x00CC0020;
+    private const int RasterOperationCaptureBlt = 0x40000000;
 
     /// <summary>
     /// Captures the entire virtual desktop synchronously into memory so hover
@@ -67,16 +71,9 @@ internal static class ScreenCaptureService
                 return null;
             }
 
-            var bitmap = new Drawing.Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            var bitmap = BlitScreenRegion(x, y, width, height);
             try
             {
-                using (var graphics = Drawing.Graphics.FromImage(bitmap))
-                {
-                    graphics.CopyFromScreen(
-                        x, y, 0, 0,
-                        new Drawing.Size(width, height),
-                        Drawing.CopyPixelOperation.SourceCopy | Drawing.CopyPixelOperation.CaptureBlt);
-                }
                 var preview = CreateFrozenPreview(bitmap, width, height);
                 return new FrozenDesktopSnapshot(new Rect(x, y, width, height), bitmap, preview);
             }
@@ -111,15 +108,7 @@ internal static class ScreenCaptureService
     {
         var (x, y, width, height) = ValidateRegion(pixelBounds);
 
-        using var bitmap = new Drawing.Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
-        using (var graphics = Drawing.Graphics.FromImage(bitmap))
-        {
-            graphics.CopyFromScreen(
-                x, y, 0, 0,
-                new Drawing.Size(width, height),
-                Drawing.CopyPixelOperation.SourceCopy | Drawing.CopyPixelOperation.CaptureBlt);
-        }
-
+        using var bitmap = BlitScreenRegion(x, y, width, height);
         return EncodePng(bitmap);
     }
 
@@ -177,6 +166,87 @@ internal static class ScreenCaptureService
         return (clampedLeft - vx, clampedTop - vy, clampedWidth, clampedHeight);
     }
 
+    /// <summary>
+    /// Blits a physical-pixel screen region into a fresh bitmap with
+    /// layered-window (CAPTUREBLT) semantics so hover tooltips, menus, and
+    /// popups frozen mid-interaction are part of the capture.
+    /// </summary>
+    /// <remarks>
+    /// <c>Graphics.CopyFromScreen</c> validates its operation argument and
+    /// rejects the <c>SourceCopy | CaptureBlt</c> combination (the enum is
+    /// not marked [Flags]), so both capture paths threw
+    /// <c>InvalidEnumArgumentException</c> on .NET Core / .NET 5+ and every
+    /// screenshot failed. Raw <c>BitBlt</c> keeps the layered-window
+    /// semantics; every GDI handle is released even when a step fails.
+    /// </remarks>
+    private static Drawing.Bitmap BlitScreenRegion(int x, int y, int width, int height)
+    {
+        var screenDc = NativeMethods.GetDC(nint.Zero);
+        if (screenDc == nint.Zero)
+        {
+            throw new InvalidOperationException("无法访问屏幕设备上下文，截图失败。");
+        }
+        try
+        {
+            var memoryDc = NativeMethods.CreateCompatibleDC(screenDc);
+            if (memoryDc == nint.Zero)
+            {
+                throw new InvalidOperationException("无法创建截图内存设备上下文。");
+            }
+            try
+            {
+                var compatibleBitmap = NativeMethods.CreateCompatibleBitmap(screenDc, width, height);
+                if (compatibleBitmap == nint.Zero)
+                {
+                    throw new OutOfMemoryException($"截图位图分配失败（{width}×{height}）。");
+                }
+                Drawing.Bitmap bitmap;
+                var previousObject = nint.Zero;
+                try
+                {
+                    previousObject = NativeMethods.SelectObject(memoryDc, compatibleBitmap);
+                    // SelectObject signals failure with NULL (or HGDI_ERROR for
+                    // region objects); blitting into an unselected bitmap would
+                    // read stale memory, and re-selecting the bogus return
+                    // value would poison the DC — bail out to the cleanup path.
+                    if (previousObject == nint.Zero || previousObject == new nint(-1))
+                    {
+                        previousObject = nint.Zero;
+                        throw new InvalidOperationException("截图位图无法选入设备上下文。");
+                    }
+                    if (!NativeMethods.BitBlt(
+                            memoryDc, 0, 0, width, height,
+                            screenDc, x, y,
+                            RasterOperationSourceCopy | RasterOperationCaptureBlt))
+                    {
+                        throw new InvalidOperationException(
+                            $"屏幕捕获失败（GDI 错误 {Marshal.GetLastWin32Error()}）。");
+                    }
+                    // FromHbitmap copies the pixels into a GDI+ owned bitmap so
+                    // the GDI side can be released immediately.
+                    bitmap = Drawing.Image.FromHbitmap(compatibleBitmap);
+                }
+                finally
+                {
+                    if (previousObject != nint.Zero)
+                    {
+                        NativeMethods.SelectObject(memoryDc, previousObject);
+                    }
+                    NativeMethods.DeleteObject(compatibleBitmap);
+                }
+                return bitmap;
+            }
+            finally
+            {
+                NativeMethods.DeleteDC(memoryDc);
+            }
+        }
+        finally
+        {
+            NativeMethods.ReleaseDC(nint.Zero, screenDc);
+        }
+    }
+
     private static BitmapSource CreateFrozenPreview(Drawing.Bitmap bitmap, int width, int height)
     {
         var data = bitmap.LockBits(
@@ -219,4 +289,43 @@ internal static class ScreenCaptureService
         double.IsFinite(value)
             ? (int)Math.Clamp(value, int.MinValue, int.MaxValue)
             : throw new InvalidOperationException("截图区域坐标无效。");
+
+    private static partial class NativeMethods
+    {
+        [LibraryImport("user32.dll", SetLastError = true)]
+        internal static partial nint GetDC(nint hWnd);
+
+        [LibraryImport("user32.dll")]
+        internal static partial int ReleaseDC(nint hWnd, nint hDC);
+
+        [LibraryImport("gdi32.dll", SetLastError = true)]
+        internal static partial nint CreateCompatibleDC(nint hdc);
+
+        [LibraryImport("gdi32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static partial bool DeleteDC(nint hdc);
+
+        [LibraryImport("gdi32.dll", SetLastError = true)]
+        internal static partial nint CreateCompatibleBitmap(nint hdc, int width, int height);
+
+        [LibraryImport("gdi32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static partial bool DeleteObject(nint hObject);
+
+        [LibraryImport("gdi32.dll", SetLastError = true)]
+        internal static partial nint SelectObject(nint hdc, nint hObject);
+
+        [LibraryImport("gdi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static partial bool BitBlt(
+            nint hdcDestination,
+            int xDestination,
+            int yDestination,
+            int width,
+            int height,
+            nint hdcSource,
+            int xSource,
+            int ySource,
+            int rasterOperation);
+    }
 }

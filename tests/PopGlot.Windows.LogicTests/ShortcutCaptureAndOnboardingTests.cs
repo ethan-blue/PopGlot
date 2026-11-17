@@ -37,6 +37,19 @@ internal static class ShortcutCaptureAndOnboardingTests
         (T)(target.GetType().GetField(name, NonPublicInstance)?.GetValue(target)
             ?? throw new InvalidOperationException($"Missing field {name} on {target.GetType().Name}."));
 
+    private static void PumpDispatcher(TimeSpan duration)
+    {
+        var deadline = Environment.TickCount64 + (long)duration.TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
+        {
+            var frame = new System.Windows.Threading.DispatcherFrame();
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Background,
+                new Action(() => frame.Continue = false));
+            System.Windows.Threading.Dispatcher.PushFrame(frame);
+        }
+    }
+
     public static void ValidateAndClampRegionMultiMonitorAndBounds()
     {
         // Multi-monitor virtual desktop spanning left (-1920) and above (-120) primary monitor.
@@ -136,6 +149,143 @@ internal static class ShortcutCaptureAndOnboardingTests
             disposed = true;
         }
         True(disposed, "closing CaptureOverlayWindow must dispose FrozenDesktopSnapshot");
+    }
+
+    /// <summary>
+    /// Real-desktop capture regression. 0.1.39/0.1.40 shipped
+    /// <c>Graphics.CopyFromScreen(..., SourceCopy | CaptureBlt)</c>: .NET
+    /// Core / .NET 5+ validates the <c>CopyPixelOperation</c> argument and
+    /// rejects the combination (the enum is not [Flags]), so
+    /// <see cref="ScreenCaptureService.TryCaptureVirtualDesktop"/> always
+    /// returned null and <c>CapturePng</c> always threw — every screenshot
+    /// failed. Both paths now blit through raw GDI with SRCCOPY|CAPTUREBLT.
+    /// The test never captures uncontrolled desktop content: a borderless
+    /// topmost window with a deterministic black-on-white pattern first
+    /// covers the whole virtual desktop (coverage re-verified from the HWND
+    /// rect before capturing), and the assertions then read back those
+    /// known pixels — geometry and pixels, not just a PNG signature. The
+    /// snapshot is disposed by <c>using</c> even when an assertion throws.
+    /// </summary>
+    public static void RealDesktopCaptureRegression()
+    {
+        var bounds = ScreenGeometry.VirtualScreenPixels();
+        var window = new Window
+        {
+            WindowStyle = WindowStyle.None,
+            ResizeMode = ResizeMode.NoResize,
+            ShowInTaskbar = false,
+            Topmost = true,
+            ShowActivated = false,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = bounds.X,
+            Top = bounds.Y,
+            Width = bounds.Width,
+            Height = bounds.Height,
+            Background = System.Windows.Media.Brushes.White,
+        };
+        // bounds are PHYSICAL pixels; at non-100% DPI the WPF DIP assignment
+        // above would size the window wrong, so the HWND is re-stated in
+        // physical pixels once the handle exists — the same discipline the
+        // capture overlay uses.
+        window.SourceInitialized += (_, _) => ScreenGeometry.ResizeToPixels(window, bounds);
+        // Left quarter filled black at a known fractional position; the marker
+        // is (re)placed in the window's LOCAL DIP space so the fractions hold
+        // at every DPI. The exact sample points are recomputed below from the
+        // same fractions of the captured bitmap.
+        const double MarkerLeftFraction = 0.02, MarkerTopFraction = 0.05;
+        const double MarkerWidthFraction = 0.20, MarkerHeightFraction = 0.12;
+        var canvas = new System.Windows.Controls.Canvas();
+        var marker = new System.Windows.Shapes.Rectangle
+        {
+            Fill = System.Windows.Media.Brushes.Black,
+        };
+        canvas.Children.Add(marker);
+        canvas.SizeChanged += (_, _) =>
+        {
+            marker.Width = canvas.ActualWidth * MarkerWidthFraction;
+            marker.Height = canvas.ActualHeight * MarkerHeightFraction;
+            System.Windows.Controls.Canvas.SetLeft(marker, canvas.ActualWidth * MarkerLeftFraction);
+            System.Windows.Controls.Canvas.SetTop(marker, canvas.ActualHeight * MarkerTopFraction);
+        };
+        window.Content = canvas;
+        try
+        {
+            window.Show();
+            PumpDispatcher(TimeSpan.FromMilliseconds(600));
+
+            // Coverage confirmation before any capture: the window's rendered
+            // corners must span the virtual desktop (rounding allows 2 px).
+            window.UpdateLayout();
+            var placedTopLeft = window.PointToScreen(new Point(0, 0));
+            var placedBottomRight = window.PointToScreen(new Point(window.ActualWidth, window.ActualHeight));
+            True(Math.Abs(placedTopLeft.X - bounds.X) <= 2 && Math.Abs(placedTopLeft.Y - bounds.Y) <= 2 &&
+                Math.Abs(placedBottomRight.X - (bounds.X + bounds.Width)) <= 2 &&
+                Math.Abs(placedBottomRight.Y - (bounds.Y + bounds.Height)) <= 2,
+                $"controlled window must cover the virtual desktop {bounds}, got " +
+                $"{placedTopLeft}..{placedBottomRight}");
+
+            // `using` before any assertion: a failed assert still disposes.
+            using var snapshot = ScreenCaptureService.TryCaptureVirtualDesktop();
+            True(snapshot is not null,
+                "TryCaptureVirtualDesktop must capture the live virtual desktop through the BitBlt SRCCOPY|CAPTUREBLT path");
+            if (snapshot is null)
+            {
+                return;
+            }
+            Equal((int)bounds.Width, (int)snapshot.VirtualBounds.Width, "snapshot width must equal the virtual screen");
+            Equal((int)bounds.Height, (int)snapshot.VirtualBounds.Height, "snapshot height must equal the virtual screen");
+            True(snapshot.PreviewSource is not null, "frozen snapshot must expose the frozen preview for the overlay");
+
+            // Pixel readback of the known pattern: the marker must be black
+            // and the far background white, at the same fractional offsets.
+            var markerPixel = snapshot.Bitmap.GetPixel(
+                (int)(snapshot.VirtualBounds.Width * (MarkerLeftFraction + MarkerWidthFraction / 2)),
+                (int)(snapshot.VirtualBounds.Height * (MarkerTopFraction + MarkerHeightFraction / 2)));
+            True((markerPixel.R + markerPixel.G + markerPixel.B) / 3 < 60,
+                $"frozen snapshot must contain the controlled black marker, got {markerPixel}");
+            var backgroundPixel = snapshot.Bitmap.GetPixel(
+                (int)(snapshot.VirtualBounds.Width * 0.85),
+                (int)(snapshot.VirtualBounds.Height * 0.85));
+            True((backgroundPixel.R + backgroundPixel.G + backgroundPixel.B) / 3 > 200,
+                $"frozen snapshot must contain the controlled white background, got {backgroundPixel}");
+
+            // Crop pipeline (marquee release path): crop the marker itself and
+            // decode the pixels, not just the PNG signature.
+            var cropRect = new Rect(
+                bounds.X + (bounds.Width * MarkerLeftFraction),
+                bounds.Y + (bounds.Height * MarkerTopFraction),
+                bounds.Width * MarkerWidthFraction,
+                bounds.Height * MarkerHeightFraction);
+            var png = ScreenCaptureService.CropPng(snapshot, cropRect);
+            using (var stream = new MemoryStream(png))
+            {
+                var frame = BitmapDecoder.Create(
+                    stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0];
+                var cropPixel = new byte[4];
+                frame.CopyPixels(
+                    new Int32Rect(frame.PixelWidth / 2, frame.PixelHeight / 2, 1, 1), cropPixel, 4, 0);
+                True(cropPixel[0] < 60 && cropPixel[1] < 60 && cropPixel[2] < 60,
+                    $"cropped PNG must decode to the black marker, got B={cropPixel[0]} G={cropPixel[1]} R={cropPixel[2]}");
+            }
+
+            // The no-frozen-snapshot fallback (live region capture) must read
+            // the same controlled marker through the same GDI path.
+            var live = ScreenCaptureService.CapturePng(cropRect);
+            using (var stream = new MemoryStream(live))
+            {
+                var frame = BitmapDecoder.Create(
+                    stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0];
+                var livePixel = new byte[4];
+                frame.CopyPixels(
+                    new Int32Rect(frame.PixelWidth / 2, frame.PixelHeight / 2, 1, 1), livePixel, 4, 0);
+                True(livePixel[0] < 60 && livePixel[1] < 60 && livePixel[2] < 60,
+                    $"live CapturePng must decode to the black marker, got B={livePixel[0]} G={livePixel[1]} R={livePixel[2]}");
+            }
+        }
+        finally
+        {
+            window.Close();
+        }
     }
 
     public static void HotkeyRecorderLiveModifiersAndUnbind()

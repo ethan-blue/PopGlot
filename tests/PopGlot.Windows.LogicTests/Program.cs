@@ -543,6 +543,7 @@ internal static partial class Program
 
         Run("screen capture validate and clamp handles multi-monitor negative origin", ShortcutCaptureAndOnboardingTests.ValidateAndClampRegionMultiMonitorAndBounds);
         await RunStaAsync("frozen snapshot crops PNG bytes and disposes on overlay close", ShortcutCaptureAndOnboardingTests.FrozenSnapshotCropPngAndOverlayDisposalAsync);
+        RunSta("real desktop capture regression covers BitBlt SRCCOPY|CAPTUREBLT paths", ShortcutCaptureAndOnboardingTests.RealDesktopCaptureRegression);
         RunStaBatch(
             ("hotkey recorder formats live modifiers and unbinds cleanly", ShortcutCaptureAndOnboardingTests.HotkeyRecorderLiveModifiersAndUnbind),
             ("hotkey diagnostics detects conflicts and applies one-click fix", ShortcutCaptureAndOnboardingTests.HotkeyServiceDiagnoseDraftAndOneClickFix),
