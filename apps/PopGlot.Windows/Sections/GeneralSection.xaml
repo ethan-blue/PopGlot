@@ -194,6 +194,90 @@
             </StackPanel>
         </Border>
 
+        <!-- ==================== 查词窗口 ==================== -->
+        <TextBlock Text="查词窗口" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
+        <Border Padding="0" Margin="0,0,0,16">
+            <StackPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="边输边译" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="输入或修改查询词停顿后自动翻译，不写入历史记录" Style="{StaticResource RowHint}" />
+                    </StackPanel>
+                    <ToggleButton x:Name="LiveTranslateToggle"
+                                  AutomationProperties.Name="边输边译" Grid.Column="1"
+                                  VerticalAlignment="Center"
+                                  Style="{StaticResource ToggleSwitch}"
+                                  Checked="LiveTranslateSettings_Changed"
+                                  Unchecked="LiveTranslateSettings_Changed" />
+                </Grid>
+
+                <Border Style="{StaticResource SettingsDivider}" Margin="0,8" />
+
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="停顿延迟" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="停止输入后等待多久开始自动翻译" Style="{StaticResource RowHint}" />
+                    </StackPanel>
+                    <ComboBox x:Name="LiveTranslateDelayCombo" Grid.Column="1" MinWidth="150"
+                              VerticalAlignment="Center"
+                              AutomationProperties.Name="停顿延迟"
+                              SelectionChanged="LiveTranslateSettings_Changed">
+                        <ComboBoxItem Tag="300">300 ms</ComboBoxItem>
+                        <ComboBoxItem Tag="500">500 ms (推荐)</ComboBoxItem>
+                        <ComboBoxItem Tag="800">800 ms</ComboBoxItem>
+                    </ComboBox>
+                </Grid>
+
+                <Border Style="{StaticResource SettingsDivider}" Margin="0,8" />
+
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="自动翻译范围" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="默认仅对内置免费线路启用边输边译，避免消耗模型额度" Style="{StaticResource RowHint}" />
+                    </StackPanel>
+                    <ComboBox x:Name="LiveTranslateScopeCombo" Grid.Column="1" MinWidth="180"
+                              VerticalAlignment="Center"
+                              AutomationProperties.Name="自动翻译范围"
+                              SelectionChanged="LiveTranslateSettings_Changed">
+                        <ComboBoxItem Tag="FreeEngineOnly">仅内置免费线路 (默认)</ComboBoxItem>
+                        <ComboBoxItem Tag="AllEngines">所有已选引擎</ComboBoxItem>
+                    </ComboBox>
+                </Grid>
+
+                <Border Style="{StaticResource SettingsDivider}" Margin="0,8" />
+
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="查词窗口形态" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="打开极速查词时的默认窗口大小与布局" Style="{StaticResource RowHint}" />
+                    </StackPanel>
+                    <ComboBox x:Name="QuickSearchModeCombo" Grid.Column="1" MinWidth="150"
+                              VerticalAlignment="Center"
+                              AutomationProperties.Name="查词窗口形态"
+                              SelectionChanged="LiveTranslateSettings_Changed">
+                        <ComboBoxItem Tag="Compact">紧凑小窗</ComboBoxItem>
+                        <ComboBoxItem Tag="Expanded">完整大窗</ComboBoxItem>
+                    </ComboBox>
+                </Grid>
+            </StackPanel>
+        </Border>
+
         <!-- ==================== 翻译规则 ==================== -->
         <TextBlock Text="翻译规则" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
         <Border Padding="0" Margin="0,0,0,16">
@@ -228,6 +312,103 @@
                             AutomationProperties.Name="保留代码与变量名原文"
                             VerticalAlignment="Center"
                             Style="{StaticResource ToggleSwitch}" />
+                </Grid>
+            </StackPanel>
+        </Border>
+
+        <!-- ==================== 网络与代理 ==================== -->
+        <TextBlock Text="网络与代理" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
+        <Border Padding="0" Margin="0,0,0,16">
+            <StackPanel>
+                <Grid x:Name="ProxyModeRowGrid">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="代理模式" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="选择 PopGlot 联网请求如何走网络代理" Style="{StaticResource RowHint}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <RadioButton x:Name="ProxySystemRadio" GroupName="NetworkProxyMode" Tag="System"
+                                     Style="{StaticResource ThemeSwatch}"
+                                     AutomationProperties.Name="跟随系统代理"
+                                     Click="ProxyModeRadio_Click">
+                            <TextBlock Text="跟随系统代理" />
+                        </RadioButton>
+                        <RadioButton x:Name="ProxyDirectRadio" GroupName="NetworkProxyMode" Tag="Direct"
+                                     Style="{StaticResource ThemeSwatch}"
+                                     AutomationProperties.Name="直连"
+                                     Click="ProxyModeRadio_Click">
+                            <TextBlock Text="直连" />
+                        </RadioButton>
+                        <RadioButton x:Name="ProxyCustomRadio" GroupName="NetworkProxyMode" Tag="Custom"
+                                     Style="{StaticResource ThemeSwatch}" Margin="0"
+                                     AutomationProperties.Name="自定义代理"
+                                     Click="ProxyModeRadio_Click">
+                            <TextBlock Text="自定义代理" />
+                        </RadioButton>
+                    </StackPanel>
+                </Grid>
+
+                <StackPanel x:Name="CustomProxyRow" Visibility="Collapsed" Margin="0,10,0,0">
+                    <TextBlock Text="代理地址" Style="{StaticResource FieldLabel}" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="CustomProxyTextBox" Style="{StaticResource FormTextBox}" Height="34"
+                                 FontFamily="{StaticResource MonoFontFamily}"
+                                 local:Ui.Placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:7891"
+                                 AutomationProperties.Name="代理地址"
+                                 TextChanged="CustomProxyTextBox_TextChanged"
+                                 LostFocus="CustomProxyTextBox_LostFocus"
+                                 KeyDown="CustomProxyTextBox_KeyDown" />
+                        <Button x:Name="ApplyCustomProxyButton" Grid.Column="1" Content="应用"
+                                Style="{StaticResource GhostButton}" Height="34" Padding="12,0" Margin="8,0,0,0"
+                                AutomationProperties.Name="应用自定义代理"
+                                Click="ApplyCustomProxy_Click" />
+                    </Grid>
+                    <TextBlock x:Name="ProxyValidationText" Style="{StaticResource Caption}"
+                               Visibility="Collapsed" TextWrapping="Wrap" Margin="0,4,0,0" />
+                </StackPanel>
+
+                <Border Style="{StaticResource SettingsDivider}" Margin="0,8" />
+
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="本地地址始终直连" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="Ollama、LM Studio 等本机与局域网地址不走代理" Style="{StaticResource RowHint}" />
+                    </StackPanel>
+                    <ToggleButton x:Name="ProxyBypassLocalToggle" Grid.Column="1"
+                                  AutomationProperties.Name="本地地址始终直连"
+                                  VerticalAlignment="Center"
+                                  Style="{StaticResource ToggleSwitch}"
+                                  Checked="ProxyBypass_Changed" Unchecked="ProxyBypass_Changed" />
+                </Grid>
+
+                <Border Style="{StaticResource SettingsDivider}" Margin="0,8" />
+
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="国内线路直连加速" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="有道、Bing 国内版、DeepSeek、智谱、硅基流动等国内服务不绕代理，直连更快"
+                                   Style="{StaticResource RowHint}" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <ToggleButton x:Name="ProxyBypassDomesticToggle" Grid.Column="1"
+                                  AutomationProperties.Name="国内线路直连加速"
+                                  VerticalAlignment="Center"
+                                  Style="{StaticResource ToggleSwitch}"
+                                  Checked="ProxyBypass_Changed" Unchecked="ProxyBypass_Changed" />
                 </Grid>
             </StackPanel>
         </Border>

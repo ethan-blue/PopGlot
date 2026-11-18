@@ -92,6 +92,10 @@ public partial class ServicesSection
         ChooseAnotherProviderButton.Visibility = adding ? Visibility.Visible : Visibility.Collapsed;
         HideDraftGuard();
         EditorActionBar.Visibility = adding ? Visibility.Collapsed : Visibility.Visible;
+        if (TestAndSaveButton is not null)
+        {
+            TestAndSaveButton.Visibility = Visibility.Collapsed;
+        }
         UpdateSaveButtonLabel();
         EditorScroll.ScrollToTop();
         UpdateCliButtons();

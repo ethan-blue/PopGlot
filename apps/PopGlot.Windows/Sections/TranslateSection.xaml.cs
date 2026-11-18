@@ -1582,10 +1582,12 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     {
         var hasUserEngine = HasConfiguredUserEngine();
         var hasFallbackRoute = false;
+        var activeFreeProvider = FreeEngineProvider.Google;
         try
         {
             var settings = ShellSettingsStore.Load();
             hasFallbackRoute = settings.FreeEngineConsent != FreeEngineConsent.Denied;
+            activeFreeProvider = settings.FreeEngineProvider;
             if (ShortcutEntriesHint is not null)
             {
                 var sel = settings.SelectionHotkey?.DisplayName ?? "Ctrl+Alt+W";
@@ -1610,7 +1612,10 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             // Two distinct empty states: fallback allowed vs no route at all.
             if (GuideTitle is not null)
             {
-                GuideTitle.Text = hasFallbackRoute ? $"当前使用{EngineWording.FreePublicTranslationName}" : "尚未配置翻译引擎";
+                var activeFreeName = EngineWording.NameFor(activeFreeProvider);
+                GuideTitle.Text = hasFallbackRoute
+                    ? $"当前使用{EngineWording.FreePublicTranslationName}（{activeFreeName}）"
+                    : "尚未配置翻译引擎";
             }
             if (GuideDescription is not null)
             {
@@ -1679,17 +1684,19 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
     /// destinations named. Saving here is the same action the privacy page
     /// performs; nothing is sent until the user actually translates.
     /// </summary>
+    internal static string FormatFreeEngineEnabledStatus(FreeEngineProvider provider)
+    {
+        var host = EngineWording.HostFor(provider);
+        return $"已允许{EngineWording.FreePublicTranslationName}；当前是{EngineWording.NameFor(provider)}（{host}）。";
+    }
+
     private async void EnableFreeEngine_Click(object sender, RoutedEventArgs e)
     {
         try
         {
             var updated = ShellSettingsStore.Update(current => current with { FreeEngineConsent = FreeEngineConsent.Allowed });
             UpdateServiceAvailability();
-            var provider = updated.FreeEngineProvider;
-            var host = provider == FreeEngineProvider.MyMemory
-                ? "api.mymemory.translated.net"
-                : "translate.googleapis.com";
-            TranslateStatus.Text = $"已允许{EngineWording.FreePublicTranslationName}；当前是{EngineWording.NameFor(provider)}（{host}）。";
+            TranslateStatus.Text = FormatFreeEngineEnabledStatus(updated.FreeEngineProvider);
 
             // R02: 授权成功后可继续用户刚才发起的同一请求；取消或保存失败时保留原文。
             var pending = TranslateInput.Text.Trim();
@@ -1701,6 +1708,28 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         catch (Exception exception)
         {
             TranslateStatus.Text = $"保存授权失败：{exception.Message}";
+        }
+    }
+
+    private void OpenExternalDocLink_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string url } ||
+            !Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+            uri.Scheme != Uri.UriSchemeHttps)
+        {
+            return;
+        }
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = uri.AbsoluteUri,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception)
+        {
+            // Ignore browser launch failures cleanly.
         }
     }
 

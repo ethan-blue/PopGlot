@@ -5,13 +5,33 @@
     <UserControl.Resources>
         <Style x:Key="ProviderPresetButton" TargetType="Button" BasedOn="{StaticResource GhostButton}">
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-            <Setter Property="Padding" Value="10,6" />
-            <Setter Property="MinHeight" Value="48" />
-            <Setter Property="Margin" Value="0,0,0,2" />
+            <Setter Property="Padding" Value="10,8" />
+            <Setter Property="MinHeight" Value="50" />
+            <Setter Property="Margin" Value="0,0,0,6" />
             <Setter Property="FontWeight" Value="Normal" />
-            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Background" Value="{DynamicResource InputBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
-            <Setter Property="BorderThickness" Value="0,0,0,1" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+        <Style x:Key="PresetBadgeBorder" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Padding" Value="5,1" />
+            <Setter Property="Margin" Value="6,0,0,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="PresetBadgeText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="10.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        </Style>
+        <Style x:Key="CapabilityPillBorder" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource SurfaceMutedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Padding" Value="5,1" />
+            <Setter Property="Margin" Value="0,0,4,0" />
         </Style>
         <Style x:Key="ServiceListItem" TargetType="ListBoxItem">
             <Setter Property="Padding" Value="0" />
@@ -139,17 +159,80 @@
         </Grid.RowDefinitions>
 
         <Grid Grid.Row="0">
-            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-            <WrapPanel Grid.Row="0" HorizontalAlignment="Left" Margin="0,0,0,10">
-                <Button x:Name="ChooseAnotherProviderButton" Content="← 选择来源" Visibility="Collapsed"
-                        Style="{StaticResource GhostButton}" Padding="10,5" Margin="0,0,8,0"
-                        Click="ChooseAnotherProvider_Click" />
-                <Button x:Name="BackToListHeaderButton" Content="← 返回引擎列表" Visibility="Collapsed"
-                        Style="{StaticResource GhostButton}" Padding="10,5" Click="BackToServices_Click" />
-                <Button x:Name="AddEngineHeaderButton" Content="添加引擎"
-                        Style="{StaticResource PrimaryButton}" Padding="16,8" Click="AddProfile_Click" />
-            </WrapPanel>
-            <Border x:Name="DraftGuardBar" Grid.Row="1" Visibility="Collapsed" Margin="0,0,0,10" Padding="12,10" CornerRadius="{DynamicResource CardRadius}"
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <Grid Grid.Row="0" Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <WrapPanel Grid.Column="0" HorizontalAlignment="Left" VerticalAlignment="Center">
+                    <Button x:Name="ChooseAnotherProviderButton" Content="← 选择来源" Visibility="Collapsed"
+                            Style="{StaticResource GhostButton}" Padding="10,5" Margin="0,0,8,0"
+                            Click="ChooseAnotherProvider_Click" />
+                    <Button x:Name="BackToListHeaderButton" Content="← 返回引擎列表" Visibility="Collapsed"
+                            Style="{StaticResource GhostButton}" Padding="10,5" Click="BackToServices_Click" />
+                    <Button x:Name="AddEngineHeaderButton" Content="添加引擎"
+                            Style="{StaticResource PrimaryButton}" Padding="16,8" Click="AddProfile_Click" />
+                </WrapPanel>
+                <Button x:Name="ProxyStatusButton" Grid.Column="1" VerticalAlignment="Center"
+                        Style="{StaticResource GhostButton}" Padding="10,5"
+                        AutomationProperties.Name="网络与代理状态"
+                        ToolTip="查看或快速切换网络代理模式"
+                        Click="ProxyStatusButton_Click">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Ellipse x:Name="ProxyStatusDot" Width="7" Height="7" VerticalAlignment="Center"
+                                 Fill="{DynamicResource SuccessBrush}" Margin="0,0,6,0" />
+                        <TextBlock x:Name="ProxyStatusLabel" Text="代理：跟随系统" FontSize="12" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+            </Grid>
+
+            <Border x:Name="QuickProxyPanel" Grid.Row="1" Visibility="Collapsed" Margin="0,0,0,10" Padding="12,10"
+                    CornerRadius="{DynamicResource CardRadius}" Background="{DynamicResource SurfaceMutedBrush}"
+                    BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
+                <StackPanel>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="快捷代理设置" Style="{StaticResource EditorSectionTitle}" VerticalAlignment="Center" />
+                        <Button x:Name="OpenGeneralProxySettingsButton" Grid.Column="1" Content="完整网络设置 →"
+                                Style="{StaticResource GhostButton}" Padding="8,3" FontSize="11.5"
+                                AutomationProperties.Name="打开通用网络设置"
+                                Click="OpenGeneralProxySettings_Click" />
+                    </Grid>
+                    <WrapPanel Margin="0,0,0,6">
+                        <RadioButton x:Name="QuickProxySystemRadio" GroupName="QuickProxyMode" Tag="System"
+                                     Content="跟随系统代理" Margin="0,0,12,4" Click="QuickProxyMode_Click" />
+                        <RadioButton x:Name="QuickProxyDirectRadio" GroupName="QuickProxyMode" Tag="Direct"
+                                     Content="直连" Margin="0,0,12,4" Click="QuickProxyMode_Click" />
+                        <RadioButton x:Name="QuickProxyCustomRadio" GroupName="QuickProxyMode" Tag="Custom"
+                                     Content="自定义代理" Margin="0,0,0,4" Click="QuickProxyMode_Click" />
+                    </WrapPanel>
+                    <Grid x:Name="QuickProxyCustomRow" Visibility="Collapsed" Margin="0,2,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="QuickProxyUrlTextBox" Style="{StaticResource FormTextBox}" Height="32"
+                                 FontFamily="{StaticResource MonoFontFamily}"
+                                 local:Ui.Placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:7891"
+                                 AutomationProperties.Name="快捷代理地址" />
+                        <Button x:Name="QuickProxyApplyButton" Grid.Column="1" Content="应用"
+                                Style="{StaticResource GhostButton}" Height="32" Padding="12,0" Margin="8,0,0,0"
+                                Click="QuickProxyApply_Click" />
+                    </Grid>
+                    <TextBlock x:Name="QuickProxyValidationText" Style="{StaticResource Caption}"
+                               Visibility="Collapsed" Margin="0,4,0,0" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
+            <Border x:Name="DraftGuardBar" Grid.Row="2" Visibility="Collapsed" Margin="0,0,0,10" Padding="12,10" CornerRadius="{DynamicResource CardRadius}"
                     Background="{DynamicResource WarningSoftBrush}" BorderBrush="{DynamicResource WarningBrush}" BorderThickness="1.5">
                 <StackPanel>
                     <TextBlock x:Name="DraftGuardText" FontWeight="SemiBold" TextWrapping="Wrap"
@@ -164,85 +247,267 @@
         </Grid>
 
 
-        <!-- 路由唯一入口是主窗口底部的快速切换器；设置页不再提供默认路由控件。 -->
+        <!-- 引擎与免费路线中心：免费线路、本机/环境变量一键发现、已配置引擎 -->
         <Grid x:Name="DetailGrid" Grid.Row="1" SizeChanged="DetailGrid_SizeChanged">
             <!-- Service overview. Editing is explicit and replaces this list. -->
             <Border x:Name="EditorEmpty" Padding="0" Background="Transparent" BorderThickness="0">
-                <Grid>
-                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-                    <StackPanel Margin="2,0,0,8">
-                        <TextBlock Text="已配置引擎" Style="{StaticResource SectionTitle}" />
-                    </StackPanel>
-                    <Grid Grid.Row="1">
-                        <StackPanel x:Name="ProfilesEmptyText" Visibility="Collapsed" Panel.ZIndex="1"
-                                    HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,8,0,0">
-                            <TextBlock Text="尚未添加引擎。点击右上角「添加引擎」开始。" FontSize="13"
-                                       TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" />
-                        </StackPanel>
-                        <ListBox x:Name="ProfilesListBox" ItemContainerStyle="{StaticResource ServiceListItem}"
-                                 ScrollViewer.VerticalScrollBarVisibility="Auto">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate>
-                                    <Border Padding="12,9" CornerRadius="{DynamicResource CardRadius}" Background="{DynamicResource InputBrush}"
-                                            BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="36"/><ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="132"/><ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <Border Width="30" Height="30" CornerRadius="10" Background="{DynamicResource AccentSoftBrush}">
-                                                <Path Data="{StaticResource IconProvider}" Width="16" Height="16" Stretch="Uniform"
-                                                      Fill="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,6,8">
+                    <StackPanel>
+                        <!-- 1. Built-in Free Routes Panel -->
+                        <Border x:Name="FreeRoutesPanel" Style="{StaticResource EditorSectionCard}" Margin="0,0,0,12">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <WrapPanel VerticalAlignment="Center">
+                                            <TextBlock Text="内置免费线路" Style="{StaticResource EditorSectionTitle}" VerticalAlignment="Center" />
+                                            <Border x:Name="FreeRoutesConsentBadge" Background="{DynamicResource SurfaceMutedBrush}"
+                                                    CornerRadius="4" Padding="6,2" Margin="8,0,0,0" VerticalAlignment="Center">
+                                                <TextBlock x:Name="FreeRoutesConsentText" Text="已启用" FontSize="11"
+                                                           Foreground="{DynamicResource TextSecondaryBrush}" />
                                             </Border>
-                                            <StackPanel Grid.Column="1" Margin="9,0,10,0" VerticalAlignment="Center">
+                                            <Button x:Name="EnableFreeRoutesInlineButton" Content="开启免费线路"
+                                                    Visibility="Collapsed" Style="{StaticResource GhostButton}"
+                                                    Padding="8,2" Margin="8,0,0,0" FontSize="11.5"
+                                                    Click="EnableFreeRoutesInline_Click" />
+                                        </WrapPanel>
+                                        <TextBlock Text="免 API Key 直接可用；点击右侧按钮可切换当前线路或手动测速"
+                                                   Style="{StaticResource Caption}" Margin="0,2,0,0" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <Button x:Name="TestAllFreeRoutesButton" Grid.Column="1" Content="一键测速"
+                                            Style="{StaticResource GhostButton}" Padding="10,5" VerticalAlignment="Center"
+                                            AutomationProperties.Name="一键测速"
+                                            ToolTip="向内置免费线路发送测试词以测量延迟"
+                                            Click="TestAllFreeRoutes_Click" />
+                                </Grid>
+
+                                <ItemsControl x:Name="FreeRoutesList">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Margin="0,0,0,6" Padding="10,7" CornerRadius="8"
+                                                    Background="{DynamicResource InputBrush}"
+                                                    BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Grid.Column="0" Margin="0,0,8,0" VerticalAlignment="Center">
+                                                        <WrapPanel VerticalAlignment="Center">
+                                                            <Ellipse Width="7" Height="7" Fill="{Binding StateBrush}"
+                                                                     VerticalAlignment="Center" Margin="0,0,6,0" />
+                                                            <TextBlock Text="{Binding Name}" FontSize="12.5" FontWeight="SemiBold"
+                                                                       VerticalAlignment="Center" />
+                                                            <ItemsControl ItemsSource="{Binding Tags}" Margin="6,0,0,0" VerticalAlignment="Center">
+                                                                <ItemsControl.ItemsPanel>
+                                                                    <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                                                                </ItemsControl.ItemsPanel>
+                                                                <ItemsControl.ItemTemplate>
+                                                                    <DataTemplate>
+                                                                        <Border Style="{StaticResource CapabilityPillBorder}">
+                                                                            <TextBlock Text="{Binding}" FontSize="10.5"
+                                                                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                                        </Border>
+                                                                    </DataTemplate>
+                                                                </ItemsControl.ItemTemplate>
+                                                            </ItemsControl>
+                                                        </WrapPanel>
+                                                        <TextBlock Text="{Binding Description}" Style="{StaticResource Caption}"
+                                                                   Margin="13,2,0,0" TextTrimming="CharacterEllipsis" />
+                                                    </StackPanel>
+                                                    <TextBlock Grid.Column="1" Text="{Binding LatencyText}" FontSize="11.5"
+                                                               Foreground="{Binding LatencyBrush}" VerticalAlignment="Center"
+                                                               Margin="0,0,10,0" MinWidth="46" TextAlignment="Right" />
+                                                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <Button Content="测速" Style="{StaticResource GhostButton}"
+                                                                Padding="8,3" FontSize="11.5" Margin="0,0,6,0"
+                                                                Tag="{Binding Provider}"
+                                                                AutomationProperties.Name="{Binding ProbeButtonName}"
+                                                                Click="ProbeFreeRoute_Click" />
+                                                        <Border Visibility="{Binding ActiveBadgeVisibility}"
+                                                                Background="{DynamicResource SuccessSoftBrush}"
+                                                                CornerRadius="4" Padding="8,3" VerticalAlignment="Center">
+                                                            <TextBlock Text="当前线路" FontSize="11.5" FontWeight="SemiBold"
+                                                                       Foreground="{DynamicResource SuccessBrush}" />
+                                                        </Border>
+                                                        <Button Content="设为当前" Style="{StaticResource GhostButton}"
+                                                                Visibility="{Binding SelectVisibility}"
+                                                                Padding="8,3" FontSize="11.5"
+                                                                Tag="{Binding Provider}"
+                                                                AutomationProperties.Name="{Binding SelectButtonName}"
+                                                                Click="SelectFreeRoute_Click" />
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <Border x:Name="GoogleProxyHintBanner" Visibility="Collapsed" Margin="0,2,0,0" Padding="10,7"
+                                        CornerRadius="6" Background="{DynamicResource WarningSoftBrush}"
+                                        BorderBrush="{DynamicResource WarningBrush}" BorderThickness="1">
+                                    <WrapPanel VerticalAlignment="Center">
+                                        <TextBlock Text="无法直连？可切换 Bing / 有道，或检查代理设置" FontSize="12"
+                                                   Foreground="{DynamicResource WarningBrush}" VerticalAlignment="Center"
+                                                   Margin="0,0,8,2" />
+                                        <Button Content="切到 Bing" Style="{StaticResource GhostButton}" Padding="8,2"
+                                                FontSize="11.5" Margin="0,0,6,2" Click="QuickSwitchBing_Click" />
+                                        <Button Content="切到有道" Style="{StaticResource GhostButton}" Padding="8,2"
+                                                FontSize="11.5" Margin="0,0,6,2" Click="QuickSwitchYoudao_Click" />
+                                        <Button Content="检查代理" Style="{StaticResource GhostButton}" Padding="8,2"
+                                                FontSize="11.5" Margin="0,0,0,2" Click="OpenQuickProxyFromBanner_Click" />
+                                    </WrapPanel>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 2. One-Click Auto-Discovery & Free Model Addition -->
+                        <Border x:Name="DiscoveryPanel" Style="{StaticResource EditorSectionCard}" Margin="0,0,0,12">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center" Margin="0,0,10,0">
+                                        <TextBlock Text="自动发现与免费模型" Style="{StaticResource EditorSectionTitle}" />
+                                        <TextBlock Text="检测本机 Ollama / LM Studio 服务与环境变量密钥，确认后一键添加"
+                                                   Style="{StaticResource Caption}" Margin="0,2,0,0" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <Button x:Name="ScanLocalAndEnvButton" Grid.Column="1" Content="扫描本机与环境"
+                                            Style="{StaticResource GhostButton}" Padding="10,5" VerticalAlignment="Center"
+                                            AutomationProperties.Name="扫描本机与环境"
+                                            Click="ScanLocalAndEnv_Click" />
+                                </Grid>
+                                <TextBlock x:Name="DiscoveryStatusText" Style="{StaticResource Caption}"
+                                           Visibility="Collapsed" Margin="0,8,0,0" TextWrapping="Wrap" />
+                                <ItemsControl x:Name="DiscoveredSourcesList" Visibility="Collapsed" Margin="0,8,0,0">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Margin="0,0,0,6" Padding="10,7" CornerRadius="8"
+                                                    Background="{DynamicResource InputBrush}"
+                                                    BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
                                                 <Grid>
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="*" />
                                                         <ColumnDefinition Width="Auto" />
                                                     </Grid.ColumnDefinitions>
-                                                    <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
-                                                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
-                                                               ToolTip="{Binding Name}" />
-                                                    <Border Grid.Column="1" Visibility="{Binding IsDefaultBadge}"
-                                                            Background="{DynamicResource SuccessSoftBrush}" CornerRadius="4"
-                                                            Padding="6,1" Margin="8,0,0,0" VerticalAlignment="Center">
-                                                        <TextBlock Text="当前引擎" FontSize="11" FontWeight="SemiBold"
-                                                                   Foreground="{DynamicResource SuccessBrush}" />
-                                                    </Border>
+                                                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,10,0">
+                                                        <WrapPanel VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding DisplayName}" FontSize="12.5" FontWeight="SemiBold" />
+                                                            <Border Style="{StaticResource PresetBadgeBorder}">
+                                                                <TextBlock Text="{Binding KindBadge}" Style="{StaticResource PresetBadgeText}" />
+                                                            </Border>
+                                                        </WrapPanel>
+                                                        <TextBlock Text="{Binding DetailText}" Style="{StaticResource Caption}"
+                                                                   Margin="0,2,0,0" TextWrapping="Wrap" />
+                                                    </StackPanel>
+                                                    <Button Grid.Column="1" Content="一键添加" Style="{StaticResource PrimaryButton}"
+                                                            Padding="10,4" FontSize="11.5" VerticalAlignment="Center"
+                                                            Tag="{Binding}"
+                                                            AutomationProperties.Name="{Binding AddButtonName}"
+                                                            Click="QuickAddDiscoveredSource_Click" />
                                                 </Grid>
-                                                <TextBlock Text="{Binding Summary}" Style="{StaticResource Caption}"
-                                                            Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
-                                            </StackPanel>
-                                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                                                <Ellipse Width="6" Height="6" Fill="{Binding StateBrush}" />
-                                                <TextBlock Text="{Binding StateText}" Margin="7,0,0,0"
-                                                           Foreground="{Binding StateTextBrush}" FontSize="12" />
-                                            </StackPanel>
-                                            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
-                                                <Button Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconCheck}"
-                                                        Visibility="{Binding SetDefaultVisibility}" Tag="{Binding Id}"
-                                                        AutomationProperties.Name="设为当前引擎" ToolTip="设为当前引擎"
-                                                        Click="SetDefaultProfile_Click" />
-                                                <Button Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconTest}"
-                                                        Margin="4,0,0,0" Tag="{Binding Id}"
-                                                        AutomationProperties.Name="测试引擎连接" ToolTip="测试连接"
-                                                        Click="TestProfile_Click" />
-                                                <Button Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconEdit}"
-                                                        Margin="4,0,0,0" Tag="{Binding Id}"
-                                                        AutomationProperties.Name="编辑引擎" ToolTip="编辑"
-                                                        Click="EditProfile_Click" />
-                                                <Button Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconDelete}"
-                                                        Margin="4,0,0,0" Tag="{Binding Id}"
-                                                        AutomationProperties.Name="删除引擎" ToolTip="删除引擎"
-                                                        Click="DeleteProfileRow_Click" Loaded="DeleteProfileRow_Loaded" />
-                                            </StackPanel>
-                                        </Grid>
-                                    </Border>
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                        </ListBox>
-                    </Grid>
-                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 3. Configured Engines -->
+                        <StackPanel Margin="2,0,0,8">
+                            <TextBlock Text="已配置引擎" Style="{StaticResource SectionTitle}" />
+                        </StackPanel>
+                        <Grid>
+                            <StackPanel x:Name="ProfilesEmptyText" Visibility="Collapsed" Panel.ZIndex="1"
+                                        HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,4,0,8">
+                                <TextBlock Text="尚未添加引擎。可点击上方「添加引擎」或使用「扫描本机与环境」快速添加。" FontSize="13"
+                                           TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" />
+                            </StackPanel>
+                            <ListBox x:Name="ProfilesListBox" ItemContainerStyle="{StaticResource ServiceListItem}"
+                                     ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Padding="12,9" CornerRadius="{DynamicResource CardRadius}" Background="{DynamicResource InputBrush}"
+                                                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="36"/><ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Border Width="30" Height="30" CornerRadius="10" Background="{DynamicResource AccentSoftBrush}">
+                                                    <Path Data="{StaticResource IconProvider}" Width="16" Height="16" Stretch="Uniform"
+                                                          Fill="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                </Border>
+                                                <StackPanel Grid.Column="1" Margin="9,0,10,0" VerticalAlignment="Center">
+                                                    <WrapPanel VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
+                                                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                                                   ToolTip="{Binding Name}" />
+                                                        <Border Visibility="{Binding IsDefaultBadge}"
+                                                                Background="{DynamicResource SuccessSoftBrush}" CornerRadius="4"
+                                                                Padding="6,1" Margin="8,0,0,0" VerticalAlignment="Center">
+                                                            <TextBlock Text="当前引擎" FontSize="11" FontWeight="SemiBold"
+                                                                       Foreground="{DynamicResource SuccessBrush}" />
+                                                        </Border>
+                                                        <ItemsControl ItemsSource="{Binding CapabilityBadges}" Margin="6,0,0,0" VerticalAlignment="Center">
+                                                            <ItemsControl.ItemsPanel>
+                                                                <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                                                            </ItemsControl.ItemsPanel>
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate>
+                                                                    <Border Style="{StaticResource CapabilityPillBorder}">
+                                                                        <TextBlock Text="{Binding}" FontSize="10.5"
+                                                                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                                    </Border>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                    </WrapPanel>
+                                                    <TextBlock Text="{Binding Summary}" Style="{StaticResource Caption}"
+                                                                Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,0">
+                                                    <Ellipse Width="6" Height="6" Fill="{Binding StateBrush}" />
+                                                    <TextBlock Text="{Binding StateText}" Margin="7,0,0,0"
+                                                               Foreground="{Binding StateTextBrush}" FontSize="12" />
+                                                    <Border Visibility="{Binding LatencyVisibility}" Margin="6,0,0,0"
+                                                            Background="{DynamicResource SurfaceMutedBrush}" CornerRadius="4" Padding="5,1">
+                                                        <TextBlock Text="{Binding LatencyText}" FontSize="11"
+                                                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                    </Border>
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <Button Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconCheck}"
+                                                            Visibility="{Binding SetDefaultVisibility}" Tag="{Binding Id}"
+                                                            AutomationProperties.Name="设为当前引擎" ToolTip="设为当前引擎"
+                                                            Click="SetDefaultProfile_Click" />
+                                                    <Button Style="{StaticResource GhostButton}" Padding="7,3" FontSize="11.5"
+                                                            Margin="4,0,0,0" Tag="{Binding Id}" Content="测速"
+                                                            AutomationProperties.Name="测试引擎连接" ToolTip="测试连接并测量延迟"
+                                                            Click="TestProfile_Click" />
+                                                    <Button Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconEdit}"
+                                                            Margin="4,0,0,0" Tag="{Binding Id}"
+                                                            AutomationProperties.Name="编辑引擎" ToolTip="编辑"
+                                                            Click="EditProfile_Click" />
+                                                    <Button Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconDelete}"
+                                                            Margin="4,0,0,0" Tag="{Binding Id}"
+                                                            AutomationProperties.Name="删除引擎" ToolTip="删除引擎"
+                                                            Click="DeleteProfileRow_Click" Loaded="DeleteProfileRow_Loaded" />
+                                                </StackPanel>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Grid>
+                    </StackPanel>
+                </ScrollViewer>
             </Border>
 
             <!-- Full-width focused editor. -->
@@ -259,8 +524,6 @@
                         <StackPanel>
                             <StackPanel x:Name="PresetsPanel" Visibility="Collapsed">
                                 <TextBlock Text="选择来源" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
-                                <!-- 0.1.30：目录统一为一张双列网格，去除特化大卡、
-                                     徽标药丸与「接入 →」装饰——所有来源同等呈现。 -->
                                 <Grid x:Name="PresetColumns" Margin="0,0,0,12">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
@@ -272,25 +535,97 @@
                                         <ColumnDefinition x:Name="PresetRightColumn" Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel x:Name="PresetColumnLeft">
-                                        <Button x:Name="ChatGptSourceButton" Style="{StaticResource ProviderPresetButton}" Click="ChatGptSource_Click"
-                                                ToolTip="用浏览器登录 ChatGPT 账号直接使用，不需要额外填写 API Key。">
-                                            <StackPanel><TextBlock Text="ChatGPT" FontWeight="SemiBold"/><TextBlock Text="官方账号直连 · 无需 Key" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel>
-                                        </Button>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="openai" AutomationProperties.Name="OpenAI 预设" Click="Preset_Click"><StackPanel><TextBlock Text="OpenAI" FontWeight="SemiBold"/><TextBlock Text="GPT · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="gemini" AutomationProperties.Name="Google Gemini 预设" Click="Preset_Click"><StackPanel><TextBlock Text="Google Gemini" FontWeight="SemiBold"/><TextBlock Text="Gemini · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="zhipu" AutomationProperties.Name="智谱 GLM 预设" Click="Preset_Click"><StackPanel><TextBlock Text="智谱 GLM" FontWeight="SemiBold"/><TextBlock Text="国内服务 · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="omp" AutomationProperties.Name="oh-my-pi 预设" Click="CliPreset_Click" ToolTip="使用 OMP 管理的账号与模型；检测本机入口后连接。"><StackPanel><TextBlock Text="oh-my-pi" FontWeight="SemiBold"/><TextBlock Text="OMP · 本机工具托管" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="codex" AutomationProperties.Name="Codex CLI 预设" Click="CliPreset_Click" ToolTip="使用 Codex CLI 管理的账号与模型；检测本机入口后连接。"><StackPanel><TextBlock Text="Codex CLI" FontWeight="SemiBold"/><TextBlock Text="Codex · 本机工具托管" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Border Style="{StaticResource EditorSectionCard}">
+                                            <StackPanel>
+                                                <TextBlock Text="免费与本机模型" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,8" />
+                                                <Button Style="{StaticResource ProviderPresetButton}" Tag="ollama" AutomationProperties.Name="Ollama（本地）预设" Click="Preset_Click">
+                                                    <StackPanel>
+                                                        <WrapPanel><TextBlock Text="Ollama 本地免费" FontWeight="SemiBold"/><Border Style="{StaticResource PresetBadgeBorder}"><TextBlock Text="免 Key · 本地" Style="{StaticResource PresetBadgeText}"/></Border></WrapPanel>
+                                                        <TextBlock Text="http://localhost:11434/v1 · 离线运行开源模型" Style="{StaticResource Caption}" Margin="0,3,0,0"/>
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Style="{StaticResource ProviderPresetButton}" Tag="lm-studio" AutomationProperties.Name="LM Studio 预设" Click="Preset_Click">
+                                                    <StackPanel>
+                                                        <WrapPanel><TextBlock Text="LM Studio 本地" FontWeight="SemiBold"/><Border Style="{StaticResource PresetBadgeBorder}"><TextBlock Text="免 Key · 本地" Style="{StaticResource PresetBadgeText}"/></Border></WrapPanel>
+                                                        <TextBlock Text="http://localhost:1234/v1 · 桌面端本地模型服务" Style="{StaticResource Caption}" Margin="0,3,0,0"/>
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Style="{StaticResource ProviderPresetButton}" Tag="siliconflow" AutomationProperties.Name="SiliconFlow 预设" Click="Preset_Click">
+                                                    <StackPanel>
+                                                        <WrapPanel><TextBlock Text="SiliconFlow 硅基流动" FontWeight="SemiBold"/><Border Style="{StaticResource PresetBadgeBorder}"><TextBlock Text="国内直连 · 含免费模型" Style="{StaticResource PresetBadgeText}"/></Border></WrapPanel>
+                                                        <TextBlock Text="部分小参数开源模型免费 · 低延迟" Style="{StaticResource Caption}" Margin="0,3,0,0"/>
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Style="{StaticResource ProviderPresetButton}" Tag="zhipu" AutomationProperties.Name="智谱 GLM 预设" Click="Preset_Click">
+                                                    <StackPanel>
+                                                        <WrapPanel><TextBlock Text="智谱 GLM" FontWeight="SemiBold"/><Border Style="{StaticResource PresetBadgeBorder}"><TextBlock Text="国内直连 · 含 GLM-4-Flash 免费" Style="{StaticResource PresetBadgeText}"/></Border></WrapPanel>
+                                                        <TextBlock Text="glm-4-flash 长期免费调用 · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/>
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Style="{StaticResource ProviderPresetButton}" Tag="groq" AutomationProperties.Name="Groq 预设" Click="Preset_Click">
+                                                    <StackPanel>
+                                                        <WrapPanel><TextBlock Text="Groq" FontWeight="SemiBold"/><Border Style="{StaticResource PresetBadgeBorder}"><TextBlock Text="高速免费额度" Style="{StaticResource PresetBadgeText}"/></Border></WrapPanel>
+                                                        <TextBlock Text="极速推理 · 适合实时查词与短句翻译" Style="{StaticResource Caption}" Margin="0,3,0,0"/>
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Style="{StaticResource ProviderPresetButton}" Tag="openrouter" AutomationProperties.Name="OpenRouter 预设" Click="Preset_Click" Margin="0">
+                                                    <StackPanel>
+                                                        <WrapPanel><TextBlock Text="OpenRouter" FontWeight="SemiBold"/><Border Style="{StaticResource PresetBadgeBorder}"><TextBlock Text="含 :free 模型" Style="{StaticResource PresetBadgeText}"/></Border></WrapPanel>
+                                                        <TextBlock Text="多模型聚合 · 支持 :free 后缀免费模型" Style="{StaticResource Caption}" Margin="0,3,0,0"/>
+                                                    </StackPanel>
+                                                </Button>
+                                            </StackPanel>
+                                        </Border>
                                     </StackPanel>
                                     <StackPanel x:Name="PresetColumnRight" Grid.Column="2">
-                                        <Button x:Name="CustomPresetButton" Style="{StaticResource ProviderPresetButton}" Tag="custom" Click="Preset_Click"
-                                                ToolTip="任何 OpenAI 兼容接口：自建服务、中转或代理。">
-                                            <StackPanel><TextBlock Text="自定义兼容" FontWeight="SemiBold"/><TextBlock Text="OpenAI 兼容 · 自建或中转" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel>
-                                        </Button>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="deepseek" AutomationProperties.Name="DeepSeek 预设" Click="Preset_Click"><StackPanel><TextBlock Text="DeepSeek" FontWeight="SemiBold"/><TextBlock Text="文字翻译 · 官方接口" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="claude" AutomationProperties.Name="Anthropic Claude 预设" Click="Preset_Click"><StackPanel><TextBlock Text="Anthropic Claude" FontWeight="SemiBold"/><TextBlock Text="Messages · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="ollama" AutomationProperties.Name="Ollama（本地）预设" Click="Preset_Click"><StackPanel><TextBlock Text="Ollama（本地）" FontWeight="SemiBold"/><TextBlock Text="本机运行 · 无需 Key" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
-                                        <Button Style="{StaticResource ProviderPresetButton}" Tag="litellm" AutomationProperties.Name="LiteLLM Proxy 预设" Click="Preset_Click"><StackPanel><TextBlock Text="LiteLLM Proxy" FontWeight="SemiBold"/><TextBlock Text="统一代理 · OpenAI 兼容" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel></Button>
+                                        <Border Style="{StaticResource EditorSectionCard}">
+                                            <StackPanel>
+                                                <TextBlock Text="主流云端 API" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,8" />
+                                                <Button Style="{StaticResource ProviderPresetButton}" Tag="deepseek" AutomationProperties.Name="DeepSeek 预设" Click="Preset_Click">
+                                                    <StackPanel>
+                                                        <WrapPanel><TextBlock Text="DeepSeek" FontWeight="SemiBold"/><Border Style="{StaticResource PresetBadgeBorder}"><TextBlock Text="国内直连" Style="{StaticResource PresetBadgeText}"/></Border></WrapPanel>
+                                                        <TextBlock Text="文字翻译 · 官方接口" Style="{StaticResource Caption}" Margin="0,3,0,0"/>
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Style="{StaticResource ProviderPresetButton}" Tag="openai" AutomationProperties.Name="OpenAI 预设" Click="Preset_Click">
+                                                    <StackPanel><TextBlock Text="OpenAI" FontWeight="SemiBold"/><TextBlock Text="GPT · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel>
+                                                </Button>
+                                                <Button Style="{StaticResource ProviderPresetButton}" Tag="gemini" AutomationProperties.Name="Google Gemini 预设" Click="Preset_Click">
+                                                    <StackPanel><TextBlock Text="Google Gemini" FontWeight="SemiBold"/><TextBlock Text="Gemini · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel>
+                                                </Button>
+                                                <Button Style="{StaticResource ProviderPresetButton}" Tag="claude" AutomationProperties.Name="Anthropic Claude 预设" Click="Preset_Click">
+                                                    <StackPanel><TextBlock Text="Anthropic Claude" FontWeight="SemiBold"/><TextBlock Text="Messages · 文字与图片" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel>
+                                                </Button>
+                                                <Button Style="{StaticResource ProviderPresetButton}" Tag="litellm" AutomationProperties.Name="LiteLLM Proxy 预设" Click="Preset_Click">
+                                                    <StackPanel>
+                                                        <WrapPanel><TextBlock Text="LiteLLM Proxy" FontWeight="SemiBold"/><Border Style="{StaticResource PresetBadgeBorder}"><TextBlock Text="本地" Style="{StaticResource PresetBadgeText}"/></Border></WrapPanel>
+                                                        <TextBlock Text="统一代理 · OpenAI 兼容" Style="{StaticResource Caption}" Margin="0,3,0,0"/>
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button x:Name="CustomPresetButton" Style="{StaticResource ProviderPresetButton}" Tag="custom" Click="Preset_Click" Margin="0"
+                                                        ToolTip="任何 OpenAI 兼容接口：自建服务、中转或代理。">
+                                                    <StackPanel><TextBlock Text="自定义兼容" FontWeight="SemiBold"/><TextBlock Text="OpenAI 兼容 · 自建或中转" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel>
+                                                </Button>
+                                            </StackPanel>
+                                        </Border>
+                                        <Border Style="{StaticResource EditorSectionCard}" Margin="0">
+                                            <StackPanel>
+                                                <TextBlock Text="账号与 CLI 工具" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,8" />
+                                                <Button x:Name="ChatGptSourceButton" Style="{StaticResource ProviderPresetButton}" Click="ChatGptSource_Click"
+                                                        ToolTip="用浏览器登录 ChatGPT 账号直接使用，不需要额外填写 API Key。">
+                                                    <StackPanel>
+                                                        <WrapPanel><TextBlock Text="ChatGPT OAuth" FontWeight="SemiBold"/><Border Style="{StaticResource PresetBadgeBorder}"><TextBlock Text="免 Key" Style="{StaticResource PresetBadgeText}"/></Border></WrapPanel>
+                                                        <TextBlock Text="官方账号浏览器授权登录" Style="{StaticResource Caption}" Margin="0,3,0,0"/>
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Style="{StaticResource ProviderPresetButton}" Tag="codex" AutomationProperties.Name="Codex CLI 预设" Click="CliPreset_Click" ToolTip="使用 Codex CLI 管理的账号与模型；检测本机入口后连接。">
+                                                    <StackPanel><TextBlock Text="Codex CLI" FontWeight="SemiBold"/><TextBlock Text="Codex · 本机工具托管" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel>
+                                                </Button>
+                                                <Button Style="{StaticResource ProviderPresetButton}" Tag="omp" AutomationProperties.Name="oh-my-pi 预设" Click="CliPreset_Click" Margin="0" ToolTip="使用 OMP 管理的账号与模型；检测本机入口后连接。">
+                                                    <StackPanel><TextBlock Text="oh-my-pi" FontWeight="SemiBold"/><TextBlock Text="OMP · 本机工具托管" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel>
+                                                </Button>
+                                            </StackPanel>
+                                        </Border>
                                     </StackPanel>
                                 </Grid>
 
@@ -450,6 +785,10 @@
                                             <TextBox x:Name="BaseUrlTextBox" Style="{StaticResource EditorTextField}" FontFamily="{StaticResource MonoFontFamily}"
                                                      local:Ui.Placeholder="例如：http://localhost:4000 或 https://your-proxy.com/v1"/>
                                         </StackPanel>
+                                        <Border x:Name="PresetTierHintBanner" Visibility="Collapsed" CornerRadius="6" Padding="10,7" Margin="0,0,0,10"
+                                                Background="{DynamicResource AccentSoftBrush}" BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1">
+                                            <TextBlock x:Name="PresetTierHintText" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}" TextWrapping="Wrap" />
+                                        </Border>
                                         <TextBlock Text="API Key" Style="{StaticResource FieldLabel}" />
                                         <Grid x:Name="ApiKeyInputGrid">
                                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -459,9 +798,9 @@
                                                 <Button x:Name="ClearKeyButton" Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconDelete}"
                                                         Width="36" Height="36" Click="ClearApiKey_Click"
                                                         AutomationProperties.Name="清除密钥" ToolTip="清除密钥" />
-                                                <Button x:Name="TestConnectionButton" Margin="6,0,0,0" Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconTest}"
-                                                        Width="36" Height="36" Click="TestConnection_Click"
-                                                        AutomationProperties.Name="测试连接" ToolTip="测试连接" />
+                                                <Button x:Name="TestConnectionButton" Margin="6,0,0,0" Style="{StaticResource GhostButton}"
+                                                        Height="36" Padding="12,0" Content="测试连接" Click="TestConnection_Click"
+                                                        AutomationProperties.Name="测试连接" ToolTip="测试连接并测量响应时间" />
                                             </StackPanel>
                                         </Grid>
                                         <TextBlock x:Name="ApiKeyStateText" Style="{StaticResource Caption}" Margin="2,4,0,0" Visibility="Collapsed" />
@@ -487,8 +826,8 @@
                                                 <TextBlock Text="使用模型" Style="{StaticResource EditorSectionTitle}" />
                                             </StackPanel>
                                             <Button x:Name="FetchModelsButton" HorizontalAlignment="Right" VerticalAlignment="Top"
-                                                    Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconRetry}"
-                                                    Width="34" Height="34" Click="FetchModels_Click"
+                                                    Style="{StaticResource GhostButton}" Content="拉取模型"
+                                                    Height="32" Padding="10,0" Click="FetchModels_Click"
                                                     AutomationProperties.Name="刷新模型列表" ToolTip="刷新模型列表" />
                                         </Grid>
 
@@ -630,8 +969,9 @@
                     <Border x:Name="EditorActionBar" Grid.Row="1" Margin="0,10,0,0" Padding="0,10,0,0" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0">
                         <WrapPanel HorizontalAlignment="Right">
                             <Button x:Name="DeleteServiceButton" Content="删除引擎" Margin="0,0,8,6" Style="{StaticResource DangerButton}" Padding="12,6" Click="DeleteProfile_Click"/>
-                                <Button x:Name="CancelEditButton" Content="取消" Style="{StaticResource GhostButton}" Padding="12,6" Click="CancelEdit_Click"/>
-                                <Button x:Name="SaveServiceButton" Content="保存" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}" Padding="16,6" Click="SaveService_Click"/>
+                            <Button x:Name="CancelEditButton" Content="取消" Style="{StaticResource GhostButton}" Padding="12,6" Click="CancelEdit_Click"/>
+                            <Button x:Name="TestAndSaveButton" Content="测试并保存" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Padding="12,6" Click="TestAndSave_Click"/>
+                            <Button x:Name="SaveServiceButton" Content="保存" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}" Padding="16,6" Click="SaveService_Click"/>
                         </WrapPanel>
                     </Border>
                 </Grid>

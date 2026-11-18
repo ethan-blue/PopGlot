@@ -271,7 +271,7 @@ public partial class PrivacySection : System.Windows.Controls.UserControl
         FreeEngineConsentState.Text = _shellSettings.FreeEngineConsent switch
         {
             FreeEngineConsent.Denied => "当前状态：已关闭（不会出网）",
-            _ => "当前状态：已开启（默认）",
+            _ => $"当前状态：已开启 · 当前线路：{EngineWording.NameFor(_shellSettings.FreeEngineProvider)}（可在「设置 → 引擎」切换）",
         };
     }
 

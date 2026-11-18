@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http;
 using System.Text;
 using System.Windows;
@@ -22,7 +23,39 @@ internal sealed record ProfilesRow(
     Brush StateBrush,
     Brush StateTextBrush,
     System.Windows.Visibility IsDefaultBadge,
-    System.Windows.Visibility SetDefaultVisibility);
+    System.Windows.Visibility SetDefaultVisibility,
+    IReadOnlyList<string>? CapabilityBadges = null,
+    string? LatencyText = null,
+    System.Windows.Visibility LatencyVisibility = System.Windows.Visibility.Collapsed);
+
+internal sealed record FreeRouteRow(
+    FreeEngineProvider Provider,
+    string Name,
+    string Description,
+    IReadOnlyList<string> Tags,
+    string LatencyText,
+    Brush StateBrush,
+    Brush LatencyBrush,
+    System.Windows.Visibility ActiveBadgeVisibility,
+    System.Windows.Visibility SelectVisibility,
+    bool IsActive,
+    string ProbeButtonName,
+    string SelectButtonName);
+
+internal sealed record DiscoveredSourceRow(
+    string Id,
+    string DisplayName,
+    string BaseUrl,
+    ProviderType ProviderType,
+    string TextEndpoint,
+    bool IsLocalRuntime,
+    bool HasEnvKey,
+    string? EnvVarName,
+    string KindBadge,
+    string DetailText,
+    string DefaultModel,
+    IReadOnlyList<string> DiscoveredModels,
+    string AddButtonName);
 
 /// <summary>
 /// Service settings switch between the saved-engine list and one editor.
@@ -55,9 +88,15 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     /// <summary>Session-scoped connection-test outcomes by profile id ("ok"/"auth"/…).</summary>
     private readonly Dictionary<string, string> _testOutcomes = new();
+    private readonly Dictionary<string, long> _testLatencies = new(StringComparer.Ordinal);
+    private readonly Dictionary<FreeEngineProvider, FreeTranslateService.FreeEngineHealth> _freeRouteProbes = new();
+    private bool _freeProbeInProgress;
+    private bool _discoveryInProgress;
+    private bool _loadingQuickProxy;
     private string? _pendingTestOutcome;
     private DateTime? _pendingTestedAtUtc;
     private string? _pendingTestFingerprint;
+    private long? _pendingTestElapsedMs;
     private long _editorRevision;
     private bool _testInProgress;
     private bool _saveInProgress;
@@ -66,6 +105,12 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         (draft, key) => CoreBridge.TestConnectionDraftAsync(draft, key);
     internal Func<ProviderSettings, string, CancellationToken, Task<ModelCatalogResult>> ModelCatalogExecutor { get; set; } =
         (draft, key, ct) => ModelCatalogService.FetchAsync(draft, key, ct);
+    internal Func<CancellationToken, Task<LocalAndFreeDiscoveryResult>> DiscoverFreeSourcesExecutor { get; set; } =
+        ct => ModelCatalogService.DiscoverLocalAndFreeSourcesAsync(ct);
+    internal Func<FreeEngineProvider, bool, FreeEngineAuthorization?, Task<FreeTranslateService.FreeEngineHealth>> FreeRouteProbeExecutor { get; set; } =
+        (provider, force, auth) => FreeTranslateService.GetHealthAsync(provider, force, auth);
+    internal Func<string, string?> EnvKeyReader { get; set; } =
+        sourceId => ModelCatalogService.TryReadEnvApiKeyForImport(sourceId);
 
     internal Func<ProviderProfile, CancellationToken, Task<TranslationResponse>> SavedConnectionTestExecutor { get; set; } =
         (profile, ct) => CliTranslationExecutor.Stream(profile, "Hello world", "en", "zh", null, ct).Completion;
@@ -167,6 +212,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 VisionModelCombo.Focus();
             }
         };
+        RefreshFreeRoutesPanel();
+        RefreshProxyStatusPill();
     }
 
     private void CancelListTests()
@@ -588,6 +635,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 _pendingTestOutcome = null;
                 _pendingTestedAtUtc = null;
                 _pendingTestFingerprint = null;
+                _pendingTestElapsedMs = null;
                 SetTestResult(StatusTone.Warning, "配置已变化，请重新测试", null);
             }
         }
@@ -839,6 +887,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             BaseUrlPanel.Visibility = Visibility.Visible;
             AdvancedGroup.Visibility = Visibility.Visible;
             ApplyEditorLayout();
+            UpdatePresetTierHint(null);
             ApiKeyPasswordBox.Clear();
             LoadStoredTestEvidence(profile);
             ResetModelCatalogStatus();
@@ -972,10 +1021,17 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     // ================= List & default routes =================
 
-    private void OnThemeChanged(object? sender, EventArgs _) => RefreshProfilesList();
+    private void OnThemeChanged(object? sender, EventArgs _)
+    {
+        RefreshProfilesList();
+        RefreshFreeRoutesPanel();
+        RefreshProxyStatusPill();
+    }
 
     internal void RefreshProfilesList()
     {
+        RefreshFreeRoutesPanel();
+        RefreshProxyStatusPill();
         // One config read for the whole refresh: rows, brushes and the route
         // pickers all draw from this instance.
         var config = ProfileManager.Load();
@@ -984,6 +1040,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             var hasKey = HasStoredKey(profile, config.ActiveProfileId);
             var (stateText, stateTone) = DescribeProfileState(profile, hasKey,
                 _testOutcomes.TryGetValue(profile.Id, out var outcome) ? outcome : null);
+            var hasLatency = _testLatencies.TryGetValue(profile.Id, out var elapsedMs);
+            var latencyText = hasLatency ? TranslationElapsedText.ForMilliseconds(elapsedMs) : null;
             return new ProfilesRow(
                 profile.Id,
                 profile.Name,
@@ -996,7 +1054,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                     : Visibility.Collapsed,
                 !config.PreferFreeEngine && profile.Id == config.ActiveProfileId
                     ? Visibility.Collapsed
-                    : Visibility.Visible);
+                    : Visibility.Visible,
+                BuildCapabilityBadges(profile),
+                latencyText,
+                hasLatency ? Visibility.Visible : Visibility.Collapsed);
         }).ToList();
         var hasProfiles = config.Profiles.Count > 0;
         ProfilesEmptyText.Visibility = hasProfiles
@@ -1320,6 +1381,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         EditorActionBar.Visibility = addMode ? Visibility.Collapsed : Visibility.Visible;
         ChooseAnotherProviderButton.Visibility = Visibility.Collapsed;
         DeleteServiceButton.Visibility = addMode ? Visibility.Collapsed : Visibility.Visible;
+        if (TestAndSaveButton is not null)
+        {
+            TestAndSaveButton.Visibility = addMode ? Visibility.Collapsed : Visibility.Visible;
+        }
         _isAdding = addMode;
         // compact 判定只来自 DetailGrid 内容宽度（SizeChanged）或未布局时的
         // 一次性窗口宽度提示；这里不再按 ActualWidth 重新推断第二套判据。
@@ -1455,9 +1520,17 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             "claude" => (ProviderType.AnthropicMessages, "https://api.anthropic.com",
                 "/v1/messages", "已填入 Claude 接入地址。"),
             "zhipu" => (ProviderType.OpenAiCompatible, "https://open.bigmodel.cn/api/paas/v4",
-                "/chat/completions", "已填入 GLM 接入地址。"),
+                "/chat/completions", "已填入智谱 GLM 接入地址（glm-4-flash 长期免费）。"),
+            "siliconflow" => (ProviderType.OpenAiCompatible, "https://api.siliconflow.cn/v1",
+                "/chat/completions", "已填入 SiliconFlow（硅基流动）接入地址。"),
+            "groq" => (ProviderType.OpenAiCompatible, "https://api.groq.com/openai/v1",
+                "/chat/completions", "已填入 Groq 接入地址。"),
+            "openrouter" => (ProviderType.OpenAiCompatible, "https://openrouter.ai/api/v1",
+                "/chat/completions", "已填入 OpenRouter 接入地址（支持 :free 免费模型）。"),
             "ollama" => (ProviderType.OpenAiCompatible, "http://localhost:11434/v1",
-                "/chat/completions", "已应用 Ollama 预设。"),
+                "/chat/completions", "已应用 Ollama 本地预设。"),
+            "lm-studio" => (ProviderType.OpenAiCompatible, "http://localhost:1234/v1",
+                "/chat/completions", "已应用 LM Studio 本地预设。"),
             "litellm" => (ProviderType.OpenAiCompatible, "http://localhost:4000",
                 "/chat/completions", "已填入 LiteLLM Proxy 预设。"),
             _ => (ProviderType.OpenAiCompatible, string.Empty,
@@ -1476,7 +1549,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             if (string.IsNullOrWhiteSpace(ServiceNameTextBox.Text) ||
                 ServiceNameTextBox.Text.StartsWith("新引擎") ||
                 ServiceNameTextBox.Text.StartsWith("新服务") ||
-                ServiceNameTextBox.Text is "OpenAI" or "DeepSeek" or "Google Gemini" or "Anthropic Claude" or "智谱 GLM" or "Ollama（本地）" or "LiteLLM Proxy" or "自定义引擎" or "自定义服务")
+                ServiceNameTextBox.Text is "OpenAI" or "DeepSeek" or "Google Gemini" or "Anthropic Claude" or "智谱 GLM" or "SiliconFlow（硅基流动）" or "Groq" or "OpenRouter" or "Ollama（本地）" or "LM Studio（本地）" or "LiteLLM Proxy" or "自定义引擎" or "自定义服务")
             {
                 ServiceNameTextBox.Text = preset switch
                 {
@@ -1485,11 +1558,17 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                     "gemini" => "Google Gemini",
                     "claude" => "Anthropic Claude",
                     "zhipu" => "智谱 GLM",
+                    "siliconflow" => "SiliconFlow（硅基流动）",
+                    "groq" => "Groq",
+                    "openrouter" => "OpenRouter",
                     "ollama" => "Ollama（本地）",
+                    "lm-studio" => "LM Studio（本地）",
                     "litellm" => "LiteLLM Proxy",
                     _ => "自定义引擎",
                 };
             }
+
+            UpdatePresetTierHint(preset);
 
             Helpers.SelectComboByTag(ProviderTypeComboBox, type.ToString());
             BaseUrlTextBox.Text = baseUrl;
@@ -1534,6 +1613,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         EditorActionBar.Visibility = Visibility.Visible;
         ChooseAnotherProviderButton.Visibility = Visibility.Visible;
         DeleteServiceButton.Visibility = Visibility.Collapsed;
+        if (TestAndSaveButton is not null)
+        {
+            TestAndSaveButton.Visibility = Visibility.Visible;
+        }
         // 本地判定与保存后的 profile.IsLocal（IsLocalBaseUrl）同一口径，
         // 避免 Ollama/LiteLLM 这类本机预设在添加预览与重开编辑器之间
         // 「本地服务 / OpenAI 兼容」来回变。
@@ -1557,10 +1640,37 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             BaseUrlTextBox.Focus();
         }
+        else if (preset is "ollama" or "lm-studio")
+        {
+            FetchModelsButton.Focus();
+        }
         else
         {
             ApiKeyPasswordBox.Focus();
         }
+    }
+
+    private void UpdatePresetTierHint(string? presetId)
+    {
+        if (PresetTierHintBanner is null || PresetTierHintText is null)
+        {
+            return;
+        }
+        var curated = !string.IsNullOrWhiteSpace(presetId)
+            ? ModelCatalogService.CuratedFreePresets.FirstOrDefault(p =>
+                string.Equals(p.Id, presetId, StringComparison.OrdinalIgnoreCase))
+            : null;
+        if (curated is null)
+        {
+            PresetTierHintText.Text = string.Empty;
+            PresetTierHintBanner.Visibility = Visibility.Collapsed;
+            return;
+        }
+        var modelHint = string.IsNullOrWhiteSpace(curated.DefaultModel)
+            ? string.Empty
+            : $" · 推荐免费/入门模型：{curated.DefaultModel}";
+        PresetTierHintText.Text = $"{curated.FreeTierHint}{modelHint}";
+        PresetTierHintBanner.Visibility = Visibility.Visible;
     }
 
     private void ChooseAnotherProvider_Click(object sender, RoutedEventArgs e) =>
@@ -1574,6 +1684,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         _editingProfileId = null;
         LoadProfileIntoForm(NewProfileDraft());
         CustomProtocolGroup.Visibility = Visibility.Collapsed;
+        UpdatePresetTierHint(null);
         _selectingCliTool = true;
         try { CliToolsListBox.SelectedItem = null; }
         finally { _selectingCliTool = false; }
@@ -2078,18 +2189,29 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         };
     }
 
-    private async void TestConnection_Click(object sender, RoutedEventArgs e)
+    private async void TestConnection_Click(object sender, RoutedEventArgs e) =>
+        await RunDraftConnectionTestAsync();
+
+    private async void TestAndSave_Click(object sender, RoutedEventArgs e)
+    {
+        if (await RunDraftConnectionTestAsync())
+        {
+            await TrySaveServiceAsync();
+        }
+    }
+
+    private async Task<bool> RunDraftConnectionTestAsync()
     {
         if (_testInProgress)
         {
-            return;
+            return false;
         }
 
         var gateId = string.IsNullOrWhiteSpace(_editingProfileId) ? "draft-editor" : _editingProfileId;
         if (!ConnectionTestRunner.TryEnter(gateId))
         {
             SetTestResult(StatusTone.Warning, "这个引擎正在测试", "请等这次结束再试。");
-            return;
+            return false;
         }
 
         _testInProgress = true;
@@ -2098,6 +2220,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         string? testedFingerprint = null;
         bool IsCurrentTest() => testedRevision == _editorRevision && testedProfileId == _editingProfileId;
         TestConnectionButton.IsEnabled = false;
+        if (TestAndSaveButton is not null)
+        {
+            TestAndSaveButton.IsEnabled = false;
+        }
         SetTestResult(StatusTone.Info, "正在测试…", null);
         try
         {
@@ -2114,37 +2240,47 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             {
                 ApiKeyPasswordBox.Focus();
                 SetTestResult(StatusTone.Warning, "需要 API Key", "填写后再试。本地服务可以留空。");
-                return;
+                return false;
             }
             if (string.IsNullOrWhiteSpace(draft.TextModel))
             {
                 TextModelCombo.Focus();
                 SetTestResult(StatusTone.Warning, "需要文字模型", "刷新列表选择一个，或直接输入模型名。");
-                return;
+                return false;
             }
             testedFingerprint = CurrentDraftFingerprint();
+            var watch = Stopwatch.StartNew();
             _ = await ConnectionTestExecutor(
                 draft, string.IsNullOrWhiteSpace(typedKey) ? "local" : typedKey);
+            watch.Stop();
             if (!IsCurrentTest())
             {
                 if (testedProfileId == _editingProfileId)
                     SetTestResult(StatusTone.Warning, "配置已变化，请重新测试", null);
-                return;
+                return false;
             }
             var testedAtUtc = DateTime.UtcNow;
             var fingerprint = testedFingerprint;
+            var elapsedMs = watch.ElapsedMilliseconds;
+            var latencyText = TranslationElapsedText.ForMilliseconds(elapsedMs);
             SetTestResult(
                 StatusTone.Success,
-                "上次成功",
+                $"测试通过 · {latencyText}",
                 "这次只检查了文字生成，不包括图片和流式输出。");
             _pendingTestOutcome = "ok";
             _pendingTestedAtUtc = testedAtUtc;
             _pendingTestFingerprint = fingerprint;
+            _pendingTestElapsedMs = elapsedMs;
+            if (testedProfileId is not null)
+            {
+                _testLatencies[testedProfileId] = elapsedMs;
+            }
             if (testedProfileId is not null && string.IsNullOrWhiteSpace(ApiKeyPasswordBox.Password))
             {
                 await PersistEditorEvidenceAsync(testedProfileId, "ok", testedAtUtc, fingerprint);
                 RefreshProfilesList();
             }
+            return true;
         }
         catch (OperationCanceledException)
         {
@@ -2152,6 +2288,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             {
                 SetTestResult(StatusTone.Warning, "已取消", null);
             }
+            return false;
         }
         catch (Exception exception)
         {
@@ -2159,7 +2296,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             {
                 if (testedProfileId == _editingProfileId)
                     SetTestResult(StatusTone.Warning, "配置已变化，请重新测试", null);
-                return;
+                return false;
             }
             var outcome = ClassifyTestFailure(exception);
             var testedAtUtc = DateTime.UtcNow;
@@ -2171,6 +2308,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             _pendingTestOutcome = outcome;
             _pendingTestedAtUtc = testedAtUtc;
             _pendingTestFingerprint = fingerprint;
+            _pendingTestElapsedMs = null;
             if (testedProfileId is not null &&
                 fingerprint is not null &&
                 string.IsNullOrWhiteSpace(ApiKeyPasswordBox.Password))
@@ -2178,12 +2316,17 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 await PersistEditorEvidenceAsync(testedProfileId, outcome, testedAtUtc, fingerprint);
                 RefreshProfilesList();
             }
+            return false;
         }
         finally
         {
             _testInProgress = false;
             ConnectionTestRunner.Exit(gateId);
             UpdateCredentialGating();
+            if (TestAndSaveButton is not null)
+            {
+                TestAndSaveButton.IsEnabled = true;
+            }
         }
     }
 
@@ -2276,10 +2419,19 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         if (completion.Apply == VerificationApplyResult.Applied)
         {
             _testOutcomes[profileId] = completion.Outcome;
+            if (completion.Outcome == "ok" && completion.ElapsedMs >= 0)
+            {
+                _testLatencies[profileId] = completion.ElapsedMs;
+            }
+            else
+            {
+                _testLatencies.Remove(profileId);
+            }
         }
         else
         {
             _testOutcomes.Remove(profileId);
+            _testLatencies.Remove(profileId);
         }
 
         RefreshProfilesList();
@@ -2289,11 +2441,14 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             : completion.Apply == VerificationApplyResult.Applied
                 ? StatusTone.Error
                 : StatusTone.Warning;
+        var latencySuffix = completion.ElapsedMs > 0
+            ? $"（{TranslationElapsedText.ForMilliseconds(completion.ElapsedMs)}）"
+            : string.Empty;
         var message = completion.Apply switch
         {
             VerificationApplyResult.Applied when completion.Outcome == "ok" =>
-                $"「{profileName}」测试通过。这次只检查了文字生成。",
-            VerificationApplyResult.Applied => $"「{profileName}」{label}。{(completion.Error is null ? "" : CliFailureText(completion.Error))}",
+                $"「{profileName}」测试通过{latencySuffix}。这次只检查了文字生成。",
+            VerificationApplyResult.Applied => $"「{profileName}」{label}{latencySuffix}。{(completion.Error is null ? "" : CliFailureText(completion.Error))}",
             VerificationApplyResult.Busy => "这个引擎正在测试。请等这次结束再试。",
             VerificationApplyResult.Cancelled => "测试已取消，没有写入配置。",
             _ => $"「{profileName}」的配置已变化，这次结果没有写入。",
@@ -2499,6 +2654,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             if (_editingProfileId is not null)
             {
                 _testOutcomes.Remove(_editingProfileId);
+                _testLatencies.Remove(_editingProfileId);
             }
             SetTestResult(StatusTone.Info, string.Empty, null);
             RefreshApiKeyState();
@@ -2722,6 +2878,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             _editingProfileId = null;
             _isAdding = false;
             _testOutcomes.Remove(profile.Id);
+            _testLatencies.Remove(profile.Id);
             _editorDirty = false;
             EditorForm.Visibility = Visibility.Collapsed;
             EditorEmpty.Visibility = Visibility.Visible;
@@ -2842,6 +2999,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             if (evidence.Outcome is null)
             {
                 _testOutcomes.Remove(profileId);
+                _testLatencies.Remove(profileId);
+            }
+            else if (evidence.Outcome == "ok" && _pendingTestElapsedMs is { } pendingElapsedMs)
+            {
+                _testLatencies[profileId] = pendingElapsedMs;
             }
 
             // The manager merges this draft with the latest routes inside its lock.
@@ -3037,4 +3199,735 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
     private static string FormatTokenSetting(uint value) =>
         value == 0 ? string.Empty : value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    // ================= Capability pills, free route hub, quick proxy & auto-discovery =================
+
+    private static IReadOnlyList<string> BuildCapabilityBadges(ProviderProfile profile)
+    {
+        var badges = new List<string>(4);
+        if (profile.SupportsText || !string.IsNullOrWhiteSpace(profile.TextModel))
+        {
+            badges.Add("文本");
+        }
+        if (profile.SupportsVision || !string.IsNullOrWhiteSpace(profile.VisionModel))
+        {
+            badges.Add("视觉");
+        }
+        if (profile.IsLocal || ProviderSettings.IsLocalBaseUrl(profile.ApiBaseUrl))
+        {
+            badges.Add("本地");
+        }
+        if (!profile.ExecutionFacts.IsCliExecution &&
+            (profile.SupportsText || !string.IsNullOrWhiteSpace(profile.TextModel)))
+        {
+            badges.Add("流式");
+        }
+        return badges;
+    }
+
+    internal void RefreshFreeRoutesPanel()
+    {
+        if (FreeRoutesList is null)
+        {
+            return;
+        }
+
+        var shell = ShellSettings.Default;
+        try
+        {
+            shell = ShellSettingsStore.Load();
+        }
+        catch (Exception)
+        {
+        }
+
+        ProviderSettings? core = null;
+        try
+        {
+            core = CoreBridge.GetSettings();
+        }
+        catch (Exception)
+        {
+        }
+
+        CoreProductConfig? config = null;
+        try
+        {
+            config = ProfileManager.Load();
+        }
+        catch (Exception)
+        {
+        }
+
+        var hasActiveUserEngine = config is not null && !config.PreferFreeEngine && config.TryGetActiveProfile() is not null;
+        var consentAllowed = shell.FreeEngineConsent != FreeEngineConsent.Denied;
+        var onlineAllowed = core is null || (!core.SafeDevMode && core.NetworkEnabled);
+
+        if (FreeRoutesConsentText is not null && FreeRoutesConsentBadge is not null)
+        {
+            if (!onlineAllowed)
+            {
+                FreeRoutesConsentText.Text = core?.SafeDevMode == true ? "安全离线模式" : "联网已关闭";
+                FreeRoutesConsentText.SetResourceReference(TextBlock.ForegroundProperty, "WarningBrush");
+                if (EnableFreeRoutesInlineButton is not null)
+                {
+                    EnableFreeRoutesInlineButton.Visibility = Visibility.Collapsed;
+                }
+            }
+            else if (!consentAllowed)
+            {
+                FreeRoutesConsentText.Text = "已关闭";
+                FreeRoutesConsentText.SetResourceReference(TextBlock.ForegroundProperty, "WarningBrush");
+                if (EnableFreeRoutesInlineButton is not null)
+                {
+                    EnableFreeRoutesInlineButton.Visibility = Visibility.Visible;
+                }
+            }
+            else
+            {
+                FreeRoutesConsentText.Text = hasActiveUserEngine ? "备用启用" : "当前启用";
+                FreeRoutesConsentText.SetResourceReference(TextBlock.ForegroundProperty, "SuccessBrush");
+                if (EnableFreeRoutesInlineButton is not null)
+                {
+                    EnableFreeRoutesInlineButton.Visibility = Visibility.Collapsed;
+                }
+            }
+        }
+
+        var specs = new (FreeEngineProvider Provider, string Name, string Desc, string[] Tags)[]
+        {
+            (FreeEngineProvider.Auto, "自动优选", "短词走有道，长句走 Bing / Google（每次只发给单条线路）", ["按文本择优", "免 Key"]),
+            (FreeEngineProvider.Bing, "Bing 翻译", "cn.bing.com · 国内直连，适合长句与段落", ["国内直连", "长句"]),
+            (FreeEngineProvider.Youdao, "有道词典", "dict.youdao.com · 单词与短语释义准确", ["国内直连", "词典级"]),
+            (FreeEngineProvider.MyMemory, "MyMemory", "api.mymemory.translated.net · 单次不超过 500 字节", ["500字节限制", "直连"]),
+            (FreeEngineProvider.Google, "Google 翻译", "translate.googleapis.com · 多语种长句支持好", ["需代理", "长句"]),
+        };
+
+        var rows = new List<FreeRouteRow>(specs.Length);
+        var googleFailed = false;
+        foreach (var spec in specs)
+        {
+            var isSelected = shell.FreeEngineProvider == spec.Provider;
+            var hasHealth = _freeRouteProbes.TryGetValue(spec.Provider, out var health) ||
+                            FreeTranslateService.TryGetValidHealth(spec.Provider, out health);
+
+            string latencyText;
+            Brush stateBrush;
+            Brush latencyBrush;
+            if (!hasHealth)
+            {
+                latencyText = "未测速";
+                stateBrush = ToneBrush(isSelected ? StatusTone.Info : StatusTone.Info);
+                latencyBrush = ToneTextBrush(StatusTone.Info);
+            }
+            else if (health.Ok)
+            {
+                latencyText = TranslationElapsedText.ForMilliseconds(health.LatencyMs);
+                stateBrush = ToneBrush(StatusTone.Success);
+                latencyBrush = ToneTextBrush(StatusTone.Success);
+            }
+            else
+            {
+                latencyText = ClassifyFreeHealthFailure(health.Error);
+                stateBrush = ToneBrush(StatusTone.Error);
+                latencyBrush = ToneTextBrush(StatusTone.Error);
+                if (spec.Provider == FreeEngineProvider.Google)
+                {
+                    googleFailed = true;
+                }
+            }
+
+            rows.Add(new FreeRouteRow(
+                Provider: spec.Provider,
+                Name: spec.Name,
+                Description: spec.Desc,
+                Tags: spec.Tags,
+                LatencyText: latencyText,
+                StateBrush: stateBrush,
+                LatencyBrush: latencyBrush,
+                ActiveBadgeVisibility: isSelected ? Visibility.Visible : Visibility.Collapsed,
+                SelectVisibility: isSelected ? Visibility.Collapsed : Visibility.Visible,
+                IsActive: isSelected,
+                ProbeButtonName: $"测速 {spec.Name}",
+                SelectButtonName: $"设为当前 {spec.Name}"));
+        }
+
+        FreeRoutesList.ItemsSource = rows;
+        if (GoogleProxyHintBanner is not null)
+        {
+            GoogleProxyHintBanner.Visibility = googleFailed ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+
+    private static string ClassifyFreeHealthFailure(string? error)
+    {
+        if (string.IsNullOrWhiteSpace(error))
+        {
+            return "不可用";
+        }
+        if (error.Contains("超时", StringComparison.Ordinal) ||
+            error.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+            error.Contains("timed out", StringComparison.OrdinalIgnoreCase))
+        {
+            return "超时";
+        }
+        if (error.Contains("403", StringComparison.Ordinal) ||
+            error.Contains("429", StringComparison.Ordinal) ||
+            error.Contains("拦截", StringComparison.Ordinal) ||
+            error.Contains("拒绝", StringComparison.Ordinal) ||
+            error.Contains("HTML", StringComparison.OrdinalIgnoreCase) ||
+            error.Contains("block", StringComparison.OrdinalIgnoreCase))
+        {
+            return "被阻断";
+        }
+        return "不可用";
+    }
+
+    private void EnableFreeRoutesInline_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            ShellSettingsStore.Update(current => current with { FreeEngineConsent = FreeEngineConsent.Allowed });
+            RefreshFreeRoutesPanel();
+            ProfileChanged?.Invoke();
+            StatusChanged?.Invoke("已开启内置免费线路。", StatusTone.Success);
+        }
+        catch (Exception ex)
+        {
+            StatusChanged?.Invoke($"开启免费线路失败：{ex.Message}", StatusTone.Error);
+        }
+    }
+
+    private void SelectFreeRoute_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as Button)?.Tag is FreeEngineProvider provider)
+        {
+            SwitchFreeRoute(provider);
+        }
+    }
+
+    private void QuickSwitchBing_Click(object sender, RoutedEventArgs e) =>
+        SwitchFreeRoute(FreeEngineProvider.Bing);
+
+    private void QuickSwitchYoudao_Click(object sender, RoutedEventArgs e) =>
+        SwitchFreeRoute(FreeEngineProvider.Youdao);
+
+    private void OpenQuickProxyFromBanner_Click(object sender, RoutedEventArgs e)
+    {
+        if (QuickProxyPanel is not null)
+        {
+            QuickProxyPanel.Visibility = Visibility.Visible;
+            RefreshProxyStatusPill();
+        }
+    }
+
+    private void SwitchFreeRoute(FreeEngineProvider provider)
+    {
+        try
+        {
+            if (!ProfileManager.TrySwitchToFreeEngine(provider, out var error))
+            {
+                StatusChanged?.Invoke(error, StatusTone.Warning);
+                return;
+            }
+            RefreshFreeRoutesPanel();
+            RefreshProfilesList();
+            ProfileChanged?.Invoke();
+            StatusChanged?.Invoke($"已切换到免费线路：{EngineWording.DisplayNameFor(provider)}", StatusTone.Success);
+        }
+        catch (Exception ex)
+        {
+            StatusChanged?.Invoke($"切换免费线路失败：{ex.Message}", StatusTone.Error);
+        }
+    }
+
+    private async void ProbeFreeRoute_Click(object sender, RoutedEventArgs e)
+    {
+        if (_freeProbeInProgress || (sender as Button)?.Tag is not FreeEngineProvider provider)
+        {
+            return;
+        }
+        await RunFreeRoutesProbeAsync([provider]);
+    }
+
+    private async void TestAllFreeRoutes_Click(object sender, RoutedEventArgs e)
+    {
+        if (_freeProbeInProgress)
+        {
+            return;
+        }
+        await RunFreeRoutesProbeAsync(
+        [
+            FreeEngineProvider.Bing,
+            FreeEngineProvider.Youdao,
+            FreeEngineProvider.MyMemory,
+            FreeEngineProvider.Google,
+        ]);
+    }
+
+    private async Task RunFreeRoutesProbeAsync(FreeEngineProvider[] providers)
+    {
+        FreeEngineAuthorization? authorization = null;
+        try
+        {
+            var settings = CoreBridge.GetSettings();
+            if (!OutboundPolicy.AllowsFreeEngine(settings, out var denial, out authorization))
+            {
+                StatusChanged?.Invoke(denial?.Message ?? "当前策略不允许测速内置免费线路。", StatusTone.Warning);
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusChanged?.Invoke($"无法读取网络策略：{ex.Message}", StatusTone.Error);
+            return;
+        }
+
+        _freeProbeInProgress = true;
+        if (TestAllFreeRoutesButton is not null)
+        {
+            TestAllFreeRoutesButton.IsEnabled = false;
+            TestAllFreeRoutesButton.Content = "测速中…";
+        }
+        try
+        {
+            StatusChanged?.Invoke("正在测试内置免费线路延迟…", StatusTone.Info);
+            var tasks = providers.Select(async provider =>
+            {
+                var health = await FreeRouteProbeExecutor(provider, true, authorization);
+                return (provider, health);
+            });
+            var results = await Task.WhenAll(tasks);
+            foreach (var (provider, health) in results)
+            {
+                _freeRouteProbes[provider] = health;
+            }
+
+            if (providers.Length > 1)
+            {
+                var best = results.Where(r => r.health.Ok).OrderBy(r => r.health.LatencyMs).FirstOrDefault();
+                if (best.health.Ok)
+                {
+                    _freeRouteProbes[FreeEngineProvider.Auto] = best.health;
+                }
+            }
+
+            RefreshFreeRoutesPanel();
+            var okCount = results.Count(r => r.health.Ok);
+            StatusChanged?.Invoke(
+                okCount > 0
+                    ? $"免费线路测速完成：{okCount}/{results.Length} 条可用。"
+                    : "免费线路测速未通过，可切换国内直连线路或检查代理设置。",
+                okCount > 0 ? StatusTone.Success : StatusTone.Warning);
+        }
+        catch (Exception ex)
+        {
+            StatusChanged?.Invoke($"免费线路测速失败：{ex.Message}", StatusTone.Error);
+        }
+        finally
+        {
+            _freeProbeInProgress = false;
+            if (TestAllFreeRoutesButton is not null)
+            {
+                TestAllFreeRoutesButton.IsEnabled = true;
+                TestAllFreeRoutesButton.Content = "一键测速";
+            }
+        }
+    }
+
+    // ================= Quick proxy pill & bar =================
+
+    internal void RefreshProxyStatusPill()
+    {
+        if (ProxyStatusLabel is null)
+        {
+            return;
+        }
+
+        var shell = ShellSettings.Default;
+        try
+        {
+            shell = ShellSettingsStore.Load();
+        }
+        catch (Exception)
+        {
+        }
+
+        var (label, tone) = shell.NetworkProxyMode switch
+        {
+            NetworkProxyMode.Direct => ("代理：直连", StatusTone.Info),
+            NetworkProxyMode.Custom when ProxyHttpClientFactory.TryParseProxyUri(shell.CustomProxyUrl, out var uri) && uri is not null =>
+                ($"代理：{uri.Authority}", StatusTone.Success),
+            NetworkProxyMode.Custom => ("代理：自定义（待填写）", StatusTone.Warning),
+            _ => ("代理：跟随系统", StatusTone.Success),
+        };
+        ProxyStatusLabel.Text = label;
+        ProxyStatusDot?.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, tone switch
+        {
+            StatusTone.Warning => "WarningBrush",
+            StatusTone.Success => "SuccessBrush",
+            _ => "TextSecondaryBrush",
+        });
+
+        if (QuickProxySystemRadio is null)
+        {
+            return;
+        }
+        _loadingQuickProxy = true;
+        try
+        {
+            QuickProxySystemRadio.IsChecked = shell.NetworkProxyMode == NetworkProxyMode.System;
+            QuickProxyDirectRadio.IsChecked = shell.NetworkProxyMode == NetworkProxyMode.Direct;
+            QuickProxyCustomRadio.IsChecked = shell.NetworkProxyMode == NetworkProxyMode.Custom;
+            QuickProxyUrlTextBox.Text = shell.CustomProxyUrl ?? string.Empty;
+            QuickProxyCustomRow.Visibility = shell.NetworkProxyMode == NetworkProxyMode.Custom
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+        finally
+        {
+            _loadingQuickProxy = false;
+        }
+    }
+
+    private void ProxyStatusButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (QuickProxyPanel is null)
+        {
+            return;
+        }
+        QuickProxyPanel.Visibility = QuickProxyPanel.Visibility == Visibility.Visible
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        if (QuickProxyPanel.Visibility == Visibility.Visible)
+        {
+            RefreshProxyStatusPill();
+        }
+    }
+
+    private void OpenGeneralProxySettings_Click(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is SettingsWindow settingsWindow)
+        {
+            settingsWindow.ShowPage("General");
+        }
+        else if (QuickProxyPanel is not null)
+        {
+            QuickProxyPanel.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void QuickProxyMode_Click(object sender, RoutedEventArgs e)
+    {
+        if (_loadingQuickProxy)
+        {
+            return;
+        }
+
+        var mode = QuickProxyDirectRadio.IsChecked == true
+            ? NetworkProxyMode.Direct
+            : QuickProxyCustomRadio.IsChecked == true
+                ? NetworkProxyMode.Custom
+                : NetworkProxyMode.System;
+
+        QuickProxyCustomRow.Visibility = mode == NetworkProxyMode.Custom
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+        if (mode == NetworkProxyMode.Custom)
+        {
+            if (App.TryValidateCustomProxyUrl(QuickProxyUrlTextBox.Text, out var parsed) && parsed is not null)
+            {
+                ApplyQuickProxy(NetworkProxyMode.Custom, parsed);
+            }
+            else
+            {
+                QuickProxyValidationText.Text = "请输入代理地址，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7891";
+                QuickProxyValidationText.SetResourceReference(TextBlock.ForegroundProperty, "DangerBrush");
+                QuickProxyValidationText.Visibility = Visibility.Visible;
+                QuickProxyUrlTextBox.Focus();
+            }
+            return;
+        }
+
+        QuickProxyValidationText.Visibility = Visibility.Collapsed;
+        ApplyQuickProxy(mode, null);
+    }
+
+    private void QuickProxyApply_Click(object sender, RoutedEventArgs e)
+    {
+        if (!App.TryValidateCustomProxyUrl(QuickProxyUrlTextBox.Text, out var normalized) || normalized is null)
+        {
+            QuickProxyValidationText.Text = "代理地址格式无效，请使用 http://、https://、socks5:// 或 socks5h:// 并包含端口。";
+            QuickProxyValidationText.SetResourceReference(TextBlock.ForegroundProperty, "DangerBrush");
+            QuickProxyValidationText.Visibility = Visibility.Visible;
+            return;
+        }
+
+        QuickProxyUrlTextBox.Text = normalized;
+        QuickProxyValidationText.Visibility = Visibility.Collapsed;
+        ApplyQuickProxy(NetworkProxyMode.Custom, normalized);
+    }
+
+    private void ApplyQuickProxy(NetworkProxyMode mode, string? customUrl)
+    {
+        try
+        {
+            var updated = ShellSettingsStore.Update(current => current with
+            {
+                NetworkProxyMode = mode,
+                CustomProxyUrl = customUrl ?? current.CustomProxyUrl,
+            });
+            App.SyncNetworkProxyToCore(updated);
+            RefreshProxyStatusPill();
+            StatusChanged?.Invoke($"代理设置已更新：{ProxyStatusLabel.Text}", StatusTone.Success);
+        }
+        catch (Exception ex)
+        {
+            StatusChanged?.Invoke($"更新代理设置失败：{ex.Message}", StatusTone.Error);
+        }
+    }
+
+    // ================= Local & env 1-click discovery =================
+
+    private async void ScanLocalAndEnv_Click(object sender, RoutedEventArgs e)
+    {
+        if (_discoveryInProgress)
+        {
+            return;
+        }
+        _discoveryInProgress = true;
+        if (ScanLocalAndEnvButton is not null)
+        {
+            ScanLocalAndEnvButton.IsEnabled = false;
+            ScanLocalAndEnvButton.Content = "扫描中…";
+        }
+        DiscoveryStatusText.Text = "正在扫描本机本地模型服务与环境变量密钥…";
+        DiscoveryStatusText.Visibility = Visibility.Visible;
+        try
+        {
+            var result = await DiscoverFreeSourcesExecutor(CancellationToken.None);
+            var rows = new List<DiscoveredSourceRow>();
+
+            foreach (var local in result.LocalRuntimes.Where(r => r.IsReachable))
+            {
+                var detail = local.DiscoveredModels.Count > 0
+                    ? $"发现 {local.DiscoveredModels.Count} 个模型：{string.Join("、", local.DiscoveredModels.Take(3))}"
+                    : local.StatusSummary;
+                rows.Add(new DiscoveredSourceRow(
+                    Id: local.Id,
+                    DisplayName: local.DisplayName,
+                    BaseUrl: local.BaseUrl,
+                    ProviderType: local.ProviderType,
+                    TextEndpoint: local.TextEndpoint,
+                    IsLocalRuntime: true,
+                    HasEnvKey: false,
+                    EnvVarName: null,
+                    KindBadge: "本地运行",
+                    DetailText: detail,
+                    DefaultModel: local.DiscoveredModels.FirstOrDefault() ?? string.Empty,
+                    DiscoveredModels: local.DiscoveredModels,
+                    AddButtonName: $"一键添加 {local.DisplayName}"));
+            }
+
+            foreach (var env in result.EnvConfiguredSources)
+            {
+                var curatedDefault = ModelCatalogService.CuratedFreePresets
+                    .FirstOrDefault(p => string.Equals(p.Id, env.Id, StringComparison.OrdinalIgnoreCase))
+                    ?.DefaultModel;
+                var fallbackModel = curatedDefault ?? DefaultModelForDiscoveredSource(env.Id);
+                rows.Add(new DiscoveredSourceRow(
+                    Id: env.Id,
+                    DisplayName: env.DisplayName,
+                    BaseUrl: env.BaseUrl,
+                    ProviderType: env.ProviderType,
+                    TextEndpoint: env.TextEndpoint,
+                    IsLocalRuntime: false,
+                    HasEnvKey: env.HasEnvKey,
+                    EnvVarName: env.EnvVarName,
+                    KindBadge: env.EnvVarName is not null ? "环境变量" : "本机 CLI",
+                    DetailText: env.StatusSummary,
+                    DefaultModel: fallbackModel,
+                    DiscoveredModels: env.DiscoveredModels,
+                    AddButtonName: $"一键添加 {env.DisplayName}"));
+            }
+
+            if (rows.Count == 0)
+            {
+                DiscoveredSourcesList.ItemsSource = null;
+                DiscoveredSourcesList.Visibility = Visibility.Collapsed;
+                DiscoveryStatusText.Text = "未发现运行中的本地模型（Ollama / LM Studio / LiteLLM）或环境变量密钥；可点击右上角「添加引擎」手动选择预设。";
+                StatusChanged?.Invoke("扫描完成，暂未发现可自动添加的本地服务或环境变量密钥。", StatusTone.Info);
+            }
+            else
+            {
+                DiscoveredSourcesList.ItemsSource = rows;
+                DiscoveredSourcesList.Visibility = Visibility.Visible;
+                DiscoveryStatusText.Text = $"发现 {rows.Count} 个可用来源，点击右侧「一键添加」即可配置并测试。";
+                StatusChanged?.Invoke($"扫描完成，发现 {rows.Count} 个可添加来源。", StatusTone.Success);
+            }
+        }
+        catch (Exception ex)
+        {
+            DiscoveryStatusText.Text = $"扫描未完成：{ex.Message}";
+            StatusChanged?.Invoke($"扫描失败：{ex.Message}", StatusTone.Error);
+        }
+        finally
+        {
+            _discoveryInProgress = false;
+            if (ScanLocalAndEnvButton is not null)
+            {
+                ScanLocalAndEnvButton.IsEnabled = true;
+                ScanLocalAndEnvButton.Content = "扫描本机与环境";
+            }
+        }
+    }
+
+    private async void QuickAddDiscoveredSource_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as Button)?.Tag is not DiscoveredSourceRow row)
+        {
+            return;
+        }
+        var button = (Button)sender;
+        button.IsEnabled = false;
+        try
+        {
+            string? apiKey = null;
+            if (!row.IsLocalRuntime)
+            {
+                if (row.EnvVarName is not null)
+                {
+                    apiKey = EnvKeyReader(row.Id);
+                }
+                if (string.IsNullOrWhiteSpace(apiKey))
+                {
+                    if (TryMapOmpProviderForImport(row.Id) is { } ompProvider && !string.IsNullOrWhiteSpace(row.DefaultModel))
+                    {
+                        var imported = await Task.Run(() => OmpApiKeyImporter.Import(ompProvider, row.DefaultModel, confirmed: true));
+                        await ProfileManager.ApplyLatestToCoreAsync();
+                        RefreshProfilesList();
+                        ProfileChanged?.Invoke();
+                        StatusChanged?.Invoke($"已从 OMP 导入并启用「{imported.Name}」。", StatusTone.Success);
+                        return;
+                    }
+                    StatusChanged?.Invoke($"未读取到 {row.DisplayName} 的密钥，请通过「添加引擎」手动填写。", StatusTone.Warning);
+                    return;
+                }
+            }
+
+            var modelId = row.DiscoveredModels.FirstOrDefault() ?? row.DefaultModel;
+            var coreSettings = CoreBridge.GetSettings();
+            if (string.IsNullOrWhiteSpace(modelId))
+            {
+                try
+                {
+                    var probeSettings = coreSettings with
+                    {
+                        ProviderType = row.ProviderType,
+                        ApiBaseUrl = row.BaseUrl,
+                        TextEndpoint = row.TextEndpoint,
+                        ApiKeyConfigured = !string.IsNullOrWhiteSpace(apiKey),
+                    };
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    var catalog = await ModelCatalogExecutor(probeSettings, apiKey ?? string.Empty, cts.Token);
+                    modelId = catalog.Models.FirstOrDefault()?.Id ?? string.Empty;
+                }
+                catch (Exception)
+                {
+                    // Fall back to curated/empty model if catalog endpoint does not respond.
+                }
+            }
+
+            var config = ProfileManager.Load();
+            var (profileId, credentialTarget) = ProfileManager.ResolveSaveTarget(config, null);
+            var keyWritten = false;
+            if (!string.IsNullOrWhiteSpace(apiKey))
+            {
+                CredentialStore.SaveApiKey(apiKey, credentialTarget);
+                keyWritten = true;
+            }
+
+            var profile = ServiceDraftCoordinator.BuildDraft(new ServiceDraftInputs(
+                Name: row.DisplayName,
+                BaseUrl: row.BaseUrl,
+                ProviderType: row.ProviderType,
+                TextEndpoint: row.TextEndpoint,
+                VisionEndpoint: row.TextEndpoint,
+                TextModel: modelId,
+                VisionModel: string.Empty,
+                ExtraHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                AnthropicVersion: "2023-06-01",
+                AllowInsecureTls: false));
+            profile.Id = profileId;
+            profile.CredentialTarget = credentialTarget;
+            profile.CredentialRevision = keyWritten ? 1 : 0;
+
+            long? verifiedMs = null;
+            if (!string.IsNullOrWhiteSpace(modelId))
+            {
+                var testSettings = profile.ToProviderSettings(coreSettings) with
+                {
+                    ApiKeyConfigured = row.IsLocalRuntime || keyWritten,
+                };
+                var watch = Stopwatch.StartNew();
+                try
+                {
+                    _ = await ConnectionTestExecutor(testSettings, string.IsNullOrWhiteSpace(apiKey) ? "local" : apiKey);
+                    watch.Stop();
+                    verifiedMs = watch.ElapsedMilliseconds;
+                    profile.LastTestOutcome = "ok";
+                    profile.LastTestedAtUtc = DateTime.UtcNow;
+                    profile.LastTestFingerprint = CreateProfileFingerprint(profile, row.IsLocalRuntime || keyWritten);
+                    _testOutcomes[profileId] = "ok";
+                    _testLatencies[profileId] = verifiedMs.Value;
+                }
+                catch (Exception testEx)
+                {
+                    watch.Stop();
+                    var outcome = ClassifyTestFailure(testEx);
+                    profile.LastTestOutcome = outcome;
+                    profile.LastTestedAtUtc = DateTime.UtcNow;
+                    profile.LastTestFingerprint = CreateProfileFingerprint(profile, row.IsLocalRuntime || keyWritten);
+                    _testOutcomes[profileId] = outcome;
+                }
+            }
+
+            await Task.Run(() => ProfileManager.SaveApiProfile(profile, editingId: null));
+            await ProfileManager.ApplyLatestToCoreAsync();
+            RefreshProfilesList();
+            ProfileChanged?.Invoke();
+
+            var latencySuffix = verifiedMs is { } ms ? $" · 验证通过（{TranslationElapsedText.ForMilliseconds(ms)}）" : string.Empty;
+            StatusChanged?.Invoke($"已添加「{profile.Name}」{latencySuffix}。", StatusTone.Success);
+        }
+        catch (Exception ex)
+        {
+            StatusChanged?.Invoke($"一键添加失败：{ex.Message}", StatusTone.Error);
+        }
+        finally
+        {
+            button.IsEnabled = true;
+        }
+    }
+
+    private static string DefaultModelForDiscoveredSource(string sourceId) => sourceId switch
+    {
+        "deepseek" => "deepseek-chat",
+        "openai" => "gpt-4o-mini",
+        "gemini" => "gemini-2.5-flash",
+        "siliconflow" => "Qwen/Qwen2.5-7B-Instruct",
+        "groq" => "llama-3.1-8b-instant",
+        "openrouter" => "meta-llama/llama-3.2-3b-instruct:free",
+        "zhipu" => "glm-4-flash",
+        _ => string.Empty,
+    };
+
+    private static string? TryMapOmpProviderForImport(string sourceId) => sourceId switch
+    {
+        "openai" => "openai",
+        "deepseek" => "deepseek",
+        "zhipu" => "zhipu-coding-plan",
+        _ => null,
+    };
 }

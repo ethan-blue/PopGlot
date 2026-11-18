@@ -515,6 +515,28 @@
                                                     ToolTip="查看随包附带的离线使用指南"
                                                     Click="ViewOfflineUsage_Click" />
                                         </WrapPanel>
+                                        <Border x:Name="DomesticRouteTipsPanel" Margin="0,12,0,0" Padding="10,8"
+                                                CornerRadius="8" Background="{DynamicResource SurfaceMutedBrush}"
+                                                BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
+                                            <StackPanel>
+                                                <TextBlock Text="国内直连提示" FontSize="12" FontWeight="SemiBold"
+                                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                                                <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,6" TextWrapping="Wrap"
+                                                           Text="Bing 与有道词典支持国内直连（有道适合单词与短语，MyMemory 单次 ≤500 字节）。如需稳定高并发长句翻译，可自备以下平台 Key（PopGlot 不内置密钥）：" />
+                                                <WrapPanel>
+                                                    <Button x:Name="BaiduOpenPlatformLink" Content="百度翻译开放平台"
+                                                            Style="{StaticResource GhostButton}" Padding="8,3" Margin="0,0,6,2"
+                                                            FontSize="11.5" Tag="https://fanyi-api.baidu.com"
+                                                            AutomationProperties.Name="百度翻译开放平台"
+                                                            Click="OpenExternalDocLink_Click" />
+                                                    <Button x:Name="YoudaoOpenPlatformLink" Content="有道智云开放平台"
+                                                            Style="{StaticResource GhostButton}" Padding="8,3" Margin="0,0,0,2"
+                                                            FontSize="11.5" Tag="https://ai.youdao.com"
+                                                            AutomationProperties.Name="有道智云开放平台"
+                                                            Click="OpenExternalDocLink_Click" />
+                                                </WrapPanel>
+                                            </StackPanel>
+                                        </Border>
                                     </StackPanel>
 
                                     <!-- Normal idle guidance: one title, one hint, one primary CTA. -->

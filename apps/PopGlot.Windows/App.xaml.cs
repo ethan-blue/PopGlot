@@ -64,6 +64,96 @@ public partial class App : Application
 
     private ShellSettings _shellSettings = ShellSettings.Default;
 
+    internal const string DomesticBypassNoProxy =
+        "dict.youdao.com,fanyi.youdao.com,cn.bing.com,open.bigmodel.cn,api.deepseek.com,api.siliconflow.cn,dashscope.aliyuncs.com,ark.cn-beijing.volces.com,aip.baidubce.com,qianfan.baidubce.com,api.moonshot.cn,api.minimax.chat,api.minimaxi.com,spark-api-open.xf-yun.com,hunyuan.tencentcloudapi.com,api.hunyuan.cloud.tencent.com,api.baichuan-ai.com,api.lingyiwanwu.com,api.stepfun.com";
+
+    /// <summary>
+    /// Validates a custom proxy URL against the Rust core's contract
+    /// (http/https/socks5/socks5h with explicit scheme, host, no path/query/fragment).
+    /// </summary>
+    internal static bool TryValidateCustomProxyUrl(string? raw, out string? normalizedUrl)
+    {
+        normalizedUrl = null;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+        var trimmed = raw.Trim();
+        if (trimmed.Any(c => char.IsControl(c) || char.IsWhiteSpace(c)))
+        {
+            return false;
+        }
+        var schemeSep = trimmed.IndexOf("://", StringComparison.Ordinal);
+        if (schemeSep <= 0)
+        {
+            return false;
+        }
+        var scheme = trimmed[..schemeSep].ToLowerInvariant();
+        if (scheme is not ("http" or "https" or "socks5" or "socks5h"))
+        {
+            return false;
+        }
+        if (trimmed.Contains('?') || trimmed.Contains('#'))
+        {
+            return false;
+        }
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) ||
+            string.IsNullOrWhiteSpace(uri.Host) ||
+            uri.AbsolutePath != "/")
+        {
+            return false;
+        }
+        if (!ProxyHttpClientFactory.TryParseProxyUri(trimmed, out _))
+        {
+            return false;
+        }
+
+        normalizedUrl = trimmed.TrimEnd('/');
+        return true;
+    }
+
+    /// <summary>
+    /// Synchronizes ShellSettings proxy preferences into the Rust core immediately
+    /// without requiring an app restart. Invalid custom URLs fall back safely to System.
+    /// </summary>
+    internal static void SyncNetworkProxyToCore(ShellSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var noProxy = settings.ProxyBypassDomesticRoutes ? DomesticBypassNoProxy : null;
+        string mode;
+        string? proxyUrl = null;
+        switch (settings.NetworkProxyMode)
+        {
+            case NetworkProxyMode.Direct:
+                mode = "Direct";
+                break;
+            case NetworkProxyMode.Custom:
+                if (TryValidateCustomProxyUrl(settings.CustomProxyUrl, out var validUrl))
+                {
+                    mode = "Custom";
+                    proxyUrl = validUrl;
+                }
+                else
+                {
+                    mode = "System";
+                }
+                break;
+            case NetworkProxyMode.System:
+            default:
+                mode = "System";
+                break;
+        }
+
+        try
+        {
+            CoreBridge.ConfigureNetworkProxy(mode, proxyUrl, settings.ProxyBypassLocal, noProxy);
+        }
+        catch (Exception)
+        {
+            // Standalone UI test hosts or transient FFI unavailability must not break UI flows.
+        }
+    }
+
     private static (string markerPath, string dataDir)? ReadSmokeMarkerPath(string[] args)
     {
         for (var i = 0; i < args.Length - 1; i++)
@@ -102,6 +192,7 @@ public partial class App : Application
             InterfaceKeys.Apply(_shellSettings);
             ThemeService.Apply(_shellSettings.Theme);
             CoreBridge.Initialize();
+            SyncNetworkProxyToCore(_shellSettings);
             TtsService.CleanupStaleTempFiles();
             _hotkeyOwner = CreateHotkeyOwnerWindow();
             _hotkeys = new HotkeyService(_hotkeyOwner);
@@ -230,6 +321,7 @@ public partial class App : Application
             }
             ThemeService.Apply(_shellSettings.Theme);
             CoreBridge.Initialize();
+            SyncNetworkProxyToCore(_shellSettings);
             TtsService.CleanupStaleTempFiles();
             _hotkeyOwner = CreateHotkeyOwnerWindow();
             _hotkeys = new HotkeyService(_hotkeyOwner);
@@ -496,6 +588,7 @@ public partial class App : Application
             InterfaceKeys.Apply(_shellSettings);
             ThemeService.Apply(_shellSettings.Theme);
             CoreBridge.Initialize();
+            SyncNetworkProxyToCore(_shellSettings);
             // C01: the send boundary re-reads the live core settings before
             // every real HTTP send, so a revoked consent or a flipped
             // offline/safe-mode switch stops even in-flight fallback sends.
@@ -592,6 +685,12 @@ public partial class App : Application
             if (e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase))
             {
                 ShowSettings();
+            }
+
+            if (!measurementIsolation && !SuppressStartupForTests)
+            {
+                var warmupSnapshot = _shellSettings;
+                _ = Task.Run(() => FreeTranslateService.WarmupFreeRoutesAsync(warmupSnapshot));
             }
 
             // 0.1.35：启动后静默查一次更新。只提示，不下载、不安装、不触碰
@@ -1803,6 +1902,7 @@ public partial class App : Application
         }
 
         _shellSettings = activeSettings;
+        SyncNetworkProxyToCore(activeSettings);
         InterfaceKeys.Apply(activeSettings);
         ThemeService.Apply(activeSettings.Theme);
         // Full success closes any active failure cycle: surfaces clear and a

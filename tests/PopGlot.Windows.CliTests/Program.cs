@@ -82,7 +82,11 @@ internal static partial class Program
             }
             if (args.Contains("--live-omp")) Check("installed OMP providers/models/translation", () => Live("omp"));
             if (args.Contains("--probe-omp")) Check("installed OMP RPC with stale saved version, without inference", ProbeOmp);
-            if (args.Contains("--ui")) Check("WPF connection screen and buttons", () => { UiScenario.Run(root); return Task.CompletedTask; });
+            if (args.Contains("--ui"))
+            {
+                Check("WPF connection screen and buttons", () => { UiScenario.Run(root); return Task.CompletedTask; });
+                Check("WPF engine hub, discovery, proxy settings, and free routes", () => { ServicesAndProxyUiTests.Run(root); return Task.CompletedTask; });
+            }
         }
         finally { DirectTests.Restore(); Environment.SetEnvironmentVariable("POPGLOT_FAKE_PROTOCOL", null); Environment.SetEnvironmentVariable("POPGLOT_FAKE_SCENARIO", null); }
         Console.WriteLine($"RESULT {_passes} passed / {_failures} failed; isolated data: {root}");

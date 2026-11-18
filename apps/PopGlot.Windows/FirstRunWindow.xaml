@@ -42,7 +42,7 @@
                 <TextBlock Text="欢迎使用 PopGlot" Style="{StaticResource PageTitle}"
                            FontSize="22" FontWeight="SemiBold" />
                 <TextBlock Margin="0,10,0,0" TextWrapping="Wrap" FontSize="13.5"
-                           Text="选中文字或框选屏幕就能翻译，自带公共翻译，打开就能用。" />
+                           Text="选中文字、框选屏幕或打开极速查词（支持边输边译）就能翻译，自带 Bing、有道词典、MyMemory、Google 等公共翻译线路，打开就能用。" />
                 <TextBlock Margin="0,18,0,6" Text="常用快捷键" Style="{StaticResource SectionTitle}" />
                 <Border Style="{StaticResource Card}" Padding="14,10">
                     <StackPanel>
@@ -91,7 +91,7 @@
                             <StackPanel VerticalAlignment="Center">
                                 <TextBlock Text="开启免配置公共翻译" Style="{StaticResource RowTitle}" />
                                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
-                                           Text="不用填 API Key，直接把待翻译文字发给所选公共服务" />
+                                           Text="不用填 API Key，直接把待翻译文字发给所选公共服务（Bing、有道词典、MyMemory 或 Google；「自动优选」每次也只发给单条线路）" />
                             </StackPanel>
                             <ToggleButton x:Name="FreeEngineToggle" Grid.Column="1" VerticalAlignment="Center"
                                           Style="{StaticResource ToggleSwitch}" IsChecked="True"
@@ -159,7 +159,7 @@
                            FontSize="22" FontWeight="SemiBold" />
                 <TextBlock x:Name="DoneSummary" Margin="0,12,0,0" TextWrapping="Wrap" FontSize="13.5" />
                 <TextBlock Margin="0,16,0,0" TextWrapping="Wrap" FontSize="13.5"
-                           Text="如果你想用自己的模型或 API Key（OpenAI、DeepSeek、Claude、Gemini、Ollama 等），可以在「设置 → 引擎」里添加。" />
+                           Text="如果你想用自己的模型或 API Key（OpenAI、DeepSeek、SiliconFlow、智谱 GLM、Claude、Gemini、Ollama 等），可以在「设置 → 引擎」里一键扫描或添加。" />
                 <Button x:Name="OpenServicesButton" Margin="0,16,0,0" HorizontalAlignment="Left"
                         Style="{StaticResource GhostButton}" Padding="12,6"
                         Content="打开设置 → 引擎" Click="OpenServices_Click" />

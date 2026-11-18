@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Reflection;
 
 namespace PopGlot.Windows.Sections;
@@ -8,11 +9,13 @@ namespace PopGlot.Windows.Sections;
 public partial class GeneralSection : System.Windows.Controls.UserControl
 {
     private bool _loading;
+    private bool _loadingExtended;
 
     public GeneralSection()
     {
         InitializeComponent();
         ShowAppVersion();
+        LoadExtendedSettings();
     }
 
     /// <summary>
@@ -39,8 +42,331 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
     internal TextBlock StartupStateHintText => StartupStateHint;
     internal Button StartupRepair => StartupRepairButton;
     internal ToggleButton AutoUpdateCheck => AutoUpdateCheckToggle;
+    internal ToggleButton LiveTranslate => LiveTranslateToggle;
+    internal ComboBox LiveTranslateDelay => LiveTranslateDelayCombo;
+    internal ComboBox LiveTranslateScope => LiveTranslateScopeCombo;
+    internal ComboBox QuickSearchMode => QuickSearchModeCombo;
+    internal RadioButton ProxySystem => ProxySystemRadio;
+    internal RadioButton ProxyDirect => ProxyDirectRadio;
+    internal RadioButton ProxyCustom => ProxyCustomRadio;
+    internal TextBox CustomProxyUrlInput => CustomProxyTextBox;
+    internal TextBlock ProxyValidationHint => ProxyValidationText;
+    internal ToggleButton ProxyBypassLocal => ProxyBypassLocalToggle;
+    internal ToggleButton ProxyBypassDomestic => ProxyBypassDomesticToggle;
 
-    internal bool IsLoading { get => _loading; set => _loading = value; }
+    internal bool IsLoading
+    {
+        get => _loading;
+        set
+        {
+            var finishedLoading = _loading && !value;
+            _loading = value;
+            if (finishedLoading)
+            {
+                LoadExtendedSettings();
+            }
+        }
+    }
+
+    internal void LoadExtendedSettings()
+    {
+        if (LiveTranslateToggle is null || ProxySystemRadio is null)
+        {
+            return;
+        }
+
+        _loadingExtended = true;
+        try
+        {
+            var settings = ShellSettingsStore.Load();
+            LiveTranslateToggle.IsChecked = settings.LiveTranslateEnabled;
+            Helpers.SelectComboByTag(LiveTranslateDelayCombo, settings.LiveTranslateDelayMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            Helpers.SelectComboByTag(LiveTranslateScopeCombo, settings.LiveTranslateScope.ToString());
+            Helpers.SelectComboByTag(QuickSearchModeCombo, settings.QuickSearchWindowMode.ToString());
+
+            ProxySystemRadio.IsChecked = settings.NetworkProxyMode == NetworkProxyMode.System;
+            ProxyDirectRadio.IsChecked = settings.NetworkProxyMode == NetworkProxyMode.Direct;
+            ProxyCustomRadio.IsChecked = settings.NetworkProxyMode == NetworkProxyMode.Custom;
+            CustomProxyTextBox.Text = settings.CustomProxyUrl ?? string.Empty;
+            ProxyBypassLocalToggle.IsChecked = settings.ProxyBypassLocal;
+            ProxyBypassDomesticToggle.IsChecked = settings.ProxyBypassDomesticRoutes;
+
+            UpdateProxyUiState(validateCustomInput: settings.NetworkProxyMode == NetworkProxyMode.Custom);
+        }
+        catch (Exception)
+        {
+            // Keep default controls if storage is temporarily unavailable.
+        }
+        finally
+        {
+            _loadingExtended = false;
+        }
+    }
+
+    private void LiveTranslateSettings_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading || _loadingExtended)
+        {
+            return;
+        }
+
+        var enabled = LiveTranslateToggle.IsChecked == true;
+        var delayTag = (LiveTranslateDelayCombo.SelectedItem as ComboBoxItem)?.Tag as string;
+        var delayMs = int.TryParse(delayTag, out var parsedDelay)
+            ? ShellSettings.NormalizeLiveTranslateDelayMs(parsedDelay)
+            : ShellSettings.DefaultLiveTranslateDelayMs;
+        var scope = Helpers.SelectedEnum(LiveTranslateScopeCombo, PopGlot.Windows.LiveTranslateScope.FreeEngineOnly);
+        var mode = Helpers.SelectedEnum(QuickSearchModeCombo, QuickSearchWindowMode.Compact);
+
+        if (LiveTranslateDelayCombo is not null)
+        {
+            LiveTranslateDelayCombo.IsEnabled = enabled;
+        }
+        if (LiveTranslateScopeCombo is not null)
+        {
+            LiveTranslateScopeCombo.IsEnabled = enabled;
+        }
+
+        try
+        {
+            ShellSettingsStore.Update(current => current with
+            {
+                LiveTranslateEnabled = enabled,
+                LiveTranslateDelayMs = delayMs,
+                LiveTranslateScope = scope,
+                QuickSearchWindowMode = mode,
+            });
+        }
+        catch (Exception)
+        {
+            // Keep UI responsive even if disk write transiently fails.
+        }
+    }
+
+    private void ProxyModeRadio_Click(object sender, RoutedEventArgs e)
+    {
+        if (_loading || _loadingExtended)
+        {
+            return;
+        }
+
+        var selectedMode = ReadSelectedProxyMode();
+        UpdateProxyUiState(validateCustomInput: selectedMode == NetworkProxyMode.Custom);
+
+        if (selectedMode == NetworkProxyMode.Custom)
+        {
+            if (ValidateCustomProxyUrl(out var normalizedUrl))
+            {
+                SaveProxySettings(NetworkProxyMode.Custom, normalizedUrl);
+            }
+            else
+            {
+                CustomProxyTextBox.Focus();
+            }
+            return;
+        }
+
+        SaveProxySettings(selectedMode, ShellSettings.NormalizeCustomProxyUrl(CustomProxyTextBox.Text));
+    }
+
+    private void ProxyBypass_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading || _loadingExtended)
+        {
+            return;
+        }
+
+        var selectedMode = ReadSelectedProxyMode();
+        if (selectedMode == NetworkProxyMode.Custom && !ValidateCustomProxyUrl(out var validUrl))
+        {
+            SaveProxySettings(null, null);
+            return;
+        }
+
+        SaveProxySettings(
+            selectedMode,
+            selectedMode == NetworkProxyMode.Custom
+                ? ShellSettings.NormalizeCustomProxyUrl(CustomProxyTextBox.Text)
+                : ShellSettings.NormalizeCustomProxyUrl(CustomProxyTextBox.Text));
+    }
+
+    private void CustomProxyTextBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_loading || _loadingExtended || ProxyCustomRadio.IsChecked != true)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(CustomProxyTextBox.Text))
+        {
+            ShowProxyValidation("请输入代理地址，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7891", isError: true);
+            return;
+        }
+
+        if (App.TryValidateCustomProxyUrl(CustomProxyTextBox.Text, out _))
+        {
+            ShowProxyValidation(null, isError: false);
+        }
+    }
+
+    private void CustomProxyTextBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_loading || _loadingExtended || ProxyCustomRadio.IsChecked != true)
+        {
+            return;
+        }
+
+        TryCommitCustomProxy(showFeedbackIfValid: false);
+    }
+
+    private void CustomProxyTextBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && ProxyCustomRadio.IsChecked == true)
+        {
+            e.Handled = true;
+            TryCommitCustomProxy(showFeedbackIfValid: true);
+        }
+    }
+
+    private void ApplyCustomProxy_Click(object sender, RoutedEventArgs e)
+    {
+        if (_loading || _loadingExtended)
+        {
+            return;
+        }
+
+        ProxyCustomRadio.IsChecked = true;
+        UpdateProxyUiState(validateCustomInput: true);
+        TryCommitCustomProxy(showFeedbackIfValid: true);
+    }
+
+    private void TryCommitCustomProxy(bool showFeedbackIfValid)
+    {
+        if (!ValidateCustomProxyUrl(out var normalizedUrl))
+        {
+            return;
+        }
+
+        if (normalizedUrl is not null && !string.Equals(CustomProxyTextBox.Text.Trim(), normalizedUrl, StringComparison.Ordinal))
+        {
+            _loadingExtended = true;
+            try
+            {
+                CustomProxyTextBox.Text = normalizedUrl;
+            }
+            finally
+            {
+                _loadingExtended = false;
+            }
+        }
+
+        SaveProxySettings(NetworkProxyMode.Custom, normalizedUrl);
+        if (showFeedbackIfValid)
+        {
+            ShowProxyValidation($"已应用自定义代理：{normalizedUrl}", isError: false);
+        }
+    }
+
+    private NetworkProxyMode ReadSelectedProxyMode()
+    {
+        if (ProxyDirectRadio.IsChecked == true)
+        {
+            return NetworkProxyMode.Direct;
+        }
+        if (ProxyCustomRadio.IsChecked == true)
+        {
+            return NetworkProxyMode.Custom;
+        }
+        return NetworkProxyMode.System;
+    }
+
+    private void UpdateProxyUiState(bool validateCustomInput)
+    {
+        var isCustom = ProxyCustomRadio.IsChecked == true;
+        CustomProxyRow.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
+        CustomProxyTextBox.IsEnabled = isCustom;
+        ApplyCustomProxyButton.IsEnabled = isCustom;
+
+        if (LiveTranslateDelayCombo is not null)
+        {
+            LiveTranslateDelayCombo.IsEnabled = LiveTranslateToggle.IsChecked == true;
+        }
+        if (LiveTranslateScopeCombo is not null)
+        {
+            LiveTranslateScopeCombo.IsEnabled = LiveTranslateToggle.IsChecked == true;
+        }
+
+        if (!isCustom)
+        {
+            ShowProxyValidation(null, isError: false);
+        }
+        else if (validateCustomInput)
+        {
+            ValidateCustomProxyUrl(out _);
+        }
+    }
+
+    private bool ValidateCustomProxyUrl(out string? normalizedUrl)
+    {
+        normalizedUrl = null;
+        var raw = CustomProxyTextBox.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            ShowProxyValidation("请输入代理地址，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7891", isError: true);
+            return false;
+        }
+
+        if (!App.TryValidateCustomProxyUrl(raw, out var validUrl) || validUrl is null)
+        {
+            ShowProxyValidation("代理地址格式无效，请使用 http://、https://、socks5:// 或 socks5h:// 并包含端口。", isError: true);
+            return false;
+        }
+
+        normalizedUrl = validUrl;
+        ShowProxyValidation(null, isError: false);
+        return true;
+    }
+
+    private void ShowProxyValidation(string? message, bool isError)
+    {
+        if (ProxyValidationText is null)
+        {
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            ProxyValidationText.Text = string.Empty;
+            ProxyValidationText.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        ProxyValidationText.Text = message;
+        ProxyValidationText.SetResourceReference(
+            TextBlock.ForegroundProperty,
+            isError ? "DangerBrush" : "SuccessBrush");
+        ProxyValidationText.Visibility = Visibility.Visible;
+    }
+
+    private void SaveProxySettings(NetworkProxyMode? modeOverride, string? customUrlOverride)
+    {
+        var bypassLocal = ProxyBypassLocalToggle.IsChecked == true;
+        var bypassDomestic = ProxyBypassDomesticToggle.IsChecked == true;
+        try
+        {
+            var updated = ShellSettingsStore.Update(current => current with
+            {
+                NetworkProxyMode = modeOverride ?? current.NetworkProxyMode,
+                CustomProxyUrl = customUrlOverride ?? current.CustomProxyUrl,
+                ProxyBypassLocal = bypassLocal,
+                ProxyBypassDomesticRoutes = bypassDomestic,
+            });
+            App.SyncNetworkProxyToCore(updated);
+        }
+        catch (Exception)
+        {
+            // Keep UI responsive even if persistence fails transiently.
+        }
+    }
 
     /// <summary>Writes the startup update-check switch without a settings save bar.</summary>
     private void AutoUpdateCheck_Changed(object sender, RoutedEventArgs e)

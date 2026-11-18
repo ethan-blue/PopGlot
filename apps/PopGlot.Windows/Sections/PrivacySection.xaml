@@ -9,9 +9,9 @@
     <StackPanel>
         <Border Margin="0,0,0,12">
             <StackPanel>
-                <TextBlock Text="只有在你主动翻译时才会处理内容，平时不会监听剪贴板或屏幕。" Style="{StaticResource Caption}" TextWrapping="Wrap" />
+                <TextBlock Text="只有在主动翻译或开启「边输边译」停止输入时才会处理内容，平时不会监听剪贴板或屏幕。" Style="{StaticResource Caption}" TextWrapping="Wrap" />
                 <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap" LineHeight="17"
-                           Text="在线翻译、登录账号或开启云端朗读时才会联网；本机文字识别与密钥都只保存在你自己的电脑上。" />
+                           Text="在线翻译、登录账号或开启云端朗读时才会联网；本机文字识别与密钥只保存在当前电脑上，边输边译的中间过程不写入历史。" />
             </StackPanel>
         </Border>
 
@@ -135,7 +135,7 @@
                         <TextBlock Text="{x:Static services:EngineWording.FreePublicTranslationName}" Style="{StaticResource RowTitle}" />
                         <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap"
                                    ToolTip="{x:Static services:EngineWording.FreeEngineOnlineServiceNote}"
-                                   Text="无需密钥即可使用；待译文本会发往所选公共服务" />
+                                   Text="无需密钥；支持 Bing、有道词典、MyMemory 与 Google，每次只发往选中的单条线路" />
                         <TextBlock x:Name="FreeEngineConsentState" Style="{StaticResource Caption}"
                                    Margin="0,4,0,0" />
                     </StackPanel>
