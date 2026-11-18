@@ -40,6 +40,7 @@ internal static partial class CoreBridge
     };
 
     private static readonly Lock SettingsGate = new();
+    private static readonly Lock ProxyGate = new();
     private static readonly SemaphoreSlim SaveQueue = new(1, 1);
 
     /// <summary>
@@ -59,6 +60,38 @@ internal static partial class CoreBridge
         var resolvedDirectory = configDirectory ?? StoragePaths.CoreConfigDirectory;
         Directory.CreateDirectory(resolvedDirectory);
         EnsureSuccess<string>(Invoke(() => NativeMethods.Initialize(resolvedDirectory)));
+    }
+
+    /// <summary>
+    /// Configures the Rust core's outbound HTTP/HTTPS/SOCKS5 proxy policy
+    /// (<c>Direct</c> | <c>System</c> | <c>Custom</c>) and immediately evicts
+    /// stale pooled clients so changes take effect without restarting.
+    /// Loopback / local runtime targets always bypass any configured proxy.
+    /// </summary>
+    public static void ConfigureNetworkProxy(
+        string mode,
+        string? proxyUrl = null,
+        bool bypassLocal = true,
+        string? noProxy = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(mode);
+        lock (ProxyGate)
+        {
+            EnsureSuccess<string>(Invoke(() =>
+                NativeMethods.ConfigureNetworkProxy(mode, proxyUrl, bypassLocal ? 1 : 0, noProxy)));
+        }
+    }
+
+    /// <summary>
+    /// Returns the active Rust core proxy configuration (with any URL
+    /// credentials redacted).
+    /// </summary>
+    public static NetworkProxyConfigDto GetNetworkProxy()
+    {
+        lock (ProxyGate)
+        {
+            return EnsureSuccess<NetworkProxyConfigDto>(Invoke(NativeMethods.GetNetworkProxy));
+        }
     }
 
     /// <summary>
@@ -1304,6 +1337,12 @@ internal sealed record VisionProviderOverride(
     bool AllowInsecureTls = false,
     bool AllowLanEndpoints = false);
 
+internal sealed record NetworkProxyConfigDto(
+    string Mode,
+    string? ProxyUrl = null,
+    bool BypassLocal = true,
+    string? NoProxy = null);
+
 internal sealed record ProviderSettings(
     uint SchemaVersion,
     ProviderType ProviderType,
@@ -1333,7 +1372,9 @@ internal sealed record ProviderSettings(
     /// <summary>模型上下文窗口 tokens；0 = 自动（PopGlot 保守默认）。</summary>
     uint ContextTokens = 0,
     /// <summary>单次请求输出上限 tokens；0 = 自适应（按原文长度预算）。</summary>
-    uint OutputTokens = 0)
+    uint OutputTokens = 0,
+    /// <summary>可选的单请求代理覆盖；为 null 时跟随全局 ConfigureNetworkProxy。</summary>
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] NetworkProxyConfigDto? Proxy = null)
 {
     public bool VisionIsConfigured => SupportsVision && !string.IsNullOrWhiteSpace(VisionModel);
     public bool TextIsConfigured => SupportsText && !string.IsNullOrWhiteSpace(TextModel);

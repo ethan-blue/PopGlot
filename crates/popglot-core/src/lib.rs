@@ -30,8 +30,9 @@ pub use streaming::{
 };
 
 use popglot_domain::{
-    LanguagePair, ProviderSettings, RoutingContext, RoutingDecision, TranslationMode,
-    protect_tokens, restore_tokens, select_route,
+    LanguagePair, NetworkProxyConfig, ProviderSettings, RoutingContext, RoutingDecision,
+    TranslationMode, effective_proxy_for, protect_tokens, restore_tokens, select_route,
+    validate_proxy_config,
 };
 use std::fs::{self, File};
 use std::io::Write;
@@ -52,6 +53,7 @@ static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 pub struct AppCore {
     settings_path: PathBuf,
     settings: ProviderSettings,
+    proxy_config: NetworkProxyConfig,
     prompt_store: PromptStore,
     provider_client: ProviderClient,
     startup_notice: Option<String>,
@@ -66,6 +68,21 @@ impl AppCore {
     /// settings cannot be read. Corrupt JSON files are backed up safely with a
     /// timestamp suffix so user data is never lost.
     pub fn open(config_directory: impl AsRef<Path>) -> Result<Self, CoreError> {
+        Self::open_with_proxy(config_directory, &NetworkProxyConfig::default())
+    }
+
+    /// Opens an application core with an explicit initial network proxy policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError`] when the directory cannot be created, existing
+    /// settings cannot be read, or the proxy configuration is invalid.
+    pub fn open_with_proxy(
+        config_directory: impl AsRef<Path>,
+        proxy_config: &NetworkProxyConfig,
+    ) -> Result<Self, CoreError> {
+        let proxy_config = validate_proxy_config(proxy_config)
+            .map_err(|e| ProviderError::new(ProviderErrorKind::Configuration, e.to_string()))?;
         let directory = config_directory.as_ref();
         fs::create_dir_all(directory)?;
         let settings_path = directory.join(SETTINGS_FILE);
@@ -98,16 +115,29 @@ impl AppCore {
         } else {
             ProviderSettings::default()
         };
-        let provider_client = ProviderClient::new(Self::limits_for(&settings))?;
+        let effective_proxy = Self::resolve_effective_proxy(&settings, &proxy_config)
+            .unwrap_or_else(|_| NetworkProxyConfig::direct());
+        let provider_client =
+            ProviderClient::new_with_proxy(Self::limits_for(&settings), &effective_proxy)?;
         let prompt_store =
             PromptStore::open(directory).map_err(|e| std::io::Error::other(e.to_string()))?;
         Ok(Self {
             settings_path,
             settings,
+            proxy_config,
             prompt_store,
             provider_client,
             startup_notice,
         })
+    }
+
+    fn resolve_effective_proxy(
+        settings: &ProviderSettings,
+        fallback_proxy: &NetworkProxyConfig,
+    ) -> Result<NetworkProxyConfig, ProviderError> {
+        let candidate = settings.proxy.as_ref().unwrap_or(fallback_proxy);
+        effective_proxy_for(&settings.api_base_url, candidate)
+            .map_err(|e| ProviderError::new(ProviderErrorKind::Configuration, e.to_string()))
     }
 
     #[must_use]
@@ -124,8 +154,34 @@ impl AppCore {
     }
 
     #[must_use]
+    pub fn proxy_config(&self) -> &NetworkProxyConfig {
+        &self.proxy_config
+    }
+
+    #[must_use]
     pub fn provider_client(&self) -> &ProviderClient {
         &self.provider_client
+    }
+
+    /// Updates the core's network proxy configuration and rebuilds the active
+    /// HTTP client so changes take effect immediately without restarting.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError`] when the proxy configuration is invalid or the
+    /// client cannot be constructed.
+    pub fn set_network_proxy(
+        &mut self,
+        proxy_config: &NetworkProxyConfig,
+    ) -> Result<(), CoreError> {
+        let normalized = validate_proxy_config(proxy_config)
+            .map_err(|e| ProviderError::new(ProviderErrorKind::Configuration, e.to_string()))?;
+        let effective = Self::resolve_effective_proxy(&self.settings, &normalized)?;
+        let next_client =
+            ProviderClient::new_with_proxy(Self::limits_for(&self.settings), &effective)?;
+        self.proxy_config = normalized;
+        self.provider_client = next_client;
+        Ok(())
     }
 
     /// Returns and clears the one-shot startup notice (e.g. corrupted settings
@@ -162,15 +218,23 @@ impl AppCore {
         validate_settings(&settings)?;
         validate_provider_settings(&settings)?;
         let json = serde_json::to_string_pretty(&settings)?;
-        // Rebuild the client only when its transport limits change; it is
-        // constructed before any disk write so a failure leaves settings
+        let prev_effective = Self::resolve_effective_proxy(&self.settings, &self.proxy_config)
+            .unwrap_or_else(|_| NetworkProxyConfig::direct());
+        let next_effective = Self::resolve_effective_proxy(&settings, &self.proxy_config)?;
+        // Rebuild the client when transport limits or effective proxy change;
+        // it is constructed before any disk write so a failure leaves settings
         // untouched on both memory and disk.
-        let next_provider_client =
-            if settings.allow_insecure_tls == self.settings.allow_insecure_tls {
-                None
-            } else {
-                Some(ProviderClient::new(Self::limits_for(&settings))?)
-            };
+        let next_provider_client = if settings.allow_insecure_tls
+            == self.settings.allow_insecure_tls
+            && next_effective == prev_effective
+        {
+            None
+        } else {
+            Some(ProviderClient::new_with_proxy(
+                Self::limits_for(&settings),
+                &next_effective,
+            )?)
+        };
 
         let temp_path = self.settings_path.with_extension("tmp");
         let bak_path = self.settings_path.with_extension("bak");
@@ -249,15 +313,43 @@ impl AppCore {
         request_id: Option<&str>,
         cancellation: &CancellationToken,
     ) -> Result<TranslationResponse, ProviderError> {
+        let fallback = NetworkProxyConfig::direct();
+        let proxy = draft_settings.proxy.as_ref().unwrap_or(&fallback);
+        Self::test_connection_draft_with_proxy(
+            draft_settings,
+            proxy,
+            api_key,
+            request_id,
+            cancellation,
+        )
+        .await
+    }
+
+    /// Tests connection using an in-memory draft configuration and an explicit
+    /// proxy policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderError`] for invalid draft settings, invalid proxy
+    /// configuration, or transport failures.
+    pub async fn test_connection_draft_with_proxy(
+        draft_settings: &ProviderSettings,
+        proxy: &NetworkProxyConfig,
+        api_key: &str,
+        request_id: Option<&str>,
+        cancellation: &CancellationToken,
+    ) -> Result<TranslationResponse, ProviderError> {
         validate_settings(draft_settings)
             .map_err(|e| ProviderError::new(ProviderErrorKind::Configuration, e.to_string()))?;
         validate_provider_settings(draft_settings)?;
+        let effective = Self::resolve_effective_proxy(draft_settings, proxy)?;
         // P04: the draft connection test rides the pooled transport (same
-        // origin/limits key as the draft execution paths) instead of paying
-        // TCP + TLS setup per click.
-        let client = crate::transport_pool::pooled_client(
+        // origin/limits/proxy key as the draft execution paths) instead of
+        // paying TCP + TLS setup per click.
+        let client = crate::transport_pool::pooled_client_with_proxy(
             &draft_settings.api_base_url,
             &Self::limits_for(draft_settings),
+            &effective,
         )?;
         let generated_id = format!(
             "connection-draft-{}",
@@ -1270,6 +1362,61 @@ mod tests {
         core.settings.safe_dev_mode = true;
         let offline = core.plan_screenshot_route(true, true);
         assert!(!offline.may_upload_image);
+
+        fs::remove_dir_all(directory).expect("remove isolated test directory");
+    }
+
+    #[test]
+    fn app_core_proxy_configuration_and_local_bypass_rebuild_client() {
+        let directory = scratch_directory("proxy-core-test");
+        let mut core = AppCore::open_with_proxy(
+            &directory,
+            &NetworkProxyConfig::custom("http://127.0.0.1:7890"),
+        )
+        .expect("open core with proxy");
+
+        // Default base_url is https://api.openai.com/v1 -> Custom proxy active.
+        assert_eq!(
+            core.provider_client().proxy_mode(),
+            popglot_domain::ProxyMode::Custom
+        );
+
+        // Switching to a local Ollama URL forces Direct (.no_proxy()) on save_settings.
+        let local = ProviderSettings {
+            api_base_url: "http://127.0.0.1:11434/v1".to_owned(),
+            ..ProviderSettings::default()
+        };
+        core.save_settings(local).expect("save local settings");
+        assert_eq!(
+            core.provider_client().proxy_mode(),
+            popglot_domain::ProxyMode::Direct
+        );
+
+        // Switching back to a public HTTPS URL restores Custom proxy.
+        let remote = ProviderSettings {
+            api_base_url: "https://api.openai.com/v1".to_owned(),
+            ..ProviderSettings::default()
+        };
+        core.save_settings(remote).expect("save remote settings");
+        assert_eq!(
+            core.provider_client().proxy_mode(),
+            popglot_domain::ProxyMode::Custom
+        );
+
+        // Switching proxy mode to System updates provider_client immediately.
+        core.set_network_proxy(&NetworkProxyConfig::system())
+            .expect("set system proxy");
+        assert_eq!(
+            core.provider_client().proxy_mode(),
+            popglot_domain::ProxyMode::System
+        );
+
+        // Invalid custom proxy URL fails cleanly and preserves previous proxy config.
+        assert!(
+            core.set_network_proxy(&NetworkProxyConfig::custom("ftp://127.0.0.1:21"))
+                .is_err()
+        );
+        assert_eq!(core.proxy_config().mode, popglot_domain::ProxyMode::System);
 
         fs::remove_dir_all(directory).expect("remove isolated test directory");
     }

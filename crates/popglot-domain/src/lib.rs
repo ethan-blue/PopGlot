@@ -10,6 +10,7 @@ use std::sync::LazyLock;
 
 pub mod language;
 pub mod prompt;
+pub mod proxy;
 
 pub use language::{AUTO_LANGUAGE, LanguagePair, language_english_name, normalize_language_tag};
 pub use prompt::{
@@ -19,6 +20,10 @@ pub use prompt::{
     MAX_TEMPLATE_BODY_BYTES, MAX_TEMPLATE_DESCRIPTION_SCALARS, MAX_TEMPLATE_NAME_SCALARS,
     PROMPT_SCHEMA_VERSION, PastRevision, PromptTemplate, PromptVariables, compile_instruction,
     compile_prompt,
+};
+pub use proxy::{
+    NetworkProxyConfig, ProxyConfigError, ProxyMode, effective_proxy_for, host_matches_no_proxy,
+    normalize_no_proxy, redact_proxy_url, validate_proxy_config, validate_proxy_url,
 };
 
 /// User-selected translation pipeline.
@@ -97,6 +102,10 @@ pub struct ProviderSettings {
     /// budget; explicit values are clamped by [`resolve_output_tokens`].
     #[serde(default)]
     pub output_tokens: u32,
+    /// Optional per-request proxy override. When absent, the core's configured
+    /// network proxy policy applies (defaulting to [`ProxyMode::Direct`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<NetworkProxyConfig>,
 }
 
 /// User-selected thinking depth. Serialized `snake_case`; unknown strings from
@@ -167,6 +176,7 @@ impl Default for ProviderSettings {
             reasoning_level: ReasoningLevel::Auto,
             context_tokens: 0,
             output_tokens: 0,
+            proxy: None,
         }
     }
 }
@@ -192,6 +202,7 @@ impl ProviderSettings {
     /// # Errors
     ///
     /// Returns whatever deserialization error the underlying data carries.
+    #[allow(clippy::too_many_lines)]
     pub fn denied_when_missing<'de, D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -232,6 +243,8 @@ impl ProviderSettings {
             context_tokens: u32,
             #[serde(default)]
             output_tokens: u32,
+            #[serde(default)]
+            proxy: Option<NetworkProxyConfig>,
         }
 
         impl Default for Shadow {
@@ -264,6 +277,7 @@ impl ProviderSettings {
                     reasoning_level: defaults.reasoning_level,
                     context_tokens: defaults.context_tokens,
                     output_tokens: defaults.output_tokens,
+                    proxy: None,
                 }
             }
         }
@@ -296,6 +310,7 @@ impl ProviderSettings {
             reasoning_level: shadow.reasoning_level,
             context_tokens: shadow.context_tokens,
             output_tokens: shadow.output_tokens,
+            proxy: shadow.proxy,
         })
     }
 
@@ -581,6 +596,7 @@ impl ProviderProfile {
             reasoning_level: ReasoningLevel::Auto,
             context_tokens: 0,
             output_tokens: 0,
+            proxy: None,
         }
     }
 }

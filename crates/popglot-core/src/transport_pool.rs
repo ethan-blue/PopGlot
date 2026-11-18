@@ -22,7 +22,11 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::provider::{ProviderClient, ProviderError, TransportLimits, transport_origin};
+use popglot_domain::{NetworkProxyConfig, effective_proxy_for};
+
+use crate::provider::{
+    ProviderClient, ProviderError, ProviderErrorKind, TransportLimits, transport_origin,
+};
 
 /// Maximum simultaneously pooled clients. Distinct origins × transport
 /// configurations beyond this evict the least recently used entry.
@@ -33,12 +37,13 @@ const MAX_ENTRIES: usize = 8;
 const IDLE_EVICTION: Duration = Duration::from_secs(600);
 
 /// Bumped whenever the client-construction behaviour itself changes (e.g. a
-/// new default policy), so old pool entries can never satisfy a new runtime.
-const TRANSPORT_REVISION: u64 = 1;
+/// new default policy or proxy configuration support), so old pool entries
+/// can never satisfy a new runtime.
+const TRANSPORT_REVISION: u64 = 2;
 
-/// The complete identity of a pooled client: the normalized transport origin
-/// plus every [`TransportLimits`] field that shapes the underlying
-/// `reqwest::Client`, plus the construction revision.
+/// The complete identity of a pooled client: the normalized transport origin,
+/// every [`TransportLimits`] field that shapes the underlying `reqwest::Client`,
+/// the normalized effective [`NetworkProxyConfig`], plus the construction revision.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TransportKey {
     origin: String,
@@ -50,21 +55,39 @@ pub struct TransportKey {
     max_retries: u8,
     retry_delay: Duration,
     accept_invalid_certs: bool,
+    proxy: NetworkProxyConfig,
     transport_revision: u64,
 }
 
 impl TransportKey {
-    /// Derives the key from a Base URL and the transport limits. The origin
-    /// goes through the SAME validation as request URL construction — an
-    /// invalid base is a configuration error, never a silently mismatched
-    /// cache entry.
+    /// Derives the key from a Base URL and the transport limits using
+    /// [`NetworkProxyConfig::direct`].
     ///
     /// # Errors
     ///
     /// Returns a configuration error when the Base URL fails validation.
     pub fn from_base_url(base: &str, limits: &TransportLimits) -> Result<Self, ProviderError> {
+        Self::from_base_url_with_proxy(base, limits, &NetworkProxyConfig::direct())
+    }
+
+    /// Derives the key from a Base URL, transport limits, and a proxy policy.
+    /// Loopback / local bypass rules are resolved deterministically here so
+    /// direct and bypassed entries share the canonical direct key.
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error when the Base URL or proxy configuration
+    /// fails validation.
+    pub fn from_base_url_with_proxy(
+        base: &str,
+        limits: &TransportLimits,
+        proxy: &NetworkProxyConfig,
+    ) -> Result<Self, ProviderError> {
+        let origin = transport_origin(base)?;
+        let effective_proxy = effective_proxy_for(base, proxy)
+            .map_err(|e| ProviderError::new(ProviderErrorKind::Configuration, e.to_string()))?;
         Ok(Self {
-            origin: transport_origin(base)?,
+            origin,
             connect_timeout: limits.connect_timeout,
             total_timeout: limits.total_timeout,
             stream_idle_timeout: limits.stream_idle_timeout,
@@ -73,8 +96,15 @@ impl TransportKey {
             max_retries: limits.max_retries,
             retry_delay: limits.retry_delay,
             accept_invalid_certs: limits.accept_invalid_certs,
+            proxy: effective_proxy,
             transport_revision: TRANSPORT_REVISION,
         })
+    }
+
+    /// Returns the effective proxy policy stored in this key (for diagnostics/tests).
+    #[must_use]
+    pub fn effective_proxy(&self) -> &NetworkProxyConfig {
+        &self.proxy
     }
 
     fn limits(&self) -> TransportLimits {
@@ -136,7 +166,7 @@ impl ProviderClientPool {
 
         // Construction happens OUTSIDE the lock: a TLS setup stall must not
         // block lookups for unrelated origins.
-        let client = ProviderClient::new(key.limits())?;
+        let client = ProviderClient::new_with_proxy(key.limits(), &key.proxy)?;
 
         let mut entries = self.lock();
         // Another thread may have inserted the same key while we built.
@@ -177,6 +207,12 @@ impl ProviderClientPool {
         self.len() == 0
     }
 
+    /// Evicts all pooled clients so updated system/custom proxy settings take
+    /// effect immediately on the next request.
+    pub fn clear(&self) {
+        self.lock().clear();
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<TransportKey, PooledClient>> {
         // A poisoned lock means another thread panicked mid-map-op; the map
         // itself is still structurally valid, so recovering is safer than
@@ -205,6 +241,21 @@ pub fn pooled_client(
     base_url: &str,
     limits: &TransportLimits,
 ) -> Result<ProviderClient, ProviderError> {
-    let key = TransportKey::from_base_url(base_url, limits)?;
+    pooled_client_with_proxy(base_url, limits, &NetworkProxyConfig::direct())
+}
+
+/// Returns a pooled client honoring the supplied proxy policy (with loopback
+/// and local bypass resolved into the key).
+///
+/// # Errors
+///
+/// Returns a configuration error when the Base URL or proxy configuration is
+/// invalid or the client cannot be constructed.
+pub fn pooled_client_with_proxy(
+    base_url: &str,
+    limits: &TransportLimits,
+    proxy: &NetworkProxyConfig,
+) -> Result<ProviderClient, ProviderError> {
+    let key = TransportKey::from_base_url_with_proxy(base_url, limits, proxy)?;
     ProviderClientPool::global().get_or_create(key)
 }

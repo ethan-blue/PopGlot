@@ -3,7 +3,10 @@
 use crate::sse::SseDecoder;
 use crate::streaming::{TextFirstAssembler, TranslationMetadata};
 use futures_util::StreamExt as _;
-use popglot_domain::{LanguagePair, ProviderSettings, ProviderType, is_local_base_url};
+use popglot_domain::{
+    EndpointClass, LanguagePair, NetworkProxyConfig, ProviderSettings, ProviderType, ProxyMode,
+    classify_endpoint, is_local_base_url, validate_proxy_config,
+};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, RETRY_AFTER};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -723,22 +726,64 @@ pub fn generate_stream_delimiter() -> Result<String, ProviderError> {
 #[derive(Debug, Clone)]
 pub struct ProviderClient {
     client: reqwest::Client,
+    direct_client: Option<reqwest::Client>,
     limits: TransportLimits,
+    proxy_mode: ProxyMode,
+    bypass_local: bool,
 }
 
 impl ProviderClient {
-    /// Creates a reusable client with a bounded connection timeout and no cookies.
+    /// Creates a reusable direct (`.no_proxy()`) client with a bounded
+    /// connection timeout and no cookies.
     ///
     /// # Errors
     ///
     /// Returns [`ProviderError`] if the TLS/HTTP client cannot be constructed.
     pub fn new(limits: TransportLimits) -> Result<Self, ProviderError> {
+        Self::new_with_proxy(limits, &NetworkProxyConfig::direct())
+    }
+
+    /// Creates a reusable client configured with an explicit proxy policy.
+    ///
+    /// Localhost / loopback targets always bypass any configured proxy via a
+    /// dedicated `.no_proxy()` client; RFC1918 private targets bypass whenever
+    /// `proxy.bypass_local` is enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderError`] if the proxy configuration is invalid or the
+    /// TLS/HTTP client cannot be constructed.
+    pub fn new_with_proxy(
+        limits: TransportLimits,
+        proxy: &NetworkProxyConfig,
+    ) -> Result<Self, ProviderError> {
+        let normalized = validate_proxy_config(proxy).map_err(|error| {
+            ProviderError::new(ProviderErrorKind::Configuration, error.to_string())
+        })?;
+        let client = Self::build_reqwest_client(&limits, &normalized)?;
+        let direct_client = if normalized.mode == ProxyMode::Direct {
+            None
+        } else {
+            Some(Self::build_reqwest_client(
+                &limits,
+                &NetworkProxyConfig::direct(),
+            )?)
+        };
+        Ok(Self {
+            client,
+            direct_client,
+            limits,
+            proxy_mode: normalized.mode,
+            bypass_local: normalized.bypass_local,
+        })
+    }
+
+    fn build_reqwest_client(
+        limits: &TransportLimits,
+        proxy: &NetworkProxyConfig,
+    ) -> Result<reqwest::Client, ProviderError> {
         let mut builder = reqwest::Client::builder()
             .connect_timeout(limits.connect_timeout)
-            // Provider endpoints are explicit product configuration. Do not
-            // silently reroute API keys or private-runtime traffic through a
-            // machine-wide proxy; users who need a gateway configure its URL.
-            .no_proxy()
             .redirect(same_origin_redirect_policy())
             .user_agent(concat!("PopGlot/", env!("CARGO_PKG_VERSION")));
         if limits.accept_invalid_certs {
@@ -746,13 +791,51 @@ impl ProviderClient {
             // the toggle is explicit user consent in provider settings.
             builder = builder.danger_accept_invalid_certs(true);
         }
-        let client = builder.build().map_err(|error| {
+        builder = match proxy.mode {
+            ProxyMode::Direct => builder.no_proxy(),
+            ProxyMode::System => builder,
+            ProxyMode::Custom => {
+                let proxy_url = proxy.proxy_url.as_deref().ok_or_else(|| {
+                    ProviderError::new(
+                        ProviderErrorKind::Configuration,
+                        "已选择自定义代理，但未填写代理地址。",
+                    )
+                })?;
+                let mut req_proxy = reqwest::Proxy::all(proxy_url).map_err(|_| {
+                    ProviderError::new(
+                        ProviderErrorKind::Configuration,
+                        "自定义代理地址无效，请检查协议、主机与端口。",
+                    )
+                })?;
+                let no_proxy_list = build_custom_no_proxy(proxy);
+                req_proxy = req_proxy.no_proxy(reqwest::NoProxy::from_string(&no_proxy_list));
+                builder.proxy(req_proxy)
+            }
+        };
+        builder.build().map_err(|error| {
+            let safe_detail = crate::benchmark::sanitize_error_string(&error.to_string());
             ProviderError::new(
                 ProviderErrorKind::Configuration,
-                format!("无法建立 HTTP 客户端：{error}"),
+                format!("无法建立 HTTP 客户端：{safe_detail}"),
             )
-        })?;
-        Ok(Self { client, limits })
+        })
+    }
+
+    fn client_for_base_url(&self, base_url: &str) -> &reqwest::Client {
+        let Some(direct) = &self.direct_client else {
+            return &self.client;
+        };
+        match classify_endpoint(base_url) {
+            EndpointClass::Loopback => direct,
+            EndpointClass::PrivateNetwork if self.bypass_local => direct,
+            EndpointClass::PrivateNetwork | EndpointClass::Internet => &self.client,
+        }
+    }
+
+    /// Returns the proxy mode this client was constructed with (for diagnostics/tests).
+    #[must_use]
+    pub fn proxy_mode(&self) -> ProxyMode {
+        self.proxy_mode
     }
 
     /// Executes one text or vision translation with cancellation and bounded retry.
@@ -790,9 +873,11 @@ impl ProviderClient {
         }
         let url = build_url(&settings.api_base_url, &prepared.endpoint)?;
         let headers = build_headers(settings, &prepared)?;
+        let http_client = self.client_for_base_url(&settings.api_base_url);
         let started = Instant::now();
 
         let operation = self.execute_with_retry(
+            http_client,
             provider,
             api_key,
             request_id,
@@ -818,6 +903,7 @@ impl ProviderClient {
     #[allow(clippy::too_many_arguments)]
     async fn execute_with_retry(
         &self,
+        http_client: &reqwest::Client,
         provider: &dyn TranslationProvider,
         api_key: &str,
         request_id: &str,
@@ -837,10 +923,10 @@ impl ProviderClient {
                 endpoint = prepared.endpoint,
                 attempt,
                 contains_image = prepared.contains_image,
+                proxy_mode = ?self.proxy_mode,
                 "provider request started"
             );
-            let mut builder = self
-                .client
+            let mut builder = http_client
                 .post(url.clone())
                 .headers(headers.clone())
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -967,6 +1053,7 @@ impl ProviderClient {
         }
         let url = build_url(&settings.api_base_url, &prepared.endpoint)?;
         let headers = build_headers(settings, &prepared)?;
+        let http_client = self.client_for_base_url(&settings.api_base_url);
         let started = Instant::now();
         let operation = async {
             let mut attempt = 0_u8;
@@ -975,6 +1062,7 @@ impl ProviderClient {
                 let mut emitted = false;
                 match self
                     .execute_stream_once(
+                        http_client,
                         provider,
                         api_key,
                         &prepared,
@@ -1012,6 +1100,7 @@ impl ProviderClient {
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // Transport state and callback are deliberately kept local per attempt.
     async fn execute_stream_once<F>(
         &self,
+        http_client: &reqwest::Client,
         provider: &dyn TranslationProvider,
         api_key: &str,
         prepared: &PreparedProviderRequest,
@@ -1026,8 +1115,7 @@ impl ProviderClient {
     where
         F: FnMut(&str),
     {
-        let mut builder = self
-            .client
+        let mut builder = http_client
             .post(url)
             .headers(headers)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -1173,6 +1261,27 @@ impl ProviderClient {
             () = tokio::time::sleep(delay) => Ok(()),
         }
     }
+}
+
+fn build_custom_no_proxy(proxy: &NetworkProxyConfig) -> String {
+    let mut entries = vec![
+        "localhost".to_owned(),
+        "127.0.0.1".to_owned(),
+        "::1".to_owned(),
+    ];
+    if proxy.bypass_local {
+        entries.push("10.0.0.0/8".to_owned());
+        entries.push("172.16.0.0/12".to_owned());
+        entries.push("192.168.0.0/16".to_owned());
+    }
+    if let Some(extra) = proxy.no_proxy.as_deref() {
+        for item in extra.split([',', ';']).map(str::trim) {
+            if !item.is_empty() {
+                entries.push(item.to_owned());
+            }
+        }
+    }
+    entries.join(",")
 }
 
 #[must_use]

@@ -12,8 +12,8 @@ use popglot_core::AppCore;
 use popglot_core::provider::ProviderClient;
 use popglot_core::transport_pool;
 use popglot_domain::{
-    BUILTIN_FAITHFUL_ID, LanguagePair, PromptTemplate, PromptVariables, ProviderSettings,
-    compile_prompt,
+    BUILTIN_FAITHFUL_ID, LanguagePair, NetworkProxyConfig, PromptTemplate, PromptVariables,
+    ProviderSettings, ProxyMode, compile_prompt, normalize_no_proxy, validate_proxy_config,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -30,19 +30,38 @@ use tokio_util::sync::CancellationToken;
 static CORE: OnceLock<RwLock<AppCore>> = OnceLock::new();
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 static ACTIVE_REQUESTS: OnceLock<Mutex<HashMap<String, CancellationToken>>> = OnceLock::new();
+static NETWORK_PROXY: OnceLock<RwLock<NetworkProxyConfig>> = OnceLock::new();
 static REQUEST_TICKET: AtomicU64 = AtomicU64::new(1);
+
+fn network_proxy_lock() -> &'static RwLock<NetworkProxyConfig> {
+    NETWORK_PROXY.get_or_init(|| RwLock::new(NetworkProxyConfig::default()))
+}
+
+fn current_network_proxy() -> NetworkProxyConfig {
+    match network_proxy_lock().read() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    }
+}
 
 /// P04: the draft execution paths (profile text/vision streaming, draft
 /// snapshots) share bounded per-origin transport clients instead of paying
 /// TCP + TLS setup on every call. The pool key carries every
 /// transport-affecting parameter — origin from the SAME validated URL
-/// builder the request path uses, plus timeouts, size caps, retry policy and
-/// TLS strictness — so a strict-TLS request can never ride a relaxed client.
+/// builder the request path uses, plus timeouts, size caps, retry policy,
+/// TLS strictness, and effective proxy config — so a strict-TLS or direct-local
+/// request can never ride a mismatched client.
 /// API keys, `Authorization` and `ExtraHeaders` stay per-request exactly
 /// as before; the pool never stores credentials.
 fn pooled_client_for(settings: &ProviderSettings) -> Result<ProviderClient, String> {
-    transport_pool::pooled_client(&settings.api_base_url, &AppCore::limits_for(settings))
-        .map_err(|error| error.to_string())
+    let global_proxy = current_network_proxy();
+    let effective_proxy = settings.proxy.as_ref().unwrap_or(&global_proxy);
+    transport_pool::pooled_client_with_proxy(
+        &settings.api_base_url,
+        &AppCore::limits_for(settings),
+        effective_proxy,
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// Version 1 stack-scoped stream callback. `payload` is borrowed UTF-8 and is
@@ -179,11 +198,68 @@ pub unsafe extern "C" fn popglot_initialize(config_directory: *const c_char) -> 
         if CORE.get().is_some() {
             return Ok(success(env!("CARGO_PKG_VERSION")));
         }
-        let core = AppCore::open(path).map_err(|error| error.to_string())?;
+        let core = AppCore::open_with_proxy(path, &current_network_proxy())
+            .map_err(|error| error.to_string())?;
         CORE.set(RwLock::new(core))
             .map_err(|_| "PopGlot Core has already been initialized".to_owned())?;
         Ok(success(env!("CARGO_PKG_VERSION")))
     })
+}
+
+/// Configures the process-wide network proxy policy used by Rust AI providers.
+///
+/// Updates both the global draft pool (evicting stale entries immediately) and
+/// the initialized `AppCore` client (if initialized) in a thread-safe manner.
+///
+/// # Safety
+///
+/// `mode` must be a valid null-terminated UTF-8 string (`"Direct"`, `"System"`,
+/// or `"Custom"`). `proxy_url` and `no_proxy` may be null or valid null-terminated
+/// UTF-8 strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn popglot_configure_network_proxy(
+    mode: *const c_char,
+    proxy_url: *const c_char,
+    bypass_local: i32,
+    no_proxy: *const c_char,
+) -> *mut c_char {
+    ffi_guard(|| {
+        let mode_str = unsafe { read_utf8(mode) }?;
+        let raw_url = unsafe { read_optional_utf8(proxy_url) }?;
+        let raw_no_proxy = unsafe { read_optional_utf8(no_proxy) }?;
+
+        let parsed_mode = ProxyMode::parse(mode_str).map_err(|e| e.to_string())?;
+        let normalized_url = raw_url
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let config = validate_proxy_config(&NetworkProxyConfig {
+            mode: parsed_mode,
+            proxy_url: normalized_url,
+            bypass_local: bypass_local != 0,
+            no_proxy: normalize_no_proxy(raw_no_proxy),
+        })
+        .map_err(|e| e.to_string())?;
+
+        if CORE.get().is_some() {
+            let mut core = core_write()?;
+            core.set_network_proxy(&config)
+                .map_err(|error| error.to_string())?;
+        }
+        transport_pool::ProviderClientPool::global().clear();
+        let mut guard = match network_proxy_lock().write() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = config;
+        Ok(success("configured"))
+    })
+}
+
+/// Returns the current network proxy configuration with any URL credentials redacted.
+#[unsafe(no_mangle)]
+pub extern "C" fn popglot_get_network_proxy() -> *mut c_char {
+    ffi_guard(|| Ok(success(current_network_proxy().redacted())))
 }
 
 #[unsafe(no_mangle)]
@@ -440,10 +516,13 @@ pub unsafe extern "C" fn popglot_test_connection_draft(
         let draft_settings: ProviderSettings =
             serde_json::from_str(draft_json).map_err(|error| error.to_string())?;
 
+        let global_proxy = current_network_proxy();
+        let effective_proxy = draft_settings.proxy.as_ref().unwrap_or(&global_proxy);
         let runtime = provider_runtime()?;
         let ticket = begin_request(custom_id);
-        let response = runtime.block_on(AppCore::test_connection_draft(
+        let response = runtime.block_on(AppCore::test_connection_draft_with_proxy(
             &draft_settings,
+            effective_proxy,
             api_key,
             Some(&ticket.id),
             &ticket.token,
@@ -2286,5 +2365,60 @@ mod tests {
             "enabled custom template must inject a preference: {body}"
         );
         assert!(body.contains("polite pirate in ja."), "{body}");
+    }
+
+    #[test]
+    fn configure_network_proxy_validates_redacts_and_updates_core() {
+        let _lock = lock_test_serial();
+        initialize_core_for_tests();
+
+        let configure = |mode: &str, url: Option<&str>, bypass: i32, no_proxy: Option<&str>| {
+            let m = cstring(mode);
+            let u = url.map(cstring);
+            let np = no_proxy.map(cstring);
+            take_envelope(unsafe {
+                popglot_configure_network_proxy(
+                    m.as_ptr(),
+                    u.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
+                    bypass,
+                    np.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
+                )
+            })
+        };
+
+        // Custom SOCKS5h with credentials: accepted, redacted on readback.
+        let ok = configure(
+            "Custom",
+            Some("socks5h://u:mySecretPwd@127.0.0.1:7897"),
+            1,
+            Some("dict.youdao.com, cn.bing.com"),
+        );
+        assert!(ok.contains("\"ok\":true"), "{ok}");
+
+        let current = take_envelope(popglot_get_network_proxy());
+        assert!(current.contains("\"mode\":\"Custom\""), "{current}");
+        assert!(!current.contains("mySecretPwd"), "{current}");
+        assert!(
+            current.contains("socks5h://[REDACTED]@127.0.0.1:7897"),
+            "{current}"
+        );
+        assert!(
+            current.contains("\"no_proxy\":\"dict.youdao.com,cn.bing.com\""),
+            "{current}"
+        );
+
+        // System mode accepted.
+        let sys = configure("System", None, 1, None);
+        assert!(sys.contains("\"ok\":true"), "{sys}");
+
+        // Invalid mode & invalid URL rejected without panicking.
+        let bad_mode = configure("UnknownMode", None, 1, None);
+        assert!(bad_mode.contains("\"ok\":false"), "{bad_mode}");
+        let bad_url = configure("Custom", Some("not-a-proxy"), 1, None);
+        assert!(bad_url.contains("\"ok\":false"), "{bad_url}");
+
+        // Restore Direct so subsequent tests stay deterministic.
+        let reset = configure("Direct", None, 1, None);
+        assert!(reset.contains("\"ok\":true"), "{reset}");
     }
 }

@@ -23,6 +23,16 @@ internal static partial class CoreBridge
         [LibraryImport(LibraryName, EntryPoint = "popglot_save_settings", StringMarshalling = StringMarshalling.Utf8)]
         internal static partial nint SaveSettings(string json);
 
+        [LibraryImport(LibraryName, EntryPoint = "popglot_configure_network_proxy", StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial nint ConfigureNetworkProxy(
+            string mode,
+            string? proxyUrl,
+            int bypassLocal,
+            string? noProxy);
+
+        [LibraryImport(LibraryName, EntryPoint = "popglot_get_network_proxy")]
+        internal static partial nint GetNetworkProxy();
+
         [LibraryImport(LibraryName, EntryPoint = "popglot_list_prompt_templates")]
         internal static partial nint ListPromptTemplates();
 

@@ -250,7 +250,8 @@ pub fn sanitize_error_string(input: &str) -> String {
             .expect("valid json key regex")
     });
     static RE_USERINFO: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r"https?://([^/@:]+):([^/@]+)@").expect("valid userinfo regex")
+        regex::Regex::new(r"(?i)(https?|socks5h?|socks4a?)://([^/@\s]+)@")
+            .expect("valid userinfo regex")
     });
 
     let mut result = RE_URL_QUERY
@@ -266,7 +267,7 @@ pub fn sanitize_error_string(input: &str) -> String {
         .replace_all(&result, r#""$1": "[REDACTED]""#)
         .into_owned();
     result = RE_USERINFO
-        .replace_all(&result, "http://[REDACTED]@")
+        .replace_all(&result, "$1://[REDACTED]@")
         .into_owned();
 
     result

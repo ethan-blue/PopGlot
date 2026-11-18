@@ -258,6 +258,15 @@ fn test_error_sanitization_removes_sensitive_patterns() {
     assert!(sanitized.contains("HTTP 401: Unauthorized"));
     assert!(sanitized.contains("Bearer [REDACTED]"));
     assert!(sanitized.contains("?[QUERY_REDACTED]"));
+
+    let proxy_err = "proxy connect failed via socks5h://alice:myProxySecret99@127.0.0.1:1080 and http://bob:otherSecret@127.0.0.1:7890";
+    let sanitized_proxy = sanitize_error_string(proxy_err);
+    assert!(!sanitized_proxy.contains("myProxySecret99"));
+    assert!(!sanitized_proxy.contains("otherSecret"));
+    assert!(!sanitized_proxy.contains("alice"));
+    assert!(!sanitized_proxy.contains("bob"));
+    assert!(sanitized_proxy.contains("socks5h://[REDACTED]@127.0.0.1:1080"));
+    assert!(sanitized_proxy.contains("http://[REDACTED]@127.0.0.1:7890"));
 }
 
 // ---------------------------------------------------------------------------

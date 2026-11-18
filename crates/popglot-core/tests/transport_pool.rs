@@ -8,8 +8,10 @@
 //! exclusion and bounded capacity are asserted separately.
 
 use popglot_core::provider::{ProviderClient, TranslationRequest, TransportLimits, provider_for};
-use popglot_core::transport_pool::{ProviderClientPool, TransportKey, pooled_client};
-use popglot_domain::{LanguagePair, ProviderSettings, ProviderType};
+use popglot_core::transport_pool::{
+    ProviderClientPool, TransportKey, pooled_client, pooled_client_with_proxy,
+};
+use popglot_domain::{LanguagePair, NetworkProxyConfig, ProviderSettings, ProviderType, ProxyMode};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -349,4 +351,252 @@ fn pool_is_bounded_and_evicts_least_recently_used() {
         "the pool must never exceed its capacity (got {})",
         pool.len()
     );
+
+    pool.clear();
+    assert!(pool.is_empty(), "clear must evict all pooled clients");
+}
+
+#[test]
+fn transport_keys_isolate_proxy_modes_and_enforce_local_direct() {
+    let limits = test_limits();
+    let public = "https://api.example.com";
+
+    let direct =
+        TransportKey::from_base_url_with_proxy(public, &limits, &NetworkProxyConfig::direct())
+            .expect("direct key");
+    let system =
+        TransportKey::from_base_url_with_proxy(public, &limits, &NetworkProxyConfig::system())
+            .expect("system key");
+    let custom_http = TransportKey::from_base_url_with_proxy(
+        public,
+        &limits,
+        &NetworkProxyConfig::custom("http://127.0.0.1:7890"),
+    )
+    .expect("custom http key");
+    let custom_socks = TransportKey::from_base_url_with_proxy(
+        public,
+        &limits,
+        &NetworkProxyConfig::custom("socks5://127.0.0.1:1080"),
+    )
+    .expect("custom socks key");
+    let custom_socks5h = TransportKey::from_base_url_with_proxy(
+        public,
+        &limits,
+        &NetworkProxyConfig::custom("socks5h://127.0.0.1:1080"),
+    )
+    .expect("custom socks5h key");
+
+    assert_ne!(direct, system);
+    assert_ne!(direct, custom_http);
+    assert_ne!(system, custom_http);
+    assert_ne!(custom_http, custom_socks);
+    assert_ne!(custom_socks, custom_socks5h);
+
+    // Local loopback ALWAYS resolves to Direct even when proxy is Custom and bypass_local is false.
+    let mut custom_no_bypass = NetworkProxyConfig::custom("http://127.0.0.1:7890");
+    custom_no_bypass.bypass_local = false;
+    let local_direct = TransportKey::from_base_url_with_proxy(
+        "http://127.0.0.1:11434/v1",
+        &limits,
+        &NetworkProxyConfig::direct(),
+    )
+    .expect("local direct");
+    let local_under_custom = TransportKey::from_base_url_with_proxy(
+        "http://127.0.0.1:11434/v1",
+        &limits,
+        &custom_no_bypass,
+    )
+    .expect("local under custom");
+    assert_eq!(local_direct, local_under_custom);
+    assert_eq!(local_under_custom.effective_proxy().mode, ProxyMode::Direct);
+
+    // Domestic / no_proxy match resolves to Direct and shares the direct key.
+    let mut with_no_proxy = NetworkProxyConfig::custom("http://127.0.0.1:7890");
+    with_no_proxy.no_proxy = Some("api.example.com, dict.youdao.com".to_owned());
+    let bypassed =
+        TransportKey::from_base_url_with_proxy(public, &limits, &with_no_proxy).expect("bypassed");
+    assert_eq!(direct, bypassed);
+
+    // Invalid proxy URL is rejected cleanly.
+    let invalid = NetworkProxyConfig::custom("ftp://127.0.0.1:21");
+    assert!(TransportKey::from_base_url_with_proxy(public, &limits, &invalid).is_err());
+    assert!(
+        TransportKey::from_base_url_with_proxy(
+            public,
+            &limits,
+            &NetworkProxyConfig::custom("not-a-url")
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn custom_http_proxy_routes_public_https_via_proxy_and_bypasses_loopback() {
+    // Wire-level proxy verification: a local TCP listener captures incoming
+    // HTTP CONNECT tunnels (with Proxy-Authorization) for public HTTPS targets,
+    // while a local Ollama-style loopback server receives direct traffic without
+    // touching the proxy listener.
+    let proxy_listener = TcpListener::bind("127.0.0.1:0").expect("bind mock proxy");
+    let proxy_port = proxy_listener.local_addr().expect("proxy addr").port();
+    let proxy_hits = Arc::new(AtomicUsize::new(0));
+    let proxy_captured = Arc::new(Mutex::new(Vec::<String>::new()));
+    let stop = Arc::new(AtomicBool::new(false));
+    let proxy_worker = {
+        let proxy_hits = Arc::clone(&proxy_hits);
+        let proxy_captured = Arc::clone(&proxy_captured);
+        let stop = Arc::clone(&stop);
+        thread::spawn(move || {
+            while !stop.load(Ordering::SeqCst) {
+                let Ok((mut stream, _)) = proxy_listener.accept() else {
+                    break;
+                };
+                if stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                proxy_hits.fetch_add(1, Ordering::SeqCst);
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                let mut buf = [0_u8; 2048];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                proxy_captured
+                    .lock()
+                    .expect("record proxy req")
+                    .push(String::from_utf8_lossy(&buf[..n]).into_owned());
+                let _ = stream.write_all(
+                    b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                let _ = stream.flush();
+            }
+        })
+    };
+
+    let proxy_cfg =
+        NetworkProxyConfig::custom(format!("http://proxyuser:proxypass@127.0.0.1:{proxy_port}"));
+    let client =
+        pooled_client_with_proxy("https://api.example.invalid", &test_limits(), &proxy_cfg)
+            .expect("build custom http proxy client");
+
+    let public_settings = ProviderSettings {
+        provider_type: ProviderType::OpenAiCompatible,
+        api_base_url: "https://api.example.invalid/v1".to_owned(),
+        text_endpoint: ProviderType::OpenAiCompatible.default_endpoint().to_owned(),
+        text_model: "proxy-test-model".to_owned(),
+        supports_text: true,
+        network_enabled: true,
+        safe_dev_mode: false,
+        ..ProviderSettings::default()
+    };
+
+    let err = client
+        .execute(
+            provider_for(public_settings.provider_type).as_ref(),
+            &public_settings,
+            "key",
+            "proxy-wire-http",
+            &TranslationRequest::text("hello", LanguagePair::new("en", "zh-CN")),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect_err("502 from mock proxy must surface as transport error");
+    assert!(!err.message.contains("proxypass"));
+    assert_eq!(proxy_hits.load(Ordering::SeqCst), 1);
+    let captured = proxy_captured.lock().expect("read captured").join("\n");
+    assert!(
+        captured.starts_with("CONNECT api.example.invalid:443"),
+        "expected HTTP CONNECT tunnel request, got: {captured}"
+    );
+    assert!(
+        captured
+            .to_ascii_lowercase()
+            .contains("proxy-authorization: basic "),
+        "expected Basic Proxy-Authorization header, got: {captured}"
+    );
+
+    // Local loopback server must NOT go through the proxy even with bypass_local=false.
+    let local_server = KeepAliveServer::start();
+    let local_settings = settings_for(&local_server);
+    let mut no_bypass = proxy_cfg.clone();
+    no_bypass.bypass_local = false;
+    let local_client =
+        pooled_client_with_proxy(&local_settings.api_base_url, &test_limits(), &no_bypass)
+            .expect("build local client");
+    execute_text(&local_client, &local_settings, "local-bypass-marker").await;
+    assert_eq!(
+        proxy_hits.load(Ordering::SeqCst),
+        1,
+        "loopback request must never hit the proxy"
+    );
+    assert_eq!(local_server.accept_count(), 1);
+
+    stop.store(true, Ordering::SeqCst);
+    let _ = TcpStream::connect(format!("127.0.0.1:{proxy_port}"));
+    let _ = proxy_worker.join();
+}
+
+#[tokio::test]
+async fn custom_socks5_proxy_sends_socks5_handshake_at_wire_level() {
+    let socks_listener = TcpListener::bind("127.0.0.1:0").expect("bind mock socks5");
+    let socks_port = socks_listener.local_addr().expect("socks addr").port();
+    let handshake_bytes = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker = {
+        let handshake_bytes = Arc::clone(&handshake_bytes);
+        let stop = Arc::clone(&stop);
+        thread::spawn(move || {
+            let Ok((mut stream, _)) = socks_listener.accept() else {
+                return;
+            };
+            if stop.load(Ordering::SeqCst) {
+                return;
+            }
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            let mut buf = [0_u8; 64];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            handshake_bytes
+                .lock()
+                .expect("record socks5 bytes")
+                .extend_from_slice(&buf[..n]);
+            // Reject method so reqwest fails cleanly right after greeting.
+            let _ = stream.write_all(&[0x05, 0xFF]);
+            let _ = stream.flush();
+        })
+    };
+
+    let socks_cfg = NetworkProxyConfig::custom(format!(
+        "socks5h://socksuser:sockspass@127.0.0.1:{socks_port}"
+    ));
+    let client =
+        pooled_client_with_proxy("https://api.example.invalid", &test_limits(), &socks_cfg)
+            .expect("build socks5h client");
+    let settings = ProviderSettings {
+        provider_type: ProviderType::OpenAiCompatible,
+        api_base_url: "https://api.example.invalid/v1".to_owned(),
+        text_endpoint: ProviderType::OpenAiCompatible.default_endpoint().to_owned(),
+        text_model: "socks-test-model".to_owned(),
+        supports_text: true,
+        network_enabled: true,
+        safe_dev_mode: false,
+        ..ProviderSettings::default()
+    };
+
+    let _ = client
+        .execute(
+            provider_for(settings.provider_type).as_ref(),
+            &settings,
+            "key",
+            "socks5-wire",
+            &TranslationRequest::text("hello", LanguagePair::new("en", "zh-CN")),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect_err("mock socks5 rejects method");
+
+    let bytes = handshake_bytes.lock().expect("read handshake").clone();
+    assert!(
+        bytes.len() >= 3 && bytes[0] == 0x05,
+        "expected SOCKS5 greeting starting with 0x05, got: {bytes:?}"
+    );
+
+    stop.store(true, Ordering::SeqCst);
+    let _ = TcpStream::connect(format!("127.0.0.1:{socks_port}"));
+    let _ = worker.join();
 }
