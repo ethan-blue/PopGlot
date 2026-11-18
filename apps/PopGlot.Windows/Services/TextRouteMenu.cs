@@ -205,18 +205,26 @@ internal static class TextRouteMenu
         }
         menu.Items.Add(Header("公共"));
         var freeSelected = current.IsFree;
-        foreach (var provider in new[] { FreeEngineProvider.Google, FreeEngineProvider.MyMemory })
+        var providers = new[]
+        {
+            FreeEngineProvider.Auto,
+            FreeEngineProvider.Google,
+            FreeEngineProvider.Bing,
+            FreeEngineProvider.Youdao,
+            FreeEngineProvider.MyMemory,
+        };
+        foreach (var provider in providers)
         {
             var selected = provider;
             var active = freeSelected && shell.FreeEngineProvider == provider;
             var item = new MenuItem
             {
-                Header = CheckRow(FreeName(provider), null, active),
+                Header = CheckRow(FreeName(provider), FreeMenuHint(provider), active),
                 ToolTip = FreeDetail(provider),
                 FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal,
                 Tag = provider,
             };
-            System.Windows.Automation.AutomationProperties.SetName(item, FreeName(provider));
+            System.Windows.Automation.AutomationProperties.SetName(item, EngineWording.DisplayNameFor(provider));
             item.Click += async (_, _) =>
             {
                 if (!IsCurrentChoice(null, selected))
@@ -358,9 +366,21 @@ internal static class TextRouteMenu
             : $"{title} · {CompactModelName(model)}\n{source}";
     }
 
+    private static string? FreeMenuHint(FreeEngineProvider provider) => provider switch
+    {
+        FreeEngineProvider.Youdao => "词句最佳",
+        FreeEngineProvider.Bing => "国内直连",
+        FreeEngineProvider.Auto => "单次择一",
+        FreeEngineProvider.MyMemory => "≤500字节",
+        _ => null,
+    };
+
     private static string FreeDetail(FreeEngineProvider provider) => provider switch
     {
-        FreeEngineProvider.MyMemory => "免配置 · 仅文字\n发送至 api.mymemory.translated.net；需先授权。",
+        FreeEngineProvider.Auto => "免配置 · 仅文字\n按健康度与输入形态择一路由（Google / Bing / 有道 / MyMemory）；每次只发给一条。",
+        FreeEngineProvider.Bing => "免配置 · 仅文字\n发送至 cn.bing.com（国内可直连）；需先授权。",
+        FreeEngineProvider.Youdao => "有道词典（词句最佳）· 免配置 · 仅文字\n发送至 dict.youdao.com（国内可直连，仅支持中英单词与短语）。",
+        FreeEngineProvider.MyMemory => "免配置 · 仅文字\n发送至 api.mymemory.translated.net（单次 ≤500 字节）；需先授权。",
         _ => "免配置 · 仅文字\n发送至 translate.googleapis.com / clients5.google.com；需先授权。",
     };
 }
