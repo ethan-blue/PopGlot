@@ -26,6 +26,15 @@ internal static class FreeEndpointCatalog
     private const string MyMemoryEncoded =
         "Mi4uKilgdXU7KjN0NyM3Pzc1KCN0Lig7NCk2Oy4/PnQ0Py51PT8u";
 
+    private const string YoudaoDictEncoded =
+        "Mi4uKilgdXU+MzkudCM1Lz47NXQ5NTd1MCk1NDsqM2UrZyErJw==";
+
+    private const string BingTranslatorPageEncoded =
+        "Mi4uKilgdXU5NHQ4MzQ9dDk1N3UuKDs0KTY7LjUo";
+
+    private const string BingTranslateV3Encoded =
+        "Mi4uKilgdXU5NHQ4MzQ9dDk1N3UuLig7NCk2Oy4/LGk=";
+
     /// <summary>
     /// 还原一条 URL 模板。模板里的 {sl} / {tl} / {q} 由调用方替换。
     /// </summary>
@@ -46,11 +55,25 @@ internal static class FreeEndpointCatalog
 
     public static string MyMemoryUrl => Reveal(MyMemoryEncoded);
 
+    public static string YoudaoDictUrl => Reveal(YoudaoDictEncoded);
+
+    public static string BingTranslatorPageUrl => Reveal(BingTranslatorPageEncoded);
+
+    public static string BingTranslateV3Url => Reveal(BingTranslateV3Encoded);
+
     /// <summary>
     /// Test/invariant seam: every template must stay a well-formed https URL
     /// and must name the host the rate-limit buckets key on.
     /// </summary>
-    internal static string[] AllUrls => [GtxSingleUrl, DictChromeExUrl, MyMemoryUrl];
+    internal static string[] AllUrls =>
+    [
+        GtxSingleUrl,
+        DictChromeExUrl,
+        MyMemoryUrl,
+        YoudaoDictUrl,
+        BingTranslatorPageUrl,
+        BingTranslateV3Url,
+    ];
 
     internal static string HostOf(string url) => new Uri(url).Host;
 }

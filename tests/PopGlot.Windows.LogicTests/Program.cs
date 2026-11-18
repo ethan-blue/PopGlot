@@ -317,6 +317,7 @@ internal static partial class Program
         await RunAsync("history write failure is not fake committed", HistoryWriteFailureIsNotFakeCommittedAsync);
         Run("rust is_partial flag survives into the csharp dto", PartialContractSurvivesSerialization);
         await RunAsync("free engine runs the shared token protection chain", FreeEngineRunsSharedTokenProtection);
+        await RunAsync("coordinator autoTriggered skips history and Youdao bypasses ProtectTokens", CoordinatorAutoTriggeredSkipsHistoryAndYoudaoBypassesProtectTokens);
         await RunAsync("free engine transport boundary rejects oversize html and fakes", FreeEngineTransportBoundary);
         await RunAsync("coordinator free engine single shot emits reset and delta and writes history once", CoordinatorFreeSingleShotAsync);
         await RunAsync("long input plans into ordered segments", LongInputPlansIntoOrderedSegmentsAsync);
@@ -4830,20 +4831,30 @@ internal static partial class Program
 
         var aSends = 0;
         var bSends = 0;
+        var aRateLimited = true;
+        var bRateLimited = false;
         FreeTranslateService.HttpSenderOverride = (request, _) =>
         {
             if (request.RequestUri?.Host == "endpoint-a.test")
             {
                 Interlocked.Increment(ref aSends);
-                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.TooManyRequests)
+                var status = aRateLimited
+                    ? System.Net.HttpStatusCode.TooManyRequests
+                    : System.Net.HttpStatusCode.OK;
+                var body = aRateLimited ? "{}" : "[[\"A-译文\"]]";
+                return Task.FromResult(new HttpResponseMessage(status)
                 {
-                    Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+                    Content = new StringContent(body, Encoding.UTF8, "application/json"),
                 });
             }
             Interlocked.Increment(ref bSends);
-            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            var bStatus = bRateLimited
+                ? System.Net.HttpStatusCode.TooManyRequests
+                : System.Net.HttpStatusCode.OK;
+            var bBody = bRateLimited ? "{}" : "[[\"B-译文\"]]";
+            return Task.FromResult(new HttpResponseMessage(bStatus)
             {
-                Content = new StringContent("[[\"B-译文\"]]", Encoding.UTF8, "application/json"),
+                Content = new StringContent(bBody, Encoding.UTF8, "application/json"),
             });
         };
         FreeTranslateService.EndpointsOverride = TwoFakeEndpoints();
@@ -4871,10 +4882,14 @@ internal static partial class Program
             Equal(2, Volatile.Read(ref bSends), "the healthy endpoint must keep serving");
 
             // 3. Advance past the remaining cooldown on the fake monotonic
-            //    clock (wall clock still ~frozen): A must become reachable
-            //    exactly when the monotonic cooldown expires.
+            //    clock (wall clock still ~frozen): B stays preferred while
+            //    healthy (endpoint stickiness), and once B rate-limits, A must
+            //    be reachable again because its monotonic cooldown expired.
             Interlocked.Add(ref fakeNow, 61_000);
-            await FreeTranslateService.TranslateAsync($"mono-3 {Guid.NewGuid():N}", "auto", "zh-CN", auth);
+            aRateLimited = false;
+            bRateLimited = true;
+            var recoveredFromA = await FreeTranslateService.TranslateAsync($"mono-3 {Guid.NewGuid():N}", "auto", "zh-CN", auth);
+            Equal("A-译文", recoveredFromA.Result.TranslatedText, "A must serve once B rate-limits and A's monotonic cooldown expired");
             Equal(2, Volatile.Read(ref aSends),
                 "A must retry once the monotonic cooldown expires, regardless of the wall clock");
         }
@@ -13636,6 +13651,62 @@ internal static partial class Program
                 $"the warning must name the dropped identifier, got: {string.Join(" | ", broken.Warnings)}");
             True(!broken.IsCleanCompletion, "a broken-placeholder result must not qualify");
             Equal(0, brokenHistory.Entries.Count, "a broken free-engine result never enters history");
+        }
+        finally
+        {
+            OutboundPolicy.SettingsLoader = originalLoader;
+            OutboundPolicy.SettingsSaver = originalSaver;
+        }
+    }
+
+    private static async Task CoordinatorAutoTriggeredSkipsHistoryAndYoudaoBypassesProtectTokens()
+    {
+        var originalLoader = OutboundPolicy.SettingsLoader;
+        var originalSaver = OutboundPolicy.SettingsSaver;
+        OutboundPolicy.SettingsLoader = () => ShellSettings.Default with
+        {
+            FreeEngineConsent = FreeEngineConsent.Allowed,
+            FreeEngineProvider = FreeEngineProvider.Youdao,
+        };
+        OutboundPolicy.SettingsSaver = _ => { };
+        try
+        {
+            var settings = CoreBridge.GetSettings() with
+            {
+                ProtectCodeTokens = true,
+                SafeDevMode = false,
+                NetworkEnabled = true,
+                TextModel = string.Empty,
+            };
+
+            string? receivedSource = null;
+            var history = new FakeHistoryRepository();
+            var executor = new FreeEngineBoundaryExecutor(settings)
+            {
+                OnTranslateFree = (source, _, _, _) =>
+                {
+                    receivedSource = source;
+                    return Task.FromResult(FreeEcho(source));
+                },
+            };
+            var coordinator = new TranslationCoordinator(history: history, executor: executor);
+
+            // 1. Auto-triggered live translation: Youdao bypasses ProtectTokens AND skips HistoryStore.
+            var liveSession = await coordinator.TranslateTextAsync(
+                "check foo_bar_baz", "en", "zh-CN", TranslationInputSource.QuickSearch, autoTriggered: true);
+            Equal(TranslationSessionStage.Completed, liveSession.Stage, "auto-triggered Youdao succeeds");
+            Equal(true, liveSession.AutoTriggered, "AutoTriggered flag preserved on session");
+            Equal("check foo_bar_baz", receivedSource, "Youdao must bypass CoreBridge.ProtectTokens");
+            Equal(0, history.Entries.Count, "autoTriggered: true must NOT write history");
+            Equal(false, liveSession.HistoryCommitted, "HistoryCommitted stays false");
+
+            // 2. Manual Enter confirmation (autoTriggered: false): writes history once.
+            var manualSession = await coordinator.TranslateTextAsync(
+                "check foo_bar_baz", "en", "zh-CN", TranslationInputSource.QuickSearch, autoTriggered: false);
+            Equal(TranslationSessionStage.Completed, manualSession.Stage, "manual Youdao succeeds");
+            Equal(false, manualSession.AutoTriggered, "manual session AutoTriggered is false");
+            Equal(1, history.Entries.Count, "autoTriggered: false writes history");
+            Equal(true, manualSession.HistoryCommitted, "HistoryCommitted is true");
         }
         finally
         {

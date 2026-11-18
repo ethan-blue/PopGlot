@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 
 namespace PopGlot.Windows.Services;
 
@@ -34,10 +35,335 @@ internal sealed record ModelCatalogResult(
     long ElapsedMs,
     string ProviderKind);
 
+internal sealed record FreeModelProviderPreset(
+    string Id,
+    string DisplayName,
+    string Description,
+    string BaseUrl,
+    ProviderType ProviderType,
+    string TextEndpoint,
+    string DefaultModel,
+    bool RequiresApiKey,
+    string FreeTierHint,
+    string? EnvVarName,
+    bool IsLocalRuntime,
+    bool IsDomestic);
+
+internal sealed record DiscoveredModelSource(
+    string Id,
+    string DisplayName,
+    string BaseUrl,
+    ProviderType ProviderType,
+    string TextEndpoint,
+    bool IsLocalRuntime,
+    bool IsReachable,
+    bool HasEnvKey,
+    string? EnvVarName,
+    IReadOnlyList<string> DiscoveredModels,
+    long ElapsedMs,
+    string StatusSummary);
+
+internal sealed record LocalAndFreeDiscoveryResult(
+    IReadOnlyList<DiscoveredModelSource> LocalRuntimes,
+    IReadOnlyList<DiscoveredModelSource> EnvConfiguredSources,
+    IReadOnlyList<FreeModelProviderPreset> CuratedPresets);
+
 /// <summary>Loads the models exposed by the provider draft without saving it.</summary>
 internal static class ModelCatalogService
 {
     private const long MaxResponseBytes = 1_048_576;
+    private static readonly TimeSpan LocalProbeTimeout = TimeSpan.FromMilliseconds(600);
+
+    public static IReadOnlyList<FreeModelProviderPreset> CuratedFreePresets { get; } =
+    [
+        new(
+            Id: "siliconflow",
+            DisplayName: "SiliconFlow（硅基流动）",
+            Description: "国内直连开源模型平台，注册含免费额度",
+            BaseUrl: "https://api.siliconflow.cn/v1",
+            ProviderType: ProviderType.OpenAiCompatible,
+            TextEndpoint: "/chat/completions",
+            DefaultModel: "Qwen/Qwen2.5-7B-Instruct",
+            RequiresApiKey: true,
+            FreeTierHint: "部分小参数开源模型永久免费，国内直连低延迟",
+            EnvVarName: "SILICONFLOW_API_KEY",
+            IsLocalRuntime: false,
+            IsDomestic: true),
+        new(
+            Id: "groq",
+            DisplayName: "Groq",
+            Description: "极速推理服务，提供每日免费额度",
+            BaseUrl: "https://api.groq.com/openai/v1",
+            ProviderType: ProviderType.OpenAiCompatible,
+            TextEndpoint: "/chat/completions",
+            DefaultModel: "llama-3.1-8b-instant",
+            RequiresApiKey: true,
+            FreeTierHint: "免费开发者额度，适合实时输入翻译",
+            EnvVarName: "GROQ_API_KEY",
+            IsLocalRuntime: false,
+            IsDomestic: false),
+        new(
+            Id: "openrouter",
+            DisplayName: "OpenRouter",
+            Description: "模型聚合平台，支持带 :free 后缀的免费模型",
+            BaseUrl: "https://openrouter.ai/api/v1",
+            ProviderType: ProviderType.OpenAiCompatible,
+            TextEndpoint: "/chat/completions",
+            DefaultModel: "meta-llama/llama-3.2-3b-instruct:free",
+            RequiresApiKey: true,
+            FreeTierHint: "内置多款 :free 免费模型",
+            EnvVarName: "OPENROUTER_API_KEY",
+            IsLocalRuntime: false,
+            IsDomestic: false),
+        new(
+            Id: "zhipu",
+            DisplayName: "智谱 GLM",
+            Description: "国内直连，glm-4-flash 长期免费调用",
+            BaseUrl: "https://open.bigmodel.cn/api/paas/v4",
+            ProviderType: ProviderType.OpenAiCompatible,
+            TextEndpoint: "/chat/completions",
+            DefaultModel: "glm-4-flash",
+            RequiresApiKey: true,
+            FreeTierHint: "glm-4-flash 免费，无需代理直连",
+            EnvVarName: "ZHIPU_API_KEY",
+            IsLocalRuntime: false,
+            IsDomestic: true),
+        new(
+            Id: "ollama",
+            DisplayName: "Ollama（本地）",
+            Description: "本机运行开源模型，离线免费无密钥",
+            BaseUrl: "http://localhost:11434/v1",
+            ProviderType: ProviderType.OpenAiCompatible,
+            TextEndpoint: "/chat/completions",
+            DefaultModel: "",
+            RequiresApiKey: false,
+            FreeTierHint: "本机离线运行，零成本",
+            EnvVarName: null,
+            IsLocalRuntime: true,
+            IsDomestic: true),
+        new(
+            Id: "lm-studio",
+            DisplayName: "LM Studio（本地）",
+            Description: "本机桌面端模型服务，离线免费无密钥",
+            BaseUrl: "http://localhost:1234/v1",
+            ProviderType: ProviderType.OpenAiCompatible,
+            TextEndpoint: "/chat/completions",
+            DefaultModel: "",
+            RequiresApiKey: false,
+            FreeTierHint: "本机离线运行，零成本",
+            EnvVarName: null,
+            IsLocalRuntime: true,
+            IsDomestic: true),
+    ];
+
+    internal static async Task<LocalAndFreeDiscoveryResult> DiscoverLocalAndFreeSourcesAsync(
+        CancellationToken cancellationToken = default,
+        HttpMessageHandler? testHandler = null,
+        Func<string, string?>? envReader = null,
+        string? ompDbPath = null)
+    {
+        var localTargets = new (string Id, string Name, string BaseUrl)[]
+        {
+            ("ollama", "Ollama（本地）", "http://localhost:11434/v1"),
+            ("lm-studio", "LM Studio（本地）", "http://localhost:1234/v1"),
+            ("litellm", "LiteLLM Proxy（本地）", "http://localhost:4000"),
+        };
+
+        var probeTasks = localTargets.Select(target =>
+            ProbeLocalRuntimeAsync(target.Id, target.Name, target.BaseUrl, cancellationToken, testHandler));
+        var localResults = await Task.WhenAll(probeTasks).ConfigureAwait(false);
+
+        var readEnv = envReader ?? Environment.GetEnvironmentVariable;
+        var ompAvailable = ReadAvailableOmpApiKeyProviders(ompDbPath);
+        var envDefinitions = new (string Id, string Name, string BaseUrl, ProviderType Type, string Endpoint, string EnvVar, string? OmpProvider)[]
+        {
+            ("siliconflow", "SiliconFlow（硅基流动）", "https://api.siliconflow.cn/v1", ProviderType.OpenAiCompatible, "/chat/completions", "SILICONFLOW_API_KEY", null),
+            ("groq", "Groq", "https://api.groq.com/openai/v1", ProviderType.OpenAiCompatible, "/chat/completions", "GROQ_API_KEY", null),
+            ("openrouter", "OpenRouter", "https://openrouter.ai/api/v1", ProviderType.OpenAiCompatible, "/chat/completions", "OPENROUTER_API_KEY", null),
+            ("zhipu", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", ProviderType.OpenAiCompatible, "/chat/completions", "ZHIPU_API_KEY", "zhipu-coding-plan"),
+            ("deepseek", "DeepSeek", "https://api.deepseek.com/v1", ProviderType.OpenAiCompatible, "/chat/completions", "DEEPSEEK_API_KEY", "deepseek"),
+            ("openai", "OpenAI", "https://api.openai.com/v1", ProviderType.OpenAiCompatible, "/chat/completions", "OPENAI_API_KEY", "openai"),
+            ("gemini", "Google Gemini", "https://generativelanguage.googleapis.com", ProviderType.GeminiGenerateContent, "/v1beta/models", "GEMINI_API_KEY", null),
+        };
+
+        var envSources = new List<DiscoveredModelSource>();
+        foreach (var def in envDefinitions)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var hasEnv = !string.IsNullOrWhiteSpace(readEnv(def.EnvVar));
+            var hasOmp = def.OmpProvider is not null && ompAvailable.Contains(def.OmpProvider);
+            if (!hasEnv && !hasOmp)
+            {
+                continue;
+            }
+            var hint = hasEnv && hasOmp
+                ? $"检测到环境变量 {def.EnvVar} 与本机 CLI 凭据"
+                : hasEnv
+                    ? $"检测到环境变量 {def.EnvVar}"
+                    : "检测到本机 OMP 已配置密钥";
+            envSources.Add(new DiscoveredModelSource(
+                Id: def.Id,
+                DisplayName: def.Name,
+                BaseUrl: def.BaseUrl,
+                ProviderType: def.Type,
+                TextEndpoint: def.Endpoint,
+                IsLocalRuntime: false,
+                IsReachable: true,
+                HasEnvKey: true,
+                EnvVarName: hasEnv ? def.EnvVar : null,
+                DiscoveredModels: [],
+                ElapsedMs: 0,
+                StatusSummary: hint));
+        }
+
+        return new LocalAndFreeDiscoveryResult(localResults, envSources, CuratedFreePresets);
+    }
+
+    internal static string? TryReadEnvApiKeyForImport(string sourceId, Func<string, string?>? envReader = null)
+    {
+        var envVar = sourceId switch
+        {
+            "siliconflow" => "SILICONFLOW_API_KEY",
+            "groq" => "GROQ_API_KEY",
+            "openrouter" => "OPENROUTER_API_KEY",
+            "zhipu" => "ZHIPU_API_KEY",
+            "deepseek" => "DEEPSEEK_API_KEY",
+            "openai" => "OPENAI_API_KEY",
+            "gemini" => "GEMINI_API_KEY",
+            _ => null,
+        };
+        if (envVar is null)
+        {
+            return null;
+        }
+        var value = (envReader ?? Environment.GetEnvironmentVariable)(envVar);
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 2400 || value.Any(char.IsControl))
+        {
+            return null;
+        }
+        return value.Trim();
+    }
+
+    private static async Task<DiscoveredModelSource> ProbeLocalRuntimeAsync(
+        string id,
+        string displayName,
+        string baseUrl,
+        CancellationToken cancellationToken,
+        HttpMessageHandler? testHandler)
+    {
+        var uri = CatalogAdapter.BuildUri(baseUrl, "/models");
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            linkedCts.CancelAfter(LocalProbeTimeout);
+
+            using var ownedClient = testHandler is null
+                ? new HttpClient(new SocketsHttpHandler
+                {
+                    UseProxy = false,
+                    ConnectTimeout = LocalProbeTimeout,
+                    AllowAutoRedirect = false,
+                })
+                { Timeout = LocalProbeTimeout }
+                : new HttpClient(testHandler, disposeHandler: false) { Timeout = LocalProbeTimeout };
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            using var response = await ownedClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                linkedCts.Token).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                stopwatch.Stop();
+                return new DiscoveredModelSource(
+                    id, displayName, baseUrl, ProviderType.OpenAiCompatible, "/chat/completions",
+                    IsLocalRuntime: true, IsReachable: false, HasEnvKey: false, EnvVarName: null,
+                    DiscoveredModels: [], ElapsedMs: stopwatch.ElapsedMilliseconds,
+                    StatusSummary: $"本机端口返回 HTTP {(int)response.StatusCode}");
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(linkedCts.Token).ConfigureAwait(false);
+            var json = await ReadCappedAsync(stream, MaxResponseBytes, linkedCts.Token).ConfigureAwait(false);
+            stopwatch.Stop();
+
+            var models = new OpenAiCompatibleCatalogAdapter()
+                .Parse(json)
+                .Select(m => m.Id)
+                .Distinct(StringComparer.Ordinal)
+                .Take(20)
+                .ToList();
+
+            var summary = models.Count > 0
+                ? $"已运行 · 发现 {models.Count} 个模型（{stopwatch.ElapsedMilliseconds} ms）"
+                : $"已运行 · 暂未拉取到模型（{stopwatch.ElapsedMilliseconds} ms）";
+
+            return new DiscoveredModelSource(
+                id, displayName, baseUrl, ProviderType.OpenAiCompatible, "/chat/completions",
+                IsLocalRuntime: true, IsReachable: true, HasEnvKey: false, EnvVarName: null,
+                DiscoveredModels: models, ElapsedMs: stopwatch.ElapsedMilliseconds,
+                StatusSummary: summary);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            stopwatch.Stop();
+            return new DiscoveredModelSource(
+                id, displayName, baseUrl, ProviderType.OpenAiCompatible, "/chat/completions",
+                IsLocalRuntime: true, IsReachable: false, HasEnvKey: false, EnvVarName: null,
+                DiscoveredModels: [], ElapsedMs: stopwatch.ElapsedMilliseconds,
+                StatusSummary: "未检测到运行中的服务");
+        }
+    }
+
+    private static HashSet<string> ReadAvailableOmpApiKeyProviders(string? ompDbPath)
+    {
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            var agent = Environment.GetEnvironmentVariable("PI_CODING_AGENT_DIR");
+            var database = ompDbPath ?? Path.Combine(
+                string.IsNullOrWhiteSpace(agent)
+                    ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".omp", "agent")
+                    : agent,
+                "agent.db");
+            if (!File.Exists(database))
+            {
+                return result;
+            }
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.GetFullPath(database),
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+                DefaultTimeout = 1,
+            }.ToString());
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT DISTINCT provider FROM auth_credentials WHERE credential_type = 'api_key' AND disabled_cause IS NULL LIMIT 16";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                if (!reader.IsDBNull(0))
+                {
+                    var name = reader.GetString(0);
+                    if (!string.IsNullOrWhiteSpace(name))
+                    {
+                        result.Add(name);
+                    }
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Never surface OMP DB errors during discovery.
+        }
+        return result;
+    }
 
     internal static async Task<ModelCatalogResult> FetchAsync(
         ProviderSettings settings,
@@ -57,15 +383,13 @@ internal static class ModelCatalogService
         var adapter = CatalogAdapter.For(settings);
         var (uri, request) = adapter.BuildRequest(settings, apiKey);
         var stopwatch = Stopwatch.StartNew();
-        using var httpClient = testHandler is null
-            ? new HttpClient(new SocketsHttpHandler
-            {
-                ConnectTimeout = TimeSpan.FromSeconds(5),
-                PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-                AutomaticDecompression = DecompressionMethods.All,
-            })
-            : new HttpClient(testHandler);
-        httpClient.Timeout = TimeSpan.FromSeconds(15);
+        using var ownedClient = testHandler is not null
+            ? new HttpClient(testHandler) { Timeout = TimeSpan.FromSeconds(15) }
+            : null;
+        var httpClient = ownedClient ?? ProxyHttpClientFactory.GetClient(
+            ProxyConfig.FromCurrentSettings(),
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromSeconds(15));
         // ResponseHeadersRead: the body (possibly gzip/brotli decompressed by
         // the handler) must never be buffered wholesale by HttpClient — the
         // 1 MiB cap is enforced below on the decoded stream itself, with or

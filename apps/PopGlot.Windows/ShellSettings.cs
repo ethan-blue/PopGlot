@@ -1,4 +1,8 @@
+using System.Collections.Concurrent;
 using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -22,6 +26,25 @@ internal enum ThemePreference
     System,
     Light,
     Dark,
+}
+
+internal enum LiveTranslateScope
+{
+    FreeEngineOnly,
+    AllEngines,
+}
+
+internal enum QuickSearchWindowMode
+{
+    Compact,
+    Expanded,
+}
+
+internal enum NetworkProxyMode
+{
+    System,
+    Direct,
+    Custom,
 }
 
 /// <summary>
@@ -313,8 +336,38 @@ internal sealed record ShellSettings(
     HotkeyBinding? InterfaceTranslateHotkey = null,
     HotkeyBinding? InterfaceSpeakHotkey = null,
     // 0.1.35：启动时是否静默查一次 GitHub Releases（只提示，不自动下载安装）。
-    bool CheckUpdatesEnabled = true)
+    bool CheckUpdatesEnabled = true,
+    // 0.1.43：实时输入翻译、极速查词窗体模式与代理设置。
+    bool LiveTranslateEnabled = true,
+    int LiveTranslateDelayMs = 500,
+    LiveTranslateScope LiveTranslateScope = LiveTranslateScope.FreeEngineOnly,
+    QuickSearchWindowMode QuickSearchWindowMode = QuickSearchWindowMode.Compact,
+    double QuickSearchExpandedWidth = 660,
+    double QuickSearchExpandedHeight = 520,
+    NetworkProxyMode NetworkProxyMode = NetworkProxyMode.System,
+    string? CustomProxyUrl = null,
+    bool ProxyBypassLocal = true,
+    bool ProxyBypassDomesticRoutes = true)
 {
+    public const int DefaultLiveTranslateDelayMs = 500;
+    public const double DefaultQuickSearchExpandedWidth = 660;
+    public const double DefaultQuickSearchExpandedHeight = 520;
+
+    internal static int NormalizeLiveTranslateDelayMs(int value) => value switch
+    {
+        <= 400 => 300,
+        >= 650 => 800,
+        _ => 500,
+    };
+
+    internal static double NormalizeQuickSearchExpandedWidth(double value) =>
+        double.IsFinite(value) ? Math.Clamp(value, 480, 1200) : DefaultQuickSearchExpandedWidth;
+
+    internal static double NormalizeQuickSearchExpandedHeight(double value) =>
+        double.IsFinite(value) ? Math.Clamp(value, 360, 1000) : DefaultQuickSearchExpandedHeight;
+
+    internal static string? NormalizeCustomProxyUrl(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     public HotkeyBinding QuickSearchHotkey { get; init; } =
         QuickSearchHotkey ?? HotkeyBinding.QuickSearchDefault;
 
@@ -812,7 +865,26 @@ internal static class ShellSettingsStore
             HotkeyBinding.Parse(persisted.InterfaceSettingsHotkey, defaults.InterfaceSettingsHotkey),
             HotkeyBinding.Parse(persisted.InterfaceTranslateHotkey, defaults.InterfaceTranslateHotkey),
             HotkeyBinding.Parse(persisted.InterfaceSpeakHotkey, defaults.InterfaceSpeakHotkey),
-            persisted.CheckUpdatesEnabled ?? true);
+            persisted.CheckUpdatesEnabled ?? true,
+            persisted.LiveTranslateEnabled ?? defaults.LiveTranslateEnabled,
+            ShellSettings.NormalizeLiveTranslateDelayMs(persisted.LiveTranslateDelayMs ?? defaults.LiveTranslateDelayMs),
+            persisted.LiveTranslateScope is not null &&
+            Enum.TryParse<LiveTranslateScope>(persisted.LiveTranslateScope, ignoreCase: true, out var liveScope)
+                ? liveScope
+                : defaults.LiveTranslateScope,
+            persisted.QuickSearchWindowMode is not null &&
+            Enum.TryParse<QuickSearchWindowMode>(persisted.QuickSearchWindowMode, ignoreCase: true, out var windowMode)
+                ? windowMode
+                : defaults.QuickSearchWindowMode,
+            ShellSettings.NormalizeQuickSearchExpandedWidth(persisted.QuickSearchExpandedWidth ?? defaults.QuickSearchExpandedWidth),
+            ShellSettings.NormalizeQuickSearchExpandedHeight(persisted.QuickSearchExpandedHeight ?? defaults.QuickSearchExpandedHeight),
+            persisted.NetworkProxyMode is not null &&
+            Enum.TryParse<NetworkProxyMode>(persisted.NetworkProxyMode, ignoreCase: true, out var proxyMode)
+                ? proxyMode
+                : defaults.NetworkProxyMode,
+            ShellSettings.NormalizeCustomProxyUrl(persisted.CustomProxyUrl),
+            persisted.ProxyBypassLocal ?? defaults.ProxyBypassLocal,
+            persisted.ProxyBypassDomesticRoutes ?? defaults.ProxyBypassDomesticRoutes);
 
             lock (CacheLock)
             {
@@ -900,6 +972,14 @@ internal static class ShellSettingsStore
             throw new InvalidOperationException(validationError);
         }
 
+        settings = settings with
+        {
+            LiveTranslateDelayMs = ShellSettings.NormalizeLiveTranslateDelayMs(settings.LiveTranslateDelayMs),
+            QuickSearchExpandedWidth = ShellSettings.NormalizeQuickSearchExpandedWidth(settings.QuickSearchExpandedWidth),
+            QuickSearchExpandedHeight = ShellSettings.NormalizeQuickSearchExpandedHeight(settings.QuickSearchExpandedHeight),
+            CustomProxyUrl = ShellSettings.NormalizeCustomProxyUrl(settings.CustomProxyUrl),
+        };
+
         var path = settingsPath ?? DefaultSettingsPath;
         var directory = Path.GetDirectoryName(path)
             ?? throw new InvalidOperationException("Unable to resolve the PopGlot settings directory.");
@@ -938,7 +1018,17 @@ internal static class ShellSettingsStore
             settings.InterfaceSpeakHotkey.Serialize(),
             // 0.1.35：启动时的更新检查开关。默认开启（只读公开 Releases，
             // 不下载、不安装），旧配置文件缺失该字段时同样读作开启。
-            settings.CheckUpdatesEnabled);
+            settings.CheckUpdatesEnabled,
+            settings.LiveTranslateEnabled,
+            settings.LiveTranslateDelayMs,
+            settings.LiveTranslateScope.ToString(),
+            settings.QuickSearchWindowMode.ToString(),
+            settings.QuickSearchExpandedWidth,
+            settings.QuickSearchExpandedHeight,
+            settings.NetworkProxyMode.ToString(),
+            settings.CustomProxyUrl,
+            settings.ProxyBypassLocal,
+            settings.ProxyBypassDomesticRoutes);
 
         // Write through a temporary file so a crash mid-write cannot leave the
         // user without settings on the next launch: exclusive-access write,
@@ -996,5 +1086,296 @@ internal static class ShellSettingsStore
         string? InterfaceSettingsHotkey = null,
         string? InterfaceTranslateHotkey = null,
         string? InterfaceSpeakHotkey = null,
-        bool? CheckUpdatesEnabled = null);
+        bool? CheckUpdatesEnabled = null,
+        bool? LiveTranslateEnabled = null,
+        int? LiveTranslateDelayMs = null,
+        string? LiveTranslateScope = null,
+        string? QuickSearchWindowMode = null,
+        double? QuickSearchExpandedWidth = null,
+        double? QuickSearchExpandedHeight = null,
+        string? NetworkProxyMode = null,
+        string? CustomProxyUrl = null,
+        bool? ProxyBypassLocal = null,
+        bool? ProxyBypassDomesticRoutes = null);
+}
+
+internal readonly record struct ProxyConfig(
+    NetworkProxyMode Mode,
+    string? CustomProxyUrl,
+    bool BypassLocal,
+    bool BypassDomesticRoutes)
+{
+    public static ProxyConfig Default => new(
+        NetworkProxyMode.System,
+        CustomProxyUrl: null,
+        BypassLocal: true,
+        BypassDomesticRoutes: true);
+
+    public static ProxyConfig FromShellSettings(ShellSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        return new ProxyConfig(
+            settings.NetworkProxyMode,
+            ShellSettings.NormalizeCustomProxyUrl(settings.CustomProxyUrl),
+            settings.ProxyBypassLocal,
+            settings.ProxyBypassDomesticRoutes);
+    }
+
+    public static ProxyConfig FromCurrentSettings()
+    {
+        try
+        {
+            return FromShellSettings(OutboundPolicy.SettingsLoader());
+        }
+        catch (Exception)
+        {
+            return Default;
+        }
+    }
+}
+
+internal static class ProxyHttpClientFactory
+{
+    private static readonly HashSet<string> DomesticHosts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "dict.youdao.com",
+        "fanyi.youdao.com",
+        "cn.bing.com",
+        "open.bigmodel.cn",
+        "api.deepseek.com",
+        "api.siliconflow.cn",
+        "dashscope.aliyuncs.com",
+        "ark.cn-beijing.volces.com",
+        "aip.baidubce.com",
+        "qianfan.baidubce.com",
+        "api.moonshot.cn",
+        "api.minimax.chat",
+        "api.minimaxi.com",
+        "spark-api-open.xf-yun.com",
+        "hunyuan.tencentcloudapi.com",
+        "api.hunyuan.cloud.tencent.com",
+        "api.baichuan-ai.com",
+        "api.lingyiwanwu.com",
+        "api.stepfun.com",
+    };
+
+    private static readonly ConcurrentDictionary<(ProxyConfig Config, TimeSpan ConnectTimeout, TimeSpan WholeTimeout), HttpClient> Clients = new();
+    private const int MaxCachedClients = 32;
+
+    public static HttpClient GetClient(ProxyConfig config, TimeSpan connectTimeout, TimeSpan wholeTimeout)
+    {
+        var key = (config, connectTimeout, wholeTimeout);
+        if (Clients.TryGetValue(key, out var existing))
+        {
+            return existing;
+        }
+
+        if (Clients.Count >= MaxCachedClients)
+        {
+            // Keep existing references alive for any in-flight callers; simply reset the map.
+            Clients.Clear();
+        }
+
+        var created = new HttpClient(CreateHandler(config, connectTimeout))
+        {
+            Timeout = wholeTimeout,
+        };
+        return Clients.GetOrAdd(key, created);
+    }
+
+    internal static SocketsHttpHandler CreateHandler(ProxyConfig config, TimeSpan connectTimeout)
+    {
+        var handler = new SocketsHttpHandler
+        {
+            ConnectTimeout = connectTimeout,
+            PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+            AutomaticDecompression = DecompressionMethods.All,
+            // A redirect would re-send the URL query (which carries the source
+            // text) to whichever host the 302 names. Not following redirects is
+            // the honest boundary; a 3xx surfaces as an explicit failure.
+            AllowAutoRedirect = false,
+        };
+
+        switch (config.Mode)
+        {
+            case NetworkProxyMode.Direct:
+                handler.UseProxy = false;
+                handler.Proxy = null;
+                break;
+
+            case NetworkProxyMode.Custom:
+                if (TryParseProxyUri(config.CustomProxyUrl, out var proxyUri) && proxyUri is not null)
+                {
+                    var webProxy = new WebProxy(proxyUri)
+                    {
+                        BypassProxyOnLocal = config.BypassLocal,
+                    };
+                    handler.UseProxy = true;
+                    handler.Proxy = config.BypassLocal || config.BypassDomesticRoutes
+                        ? new RoutingWebProxy(webProxy, config)
+                        : webProxy;
+                }
+                else
+                {
+                    handler.UseProxy = false;
+                    handler.Proxy = null;
+                }
+                break;
+
+            case NetworkProxyMode.System:
+            default:
+                handler.UseProxy = true;
+                handler.Proxy = config.BypassLocal || config.BypassDomesticRoutes
+                    ? new RoutingWebProxy(HttpClient.DefaultProxy, config)
+                    : null;
+                break;
+        }
+
+        return handler;
+    }
+
+    public static bool TryParseProxyUri(string? raw, out Uri? uri)
+    {
+        uri = null;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        var trimmed = raw.Trim();
+        if (!trimmed.Contains("://", StringComparison.Ordinal))
+        {
+            trimmed = "http://" + trimmed;
+        }
+
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var candidate))
+        {
+            return false;
+        }
+
+        var scheme = candidate.Scheme.ToLowerInvariant();
+        if (scheme is not ("http" or "https" or "socks5" or "socks5h" or "socks4" or "socks4a"))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(candidate.Host) || candidate.Port <= 0)
+        {
+            return false;
+        }
+
+        uri = candidate;
+        return true;
+    }
+
+    public static bool IsDomesticHost(string? host)
+    {
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            return false;
+        }
+
+        var normalized = host.Trim().Trim('.');
+        return DomesticHosts.Contains(normalized);
+    }
+
+    public static bool IsLocalHost(string? host)
+    {
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            return false;
+        }
+
+        var normalized = host.Trim().Trim('[', ']');
+        if (normalized.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+            normalized.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!IPAddress.TryParse(normalized, out var ip))
+        {
+            return false;
+        }
+
+        if (IPAddress.IsLoopback(ip))
+        {
+            return true;
+        }
+
+        if (ip.IsIPv4MappedToIPv6)
+        {
+            ip = ip.MapToIPv4();
+        }
+
+        if (ip.AddressFamily == AddressFamily.InterNetwork)
+        {
+            var bytes = ip.GetAddressBytes();
+            return bytes[0] == 10 ||
+                   (bytes[0] == 172 && bytes[1] is >= 16 and <= 31) ||
+                   (bytes[0] == 192 && bytes[1] == 168) ||
+                   (bytes[0] == 169 && bytes[1] == 254);
+        }
+
+        if (ip.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            return ip.IsIPv6LinkLocal || ip.IsIPv6UniqueLocal || ip.IsIPv6SiteLocal;
+        }
+
+        return false;
+    }
+
+    public static bool ShouldBypassProxy(Uri? destination, ProxyConfig config)
+    {
+        if (destination is null || config.Mode == NetworkProxyMode.Direct)
+        {
+            return true;
+        }
+
+        var host = destination.Host;
+        if (config.BypassLocal && IsLocalHost(host))
+        {
+            return true;
+        }
+
+        if (config.BypassDomesticRoutes && IsDomesticHost(host))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private sealed class RoutingWebProxy(IWebProxy? inner, ProxyConfig config) : IWebProxy
+    {
+        public ICredentials? Credentials
+        {
+            get => inner?.Credentials;
+            set
+            {
+                if (inner is not null)
+                {
+                    inner.Credentials = value;
+                }
+            }
+        }
+
+        public Uri? GetProxy(Uri destination)
+        {
+            if (ShouldBypassProxy(destination, config))
+            {
+                return destination;
+            }
+            return inner?.GetProxy(destination) ?? destination;
+        }
+
+        public bool IsBypassed(Uri host)
+        {
+            if (ShouldBypassProxy(host, config))
+            {
+                return true;
+            }
+            return inner?.IsBypassed(host) ?? true;
+        }
+    }
 }

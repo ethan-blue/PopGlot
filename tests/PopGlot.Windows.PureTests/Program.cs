@@ -136,6 +136,7 @@ internal static partial class Program
         Run("free endpoint catalog reveals usable urls only at runtime", FreeEndpointCatalogRevealsAtRuntimeOnly);
         await RunAsync("free engine local hourly budget stops sends", FreeEngineLocalHourlyBudget);
         await RunAsync("update service only reports a genuinely newer release", UpdateServiceReportsOnlyNewer);
+        await RunAsync("net-engine: shell settings defaults, normalization, and proxy routing", () => RunNetEngineAndRoutingTestsAsync(root));
 
         Console.WriteLine($"\nPopGlot pure tests: {_passed} passed, {_failed} failed, " +
                           $"{Interlocked.Read(ref refusedSends)} send attempts refused.");
@@ -1085,6 +1086,7 @@ internal static partial class Program
             await ThrowsAsync<InvalidOperationException>(() =>
                 FreeTranslateService.TranslateAsync("a4-fail", "auto", "zh-CN", failing!));
             FreeTranslateService.HttpSenderOverride = originalForFailure;
+            FreeTranslateService.ResetTransportStateForTest();
             Equal(3L, Interlocked.Read(ref sends), "each fallback endpoint is one real send");
 
             // 3. An explicit denial after issuance refuses: zero sends.
@@ -1172,6 +1174,8 @@ internal static partial class Program
             OutboundPolicy.SettingsSaver = originalSaver;
             FreeTranslateService.HttpSenderOverride = originalSender;
             FreeTranslateService.EndpointsOverride = originalEndpoints;
+            FreeTranslateService.ResetRateLimitStateForTest();
+            FreeTranslateService.ResetTransportStateForTest();
         }
     }
 
@@ -1220,8 +1224,15 @@ internal static partial class Program
     private static void FreeEndpointCatalogRevealsAtRuntimeOnly()
     {
         var urls = FreeEndpointCatalog.AllUrls;
-        Equal(3, urls.Length, "three built-in endpoints must be catalogued");
-        var expectedHosts = new[] { "translate.googleapis.com", "clients5.google.com", "api.mymemory.translated.net" };
+        Equal(6, urls.Length, "six built-in endpoints must be catalogued");
+        var expectedHosts = new[]
+        {
+            "translate.googleapis.com",
+            "clients5.google.com",
+            "api.mymemory.translated.net",
+            "dict.youdao.com",
+            "cn.bing.com",
+        };
         foreach (var url in urls)
         {
             True(url.StartsWith("https://", StringComparison.Ordinal), $"an endpoint must be https: {url}");
@@ -1261,7 +1272,7 @@ internal static partial class Program
             True(value.Length > 0 && FreeEndpointCatalog.Reveal(value).StartsWith("https://", StringComparison.Ordinal),
                 $"the constant {field.Name} must decode to a usable url");
         }
-        Equal(3, encodedCount, "every endpoint must be stored obfuscated");
+        Equal(6, encodedCount, "every endpoint must be stored obfuscated");
     }
 
     /// <summary>
@@ -1284,6 +1295,8 @@ internal static partial class Program
         };
         try
         {
+            FreeTranslateService.ResetRateLimitStateForTest();
+            FreeTranslateService.ResetTransportStateForTest();
             FreeTranslateService.ResetQuotaForTest();
             var budget = FreeTranslateService.HourlySendBudget;
             True(budget > 0, "the local budget must be a positive number");

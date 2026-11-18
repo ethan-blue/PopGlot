@@ -5,11 +5,10 @@ namespace PopGlot.Windows.Services.AiConnections;
 
 internal static class DirectHttp
 {
+    private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(15);
     internal static Func<HttpClient>? TestClientFactory;
-    private static readonly HttpClient Shared = new(new SocketsHttpHandler
-    { AllowAutoRedirect = false, PooledConnectionLifetime = TimeSpan.FromMinutes(5), ConnectTimeout = TimeSpan.FromSeconds(15) })
-    { Timeout = Timeout.InfiniteTimeSpan };
-    public static HttpClient Client => TestClientFactory?.Invoke() ?? Shared;
+    public static HttpClient Client => TestClientFactory?.Invoke() ??
+        ProxyHttpClientFactory.GetClient(ProxyConfig.FromCurrentSettings(), ConnectTimeout, Timeout.InfiniteTimeSpan);
     public static void RequirePolicy()
     {
         if (!RuntimeGate.NewWorkAllowed) throw new InvalidOperationException(RuntimeGate.RefusalZh);

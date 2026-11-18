@@ -613,7 +613,12 @@ internal sealed class TranslationCoordinator
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!settings.ProtectCodeTokens)
+        var activeFreeProvider = FreeTranslateService.CurrentProvider();
+        var bypassTokenProtection = !settings.ProtectCodeTokens ||
+            activeFreeProvider == FreeEngineProvider.Youdao ||
+            (activeFreeProvider == FreeEngineProvider.Auto &&
+             FreeTranslateService.SelectAutoProvider(source, sourceLang, targetLang) == FreeEngineProvider.Youdao);
+        if (bypassTokenProtection)
         {
             var unprotectedResponse = await _executor.TranslateFreeAsync(source, sourceLang, targetLang, authorization, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
@@ -668,7 +673,8 @@ internal sealed class TranslationCoordinator
         Action<TranslationSessionStage>? onStageChanged = null,
         IProgress<TranslationStreamUpdate>? progress = null,
         long epoch = 0,
-        InteractionTrace? trace = null)
+        InteractionTrace? trace = null,
+        bool autoTriggered = false)
     {
         // A10: a fused app refuses new work instead of half-starting it.
         if (!RuntimeGate.NewWorkAllowed)
@@ -678,6 +684,7 @@ internal sealed class TranslationCoordinator
                 InputSource = sourceKind,
                 SourceText = source ?? string.Empty,
                 Stage = TranslationSessionStage.Failed,
+                AutoTriggered = autoTriggered,
                 Error = new TranslationError(TranslationErrorKind.Unknown, RuntimeGate.RefusalZh, null),
             };
         }
@@ -689,6 +696,7 @@ internal sealed class TranslationCoordinator
             TargetLanguage = targetLang,
             Stage = TranslationSessionStage.Created,
             Trace = trace,
+            AutoTriggered = autoTriggered,
         };
 
         var totalStopwatch = Stopwatch.StartNew();
@@ -855,6 +863,10 @@ internal sealed class TranslationCoordinator
                 response = await TranslateFreeWithTokenProtectionAsync(
                     settings, trimmed, sourceLang, targetLang, freeAuth!, cancellationToken,
                     progress, session, epoch, startTimestampTicks);
+                if (!string.IsNullOrWhiteSpace(response.OverrideEngineLabel))
+                {
+                    session.PipelineLabel = response.OverrideEngineLabel;
+                }
             }
 
             netStopwatch.Stop();
@@ -2164,8 +2176,8 @@ internal sealed class TranslationCoordinator
 
     private void WriteHistoryOnce(TranslationSession session, TranslationInputSource sourceKind)
     {
-        // Only complete, nonempty content enters history, once per session.
-        if (!session.IsCleanCompletion || _history is null || session.HistoryCommitted)
+        // Only complete, nonempty, manually-confirmed content enters history, once per session.
+        if (session.AutoTriggered || !session.IsCleanCompletion || _history is null || session.HistoryCommitted)
         {
             return;
         }

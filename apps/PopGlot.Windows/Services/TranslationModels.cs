@@ -235,22 +235,65 @@ internal static class TranslationElapsedText
     public static string ForMilliseconds(double totalMilliseconds)
     {
         var elapsed = Math.Max(0, totalMilliseconds);
-        return elapsed < 100
-            ? "用时 < 0.1 秒"
-            : $"用时 {elapsed / 1000.0:F1} 秒";
+        return elapsed < 1000
+            ? $"{(long)Math.Round(elapsed)} ms"
+            : $"{elapsed / 1000.0:F1}s";
     }
 
     public static string ForTiming(TranslationSessionTiming? timing)
     {
-        if (timing is null) return "用时 < 0.1 秒";
+        if (timing is null) return "0 ms";
         var total = Math.Max(0, timing.TotalElapsedMs);
+        if (total < 1000)
+        {
+            return $"{total} ms";
+        }
         var totalSec = total / 1000.0;
         if (timing.FirstDeltaMs > 0 && timing.TotalElapsedMs >= timing.FirstDeltaMs + 100)
         {
             var firstSec = timing.FirstDeltaMs / 1000.0;
-            return $"总计 {totalSec:F1}s · 首字 {firstSec:F1}s";
+            return $"{totalSec:F1}s · 首字 {firstSec:F1}s";
         }
-        return total < 100 ? "用时 < 0.1 秒" : $"用时 {totalSec:F1} 秒";
+        return $"{totalSec:F1}s";
+    }
+
+    public static string FormatRouteLatency(
+        string? routeLabel,
+        long? elapsedMs,
+        TranslationSessionTiming? timing)
+    {
+        string? latencyText = null;
+        if (timing is not null && (timing.TotalElapsedMs > 0 || elapsedMs is null))
+        {
+            latencyText = ForTiming(timing);
+        }
+        else if (elapsedMs is { } ms)
+        {
+            latencyText = ForMilliseconds(ms);
+        }
+
+        if (string.IsNullOrWhiteSpace(routeLabel))
+        {
+            return latencyText ?? string.Empty;
+        }
+        if (string.IsNullOrWhiteSpace(latencyText))
+        {
+            return routeLabel.Trim();
+        }
+        return $"{routeLabel.Trim()} · {latencyText}";
+    }
+
+    public static string DescribeStagesTooltip(TranslationSessionTiming? timing)
+    {
+        if (timing is null) return string.Empty;
+        var parts = new List<string>(6);
+        if (timing.SelectionReadMs > 0) parts.Add($"取词 {timing.SelectionReadMs} ms");
+        if (timing.OcrElapsedMs > 0) parts.Add($"识别 {timing.OcrElapsedMs} ms");
+        if (timing.RoutingElapsedMs > 0) parts.Add($"路由 {timing.RoutingElapsedMs} ms");
+        if (timing.FirstDeltaMs > 0) parts.Add($"首字 {timing.FirstDeltaMs} ms");
+        if (timing.NetworkElapsedMs > 0) parts.Add($"网络 {timing.NetworkElapsedMs} ms");
+        if (timing.TotalElapsedMs > 0) parts.Add($"总计 {timing.TotalElapsedMs} ms");
+        return string.Join(" · ", parts);
     }
 }
 
@@ -309,6 +352,9 @@ internal sealed class TranslationSession
 
     /// <summary>Set once the coordinator has persisted this session, so a duplicated final delivery can never write history twice.</summary>
     public bool HistoryCommitted { get; set; }
+
+    /// <summary>True when triggered automatically (e.g. live type-to-translate), so history and side-effects are suppressed.</summary>
+    public bool AutoTriggered { get; set; }
 
     /// <summary>
     /// Identity-only provenance of the prompt template that produced this

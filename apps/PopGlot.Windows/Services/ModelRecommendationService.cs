@@ -352,6 +352,10 @@ internal static class ModelRecommendationService
         // 2. Reasoner & Preview Detection
         var isReasoner = ReasonerPattern.IsMatch(modelId);
         var isPreview = PreviewPattern.IsMatch(modelId);
+        if (IsFreeTierModelId(modelId))
+        {
+            detailedReasons.Add("模型标识含免费层级（:free / flash）");
+        }
 
         if (isReasoner)
         {
@@ -451,6 +455,19 @@ internal static class ModelRecommendationService
             Warnings: warnings,
             BenchmarkEvidence: matchedBenchmark,
             Score: score);
+    }
+
+    internal static bool IsFreeTierModelId(string? modelId)
+    {
+        if (string.IsNullOrWhiteSpace(modelId))
+        {
+            return false;
+        }
+        var trimmed = modelId.Trim();
+        return trimmed.EndsWith(":free", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.Equals("glm-4-flash", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.Equals("glm-4.5-flash", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.Equals("glm-4-flashx", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsNonGenerative(ModelDescriptor model)
