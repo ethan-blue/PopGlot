@@ -402,6 +402,109 @@ internal static class QuickSearchLiveAndCompactTests
         }
     }
 
+    public static void ShowSuppressesWarmupWhenTestSuppressionOrCustomRouteIsActive()
+    {
+        EnsureApp();
+        var tempDir = Path.Combine(TestIsolation.Root, $"qs-warmup-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var history = new HistoryStore(Path.Combine(tempDir, "history.json"));
+        var vocab = new VocabularyStore(Path.Combine(tempDir, "vocab.json"));
+        var executor = new FakeLiveExecutor();
+        var coordinator = new TranslationCoordinator(history, vocab, executor: executor);
+
+        var originalSuppress = App.SuppressStartupForTests;
+        var originalSender = FreeTranslateService.HttpSenderOverride;
+        var originalShell = ShellSettingsStore.Load();
+        var originalCore = CoreBridge.GetSettings();
+
+        var shell = ShellSettings.Default with
+        {
+            FreeEngineConsent = FreeEngineConsent.Allowed,
+            FreeEngineProvider = FreeEngineProvider.Bing,
+        };
+        ShellSettingsStore.Save(shell);
+        CoreBridge.SaveSettings(originalCore with { NetworkEnabled = true, SafeDevMode = false });
+        FreeTranslateService.ResetQuotaForTest();
+        FreeTranslateService.ResetRateLimitStateForTest();
+        App.SharedSessionStore.Clear();
+
+        var warmupMethods = new List<System.Net.Http.HttpMethod>();
+        FreeTranslateService.HttpSenderOverride = (request, _) =>
+        {
+            lock (warmupMethods)
+            {
+                warmupMethods.Add(request.Method);
+            }
+            return Task.FromResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK));
+        };
+
+        var window = new QuickSearchWindow(
+            history,
+            vocab,
+            coordinator: coordinator,
+            shellSettingsLoader: () => shell,
+            shellSettingsSaver: s => shell = s)
+        {
+            ForceClose = true,
+            IsFreeRouteResolverForTest = () => true,
+        };
+
+        try
+        {
+            // 1. Test startup suppression blocks warmup even when active route is free.
+            App.SuppressStartupForTests = true;
+            window.Show();
+            PumpOnce();
+            Thread.Sleep(60);
+            PumpOnce();
+            lock (warmupMethods)
+            {
+                Equal(0, warmupMethods.Count, "SuppressStartupForTests=true must block QuickSearch warmup");
+            }
+
+            // 2. Active custom/local engine (Demo Text Service, PreferFreeEngine=false) blocks warmup even with suppression off.
+            App.SuppressStartupForTests = false;
+            window.IsFreeRouteResolverForTest = null;
+            window.Hide();
+            PumpOnce();
+            window.Show();
+            PumpOnce();
+            Thread.Sleep(60);
+            PumpOnce();
+            lock (warmupMethods)
+            {
+                Equal(0, warmupMethods.Count, "active custom engine must block QuickSearch free-route warmup");
+            }
+
+            // 3. Eligible free route with suppression off fires exactly one HEAD warmup (no duplicate Show/IsVisibleChanged fire).
+            window.IsFreeRouteResolverForTest = () => true;
+            window.Hide();
+            PumpOnce();
+            window.Show();
+            PumpUntilCondition(() =>
+            {
+                lock (warmupMethods) return warmupMethods.Count >= 1;
+            }, "eligible free-route Show must trigger warmup once");
+            Thread.Sleep(60);
+            PumpOnce();
+            lock (warmupMethods)
+            {
+                Equal(1, warmupMethods.Count, "Show + IsVisibleChanged must not trigger duplicate warmup");
+                Equal(System.Net.Http.HttpMethod.Head, warmupMethods[0], "warmup must send a zero-payload HEAD request");
+            }
+        }
+        finally
+        {
+            window.Close();
+            App.SuppressStartupForTests = originalSuppress;
+            FreeTranslateService.HttpSenderOverride = originalSender;
+            CoreBridge.SaveSettings(originalCore);
+            ShellSettingsStore.Save(originalShell);
+            App.SharedSessionStore.Clear();
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
     private sealed class FakeLiveExecutor : ITranslationExecutor
     {
         public List<string> FreeCalls { get; } = [];

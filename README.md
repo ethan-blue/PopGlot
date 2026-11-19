@@ -12,18 +12,18 @@ Select text, press `Ctrl+Alt+W`, read the translation next to the cursor. Built 
 
 两个包都自带 .NET 10 运行时，装完即用。Windows 10 / 11 x64。
 
-[![下载安装包](docs/badges/download-setup.svg)](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.42/PopGlot-v0.1.42-win-x64-setup.exe)
-[![下载便携包](docs/badges/download-portable.svg)](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.42/PopGlot-v0.1.42-win-x64.zip)
+[![下载安装包](docs/badges/download-setup.svg)](https://github.com/ethan-blue/PopGlot/releases/download/v0.2.0/PopGlot-v0.2.0-win-x64-setup.exe)
+[![下载便携包](docs/badges/download-portable.svg)](https://github.com/ethan-blue/PopGlot/releases/download/v0.2.0/PopGlot-v0.2.0-win-x64.zip)
 
 | 形态 | 文件 | 说明 |
 | --- | --- | --- |
-| 安装包 | `PopGlot-v0.1.42-win-x64-setup.exe`（约 57 MB） | 向导安装、开始菜单、卸载入口。升级直接跑新安装包，原地覆盖。 |
-| 便携 zip | `PopGlot-v0.1.42-win-x64.zip`（约 84 MB） | 解压运行 `PopGlot.exe`，不写注册表。 |
+| 安装包 | `PopGlot-v0.2.0-win-x64-setup.exe`（约 57 MB） | 向导安装、开始菜单、卸载入口。升级直接跑新安装包，原地覆盖。 |
+| 便携 zip | `PopGlot-v0.2.0-win-x64.zip`（约 84 MB） | 解压运行 `PopGlot.exe`，不写注册表。 |
 
 安装包未签名，首次运行会有 SmartScreen 提示：点「更多信息」→「仍要运行」。校验文件完整性：
 
 ```powershell
-(Get-FileHash .\PopGlot-v0.1.42-win-x64-setup.exe -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash .\PopGlot-v0.2.0-win-x64-setup.exe -Algorithm SHA256).Hash.ToLower()
 ```
 
 和发布页同名附件的 `.sha256` 比对。全部版本见 [Releases](https://github.com/ethan-blue/PopGlot/releases)。
@@ -35,9 +35,10 @@ Select text, press `Ctrl+Alt+W`, read the translation next to the cursor. Built 
 | 划词 | 任意程序里 `Ctrl+Alt+W`。原剪贴板按序列号恢复。 |
 | 截图 | `Ctrl+Alt+Space` 框选。默认本机 OCR，图片不出本机。 |
 | 工作台 | `Ctrl+Alt+O`。左原文右译文，说明在译文下，「要点」是独立视图。 |
-| 查词 | `Ctrl+Alt+Q`。输入后 Enter 翻译。 |
-| 引擎 | OpenAI 兼容、OpenAI Responses、Anthropic、Gemini、Ollama、LM Studio。 |
-| 免费线路 | 没配引擎时走 Google 公共翻译，可切换 MyMemory。只发待译文本。 |
+| 查词 | `Ctrl+Alt+Q`。支持边输边译、紧凑小窗与完整大窗切换。 |
+| 引擎 | OpenAI 兼容、OpenAI Responses、Anthropic、Gemini、Ollama、LM Studio，支持一键扫描本机服务与环境变量。 |
+| 免费线路 | 没配引擎时提供 Google、MyMemory、有道词典、Bing 翻译、自动优选 5 条线路，可一键测速。只发待译文本。 |
+| 代理 | 支持跟随系统代理、直连、自定义 HTTP/SOCKS5，本地地址始终直连，支持国内线路直连加速。 |
 | 主题 | 跟随系统 / 浅色 / 深色。 |
 | 离线 | 「安全离线模式」拦截所有外发请求，本机模型地址不受影响。 |
 
@@ -77,7 +78,7 @@ Select text, press `Ctrl+Alt+W`, read the translation next to the cursor. Built 
 
 1. 运行 `PopGlot.exe`，程序驻留任务栏通知区。
 2. 选中一段英文，按 `Ctrl+Alt+W`。第一次会走配置向导，五项选择一次做完。
-3. 不配引擎也能用：免费线路默认开启，走 Google 公共翻译，不可用时切 MyMemory。
+3. 不配引擎也能用：免费线路默认开启，支持 Google、MyMemory、有道词典、Bing 翻译和自动优选，可在「设置 → 引擎」里测速和切换。
 4. 要更好的质量：设置 → 引擎 → 添加引擎，填地址和 Key，测试连接后选用。
 5. 要彻底断网：开「安全离线模式」，本机 Ollama / LM Studio 仍可用。
 

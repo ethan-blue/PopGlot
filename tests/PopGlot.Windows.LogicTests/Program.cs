@@ -547,7 +547,8 @@ internal static partial class Program
             ("provider editor shared model sync and unlocking invariants", WaveRegressionTests.ProviderEditorSharedModelSyncAndUnlockingInvariants),
             ("quick search live translate debounce collapses typing skips history and manual enter writes history", QuickSearchLiveAndCompactTests.LiveTranslateDebounceCollapsesTypingSkipsHistoryAndManualEnterWritesHistory),
             ("quick search live translate ime composing quota and length guards suppress cleanly", QuickSearchLiveAndCompactTests.ImeComposingAndQuotaAndLengthGuardsSuppressLiveTranslateCleanly),
-            ("quick search escape cancels live request and compact expanded mode persists", QuickSearchLiveAndCompactTests.EscapeCancelsInFlightLiveRequestAndCompactExpandedModePersists));
+            ("quick search escape cancels live request and compact expanded mode persists", QuickSearchLiveAndCompactTests.EscapeCancelsInFlightLiveRequestAndCompactExpandedModePersists),
+            ("quick search show suppresses warmup under test suppression or custom route", QuickSearchLiveAndCompactTests.ShowSuppressesWarmupWhenTestSuppressionOrCustomRouteIsActive));
 
         Run("screen capture validate and clamp handles multi-monitor negative origin", ShortcutCaptureAndOnboardingTests.ValidateAndClampRegionMultiMonitorAndBounds);
         await RunStaAsync("frozen snapshot crops PNG bytes and disposes on overlay close", ShortcutCaptureAndOnboardingTests.FrozenSnapshotCropPngAndOverlayDisposalAsync);

@@ -143,7 +143,6 @@ public partial class QuickSearchWindow : Window
         base.Show();
         CenterOnCurrentMonitor();
         FocusSearchBox();
-        TriggerWarmupIfEligible();
     }
 
     public new bool Activate()
@@ -1578,13 +1577,14 @@ public partial class QuickSearchWindow : Window
 
     private void TriggerWarmupIfEligible()
     {
-        if (_isClosed) return;
+        if (_isClosed || App.SuppressStartupForTests) return;
         var now = DateTime.UtcNow;
         if ((now - _lastWarmupUtc).TotalSeconds < 60) return;
 
         var shell = LoadShellSettings();
         var coreSettings = TryGetCoreSettingsSafely();
         if (!IsFreeRouteOutboundAllowed(shell, coreSettings)) return;
+        if (!ResolveIsActiveRouteFree(coreSettings)) return;
 
         _lastWarmupUtc = now;
         _ = Task.Run(async () =>

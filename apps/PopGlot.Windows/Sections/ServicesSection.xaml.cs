@@ -3702,7 +3702,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             ScanLocalAndEnvButton.IsEnabled = false;
             ScanLocalAndEnvButton.Content = "扫描中…";
         }
-        DiscoveryStatusText.Text = "正在扫描本机本地模型服务与环境变量密钥…";
+        DiscoveryStatusText.Text = "正在扫描本机模型服务与环境变量密钥…";
         DiscoveryStatusText.Visibility = Visibility.Visible;
         try
         {

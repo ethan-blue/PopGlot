@@ -565,7 +565,7 @@
                                                 <Button Style="{StaticResource ProviderPresetButton}" Tag="groq" AutomationProperties.Name="Groq 预设" Click="Preset_Click">
                                                     <StackPanel>
                                                         <WrapPanel><TextBlock Text="Groq" FontWeight="SemiBold"/><Border Style="{StaticResource PresetBadgeBorder}"><TextBlock Text="高速免费额度" Style="{StaticResource PresetBadgeText}"/></Border></WrapPanel>
-                                                        <TextBlock Text="极速推理 · 适合实时查词与短句翻译" Style="{StaticResource Caption}" Margin="0,3,0,0"/>
+                                                        <TextBlock Text="低延迟推理 · 适合查词与短句翻译" Style="{StaticResource Caption}" Margin="0,3,0,0"/>
                                                     </StackPanel>
                                                 </Button>
                                                 <Button Style="{StaticResource ProviderPresetButton}" Tag="openrouter" AutomationProperties.Name="OpenRouter 预设" Click="Preset_Click" Margin="0">

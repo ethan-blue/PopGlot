@@ -3,6 +3,32 @@
 本文件从 **0.0.1** 开始维护。更早的开发过程没有正式版本号；
 曾被误打的 `v0.3.0` tag 已撤回（见 `docs/VERSIONING.md` 历史修正），编号不复用。
 
+## 0.2.0 - 2026-11-19
+
+### 新增
+- **内置免费线路扩展为 5 条**：在原有 `Google`、`MyMemory` 基础上新增 `有道词典`（`dict.youdao.com`，120 字符内单词/短语词典查询与音标解析）、`Bing 翻译`（`cn.bing.com`，支持 IG/IID 令牌缓存与续期）以及 `自动优选`（按健康探测、最近成功记录与输入长度选择单条可用线路：单词/短语优先有道词典，长句优先 Bing / Google）。
+- **极速查词边输边译**：`QuickSearchWindow` 新增输入停顿自动翻译，在「设置 → 通用 → 查词窗口」提供「边输边译」开关、「停顿延迟」（`300 ms` / `500 ms` 默认 / `800 ms`）与「自动翻译范围」（默认「仅内置免费线路」，避免误耗自定义模型额度）。输入法组词期间不触发自动翻译；中文至少 1 字、外文至少 2 字符起译；剩余每小时配额低于 30 或超出当前免费线路单次上限时跳过自动请求并提示按 Enter 手动翻译。自动触发的中间查询不写入本地历史与往返缓存，也不覆盖会话快照。
+- **查词窗口形态切换与用时展示**：`QuickSearchWindow` 顶栏新增形态切换按钮（`ModeToggleButton`）和「在主窗口中打开」（`OpenInMainButton`）；支持「紧凑小窗」（430 DIP 宽、最大高度 380 DIP，说明默认折叠为「释义详情 ▾」按钮）与「完整大窗」（最小 480×360 DIP，可拖拽边框调整并持久化宽高）；底栏新增路线与阶段用时徽标（`RouteLatencyBadge`），悬停显示各阶段耗时明细，翻译浮窗底部同步展示。
+- **统一网络代理与国内直连加速**：「设置 → 通用 → 网络与代理」新增 `跟随系统代理`（默认）、`直连` 与 `自定义代理`（支持 `http://`、`https://`、`socks5://`、`socks5h://`），「设置 → 引擎」顶栏同步提供代理状态按钮与快捷面板；支持「本地地址始终直连」（默认开启）与「国内线路直连加速」（有道、Bing 国内版、DeepSeek、智谱、硅基流动等国内域名绕过代理直连），C# 侧与 Rust Core 传输池按配置隔离并实时同步。
+- **引擎总览测速与本机/环境一键发现**：「设置 → 引擎」总览页新增「内置免费线路」面板（5 条线路状态、单条测速、一键测速与设为当前）与「自动发现与免费模型」面板（点击「扫描本机与环境」探测运行中的 Ollama / LM Studio / LiteLLM 与环境变量密钥，确认后一键添加）；新增引擎预设分为「免费与本机模型」「主流云端 API」「账号与 CLI 工具」三类，引擎列表显示能力标签与最近测速延迟。
+
+### 变更
+- **免费引擎连接与冷却策略**：连接超时收紧至 2.5 秒（整请求 30 秒），新增按主机隔离的冷却机制（HTTP 429 冷却 1 分钟、网络或超时冷却 90 秒），只屏蔽出错主机；跳过冷却中与超 URL 长度预算的端点时不消耗每小时 400 次配额；单次请求失败后绝不跨提供商静默转发失败原文。
+- **零荷载连接预热**：当安全离线模式关闭、网络许可开启、内置免费引擎允许且当前激活线路为内置免费线路时，应用启动后台与打开极速查词窗口时向活跃免费线路主机发出零荷载 `HEAD` 预热请求（不携带用户正文、不消耗每小时配额）；启用自定义引擎、禁用免费引擎或测试抑制时不发出预热。
+- **查词流式渲染节流**：`QuickSearchWindow` 流式增量渲染与紧凑模式工作区夹紧按 60 ms 节流，并在边输边译新请求期间淡化保留上一条结果与状态点动画，减少连续输入时的高度跳变。
+
+### 修复
+- **查词窗口在非免费/测试抑制下误发预热**：`QuickSearchWindow.Show()` 不再与 `IsVisibleChanged` 重复触发预热，且仅在非测试抑制状态及当前激活线路为内置免费线路时才执行 `HEAD` 预热。
+- **有道词典请求误做代码占位保护**：通过有道词典查询单词或短语时跳过本地 Token 占位替换，避免英文词条被改写为占位符后再送往词典接口。
+
+### 迁移
+- 无破坏性变更。既有 `windows-shell.json` 缺少新字段时自动使用默认值（`LiveTranslateEnabled=true`、`LiveTranslateDelayMs=500`、`LiveTranslateScope=FreeEngineOnly`、`QuickSearchWindowMode=Compact`、`NetworkProxyMode=System`、`ProxyBypassLocal=true`、`ProxyBypassDomesticRoutes=true`）。
+
+### 验证与边界
+- Rust 检查通过：`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`（0 警告）、`cargo test --workspace --locked` 共 285 项全部通过（`popglot-core` 194 项、`popglot-domain` 75 项、`popglot-ffi` 16 项）。
+- Release 构建与自动化测试：`dotnet build apps/PopGlot.Windows/PopGlot.Windows.csproj --configuration Release` 通过（0 警告 0 错误）；`PureTests` 75 项全部通过（0 未授权外发）；`CliTests --ui` 32 项全部通过；`LogicTests` 421 项通过、3 项在非交互桌面/后台会话中失败（`flat text surfaces are quiet under mouse focus keyboard`、`panel ctrl s stars completed but not partial`、`real desktop capture regression covers BitBlt SRCCOPY|CAPTUREBLT paths`，均为需要解锁前台桌面的 Win32 光标/按键/抓屏用例）。
+- 边界说明：公共免费线路接口未提供商业 SLA，无固定可用性保证；真实网络代理连通性与各家服务实际译文质量需在真实环境人工复核，回环 mock 与隔离宿主测试不能替代真机多屏高分屏与物理输入验收。
+
 ## 0.1.42 - 2026-11-17
 
 ### 新增

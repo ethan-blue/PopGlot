@@ -92,7 +92,7 @@ internal static class ModelCatalogService
         new(
             Id: "groq",
             DisplayName: "Groq",
-            Description: "极速推理服务，提供每日免费额度",
+            Description: "低延迟推理服务，提供每日免费额度",
             BaseUrl: "https://api.groq.com/openai/v1",
             ProviderType: ProviderType.OpenAiCompatible,
             TextEndpoint: "/chat/completions",
