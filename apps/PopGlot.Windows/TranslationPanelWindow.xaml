@@ -461,7 +461,7 @@
                                AutomationProperties.LiveSetting="Polite"
                                AutomationProperties.Name="翻译状态" />
                     <TextBlock x:Name="RouteText" Grid.Column="2" Style="{StaticResource Metadata}" VerticalAlignment="Center"
-                               Margin="8,0,8,0" MaxWidth="130" TextTrimming="CharacterEllipsis"
+                               Margin="8,0,8,0" MaxWidth="165" TextTrimming="CharacterEllipsis"
                                HorizontalAlignment="Right"
                                Foreground="{DynamicResource TextTertiaryBrush}"
                                ToolTip="{Binding RelativeSource={RelativeSource Self}, Path=Text}" />

@@ -1458,7 +1458,7 @@ public partial class TranslationPanelWindow : Window
         EngineBadge.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
         StatusDot.SetResourceReference(Border.BackgroundProperty, "AccentBrush");
 
-        // The result badge identifies the engine; the footer keeps timing and screenshot privacy.
+        // The result badge identifies the engine; the footer keeps route + timing and screenshot privacy.
         var totalMs = session.Timing.TotalElapsedMs + (ulong)Math.Max(0, _inputAcquisitionMs);
         var footerParts = new List<string>();
         if (session.InputSource == TranslationInputSource.Screenshot)
@@ -1467,8 +1467,12 @@ public partial class TranslationPanelWindow : Window
         }
         footerParts.Add(isCached
             ? TranslationRoundTripCache.ReusedFact
-            : TranslationElapsedText.ForTiming(session.Timing));
+            : TranslationElapsedText.FormatRouteLatency(session.PipelineLabel, null, session.Timing));
         SetRouteText(string.Join(" · ", footerParts));
+        var stagesTip = isCached ? string.Empty : TranslationElapsedText.DescribeStagesTooltip(session.Timing);
+        RouteText.ToolTip = string.IsNullOrWhiteSpace(stagesTip)
+            ? (string.IsNullOrWhiteSpace(RouteText.Text) ? null : RouteText.Text)
+            : stagesTip;
         StatusText.Text = isCached
             ? TranslationRoundTripCache.ReusedStatus
             : string.IsNullOrWhiteSpace(pipelineNote)
