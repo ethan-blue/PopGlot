@@ -9,6 +9,11 @@
         WindowStartupLocation="Manual" UseLayoutRounding="True" SnapsToDevicePixels="True"
         KeyDown="Window_KeyDown" Deactivated="Window_Deactivated">
 
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="0" CornerRadius="0" GlassFrameThickness="0"
+                      ResizeBorderThickness="5" UseAeroCaptionButtons="False" />
+    </WindowChrome.WindowChrome>
+
     <!-- Not AllowsTransparency: text-first window keeps ClearType via an
          opaque surface; DWM provides rounding and shadow. -->
     <Grid>
@@ -25,7 +30,7 @@
             </Grid.RowDefinitions>
 
             <!-- Search input bar: Spotlight/Raycast flagship style -->
-            <Border Grid.Row="0" Padding="16,12" Background="Transparent"
+            <Border x:Name="HeaderBar" Grid.Row="0" Padding="16,12" Background="Transparent"
                     CornerRadius="11,11,0,0" MouseLeftButtonDown="Header_MouseLeftButtonDown">
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -162,7 +167,59 @@
                                   Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                   Data="{StaticResource IconSettings}" />
                         </Button>
-                        <Button Style="{StaticResource IconButton}" Width="32" Height="32" Margin="4,0,0,0"
+                        <Button x:Name="OpenInMainButton" Style="{StaticResource IconButton}" Width="32" Height="32" Margin="4,0,0,0"
+                                AutomationProperties.Name="在主窗口中打开"
+                                ToolTip="在主窗口中打开" Click="OpenInMain_Click">
+                            <Path Width="12" Height="12" Stretch="Uniform"
+                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  Data="{StaticResource IconOpenExternal}" />
+                        </Button>
+                        <Button x:Name="ModeToggleButton" Style="{StaticResource IconButton}" Width="28" Height="28" Margin="2,0,0,0"
+                                AutomationProperties.Name="切换到大窗模式"
+                                ToolTip="切换到大窗模式" Click="ModeToggle_Click">
+                            <Path x:Name="ModeToggleIcon" Width="11" Height="11" Stretch="Uniform"
+                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  Data="{StaticResource IconExpand}" />
+                        </Button>
+                        <ToggleButton x:Name="PinToggle" Width="28" Height="28" Margin="2,0,0,0"
+                                      AutomationProperties.Name="固定查词栏"
+                                      Cursor="Hand" ToolTip="固定查词栏（失焦不收起）"
+                                      FocusVisualStyle="{StaticResource FocusRing}"
+                                      Checked="PinToggle_Changed" Unchecked="PinToggle_Changed">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border x:Name="Surface" Background="Transparent" CornerRadius="{StaticResource ControlRadius}">
+                                        <Path x:Name="Glyph" Width="11" Height="11" Stretch="Uniform"
+                                              Fill="{DynamicResource TextSecondaryBrush}"
+                                              Data="{StaticResource IconPin}"
+                                              HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              Opacity="0.65" />
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Surface" Property="Background"
+                                                    Value="{DynamicResource SurfaceHoverBrush}" />
+                                        </Trigger>
+                                        <Trigger Property="IsPressed" Value="True">
+                                            <Setter TargetName="Surface" Property="Background"
+                                                    Value="{DynamicResource SurfacePressedBrush}" />
+                                        </Trigger>
+                                        <Trigger Property="IsChecked" Value="True">
+                                            <Setter TargetName="Surface" Property="Background"
+                                                    Value="{DynamicResource AccentSoftBrush}" />
+                                            <Setter TargetName="Glyph" Property="Fill"
+                                                    Value="{DynamicResource AccentBrush}" />
+                                            <Setter TargetName="Glyph" Property="Opacity" Value="1" />
+                                        </Trigger>
+                                        <Trigger Property="IsEnabled" Value="False">
+                                            <Setter TargetName="Glyph" Property="Fill" Value="{DynamicResource TextDisabledBrush}" />
+                                            <Setter Property="Cursor" Value="Arrow" />
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+                        <Button x:Name="CloseButton" Style="{StaticResource IconButton}" Width="28" Height="28" Margin="2,0,0,0"
                                 AutomationProperties.Name="关闭查词栏"
                                 ToolTip="关闭 (Esc)" Click="CloseButton_Click">
                             <Path Width="12" Height="12" Stretch="Uniform"
@@ -172,7 +229,7 @@
                     </StackPanel>
 
                     <!-- Loading line overlays the search bar's bottom edge -->
-                    <ProgressBar x:Name="SearchProgress" Grid.ColumnSpan="3" Height="2" IsIndeterminate="True"
+                    <ProgressBar x:Name="SearchProgress" Grid.ColumnSpan="4" Height="2" IsIndeterminate="True"
                                  VerticalAlignment="Bottom" Visibility="Collapsed"
                                  Foreground="{DynamicResource AccentBrush}" Background="Transparent" BorderThickness="0" />
                 </Grid>
@@ -297,6 +354,13 @@
                         </StackPanel>
                     </Border>
 
+                    <!-- Compact mode inline explanation toggle -->
+                    <Button x:Name="ExplanationToggleButton" Style="{StaticResource GhostButton}"
+                            Content="释义详情 ▾" FontSize="11.5" Padding="8,4" Margin="0,6,0,0"
+                            HorizontalAlignment="Left" Visibility="Collapsed"
+                            AutomationProperties.Name="切换释义详情"
+                            Click="ExplanationToggle_Click" />
+
                     <!-- Explanation: distinct sub-card hierarchy -->
                     <Border x:Name="ExplanationCard" Margin="0,10,0,0" Padding="12,10" CornerRadius="{StaticResource ControlRadius}"
                             Background="{DynamicResource SurfaceRaisedBrush}"
@@ -347,15 +411,16 @@
             </Border>
 
             <!-- Bottom Shortcuts footer: Spotlight/Raycast style -->
-            <Border Grid.Row="2" Padding="16,6" Background="{DynamicResource SurfaceMutedBrush}"
+            <Border x:Name="FooterBar" Grid.Row="2" Padding="16,6" Background="{DynamicResource SurfaceMutedBrush}"
                     BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
                     CornerRadius="0,0,11,11">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <Grid Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
+                    <Grid Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
@@ -370,7 +435,18 @@
                                    AutomationProperties.LiveSetting="Polite"
                                    AutomationProperties.Name="翻译状态" />
                     </Grid>
-                    <Button x:Name="RouteSelectorButton" Grid.Column="1" Style="{StaticResource GhostButton}"
+                    <Border x:Name="RouteLatencyBadge" Grid.Column="1"
+                            Background="{DynamicResource SurfaceRaisedBrush}"
+                            BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
+                            CornerRadius="{StaticResource ChipRadius}" Padding="7,2" Margin="0,0,6,0"
+                            VerticalAlignment="Center" Visibility="Collapsed">
+                        <TextBlock x:Name="RouteLatencyText" Style="{StaticResource Metadata}"
+                                   FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}"
+                                   MaxWidth="180" TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
+                                   AutomationProperties.Name="路线与用时" />
+                    </Border>
+                    <Button x:Name="RouteSelectorButton" Grid.Column="2" Style="{StaticResource GhostButton}"
                             Height="26" MinWidth="36" MaxWidth="136" Padding="7,0"
                             AutomationProperties.Name="切换文字模型" ToolTipService.ShowOnDisabled="True"
                             ToolTip="切换翻译模型"

@@ -3410,8 +3410,11 @@ internal static class WaveRegressionTests
         {
             quickSearch.Show();
             PumpUntil(Task.CompletedTask);
-            Equal(480.0, quickSearch.MinWidth, "the 480 DIP minimum width contract must hold");
-            True(quickSearch.ActualWidth >= 480 - 0.5,
+            var expectedMinWidth = quickSearch.CurrentWindowMode == QuickSearchWindowMode.Compact
+                ? QuickSearchWindow.CompactWindowWidth
+                : QuickSearchWindow.ExpandedMinWidth;
+            Equal(expectedMinWidth, quickSearch.MinWidth, "the mode minimum width contract must hold");
+            True(quickSearch.ActualWidth >= expectedMinWidth - 0.5,
                 $"the window must start at or above the minimum width, got {quickSearch.ActualWidth:F1}");
             var widthBefore = quickSearch.ActualWidth;
 
@@ -3425,7 +3428,14 @@ internal static class WaveRegressionTests
             Equal(generation, GetPrivate<long>(quickSearch, "_settledDpiGeneration"),
                 "the idle reposition must settle the transition exactly once");
             True(quickSearch.ActualWidth >= widthBefore - 0.5,
-                $"the settle must keep the window width (no 480→720 DIP pollution), got {quickSearch.ActualWidth:F1}");
+                $"the settle must keep the window width (no DPI pollution), got {quickSearch.ActualWidth:F1}");
+
+            // Also verify Expanded mode keeps its 480 DIP minimum width contract across DPI transitions.
+            quickSearch.SetWindowMode(QuickSearchWindowMode.Expanded, persist: false);
+            PumpUntil(Task.CompletedTask);
+            Equal(480.0, quickSearch.MinWidth, "the 480 DIP minimum width contract must hold in Expanded mode");
+            True(quickSearch.ActualWidth >= 480 - 0.5,
+                $"the Expanded window must start at or above 480 DIP, got {quickSearch.ActualWidth:F1}");
         }
         finally
         {

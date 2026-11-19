@@ -1,4 +1,70 @@
+using System.Text;
+
 namespace PopGlot.Windows.Services;
+
+internal readonly record struct LiveTranslateGuardResult(bool Allowed, string? Hint);
+
+internal static class QuickSearchLivePolicy
+{
+    public const int MinAutoQuotaRemaining = 30;
+    public const string LowQuotaHint = "剩余自动配额不足，按 Enter 手动翻译";
+    public const string MyMemoryTooLongHint = "内容较长，按 Enter 使用分段翻译";
+    public const string YoudaoTooLongHint = "有道词典适合单词和短语，长句可按 Enter 或切换 Bing";
+
+    public static bool ContainsCjk(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+        foreach (var ch in text)
+        {
+            if (ch is (>= '\u4E00' and <= '\u9FFF')
+                or (>= '\u3400' and <= '\u4DBF')
+                or (>= '\uF900' and <= '\uFAFF')
+                or (>= '\u3040' and <= '\u30FF')
+                or (>= '\uAC00' and <= '\uD7AF'))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static bool MeetsMinimumLength(string trimmed)
+    {
+        if (string.IsNullOrWhiteSpace(trimmed)) return false;
+        return trimmed.Length >= 2 || ContainsCjk(trimmed);
+    }
+
+    public static LiveTranslateGuardResult EvaluateFreeRouteGuards(
+        string trimmed,
+        FreeEngineProvider provider,
+        int quotaRemaining,
+        string sourceLang = LanguageCatalog.Auto,
+        string targetLang = "zh-CN")
+    {
+        if (quotaRemaining < MinAutoQuotaRemaining)
+        {
+            return new LiveTranslateGuardResult(false, LowQuotaHint);
+        }
+
+        var effective = provider == FreeEngineProvider.Auto
+            ? FreeTranslateService.SelectAutoProvider(trimmed, sourceLang, targetLang)
+            : provider;
+
+        if (effective == FreeEngineProvider.MyMemory &&
+            Encoding.UTF8.GetByteCount(trimmed) > FreeTranslateService.MyMemoryMaxQueryBytes)
+        {
+            return new LiveTranslateGuardResult(false, MyMemoryTooLongHint);
+        }
+
+        if (effective == FreeEngineProvider.Youdao &&
+            FreeTranslateService.IsYoudaoTooLongOrMultiSentence(trimmed))
+        {
+            return new LiveTranslateGuardResult(false, YoudaoTooLongHint);
+        }
+
+        return new LiveTranslateGuardResult(true, null);
+    }
+}
 
 internal enum QuickSearchUiStage
 {
@@ -36,6 +102,9 @@ internal sealed class QuickSearchState
     public string IncompleteBadgeText { get; private set; } = "未完成";
     public bool IsPartialWarningTone { get; private set; } = true;
     public bool IsProgressVisible { get; private set; }
+    public bool IsDimmingPreviousResult { get; private set; }
+    public string? RouteLatencyText { get; private set; }
+    public string? RouteStagesTooltip { get; private set; }
 
     public bool CanCopy { get; private set; }
     public bool CanSpeak { get; private set; }
@@ -92,29 +161,51 @@ internal sealed class QuickSearchState
         return true;
     }
 
-    public void StartNewSearch(string query)
+    public void StartNewSearch(string query) => StartNewSearch(query, preservePreviousResultForLive: false);
+
+    public void StartNewSearch(string query, bool preservePreviousResultForLive)
     {
+        var hasPreviousResult = preservePreviousResultForLive &&
+            IsResultVisible &&
+            Stage is QuickSearchUiStage.Completed or QuickSearchUiStage.Partial &&
+            (!string.IsNullOrWhiteSpace(FinalRenderedText) || !string.IsNullOrWhiteSpace(AccumulatedText));
+
         CurrentEpoch++;
         CurrentQuery = query.Trim();
         Stage = QuickSearchUiStage.Streaming;
-        AccumulatedText = string.Empty;
-        FinalRenderedText = string.Empty;
-        Phonetic = null;
-        Explanation = null;
-        ErrorMessage = null;
         PendingNotice = null;
-        IsResultVisible = true;
-        IsStreamLayerVisible = true;
-        IsRichBoxVisible = false;
-        IsStreamIndicatorVisible = true;
+        IsProgressVisible = true;
         IsIncompleteBadgeVisible = false;
         IncompleteBadgeText = "未完成";
         IsPartialWarningTone = true;
-        IsProgressVisible = true;
         CanCopy = false;
         CanSpeak = false;
         CanStar = false;
-        StatusText = "正在生成…";
+        RouteLatencyText = null;
+        RouteStagesTooltip = null;
+
+        if (hasPreviousResult)
+        {
+            IsDimmingPreviousResult = true;
+            IsResultVisible = true;
+            IsStreamIndicatorVisible = false;
+            StatusText = "正在实时翻译…";
+        }
+        else
+        {
+            IsDimmingPreviousResult = false;
+            AccumulatedText = string.Empty;
+            FinalRenderedText = string.Empty;
+            Phonetic = null;
+            Explanation = null;
+            ErrorMessage = null;
+            IsResultVisible = true;
+            IsStreamLayerVisible = true;
+            IsRichBoxVisible = false;
+            IsStreamIndicatorVisible = true;
+            StatusText = "正在生成…";
+        }
+
         RefreshHints();
     }
 
@@ -130,6 +221,14 @@ internal sealed class QuickSearchState
         PendingNotice = null;
         Stage = QuickSearchUiStage.Streaming;
         IsProgressVisible = true;
+        if (IsDimmingPreviousResult)
+        {
+            IsDimmingPreviousResult = false;
+            FinalRenderedText = string.Empty;
+            Phonetic = null;
+            Explanation = null;
+            ErrorMessage = null;
+        }
 
         if (update.Kind == TranslationStreamUpdateKind.Reset)
         {
@@ -191,6 +290,8 @@ internal sealed class QuickSearchState
             return false;
         }
 
+        var wasDimming = IsDimmingPreviousResult;
+        IsDimmingPreviousResult = false;
         IsProgressVisible = false;
         IsStreamIndicatorVisible = false;
         // A terminal state always rewrites the status copy: any pending
@@ -216,9 +317,21 @@ internal sealed class QuickSearchState
             // 0.1.27 文案减法：引擎名不再进状态行（产品即 PopGlot/OMP，
             // 徽标已指明引擎），只保留面向用户的秒级用时。
             StatusText = TranslationElapsedText.ForTiming(session.Timing);
+            RouteLatencyText = TranslationElapsedText.FormatRouteLatency(session.PipelineLabel, null, session.Timing);
+            RouteStagesTooltip = TranslationElapsedText.DescribeStagesTooltip(session.Timing);
             RefreshHints();
             return true;
         }
+
+        if (wasDimming)
+        {
+            AccumulatedText = string.Empty;
+            FinalRenderedText = string.Empty;
+            Phonetic = null;
+            Explanation = null;
+        }
+        RouteLatencyText = null;
+        RouteStagesTooltip = null;
 
         if (session.Stage == TranslationSessionStage.Partial)
         {
@@ -290,6 +403,10 @@ internal sealed class QuickSearchState
     {
         if (!OnSessionCompleted(session, epoch, currentInputQuery)) return false;
         StatusText = TranslationRoundTripCache.ReusedStatus;
+        RouteLatencyText = string.IsNullOrWhiteSpace(session.PipelineLabel)
+            ? TranslationRoundTripCache.ReusedFact
+            : $"{session.PipelineLabel.Trim()} · {TranslationRoundTripCache.ReusedFact}";
+        RouteStagesTooltip = null;
         return true;
     }
 
@@ -332,6 +449,13 @@ internal sealed class QuickSearchState
             return false;
         }
 
+        if (IsDimmingPreviousResult)
+        {
+            IsDimmingPreviousResult = false;
+            AccumulatedText = string.Empty;
+        }
+        RouteLatencyText = null;
+        RouteStagesTooltip = null;
         PendingNotice = null;
         Stage = QuickSearchUiStage.Cancelled;
         IsProgressVisible = false;
@@ -362,6 +486,13 @@ internal sealed class QuickSearchState
             return false;
         }
 
+        if (IsDimmingPreviousResult)
+        {
+            IsDimmingPreviousResult = false;
+            AccumulatedText = string.Empty;
+        }
+        RouteLatencyText = null;
+        RouteStagesTooltip = null;
         PendingNotice = null;
         Stage = QuickSearchUiStage.Failed;
         IsProgressVisible = false;
@@ -403,6 +534,14 @@ internal sealed class QuickSearchState
         PendingNotice = null;
         IsProgressVisible = false;
         IsStreamIndicatorVisible = false;
+        if (IsDimmingPreviousResult)
+        {
+            IsDimmingPreviousResult = false;
+            AccumulatedText = string.Empty;
+            FinalRenderedText = string.Empty;
+        }
+        RouteLatencyText = null;
+        RouteStagesTooltip = null;
 
         if (string.IsNullOrEmpty(trimmed))
         {
@@ -477,6 +616,9 @@ internal sealed class QuickSearchState
         IsProgressVisible = false;
         IsStreamIndicatorVisible = false;
         IsIncompleteBadgeVisible = false;
+        IsDimmingPreviousResult = false;
+        RouteLatencyText = null;
+        RouteStagesTooltip = null;
         CanCopy = false;
         CanSpeak = false;
         CanStar = false;

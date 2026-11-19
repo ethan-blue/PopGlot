@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -10,16 +11,41 @@ namespace PopGlot.Windows;
 
 public partial class QuickSearchWindow : Window
 {
+    public const double CompactWindowWidth = 430.0;
+    public const double CompactWindowMaxHeight = 380.0;
+    public const double ExpandedMinWidth = 480.0;
+    public const double ExpandedMaxWidth = 1200.0;
+    public const double ExpandedMinHeight = 360.0;
+    public const double ExpandedMaxHeight = 1000.0;
+
     private readonly HistoryStore _history;
     private readonly VocabularyStore _vocabulary;
     private readonly TranslationCoordinator _coordinator;
+    private readonly Func<ShellSettings>? _shellSettingsLoader;
+    private readonly Action<ShellSettings>? _shellSettingsSaver;
     private readonly EventHandler _themeChangedHandler;
     private readonly Action<string?>? _openSettings;
     private readonly QuickSearchState _state = new();
     private readonly TranslationRoundTripCache _roundTripCache = new();
     private readonly DispatcherTimer _debounceTimer = new()
     {
-        Interval = TimeSpan.FromMilliseconds(150),
+        Interval = TimeSpan.FromMilliseconds(500),
+    };
+    private readonly DispatcherTimer _streamFlushTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(60),
+    };
+    private readonly DispatcherTimer _clampThrottleTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(60),
+    };
+    private readonly DispatcherTimer _expandedSizeSaveTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(250),
+    };
+    private readonly DispatcherTimer _breathingDotTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(140),
     };
     private CancellationTokenSource? _cts;
     private bool _isClosed;
@@ -29,6 +55,21 @@ public partial class QuickSearchWindow : Window
     private System.Windows.Controls.ContextMenu? _routeMenu;
     private bool _switchingRoute;
     internal Action? RouteChanged { get; set; }
+    private QuickSearchWindowMode _windowMode = QuickSearchWindowMode.Compact;
+    private bool _applyingWindowMode;
+    private bool _expandedSizeDirty;
+    private bool _isCompactExplanationExpanded;
+    private bool _userMoved;
+    private bool _currentResultAutoTriggered;
+    private string? _lastLiveQuery;
+    private long _lastStreamRenderTicks;
+    private long _lastClampTicks;
+    private int _breathingStep;
+    private DateTime _lastWarmupUtc = DateTime.MinValue;
+    internal Func<bool>? IsFreeRouteResolverForTest { get; set; }
+    internal QuickSearchWindowMode CurrentWindowMode => _windowMode;
+    internal bool IsUserMoved => _userMoved;
+    internal bool IsCurrentResultAutoTriggered => _currentResultAutoTriggered;
     // DPI transition fencing: OnDpiChanged only schedules ONE ApplicationIdle
     // reposition; until it ran, every generation bump has a pending settle and
     // the transition-driven SizeChanged/Height events must not re-position or
@@ -62,11 +103,47 @@ public partial class QuickSearchWindow : Window
     private Point? _initialCenterPointPixels;
     internal bool ForceClose { get; set; }
 
+    private ShellSettings LoadShellSettings()
+    {
+        try
+        {
+            return _shellSettingsLoader is not null
+                ? _shellSettingsLoader()
+                : ShellSettingsStore.Load();
+        }
+        catch
+        {
+            return ShellSettings.Default;
+        }
+    }
+
+    private void UpdateShellSettings(Func<ShellSettings, ShellSettings> update)
+    {
+        try
+        {
+            if (_shellSettingsSaver is not null)
+            {
+                var updated = update(LoadShellSettings());
+                _shellSettingsSaver(updated);
+            }
+            else
+            {
+                ShellSettingsStore.Update(update);
+            }
+        }
+        catch
+        {
+            // Ignore persistence failure on transient UI toggles
+        }
+    }
+
     public new void Show()
     {
+        SyncWindowModeFromSettings();
         base.Show();
         CenterOnCurrentMonitor();
         FocusSearchBox();
+        TriggerWarmupIfEligible();
     }
 
     public new bool Activate()
@@ -80,6 +157,7 @@ public partial class QuickSearchWindow : Window
     public new void Hide()
     {
         CancelRunningRequest();
+        FlushExpandedSizeSaveIfDirty();
         if (_routeMenu is not null) _routeMenu.IsOpen = false;
         // 用户主动收起（Esc 阶梯/失焦）结束本次会话视图的生命周期：一次性
         // 通知（如划词预读取超时落地提示）与仅作解释的风格提示都不得跨
@@ -125,16 +203,28 @@ public partial class QuickSearchWindow : Window
         }));
     }
 
-    internal QuickSearchWindow(HistoryStore history, VocabularyStore vocabulary, Action<string?>? openSettings = null)
+    internal QuickSearchWindow(
+        HistoryStore history,
+        VocabularyStore vocabulary,
+        Action<string?>? openSettings = null,
+        TranslationCoordinator? coordinator = null,
+        Func<ShellSettings>? shellSettingsLoader = null,
+        Action<ShellSettings>? shellSettingsSaver = null)
     {
         _history = history;
         _vocabulary = vocabulary;
         _openSettings = openSettings;
-        _coordinator = new TranslationCoordinator(_history, _vocabulary);
+        _coordinator = coordinator ?? new TranslationCoordinator(_history, _vocabulary);
+        _shellSettingsLoader = shellSettingsLoader;
+        _shellSettingsSaver = shellSettingsSaver;
         InitializeComponent();
         InterfaceKeys.RefreshHints(this);
         PreviewKeyDown += Window_PreviewShortcutKeyDown;
         _debounceTimer.Tick += DebounceTimer_Tick;
+        _streamFlushTimer.Tick += StreamFlushTimer_Tick;
+        _clampThrottleTimer.Tick += ClampThrottleTimer_Tick;
+        _expandedSizeSaveTimer.Tick += ExpandedSizeSaveTimer_Tick;
+        _breathingDotTimer.Tick += BreathingDotTimer_Tick;
         CoreBridge.LanguagePairChanged += OnLanguagePairChanged;
         // E3: the sampler must register BEFORE the Ui composition tracker —
         // it reads IsComposing, which the tracker resets on Escape during
@@ -142,6 +232,8 @@ public partial class QuickSearchWindow : Window
         SearchBox.PreviewKeyDown += OnSearchBoxPreviewKeyDownSample;
         Ui.AttachCompositionTracker(SearchBox);
         _speakIconFillBinding = SpeakIcon.GetBindingExpression(System.Windows.Shapes.Shape.FillProperty)?.ParentBinding;
+        RefreshPinTooltip();
+        SyncWindowModeFromSettings(isInitial: true);
 
         GotKeyboardFocus += (_, e) =>
         {
@@ -182,6 +274,7 @@ public partial class QuickSearchWindow : Window
         {
             if (IsVisible)
             {
+                SyncWindowModeFromSettings();
                 CenterOnCurrentMonitor();
                 FocusSearchBox();
                 // The persisted language pair may have changed on another
@@ -191,9 +284,11 @@ public partial class QuickSearchWindow : Window
                 _sessionTargetLanguage = null;
                 RefreshLangBadge();
                 RefreshRouteSelection();
+                TriggerWarmupIfEligible();
             }
             else
             {
+                FlushExpandedSizeSaveIfDirty();
                 StoreSessionSnapshot();
             }
         };
@@ -202,6 +297,16 @@ public partial class QuickSearchWindow : Window
         SizeChanged += (_, _) =>
         {
             if (IsInDpiTransition) return;
+            if (_windowMode == QuickSearchWindowMode.Expanded && IsLoaded && !_applyingWindowMode)
+            {
+                ScheduleExpandedSizeSave();
+            }
+            if (_windowMode == QuickSearchWindowMode.Compact &&
+                _state.Stage is QuickSearchUiStage.Streaming or QuickSearchUiStage.Finalizing)
+            {
+                ScheduleThrottledClamp();
+                return;
+            }
             ClampToWorkArea();
         };
 
@@ -280,11 +385,17 @@ public partial class QuickSearchWindow : Window
 
         var workAreaHeightDip = workArea.Height / scaleY;
         var workAreaWidthDip = workArea.Width / scaleX;
-        var maxAllowedHeight = Math.Min(600, Math.Max(120, workAreaHeightDip - 40));
+        var modeMaxCap = _windowMode == QuickSearchWindowMode.Compact
+            ? CompactWindowMaxHeight
+            : ExpandedMaxHeight;
+        var maxAllowedHeight = Math.Min(modeMaxCap, Math.Max(120, workAreaHeightDip - 40));
         MaxHeight = maxAllowedHeight;
 
-        var widthDip = ActualWidth > 0 ? ActualWidth : (double.IsFinite(Width) ? Width : 640);
-        var heightDip = ActualHeight > 0 ? ActualHeight : 100;
+        var defaultWidth = _windowMode == QuickSearchWindowMode.Compact
+            ? CompactWindowWidth
+            : ShellSettings.DefaultQuickSearchExpandedWidth;
+        var widthDip = ActualWidth > 0 ? ActualWidth : (double.IsFinite(Width) ? Width : defaultWidth);
+        var heightDip = ActualHeight > 0 ? ActualHeight : (double.IsFinite(Height) ? Height : 100);
         if (heightDip > maxAllowedHeight)
         {
             heightDip = maxAllowedHeight;
@@ -293,6 +404,12 @@ public partial class QuickSearchWindow : Window
                 SizeToContent = SizeToContent.Manual;
             }
             Height = maxAllowedHeight;
+        }
+
+        if (_userMoved && IsLoaded)
+        {
+            ClampToWorkArea();
+            return;
         }
 
         var xDip = (workArea.Left / scaleX) + Math.Max(0, (workAreaWidthDip - widthDip) / 2);
@@ -311,6 +428,31 @@ public partial class QuickSearchWindow : Window
             return;
         }
         ScreenGeometry.MoveToPixels(this, new Point(xDip * scaleX, yDip * scaleY));
+    }
+
+    private void ScheduleThrottledClamp()
+    {
+        if (_isClosed || !IsLoaded) return;
+        var now = Stopwatch.GetTimestamp();
+        if (_lastClampTicks == 0 || Stopwatch.GetElapsedTime(_lastClampTicks, now).TotalMilliseconds >= 60)
+        {
+            _lastClampTicks = now;
+            _clampThrottleTimer.Stop();
+            ClampToWorkArea();
+            return;
+        }
+        if (!_clampThrottleTimer.IsEnabled)
+        {
+            _clampThrottleTimer.Start();
+        }
+    }
+
+    private void ClampThrottleTimer_Tick(object? sender, EventArgs e)
+    {
+        _clampThrottleTimer.Stop();
+        if (_isClosed || !IsLoaded || IsInDpiTransition) return;
+        _lastClampTicks = Stopwatch.GetTimestamp();
+        ClampToWorkArea();
     }
 
     private void ClampToWorkArea()
@@ -417,9 +559,29 @@ public partial class QuickSearchWindow : Window
 
     private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        if (e.ClickCount == 2 && e.ChangedButton == MouseButton.Left)
+        {
+            e.Handled = true;
+            ToggleWindowMode();
+            return;
+        }
         if (e.LeftButton == MouseButtonState.Pressed)
         {
-            DragMove();
+            var beforeLeft = Left;
+            var beforeTop = Top;
+            try
+            {
+                DragMove();
+            }
+            catch (InvalidOperationException)
+            {
+                // Headless or mouse released before DragMove entered modal loop
+            }
+            if ((double.IsFinite(Left) && double.IsFinite(beforeLeft) && Math.Abs(Left - beforeLeft) > 1.0) ||
+                (double.IsFinite(Top) && double.IsFinite(beforeTop) && Math.Abs(Top - beforeTop) > 1.0))
+            {
+                _userMoved = true;
+            }
         }
     }
 
@@ -439,6 +601,7 @@ public partial class QuickSearchWindow : Window
         // If input is cleared, update state immediately without debounce lag
         if (string.IsNullOrWhiteSpace(text))
         {
+            _lastLiveQuery = null;
             CancelRunningRequest();
             if (text.Trim() != _state.CurrentQuery)
             {
@@ -451,6 +614,10 @@ public partial class QuickSearchWindow : Window
         // One timer handler serves every edit. Stopping a timer must not leave
         // an unbounded set of obsolete per-keystroke closures subscribed.
         CancelRunningRequest();
+        var shell = LoadShellSettings();
+        _debounceTimer.Interval = shell.LiveTranslateEnabled
+            ? TimeSpan.FromMilliseconds(ShellSettings.NormalizeLiveTranslateDelayMs(shell.LiveTranslateDelayMs))
+            : TimeSpan.FromMilliseconds(150);
         _debounceTimer.Start();
     }
 
@@ -458,12 +625,157 @@ public partial class QuickSearchWindow : Window
     {
         _debounceTimer.Stop();
         if (_isClosed) return;
-        var text = SearchBox.Text;
-        if (text.Trim() != _state.CurrentQuery)
+        if (Ui.GetIsComposing(SearchBox))
         {
-            _state.OnQueryTextChanged(text);
-            SyncUiWithState();
+            // Reschedule while IME is actively composing; when composition finishes,
+            // either the next TextChanged or this rescheduled tick picks up the final text.
+            _debounceTimer.Start();
+            return;
         }
+
+        var text = SearchBox.Text;
+        var trimmed = text.Trim();
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            if (trimmed != _state.CurrentQuery)
+            {
+                _state.OnQueryTextChanged(text);
+                SyncUiWithState();
+            }
+            return;
+        }
+
+        var shell = LoadShellSettings();
+        if (!shell.LiveTranslateEnabled)
+        {
+            _lastLiveQuery = null;
+            if (trimmed != _state.CurrentQuery)
+            {
+                _state.OnQueryTextChanged(text);
+                SyncUiWithState();
+            }
+            return;
+        }
+
+        // Do not re-trigger if identical to the currently active/completed query
+        if (string.Equals(trimmed, _lastLiveQuery, StringComparison.Ordinal) &&
+            string.Equals(trimmed, _state.CurrentQuery, StringComparison.Ordinal) &&
+            _state.Stage is QuickSearchUiStage.Completed or QuickSearchUiStage.Streaming or QuickSearchUiStage.Finalizing)
+        {
+            return;
+        }
+
+        if (!QuickSearchLivePolicy.MeetsMinimumLength(trimmed))
+        {
+            _lastLiveQuery = null;
+            if (trimmed != _state.CurrentQuery)
+            {
+                _state.OnQueryTextChanged(text);
+                SyncUiWithState();
+            }
+            return;
+        }
+
+        var coreSettings = TryGetCoreSettingsSafely();
+        var isFreeRoute = ResolveIsActiveRouteFree(coreSettings);
+        if (shell.LiveTranslateScope == LiveTranslateScope.FreeEngineOnly && !isFreeRoute)
+        {
+            _lastLiveQuery = null;
+            if (trimmed != _state.CurrentQuery)
+            {
+                _state.OnQueryTextChanged(text);
+                SyncUiWithState();
+            }
+            return;
+        }
+
+        if (isFreeRoute)
+        {
+            if (!IsFreeRouteOutboundAllowed(shell, coreSettings))
+            {
+                _lastLiveQuery = null;
+                if (trimmed != _state.CurrentQuery)
+                {
+                    _state.OnQueryTextChanged(text);
+                    SyncUiWithState();
+                }
+                return;
+            }
+
+            var sourceLang = coreSettings?.SourceLanguage ?? LanguageCatalog.Auto;
+            var targetLang = coreSettings?.TargetLanguage ?? "zh-CN";
+            if (LanguageCatalog.Normalize(sourceLang) == LanguageCatalog.Auto)
+            {
+                targetLang = LanguageCatalog.ResolveAutoTarget(trimmed, targetLang);
+            }
+
+            var guard = QuickSearchLivePolicy.EvaluateFreeRouteGuards(
+                trimmed,
+                shell.FreeEngineProvider,
+                FreeTranslateService.QuotaRemaining,
+                sourceLang,
+                targetLang);
+            if (!guard.Allowed)
+            {
+                _lastLiveQuery = null;
+                _state.OnQueryTextChanged(text);
+                _state.PostPendingNotice(guard.Hint);
+                SyncUiWithState();
+                return;
+            }
+        }
+
+        _lastLiveQuery = trimmed;
+        _ = ExecuteTranslateAsync(autoTriggered: true);
+    }
+
+    private static ProviderSettings? TryGetCoreSettingsSafely()
+    {
+        try
+        {
+            return CoreBridge.GetSettings();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private bool ResolveIsActiveRouteFree(ProviderSettings? coreSettings)
+    {
+        if (IsFreeRouteResolverForTest is not null)
+        {
+            return IsFreeRouteResolverForTest();
+        }
+        try
+        {
+            if (coreSettings is null) return false;
+            var (textRoute, _) = ProfileManager.ResolveRoutes();
+            var textApiKey = textRoute is null || textRoute.Profile.ExecutionFacts.IsManagedExecution
+                ? null
+                : (CredentialStore.HasApiKey(textRoute.CredentialTarget) ? TextRouteMenu.KeyPresent : null);
+            var textRuntimeSettings = textRoute?.Profile.ToProviderSettings(coreSettings);
+            var capability = TranslationCoordinator.ResolveTextRouteCapability(
+                textRuntimeSettings, textApiKey, coreSettings, textRoute?.Profile);
+            return !capability.HasConfiguredProvider && !capability.ConfiguredButUnsupported;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsFreeRouteOutboundAllowed(ShellSettings shell, ProviderSettings? coreSettings)
+    {
+        if (!RuntimeGate.NewWorkAllowed || shell.FreeEngineConsent != FreeEngineConsent.Allowed)
+        {
+            return false;
+        }
+        if (coreSettings is null || coreSettings.SafeDevMode || !coreSettings.NetworkEnabled)
+        {
+            return false;
+        }
+        return true;
     }
 
     /// <summary>
@@ -504,7 +816,17 @@ public partial class QuickSearchWindow : Window
         }
     }
 
-    private async Task PerformTranslateAsync()
+    private Task PerformTranslateAsync() => ExecuteTranslateAsync(autoTriggered: false);
+
+    private void StreamFlushTimer_Tick(object? sender, EventArgs e)
+    {
+        _streamFlushTimer.Stop();
+        if (_isClosed) return;
+        _lastStreamRenderTicks = Stopwatch.GetTimestamp();
+        SyncUiWithState();
+    }
+
+    private async Task ExecuteTranslateAsync(bool autoTriggered)
     {
         if (_isClosed) return;
 
@@ -525,13 +847,22 @@ public partial class QuickSearchWindow : Window
         _cts = cts;
         var token = cts.Token;
 
+        _currentResultAutoTriggered = autoTriggered;
+        _isCompactExplanationExpanded = false;
+        _lastStreamRenderTicks = 0;
+        _streamFlushTimer.Stop();
+        if (!autoTriggered)
+        {
+            _lastLiveQuery = text;
+        }
+
         // P02: one trace per query interaction. The origin is the dispatcher
         // entry that begins the query (the user pressed Enter), and the
         // session's terminal close publishes it with the full timeline.
         var queryTrace = new Services.InteractionTrace("quicksearch-query");
         queryTrace.Mark(Services.TracePoint.DispatcherEntered);
 
-        _state.StartNewSearch(text);
+        _state.StartNewSearch(text, preservePreviousResultForLive: autoTriggered);
         var epoch = _state.CurrentEpoch;
         SyncUiWithState();
 
@@ -551,18 +882,41 @@ public partial class QuickSearchWindow : Window
         var progress = new Progress<TranslationStreamUpdate>(update =>
         {
             if (_isClosed || token.IsCancellationRequested || !ReferenceEquals(_cts, cts)) return;
+            if (!_state.OnStreamUpdate(update, SearchBox.Text.Trim()))
+            {
+                return;
+            }
+            if (update.Kind == TranslationStreamUpdateKind.Reset)
+            {
+                _lastStreamRenderTicks = 0;
+                _streamFlushTimer.Stop();
+                SyncUiWithState();
+                return;
+            }
+
+            // PERF-LIST-01: 60ms throttle on intermediate stream deltas to avoid layout thrashing.
+            var now = Stopwatch.GetTimestamp();
+            var elapsedMs = Stopwatch.GetElapsedTime(_lastStreamRenderTicks, now).TotalMilliseconds;
+            if (_lastStreamRenderTicks != 0 && elapsedMs < 60)
+            {
+                if (!_streamFlushTimer.IsEnabled)
+                {
+                    _streamFlushTimer.Start();
+                }
+                return;
+            }
+            _lastStreamRenderTicks = now;
+            _streamFlushTimer.Stop();
             if (update.Kind == TranslationStreamUpdateKind.Delta &&
                 !string.IsNullOrEmpty(update.Delta) &&
-                queryTrace is not null)
+                queryTrace is not null &&
+                !queryTrace.IsMarked(Services.TracePoint.FirstVisibleDeltaApplied))
             {
                 queryTrace.Mark(Services.TracePoint.FirstVisibleDeltaApplied);
                 Services.InteractionTraceWindow.MarkAtNextRenderCallback(
                     queryTrace, Services.TracePoint.FirstDeltaRenderCallback);
             }
-            if (_state.OnStreamUpdate(update, SearchBox.Text.Trim()))
-            {
-                SyncUiWithState();
-            }
+            SyncUiWithState();
         });
 
         try
@@ -616,9 +970,11 @@ public partial class QuickSearchWindow : Window
                     },
                     progress: progress,
                     epoch: epoch,
-                    trace: queryTrace);
+                    trace: queryTrace,
+                    autoTriggered: autoTriggered);
             }
 
+            _streamFlushTimer.Stop();
             if (_isClosed) return;
             if (token.IsCancellationRequested)
             {
@@ -630,7 +986,7 @@ public partial class QuickSearchWindow : Window
                     ? _state.OnCachedSessionCompleted(session, epoch, SearchBox.Text.Trim())
                     : _state.OnSessionCompleted(session, epoch, SearchBox.Text.Trim()))
             {
-                if (!isCached && session.IsCleanCompletion && styleIdentity is not null &&
+                if (!autoTriggered && !isCached && session.IsCleanCompletion && styleIdentity is not null &&
                     configVersion == ProfileManager.Revision &&
                     string.Equals(styleIdentity, TranslationStyleMenu.ActiveIdentity(), StringComparison.Ordinal))
                 {
@@ -656,6 +1012,10 @@ public partial class QuickSearchWindow : Window
                     }
                 }
                 SyncUiWithState();
+                if (_windowMode == QuickSearchWindowMode.Compact && IsLoaded && !IsInDpiTransition)
+                {
+                    ClampToWorkArea();
+                }
 
                 // Durable post-hoc honesty: when the free engine actually ran,
                 // the selected style did not apply. Decided by the TYPED
@@ -672,6 +1032,7 @@ public partial class QuickSearchWindow : Window
         }
         catch (OperationCanceledException)
         {
+            _streamFlushTimer.Stop();
             if (_isClosed) return;
             if (_state.OnCancelled(epoch, SearchBox.Text.Trim()))
             {
@@ -680,6 +1041,7 @@ public partial class QuickSearchWindow : Window
         }
         catch (Exception ex)
         {
+            _streamFlushTimer.Stop();
             if (_isClosed) return;
             if (_state.OnException(ex, epoch, SearchBox.Text.Trim()))
             {
@@ -697,7 +1059,9 @@ public partial class QuickSearchWindow : Window
     {
         if (_isClosed) return;
 
-        if (!_state.IsStreamLayerVisible && SizeToContent != SizeToContent.Height)
+        if (_windowMode == QuickSearchWindowMode.Compact &&
+            !_state.IsStreamLayerVisible &&
+            SizeToContent != SizeToContent.Height)
         {
             SizeToContent = SizeToContent.Height;
             ClearValue(HeightProperty);
@@ -705,36 +1069,41 @@ public partial class QuickSearchWindow : Window
 
         EmptyStateContainer.Visibility = _state.IsResultVisible ? Visibility.Collapsed : Visibility.Visible;
         ResultContainer.Visibility = _state.IsResultVisible ? Visibility.Visible : Visibility.Collapsed;
-        ResultStreamBox.Visibility = _state.IsStreamLayerVisible ? Visibility.Visible : Visibility.Collapsed;
-        if (_state.IsStreamLayerVisible)
-        {
-            // Stick-to-bottom: follow the stream only while the reader sits at
-            // the bottom, so scrolling up to re-read is never overridden.
-            var stickToBottom = Ui.IsScrolledToBottom(ResultScroll);
-            // Append-only when the accumulated text simply grew: wholesale
-            // reassignment re-layouts the whole box on every pump tick and
-            // makes the window edge flicker.
-            var accumulated = _state.AccumulatedText;
-            if (accumulated.StartsWith(ResultStreamBox.Text, StringComparison.Ordinal))
-            {
-                ResultStreamBox.AppendText(accumulated[ResultStreamBox.Text.Length..]);
-            }
-            else
-            {
-                ResultStreamBox.Text = accumulated;
-            }
-            if (stickToBottom)
-            {
-                ResultScroll.ScrollToEnd();
-            }
-        }
+        ResultContainer.Opacity = _state.IsDimmingPreviousResult ? 0.55 : 1.0;
 
-        var usePlainFinal = _state.IsRichBoxVisible && _richRenderFailed;
-        ResultRichBox.Visibility = _state.IsRichBoxVisible && !usePlainFinal ? Visibility.Visible : Visibility.Collapsed;
-        if (usePlainFinal)
+        if (!_state.IsDimmingPreviousResult)
         {
-            ResultStreamBox.Text = _state.FinalRenderedText;
-            ResultStreamBox.Visibility = Visibility.Visible;
+            ResultStreamBox.Visibility = _state.IsStreamLayerVisible ? Visibility.Visible : Visibility.Collapsed;
+            if (_state.IsStreamLayerVisible)
+            {
+                // Stick-to-bottom: follow the stream only while the reader sits at
+                // the bottom, so scrolling up to re-read is never overridden.
+                var stickToBottom = Ui.IsScrolledToBottom(ResultScroll);
+                // Append-only when the accumulated text simply grew: wholesale
+                // reassignment re-layouts the whole box on every pump tick and
+                // makes the window edge flicker.
+                var accumulated = _state.AccumulatedText;
+                if (accumulated.StartsWith(ResultStreamBox.Text, StringComparison.Ordinal))
+                {
+                    ResultStreamBox.AppendText(accumulated[ResultStreamBox.Text.Length..]);
+                }
+                else
+                {
+                    ResultStreamBox.Text = accumulated;
+                }
+                if (stickToBottom)
+                {
+                    ResultScroll.ScrollToEnd();
+                }
+            }
+
+            var usePlainFinal = _state.IsRichBoxVisible && _richRenderFailed;
+            ResultRichBox.Visibility = _state.IsRichBoxVisible && !usePlainFinal ? Visibility.Visible : Visibility.Collapsed;
+            if (usePlainFinal)
+            {
+                ResultStreamBox.Text = _state.FinalRenderedText;
+                ResultStreamBox.Visibility = Visibility.Visible;
+            }
         }
         StreamIndicator.Visibility = _state.IsStreamIndicatorVisible ? Visibility.Visible : Visibility.Collapsed;
         IncompleteBadge.Visibility = _state.IsIncompleteBadgeVisible ? Visibility.Visible : Visibility.Collapsed;
@@ -780,6 +1149,25 @@ public partial class QuickSearchWindow : Window
         AutomationProperties.SetHelpText(SearchBox, _state.HintsText);
         RouteSelectorButton.IsEnabled = !_switchingRoute;
 
+        if (!string.IsNullOrWhiteSpace(_state.RouteLatencyText))
+        {
+            RouteLatencyText.Text = _state.RouteLatencyText;
+            var stagesTip = _state.RouteStagesTooltip;
+            var badgeTip = string.IsNullOrWhiteSpace(stagesTip)
+                ? _state.RouteLatencyText
+                : $"{_state.RouteLatencyText}\n{stagesTip}";
+            RouteLatencyBadge.ToolTip = badgeTip;
+            RouteLatencyText.ToolTip = badgeTip;
+            RouteLatencyBadge.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            RouteLatencyText.Text = string.Empty;
+            RouteLatencyBadge.ToolTip = null;
+            RouteLatencyText.ToolTip = null;
+            RouteLatencyBadge.Visibility = Visibility.Collapsed;
+        }
+
         if (_state.PendingNotice is not null && _state.IsPendingNoticeError)
         {
             FooterStatus.SetResourceReference(TextBlock.ForegroundProperty, "DangerBrush");
@@ -809,37 +1197,17 @@ public partial class QuickSearchWindow : Window
                 _state.IsPartialWarningTone ? "WarningBrush" : "DangerBrush");
         }
 
-
-
         if (!string.IsNullOrWhiteSpace(_state.Phonetic))
-
         {
-
             PhoneticLabel.Text = $"[{_state.Phonetic}]";
-
             PhoneticLabel.Visibility = Visibility.Visible;
-
         }
-
         else
-
         {
-
             PhoneticLabel.Visibility = Visibility.Collapsed;
-
         }
 
-
-
-        if (!string.IsNullOrWhiteSpace(_state.Explanation))
-        {
-            ExplanationLabel.Text = _state.Explanation;
-            ExplanationCard.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            ExplanationCard.Visibility = Visibility.Collapsed;
-        }
+        UpdateExplanationVisibility();
 
         // T9.30：Partial 带错误时也显示错误卡（含「打开设置」恢复入口），
         // 不再只把截断原因塞进页脚。警告色调的截断徽标仍避免与错误卡重复。
@@ -862,6 +1230,38 @@ public partial class QuickSearchWindow : Window
         }
         UpdateEmptyStateVisuals();
         UpdateStatusDot();
+    }
+
+    private void UpdateExplanationVisibility()
+    {
+        if (_isClosed || ExplanationCard is null || ExplanationToggleButton is null) return;
+        var hasExplanation = !string.IsNullOrWhiteSpace(_state.Explanation);
+        if (!hasExplanation)
+        {
+            ExplanationToggleButton.Visibility = Visibility.Collapsed;
+            ExplanationCard.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        ExplanationLabel.Text = _state.Explanation;
+        if (_windowMode == QuickSearchWindowMode.Compact)
+        {
+            ExplanationToggleButton.Visibility = Visibility.Visible;
+            ExplanationToggleButton.Content = _isCompactExplanationExpanded ? "收起释义 ▴" : "释义详情 ▾";
+            ExplanationCard.Visibility = _isCompactExplanationExpanded ? Visibility.Visible : Visibility.Collapsed;
+        }
+        else
+        {
+            ExplanationToggleButton.Visibility = Visibility.Collapsed;
+            ExplanationCard.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void ExplanationToggle_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isClosed) return;
+        _isCompactExplanationExpanded = !_isCompactExplanationExpanded;
+        UpdateExplanationVisibility();
     }
 
     private async void SearchEnterKeycap_Click(object sender, RoutedEventArgs e)
@@ -917,6 +1317,287 @@ public partial class QuickSearchWindow : Window
                     _ => "TextTertiaryBrush",
                 };
         StatusDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, resourceKey);
+
+        var shouldBreathe = _state.IsDimmingPreviousResult ||
+            _state.Stage is QuickSearchUiStage.Streaming or QuickSearchUiStage.Finalizing;
+        if (shouldBreathe)
+        {
+            if (!_breathingDotTimer.IsEnabled)
+            {
+                _breathingStep = 0;
+                _breathingDotTimer.Start();
+            }
+        }
+        else
+        {
+            if (_breathingDotTimer.IsEnabled)
+            {
+                _breathingDotTimer.Stop();
+            }
+            StatusDot.Opacity = 1.0;
+        }
+    }
+
+    private void BreathingDotTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_isClosed || StatusDot is null)
+        {
+            _breathingDotTimer.Stop();
+            return;
+        }
+        _breathingStep = (_breathingStep + 1) % 6;
+        StatusDot.Opacity = _breathingStep switch
+        {
+            0 => 1.0,
+            1 => 0.78,
+            2 => 0.52,
+            3 => 0.36,
+            4 => 0.52,
+            _ => 0.78,
+        };
+    }
+
+    // ================= Compact vs Expanded Mode, Pin & Warmup =================
+
+    private void SyncWindowModeFromSettings(bool isInitial = false)
+    {
+        var shell = LoadShellSettings();
+        if (isInitial || _windowMode != shell.QuickSearchWindowMode)
+        {
+            _windowMode = shell.QuickSearchWindowMode;
+            ApplyWindowModeLayout(isInitial);
+        }
+    }
+
+    internal void SetWindowMode(QuickSearchWindowMode mode, bool persist = true)
+    {
+        if (_isClosed) return;
+        _windowMode = mode;
+        ApplyWindowModeLayout(isInitial: false);
+        if (persist)
+        {
+            UpdateShellSettings(current => current with { QuickSearchWindowMode = mode });
+        }
+    }
+
+    internal void ToggleWindowMode()
+    {
+        var next = _windowMode == QuickSearchWindowMode.Compact
+            ? QuickSearchWindowMode.Expanded
+            : QuickSearchWindowMode.Compact;
+        SetWindowMode(next, persist: true);
+    }
+
+    private void ModeToggle_Click(object sender, RoutedEventArgs e) => ToggleWindowMode();
+
+    private void ApplyWindowModeLayout(bool isInitial)
+    {
+        if (_isClosed) return;
+        _applyingWindowMode = true;
+        try
+        {
+            if (_windowMode == QuickSearchWindowMode.Compact)
+            {
+                ResizeMode = ResizeMode.NoResize;
+                MinWidth = CompactWindowWidth;
+                MaxWidth = CompactWindowWidth;
+                Width = CompactWindowWidth;
+                MinHeight = 52.0;
+                MaxHeight = CompactWindowMaxHeight;
+                SizeToContent = SizeToContent.Height;
+                ClearValue(HeightProperty);
+
+                SearchBox.MaxHeight = 40.0;
+                SearchEnterKeycap.Visibility = Visibility.Collapsed;
+                StyleSelectorButton.Visibility = Visibility.Collapsed;
+                SettingsButton.Visibility = Visibility.Collapsed;
+                OpenInMainButton.Visibility = Visibility.Collapsed;
+                CopySourceButton.Visibility = Visibility.Collapsed;
+
+                HeaderBar.Padding = new Thickness(12, 8, 10, 8);
+                ResultContainer.Padding = new Thickness(10, 8, 10, 8);
+                FooterBar.Padding = new Thickness(12, 5, 12, 5);
+                RouteLatencyText.MaxWidth = 132.0;
+                RouteSelectorButton.MaxWidth = 108.0;
+
+                if (TryFindResource("IconExpand") is Geometry expandGeo)
+                {
+                    ModeToggleIcon.Data = expandGeo;
+                }
+                ModeToggleButton.ToolTip = "切换到大窗模式";
+                AutomationProperties.SetName(ModeToggleButton, "切换到大窗模式");
+            }
+            else
+            {
+                var shell = LoadShellSettings();
+                var targetWidth = ShellSettings.NormalizeQuickSearchExpandedWidth(shell.QuickSearchExpandedWidth);
+                var targetHeight = ShellSettings.NormalizeQuickSearchExpandedHeight(shell.QuickSearchExpandedHeight);
+
+                ResizeMode = ResizeMode.CanResize;
+                MinWidth = ExpandedMinWidth;
+                MaxWidth = ExpandedMaxWidth;
+                MinHeight = ExpandedMinHeight;
+                MaxHeight = ExpandedMaxHeight;
+                SizeToContent = SizeToContent.Manual;
+                Width = targetWidth;
+                Height = targetHeight;
+
+                SearchBox.MaxHeight = 140.0;
+                SearchEnterKeycap.Visibility = Visibility.Visible;
+                StyleSelectorButton.Visibility = Visibility.Visible;
+                SettingsButton.Visibility = Visibility.Visible;
+                OpenInMainButton.Visibility = Visibility.Visible;
+                CopySourceButton.Visibility = Visibility.Visible;
+
+                HeaderBar.Padding = new Thickness(16, 12, 16, 12);
+                ResultContainer.Padding = new Thickness(16, 14, 16, 14);
+                FooterBar.Padding = new Thickness(16, 6, 16, 6);
+                RouteLatencyText.MaxWidth = 210.0;
+                RouteSelectorButton.MaxWidth = 136.0;
+
+                if (TryFindResource("IconCaptionRestore") is Geometry restoreGeo)
+                {
+                    ModeToggleIcon.Data = restoreGeo;
+                }
+                ModeToggleButton.ToolTip = "切换到小窗模式";
+                AutomationProperties.SetName(ModeToggleButton, "切换到小窗模式");
+            }
+
+            UpdateExplanationVisibility();
+            if (_windowMode == QuickSearchWindowMode.Expanded)
+            {
+                RefreshStyleSelector();
+            }
+
+            if (!isInitial && IsLoaded && !IsInDpiTransition)
+            {
+                UpdateLayout();
+                if (_userMoved)
+                {
+                    ClampToWorkArea();
+                }
+                else
+                {
+                    CenterOnCurrentMonitor();
+                }
+            }
+        }
+        finally
+        {
+            _applyingWindowMode = false;
+        }
+    }
+
+    private void ScheduleExpandedSizeSave()
+    {
+        if (_isClosed || _windowMode != QuickSearchWindowMode.Expanded) return;
+        _expandedSizeDirty = true;
+        _expandedSizeSaveTimer.Stop();
+        _expandedSizeSaveTimer.Start();
+    }
+
+    private void ExpandedSizeSaveTimer_Tick(object? sender, EventArgs e)
+    {
+        _expandedSizeSaveTimer.Stop();
+        FlushExpandedSizeSaveIfDirty();
+    }
+
+    private void FlushExpandedSizeSaveIfDirty()
+    {
+        _expandedSizeSaveTimer.Stop();
+        if (!_expandedSizeDirty || _windowMode != QuickSearchWindowMode.Expanded) return;
+        _expandedSizeDirty = false;
+        var w = ActualWidth > 0 ? ActualWidth : Width;
+        var h = ActualHeight > 0 ? ActualHeight : Height;
+        if (!double.IsFinite(w) || !double.IsFinite(h)) return;
+        var clampedW = ShellSettings.NormalizeQuickSearchExpandedWidth(w);
+        var clampedH = ShellSettings.NormalizeQuickSearchExpandedHeight(h);
+        UpdateShellSettings(current => current with
+        {
+            QuickSearchExpandedWidth = clampedW,
+            QuickSearchExpandedHeight = clampedH,
+        });
+    }
+
+    private void PinToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_isClosed) return;
+        var pinned = PinToggle.IsChecked == true;
+        if (pinned)
+        {
+            _currentResultAutoTriggered = false;
+        }
+        FooterStatus.Text = pinned ? "查词栏已固定" : "查词栏已取消固定";
+        RefreshPinTooltip();
+    }
+
+    private void RefreshPinTooltip()
+    {
+        if (PinToggle is null) return;
+        var pinned = PinToggle.IsChecked == true;
+        var tip = pinned ? "取消固定（当前保持置顶）" : "固定查词栏（失焦不收起）";
+        PinToggle.ToolTip = tip;
+        AutomationProperties.SetName(PinToggle, tip);
+    }
+
+    private void OpenInMain_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isClosed) return;
+        var text = SearchBox.Text.Trim();
+        var translation = !string.IsNullOrWhiteSpace(_state.FinalRenderedText)
+            ? _state.FinalRenderedText
+            : _state.AccumulatedText;
+        if (string.IsNullOrWhiteSpace(text) && string.IsNullOrWhiteSpace(translation))
+        {
+            if (Application.Current is App emptyApp)
+            {
+                emptyApp.NavigateFromShortcut(InterfaceAction.Workbench);
+            }
+            return;
+        }
+
+        _currentResultAutoTriggered = false;
+        var settings = TryGetCoreSettingsSafely();
+        var sourceLang = _sessionSourceLanguage ?? settings?.SourceLanguage ?? LanguageCatalog.Auto;
+        var targetLang = _sessionTargetLanguage ?? settings?.TargetLanguage ?? "zh-CN";
+        var sessionState = _state.Stage switch
+        {
+            QuickSearchUiStage.Completed => TranslationSessionState.Completed,
+            QuickSearchUiStage.Failed => TranslationSessionState.Failed,
+            _ => TranslationSessionState.Cancelled,
+        };
+
+        if (Application.Current is App app)
+        {
+            app.NavigateFromShortcut(InterfaceAction.Workbench);
+        }
+        var mainWindow = Application.Current?.Windows.OfType<MainWindow>().FirstOrDefault();
+        mainWindow?.FocusTranslate(text, targetLang, sourceLang, translation, sessionState);
+        Hide();
+    }
+
+    private void TriggerWarmupIfEligible()
+    {
+        if (_isClosed) return;
+        var now = DateTime.UtcNow;
+        if ((now - _lastWarmupUtc).TotalSeconds < 60) return;
+
+        var shell = LoadShellSettings();
+        var coreSettings = TryGetCoreSettingsSafely();
+        if (!IsFreeRouteOutboundAllowed(shell, coreSettings)) return;
+
+        _lastWarmupUtc = now;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await FreeTranslateService.WarmupFreeRoutesAsync(shell, default, coreSettings).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Prewarm is strictly best-effort and must never surface errors.
+            }
+        });
     }
 
     internal void RefreshRouteSelection()
@@ -1138,6 +1819,10 @@ public partial class QuickSearchWindow : Window
         {
             TranslationStyleMenu.ApplyTo(StyleSelectorButton);
             StyleSelectorLabel.Text = TranslationStyleMenu.ActiveLabel();
+            if (_windowMode == QuickSearchWindowMode.Compact)
+            {
+                StyleSelectorButton.Visibility = Visibility.Collapsed;
+            }
         }
         catch (Exception)
         {
@@ -1271,6 +1956,7 @@ public partial class QuickSearchWindow : Window
     {
 
         if (_isClosed || !_state.CanCopy) return;
+        _currentResultAutoTriggered = false;
 
 
 
@@ -1307,6 +1993,7 @@ public partial class QuickSearchWindow : Window
         if (_isClosed) return;
         var text = SearchBox.Text;
         if (string.IsNullOrWhiteSpace(text)) return;
+        _currentResultAutoTriggered = false;
         FooterStatus.Text = await PopGlot.Windows.Sections.Helpers.CopyToClipboardAsync(text)
             ? "已复制原文到剪贴板"
             : "剪贴板被其他应用占用，未复制";
@@ -1319,6 +2006,7 @@ public partial class QuickSearchWindow : Window
     {
 
         if (_isClosed || !_state.CanStar) return;
+        _currentResultAutoTriggered = false;
 
 
 
@@ -1436,6 +2124,7 @@ public partial class QuickSearchWindow : Window
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
         CancelRunningRequest();
+        FlushExpandedSizeSaveIfDirty();
         StoreSessionSnapshot();
         if (!ForceClose)
         {
@@ -1543,7 +2232,7 @@ public partial class QuickSearchWindow : Window
         // same-process surface (IME, context menu, drop-down) is not a real
         // leave at all; a window with a draft, a running task or a result
         // stays visible; only a fresh, empty window hides.
-        if (_isClosed)
+        if (_isClosed || PinToggle?.IsChecked == true)
         {
             return;
         }
@@ -1599,7 +2288,7 @@ public partial class QuickSearchWindow : Window
 
     internal void StoreSessionSnapshot()
     {
-        if (_isClosed) return;
+        if (_isClosed || _currentResultAutoTriggered) return;
 
         var query = !string.IsNullOrWhiteSpace(_state.CurrentQuery)
             ? _state.CurrentQuery.Trim()
@@ -1684,10 +2373,19 @@ public partial class QuickSearchWindow : Window
     private void OnClosedCleanup()
     {
         if (_isClosed) return;
+        FlushExpandedSizeSaveIfDirty();
         StoreSessionSnapshot();
         _isClosed = true;
         _debounceTimer.Stop();
         _debounceTimer.Tick -= DebounceTimer_Tick;
+        _streamFlushTimer.Stop();
+        _streamFlushTimer.Tick -= StreamFlushTimer_Tick;
+        _clampThrottleTimer.Stop();
+        _clampThrottleTimer.Tick -= ClampThrottleTimer_Tick;
+        _expandedSizeSaveTimer.Stop();
+        _expandedSizeSaveTimer.Tick -= ExpandedSizeSaveTimer_Tick;
+        _breathingDotTimer.Stop();
+        _breathingDotTimer.Tick -= BreathingDotTimer_Tick;
         CoreBridge.LanguagePairChanged -= OnLanguagePairChanged;
         ThemeService.ThemeChanged -= _themeChangedHandler;
         TtsService.SpeakingStateChanged -= OnTtsSpeakingStateChanged;
