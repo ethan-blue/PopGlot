@@ -200,6 +200,7 @@ public partial class PromptSection : System.Windows.Controls.UserControl
 
         var quotaFull = customs.Count >= MaxCustomTemplates;
         CustomQuotaText.Text = customs.Count == 0 ? string.Empty : $"{customs.Count} 条";
+        CustomQuotaText.Visibility = customs.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         AddTemplateButton.IsEnabled = !quotaFull;
         AddTemplateButton.ToolTip = quotaFull
             ? $"自定义规则已达上限（{MaxCustomTemplates} 条）"

@@ -392,6 +392,8 @@ internal static class QuickSearchLiveAndCompactTests
             Equal(QuickSearchWindowMode.Compact, window.CurrentWindowMode, "mode switches back to Compact");
             Equal(QuickSearchWindowMode.Compact, shell.QuickSearchWindowMode, "Compact mode persists to ShellSettings");
             Equal(QuickSearchWindow.CompactWindowWidth, window.Width, "Compact mode restores 430 DIP width");
+
+            VerifyQuickSearchKeyboardAndUiContracts();
         }
         finally
         {
@@ -501,6 +503,216 @@ internal static class QuickSearchLiveAndCompactTests
             CoreBridge.SaveSettings(originalCore);
             ShellSettingsStore.Save(originalShell);
             App.SharedSessionStore.Clear();
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    private static void VerifyQuickSearchKeyboardAndUiContracts()
+    {
+        EnsureApp();
+        var tempDir = Path.Combine(TestIsolation.Root, $"qs-kbd-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var history = new HistoryStore(Path.Combine(tempDir, "history.json"));
+        var vocab = new VocabularyStore(Path.Combine(tempDir, "vocab.json"));
+        var executor = new FakeLiveExecutor();
+        var coordinator = new TranslationCoordinator(history, vocab, executor: executor);
+
+        var shell = ShellSettings.Default with
+        {
+            LiveTranslateEnabled = false,
+            FreeEngineConsent = FreeEngineConsent.Allowed,
+            FreeEngineProvider = FreeEngineProvider.Bing,
+            QuickSearchWindowMode = QuickSearchWindowMode.Compact,
+        };
+        var originalShell = ShellSettingsStore.Load();
+        var originalInterface = InterfaceKeys.Snapshot;
+        ShellSettingsStore.Save(shell);
+        InterfaceKeys.Apply(shell);
+
+        var window = new QuickSearchWindow(
+            history,
+            vocab,
+            coordinator: coordinator,
+            shellSettingsLoader: () => shell,
+            shellSettingsSaver: s => shell = s)
+        {
+            ForceClose = true,
+            IsFreeRouteResolverForTest = () => true,
+        };
+        var source = new System.Windows.Interop.HwndSource(
+            new System.Windows.Interop.HwndSourceParameters("popglot-qs-kbd-test") { Width = 8, Height = 8 });
+
+        try
+        {
+            window.Show();
+            PumpOnce();
+
+            // Compact mode keeps clickable submit affordance visible
+            Equal(Visibility.Visible, window.EnterKeycapButton.Visibility,
+                "Compact mode must keep SearchEnterKeycap visible");
+
+            // 1. Plain Key.Enter on SearchBox triggers translation and does NOT insert newline
+            window.SearchBox.Text = "keyboard enter submit";
+            window.ModifiersOverrideForTest = ModifierKeys.None;
+            var previewEnter = new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Enter)
+            {
+                RoutedEvent = Keyboard.PreviewKeyDownEvent,
+            };
+            window.SearchBox.RaiseEvent(previewEnter);
+            True(previewEnter.Handled, "plain Enter PreviewKeyDown must be handled to submit");
+            if (!previewEnter.Handled)
+            {
+                window.SearchBox.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Enter)
+                {
+                    RoutedEvent = Keyboard.KeyDownEvent,
+                });
+            }
+            PumpUntilCondition(() => executor.FreeCalls.Count == 1 && window.State.Stage == QuickSearchUiStage.Completed,
+                "plain Enter on SearchBox must trigger translation");
+            True(!window.SearchBox.Text.Contains('\r') && !window.SearchBox.Text.Contains('\n'),
+                "plain Enter submit must not insert CR/LF into SearchBox.Text");
+
+            // 2. Shift+Enter does NOT submit and allows native newline insertion
+            window.ModifiersOverrideForTest = ModifierKeys.Shift;
+            var previewShiftEnter = new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Enter)
+            {
+                RoutedEvent = Keyboard.PreviewKeyDownEvent,
+            };
+            window.SearchBox.RaiseEvent(previewShiftEnter);
+            True(!previewShiftEnter.Handled, "Shift+Enter must remain unhandled so TextBox inserts newline");
+            System.Windows.Documents.EditingCommands.EnterLineBreak.Execute(null, window.SearchBox);
+            PumpOnce();
+            Equal(1, executor.FreeCalls.Count, "Shift+Enter must not trigger translation");
+            True(window.SearchBox.Text.Contains('\n'), "Shift+Enter must insert a newline in SearchBox");
+
+            // 3. IME-composing Key.Enter does NOT trigger translation
+            window.SearchBox.Text = "ime composing test";
+            window.ModifiersOverrideForTest = ModifierKeys.None;
+            Ui.SetIsComposing(window.SearchBox, true);
+            var previewImeEnter = new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Enter)
+            {
+                RoutedEvent = Keyboard.PreviewKeyDownEvent,
+            };
+            window.SearchBox.RaiseEvent(previewImeEnter);
+            PumpOnce();
+            True(!previewImeEnter.Handled, "IME-composing Enter must stay unhandled for IME commit");
+            Equal(1, executor.FreeCalls.Count, "IME-composing Enter must not submit translation");
+            Ui.SetIsComposing(window.SearchBox, false);
+
+            // 4. Ctrl+Enter still submits cleanly
+            window.SearchBox.Text = "ctrl enter submit";
+            window.ModifiersOverrideForTest = ModifierKeys.Control;
+            var previewCtrlEnter = new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Enter)
+            {
+                RoutedEvent = Keyboard.PreviewKeyDownEvent,
+            };
+            window.SearchBox.RaiseEvent(previewCtrlEnter);
+            True(previewCtrlEnter.Handled, "Ctrl+Enter must be handled");
+            PumpUntilCondition(() => executor.FreeCalls.Count == 2, "Ctrl+Enter must trigger translation");
+
+            // 5. Ctrl+R retries a failed translation cleanly when SearchBox has focus
+            executor.NextFreeResponseTask = Task.FromException<TranslationResponse>(new InvalidOperationException("transient"));
+            window.SearchBox.Text = "ctrl r retry";
+            window.ModifiersOverrideForTest = ModifierKeys.None;
+            window.SearchBox.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Enter)
+            {
+                RoutedEvent = Keyboard.PreviewKeyDownEvent,
+            });
+            PumpUntilCondition(() => executor.FreeCalls.Count == 3 && window.State.Stage == QuickSearchUiStage.Failed,
+                "failed query must enter Failed stage");
+
+            executor.NextFreeResponseTask = null;
+            window.ModifiersOverrideForTest = ModifierKeys.Control;
+            var retryKey = new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.R)
+            {
+                RoutedEvent = Keyboard.KeyDownEvent,
+            };
+            window.SearchBox.RaiseEvent(retryKey);
+            True(retryKey.Handled, "Ctrl+R must be handled in QuickSearchWindow");
+            PumpUntilCondition(() => executor.FreeCalls.Count == 4 && window.State.Stage == QuickSearchUiStage.Completed,
+                "Ctrl+R must trigger retry translation");
+
+            // 6. Compact mode Ctrl+T does not fire hidden StyleSelectorButton
+            var previewStyle = new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.T)
+            {
+                RoutedEvent = Keyboard.PreviewKeyDownEvent,
+            };
+            window.RaiseEvent(previewStyle);
+            True(!previewStyle.Handled, "Ctrl+T in Compact mode must not trigger collapsed StyleSelectorButton");
+
+            // 7. Expanded mode uses filled IconCollapse (not stroked IconCaptionRestore) and shows idle guide
+            window.SearchBox.Text = string.Empty;
+            window.ToggleWindowMode();
+            PumpOnce();
+            var modeIcon = (System.Windows.Shapes.Path)window.FindName("ModeToggleIcon")!;
+            var iconCollapse = Application.Current!.TryFindResource("IconCollapse");
+            True(ReferenceEquals(modeIcon.Data, iconCollapse),
+                "Expanded mode must assign filled IconCollapse geometry to ModeToggleIcon");
+            var emptyGuide = (FrameworkElement)window.FindName("ExpandedEmptyGuide")!;
+            Equal(Visibility.Visible, emptyGuide.Visibility,
+                "Expanded idle mode must show centered ExpandedEmptyGuide instead of blank void");
+
+            // 8. TranslateSection example/onboarding hints & narrow stacked swap/divider fixes
+            var translateSection = new PopGlot.Windows.Sections.TranslateSection();
+            translateSection.Initialize(coordinator, vocab);
+            InvokePrivate(translateSection, "FillExample_Click", translateSection, new RoutedEventArgs());
+            True(translateSection.StatusBlock.Text.Contains(InterfaceKeys.TranslateKeyName, StringComparison.Ordinal),
+                $"FillExample status must contain {InterfaceKeys.TranslateKeyName}, got '{translateSection.StatusBlock.Text}'");
+            True(!translateSection.StatusBlock.Text.Contains("按 Enter 翻译", StringComparison.Ordinal),
+                "FillExample status must never claim 按 Enter 翻译");
+
+            translateSection.BeginOnboarding();
+            InvokePrivate(translateSection, "AdvanceOnboarding");
+            InvokePrivate(translateSection, "AdvanceOnboarding");
+            var onboardingDesc = (TextBlock)translateSection.FindName("OnboardingDescription")!;
+            True(onboardingDesc.Text.Contains(InterfaceKeys.TranslateKeyName, StringComparison.Ordinal),
+                $"Onboarding step 3 must contain {InterfaceKeys.TranslateKeyName}, got '{onboardingDesc.Text}'");
+            True(!onboardingDesc.Text.Contains("按 Enter 翻译", StringComparison.Ordinal),
+                "Onboarding step 3 must never claim 按 Enter 翻译");
+
+            var axisDivider = (System.Windows.Shapes.Rectangle)translateSection.FindName("AxisDividerLine")!;
+            Equal(2, System.Windows.Controls.Grid.GetRowSpan(axisDivider),
+                "AxisDividerLine must span both body and footer rows");
+
+            translateSection.SetStacked(true);
+            var stackedSwap = (Button)translateSection.FindName("StackedSwapButton")!;
+            Equal(Visibility.Visible, stackedSwap.Visibility,
+                "StackedSwapButton must be visible in narrow stacked mode");
+
+            // 9. LibrarySection SpeakHotkey dynamic hints/shortcut + rounded inner borders
+            var librarySection = new PopGlot.Windows.Sections.LibrarySection();
+            librarySection.Initialize(history, vocab);
+            var reboundShell = shell with { InterfaceSpeakHotkey = new HotkeyBinding(HotkeyBinding.ModAlt, 0x50) };
+            InterfaceKeys.Apply(reboundShell);
+            librarySection.RefreshHotkeyHints();
+            var placeholderHints = (TextBlock)librarySection.FindName("DetailPlaceholderHints")!;
+            True(placeholderHints.Text.Contains("Alt+P 朗读", StringComparison.Ordinal) &&
+                 !placeholderHints.Text.Contains("Ctrl+P", StringComparison.Ordinal),
+                $"LibrarySection placeholder hints must reflect rebound SpeakHotkey, got '{placeholderHints.Text}'");
+            True(librarySection.HandleSectionShortcut(Key.P, ModifierKeys.Alt),
+                "LibrarySection must honor rebound SpeakHotkey (Alt+P)");
+            True(!librarySection.HandleSectionShortcut(Key.P, ModifierKeys.Control),
+                "LibrarySection must not hardcode Ctrl+P when rebound");
+
+            librarySection.Measure(new Size(900, 600));
+            librarySection.Arrange(new Rect(0, 0, 900, 600));
+            librarySection.UpdateLayout();
+            var masterSummary = (Border)librarySection.FindName("MasterSummaryBorder")!;
+            var detailPane = (Border)librarySection.FindName("DetailPane")!;
+            var detailFooter = (Border)librarySection.FindName("DetailFooterBorder")!;
+            True(masterSummary.CornerRadius.BottomLeft > 0, "MasterSummaryBorder must round outer bottom-left corner");
+            True(detailPane.CornerRadius.TopRight > 0 && detailPane.CornerRadius.BottomRight > 0,
+                "DetailPane must round outer right corners");
+            True(detailFooter.CornerRadius.BottomRight > 0, "DetailFooterBorder must round outer bottom-right corner");
+        }
+        finally
+        {
+            window.ModifiersOverrideForTest = null;
+            Ui.SetIsComposing(window.SearchBox, false);
+            source.Dispose();
+            window.Close();
+            InterfaceKeys.Apply(originalInterface);
+            ShellSettingsStore.Save(originalShell);
             try { Directory.Delete(tempDir, true); } catch { }
         }
     }

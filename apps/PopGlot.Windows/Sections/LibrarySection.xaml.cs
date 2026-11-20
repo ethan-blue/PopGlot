@@ -91,8 +91,58 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         };
         _undoTimer.Tick += (_, _) => RefreshUndoBar();
         _clearConfirm = ConfirmButton.Attach(ClearCurrentButton, "确认清空？", ClearCurrent);
+        Loaded += OnLoaded;
+        Unloaded += OnUnloaded;
+        IsVisibleChanged += (_, _) => { if (IsVisible) RefreshHotkeyHints(); };
+        RefreshHotkeyHints();
     }
     private ConfirmButton _clearConfirm = null!;
+
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        TtsService.SpeakingStateChanged += OnTtsSpeakingStateChanged;
+        RefreshHotkeyHints();
+        PaintSpeakButtonState(TtsService.IsSpeaking);
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        TtsService.SpeakingStateChanged -= OnTtsSpeakingStateChanged;
+    }
+
+    private void OnTtsSpeakingStateChanged(object? sender, bool isSpeaking)
+    {
+        Dispatcher.BeginInvoke(() => PaintSpeakButtonState(isSpeaking));
+    }
+
+    internal void RefreshHotkeyHints()
+    {
+        if (DetailPlaceholderHints is not null)
+        {
+            var speakPart = InterfaceKeys.SpeakHotkey.IsValid
+                ? $"{InterfaceKeys.SpeakHotkey.DisplayName} 朗读 · "
+                : string.Empty;
+            DetailPlaceholderHints.Text = $"方向键切换 · Enter 载入工作台 · {speakPart}Ctrl+Shift+C 复制译文 · Delete 删除";
+        }
+        PaintSpeakButtonState(TtsService.IsSpeaking);
+    }
+
+    private void PaintSpeakButtonState(bool isSpeaking)
+    {
+        CardSpeakIcon?.SetResourceReference(
+            System.Windows.Shapes.Shape.FillProperty,
+            isSpeaking ? "AccentBrush" : "TextSecondaryBrush");
+        if (CardSpeakButton is not null)
+        {
+            var action = isSpeaking ? "停止朗读" : "朗读";
+            CardSpeakButton.ToolTip = InterfaceKeys.SpeakHotkey.IsValid
+                ? $"{action} ({InterfaceKeys.SpeakHotkey.DisplayName})"
+                : action;
+            System.Windows.Automation.AutomationProperties.SetName(
+                CardSpeakButton,
+                isSpeaking ? "停止朗读" : "朗读所选记录");
+        }
+    }
 
     private bool FilterRow(object item)
     {
@@ -434,7 +484,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
                 DeleteRowNow(row);
             }
         }
-        else if (e.Key == Key.P && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        else if (InterfaceKeys.Resolve(InterfaceKeys.Normalize(e), Keyboard.Modifiers) == InterfaceAction.Speak)
         {
             e.Handled = true;
             CardSpeak_Click(this, new RoutedEventArgs());
@@ -446,10 +496,10 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         }
     }
 
-    /// <summary>根级快捷键：焦点在详情或操作栏时 Ctrl+Shift+C / Ctrl+P 仍然生效。</summary>
+    /// <summary>根级快捷键：焦点在详情或操作栏时 Ctrl+Shift+C / 朗读快捷键仍然生效。</summary>
     private void Section_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (HandleSectionShortcut(e.Key, Keyboard.Modifiers)) e.Handled = true;
+        if (HandleSectionShortcut(InterfaceKeys.Normalize(e), Keyboard.Modifiers)) e.Handled = true;
     }
 
     internal bool HandleSectionShortcut(System.Windows.Input.Key key, ModifierKeys modifiers)
@@ -459,7 +509,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             CardCopy_Click(this, new RoutedEventArgs());
             return true;
         }
-        if (key == System.Windows.Input.Key.P && (modifiers & ModifierKeys.Control) != 0 && (modifiers & ModifierKeys.Shift) == 0)
+        if (InterfaceKeys.Resolve(key, modifiers) == InterfaceAction.Speak)
         {
             CardSpeak_Click(this, new RoutedEventArgs());
             return true;
@@ -470,6 +520,11 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
 
     private void CardSpeak_Click(object sender, RoutedEventArgs e)
     {
+        if (TtsService.IsSpeaking)
+        {
+            TtsService.Stop();
+            return;
+        }
         if (SelectedRow() is { } row)
         {
             TtsService.Speak(
@@ -883,6 +938,9 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             return;
         }
 
+        var card = TryFindResource("CardRadius") as CornerRadius? ?? new CornerRadius(10);
+        var r = Math.Max(0, card.TopLeft - 1);
+
         _narrowLibrary = width < 560;
         if (!_narrowLibrary)
         {
@@ -895,6 +953,9 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             ListColumn.MinWidth = 220;
             SplitterColumn.Width = new GridLength(8);
             DetailColumn.Width = new GridLength(1, GridUnitType.Star);
+            MasterSummaryBorder.CornerRadius = new CornerRadius(0, 0, 0, r);
+            DetailPane.CornerRadius = new CornerRadius(0, r, r, 0);
+            DetailFooterBorder.CornerRadius = new CornerRadius(0, 0, r, 0);
             return;
         }
 
@@ -908,6 +969,8 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
             ListColumn.Width = new GridLength(0);
             DetailColumn.Width = new GridLength(1, GridUnitType.Star);
             LibraryBackButton.Visibility = Visibility.Visible;
+            DetailPane.CornerRadius = new CornerRadius(r);
+            DetailFooterBorder.CornerRadius = new CornerRadius(0, 0, r, r);
             return;
         }
 
@@ -916,6 +979,7 @@ public partial class LibrarySection : System.Windows.Controls.UserControl
         ListColumn.Width = new GridLength(1, GridUnitType.Star);
         DetailColumn.Width = new GridLength(0);
         LibraryBackButton.Visibility = Visibility.Collapsed;
+        MasterSummaryBorder.CornerRadius = new CornerRadius(0, 0, r, r);
     }
 
     private void ShowExport(string path)

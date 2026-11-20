@@ -588,6 +588,8 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             ApplyPaneCornerRadii(stacked: true);
 
             TranslateSwapButton.Visibility = Visibility.Collapsed;
+            StackedSwapButton.Visibility = Visibility.Visible;
+            StackedSwapButton.ToolTip = TranslateSwapButton.ToolTip;
             AxisTopCell.Visibility = Visibility.Collapsed;
             AxisFooterCell.Visibility = Visibility.Collapsed;
             AxisDividerLine.Visibility = Visibility.Collapsed;
@@ -607,8 +609,8 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         Place(AxisTopCell, 0, 1);
         System.Windows.Controls.Grid.SetRow(TranslateSwapButton, 0);
         System.Windows.Controls.Grid.SetColumn(TranslateSwapButton, 1);
-        // 竖线只走正文区：停在页脚顶边框，不与横线交叉成十字。
-        System.Windows.Controls.Grid.SetRowSpan(AxisDividerLine, 1);
+        // 竖线走正文区与页脚区，将左右两栏彻底分隔开。
+        System.Windows.Controls.Grid.SetRowSpan(AxisDividerLine, 2);
         Place(AxisDividerLine, 1, 1);
         Place(AxisFooterCell, 2, 1);
         Place(TargetLangBarCell, 0, 2);
@@ -618,6 +620,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         ApplyPaneCornerRadii(stacked: false);
 
         TranslateSwapButton.Visibility = Visibility.Visible;
+        StackedSwapButton.Visibility = Visibility.Collapsed;
         AxisTopCell.Visibility = Visibility.Visible;
         AxisFooterCell.Visibility = Visibility.Visible;
         AxisDividerLine.Visibility = Visibility.Visible;
@@ -1280,6 +1283,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         TranslateSourceLang.IsEnabled = state.IsTranslateButtonEnabled;
         TranslateTargetLang.IsEnabled = state.IsTranslateButtonEnabled;
         TranslateSwapButton.IsEnabled = true;
+        StackedSwapButton.IsEnabled = true;
 
         // A translation that is still arriving must not take the result
         // surface back from the summary. A new translation clears the flag
@@ -1449,8 +1453,11 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
             }
             if (TranslateResultSpeakButton is not null)
             {
-                TranslateResultSpeakButton.ToolTip = $"{(isSpeaking ? "停止朗读" : "朗读译文")} ({InterfaceKeys.SpeakHotkey.DisplayName})";
-                System.Windows.Automation.AutomationProperties.SetName(TranslateResultSpeakButton, isSpeaking ? "停止朗读" : "朗读译文");
+                var speakLabel = isSpeaking ? "停止朗读" : "朗读译文";
+                TranslateResultSpeakButton.ToolTip = InterfaceKeys.SpeakHotkey.IsValid
+                    ? $"{speakLabel} ({InterfaceKeys.SpeakHotkey.DisplayName})"
+                    : speakLabel;
+                System.Windows.Automation.AutomationProperties.SetName(TranslateResultSpeakButton, speakLabel);
             }
         });
     }
@@ -1676,7 +1683,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
         TranslateInput.Text = "FileNotFoundError: config.json not found";
         TranslateInput.CaretIndex = TranslateInput.Text.Length;
         TranslateInput.Focus();
-        TranslateStatus.Text = "已填入演示（未联网），按 Enter 翻译";
+        TranslateStatus.Text = $"已填入演示（未联网），按 {InterfaceKeys.TranslateKeyName} 翻译";
     }
 
     /// <summary>
@@ -2409,7 +2416,7 @@ public partial class TranslateSection : System.Windows.Controls.UserControl
                   "下一步"),
             _ => ("引导 3 / 3",
                   "开始第一次翻译",
-                  "输入文本，按 Enter 翻译。",
+                  $"输入文本，按 {InterfaceKeys.TranslateKeyName} 翻译。",
                   "完成引导"),
         };
         OnboardingStepLabel.Text = label;

@@ -67,6 +67,7 @@ public partial class QuickSearchWindow : Window
     private int _breathingStep;
     private DateTime _lastWarmupUtc = DateTime.MinValue;
     internal Func<bool>? IsFreeRouteResolverForTest { get; set; }
+    internal ModifierKeys? ModifiersOverrideForTest { get; set; }
     internal QuickSearchWindowMode CurrentWindowMode => _windowMode;
     internal bool IsUserMoved => _userMoved;
     internal bool IsCurrentResultAutoTriggered => _currentResultAutoTriggered;
@@ -361,6 +362,7 @@ public partial class QuickSearchWindow : Window
                 if (SizeToContent == SizeToContent.Height)
                 {
                     SizeToContent = SizeToContent.Manual;
+                    UpdateExpandedEmptyGuideVisibility();
                 }
                 UpdateLayout();
                 ClampToWorkArea();
@@ -799,9 +801,15 @@ public partial class QuickSearchWindow : Window
         }
     }
 
-    private async void SearchBox_KeyDown(object sender, KeyEventArgs e)
+    private async void SearchBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.None)
+        var key = InterfaceKeys.Normalize(e);
+        if (key != Key.Enter)
+        {
+            return;
+        }
+        var modifiers = ModifiersOverrideForTest ?? Keyboard.Modifiers;
+        if (modifiers is ModifierKeys.None or ModifierKeys.Control)
         {
             // IME composition confirm: the composition owns this Enter.
             if (Ui.IsImeComposing(SearchBox, e))
@@ -1296,8 +1304,17 @@ public partial class QuickSearchWindow : Window
             SearchEnterKeycap.IsEnabled = hasText;
             System.Windows.Automation.AutomationProperties.SetName(SearchEnterKeycap, hasText ? "立即翻译" : "立即翻译（请先输入文本）");
         }
+        UpdateExpandedEmptyGuideVisibility();
         // 0.1.6 空态减法：动态提示条已移除（与页脚动态提示重复），此处不再
         // 有 EmptyStatePrompt 需要刷新。
+    }
+
+    private void UpdateExpandedEmptyGuideVisibility()
+    {
+        if (_isClosed || ExpandedEmptyGuide is null) return;
+        ExpandedEmptyGuide.Visibility = _windowMode == QuickSearchWindowMode.Expanded || SizeToContent == SizeToContent.Manual
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     private void UpdateStatusDot()
@@ -1407,7 +1424,7 @@ public partial class QuickSearchWindow : Window
                 ClearValue(HeightProperty);
 
                 SearchBox.MaxHeight = 40.0;
-                SearchEnterKeycap.Visibility = Visibility.Collapsed;
+                SearchEnterKeycap.Visibility = Visibility.Visible;
                 StyleSelectorButton.Visibility = Visibility.Collapsed;
                 SettingsButton.Visibility = Visibility.Collapsed;
                 OpenInMainButton.Visibility = Visibility.Collapsed;
@@ -1454,14 +1471,15 @@ public partial class QuickSearchWindow : Window
                 RouteLatencyText.MaxWidth = 210.0;
                 RouteSelectorButton.MaxWidth = 136.0;
 
-                if (TryFindResource("IconCaptionRestore") is Geometry restoreGeo)
+                if (TryFindResource("IconCollapse") is Geometry collapseGeo)
                 {
-                    ModeToggleIcon.Data = restoreGeo;
+                    ModeToggleIcon.Data = collapseGeo;
                 }
                 ModeToggleButton.ToolTip = "切换到小窗模式";
                 AutomationProperties.SetName(ModeToggleButton, "切换到小窗模式");
             }
 
+            UpdateExpandedEmptyGuideVisibility();
             UpdateExplanationVisibility();
             if (_windowMode == QuickSearchWindowMode.Expanded)
             {
@@ -1607,8 +1625,12 @@ public partial class QuickSearchWindow : Window
         {
             var route = TextRouteMenu.ReadCurrent();
             RouteSelectorLabel.Text = route.Label;
-            RouteSelectorButton.ToolTip = (route.Detail ?? string.Empty) +
-                $"\n点击切换模型 ({InterfaceKeys.ModelHotkey.DisplayName}) · 切换后立即重译";
+            var modelHint = InterfaceKeys.ModelHotkey.IsValid
+                ? $"点击切换模型 ({InterfaceKeys.ModelHotkey.DisplayName}) · 切换后立即重译"
+                : "点击切换模型 · 切换后立即重译";
+            RouteSelectorButton.ToolTip = string.IsNullOrWhiteSpace(route.Detail)
+                ? modelHint
+                : $"{route.Detail}\n{modelHint}";
         }
         catch (Exception)
         {
@@ -2061,7 +2083,9 @@ public partial class QuickSearchWindow : Window
             if (isSpeaking)
             {
                 SpeakIcon.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "AccentBrush");
-                SpeakButton.ToolTip = $"停止朗读 ({InterfaceKeys.SpeakHotkey.DisplayName})";
+                SpeakButton.ToolTip = InterfaceKeys.SpeakHotkey.IsValid
+                    ? $"停止朗读 ({InterfaceKeys.SpeakHotkey.DisplayName})"
+                    : "停止朗读";
             }
             else
             {
@@ -2072,7 +2096,9 @@ public partial class QuickSearchWindow : Window
                 {
                     SpeakIcon.SetBinding(System.Windows.Shapes.Shape.FillProperty, _speakIconFillBinding);
                 }
-                SpeakButton.ToolTip = $"朗读译文 ({InterfaceKeys.SpeakHotkey.DisplayName})";
+                SpeakButton.ToolTip = InterfaceKeys.SpeakHotkey.IsValid
+                    ? $"朗读译文 ({InterfaceKeys.SpeakHotkey.DisplayName})"
+                    : "朗读译文";
             }
             // The accessibility name must follow the ToolTip so screen readers
             // announce the action the click will actually perform right now.
@@ -2144,14 +2170,15 @@ public partial class QuickSearchWindow : Window
 
     private async void Window_PreviewShortcutKeyDown(object sender, KeyEventArgs e)
     {
-        var action = InterfaceKeys.Resolve(InterfaceKeys.Normalize(e), Keyboard.Modifiers);
+        var modifiers = ModifiersOverrideForTest ?? Keyboard.Modifiers;
+        var action = InterfaceKeys.Resolve(InterfaceKeys.Normalize(e), modifiers);
         switch (action)
         {
             case InterfaceAction.Model when RouteSelectorButton.IsEnabled:
                 e.Handled = true;
                 RouteSelector_Click(RouteSelectorButton, new RoutedEventArgs());
                 break;
-            case InterfaceAction.Style when StyleSelectorButton.IsEnabled:
+            case InterfaceAction.Style when StyleSelectorButton.Visibility == Visibility.Visible && StyleSelectorButton.IsEnabled:
                 e.Handled = true;
                 StyleSelector_Click(StyleSelectorButton, new RoutedEventArgs());
                 break;
@@ -2182,8 +2209,9 @@ public partial class QuickSearchWindow : Window
         }
     }
 
-    private void Window_KeyDown(object sender, KeyEventArgs e)
+    private async void Window_KeyDown(object sender, KeyEventArgs e)
     {
+        var modifiers = ModifiersOverrideForTest ?? Keyboard.Modifiers;
         if (e.Key == Key.Escape || e.ImeProcessedKey == Key.Escape)
         {
             // E3: a live IME composition owns this Escape — hiding or
@@ -2213,12 +2241,22 @@ public partial class QuickSearchWindow : Window
             }
             Hide();
         }
-        else if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control && _state.CanStar)
+        else if (e.Key == Key.R && modifiers == ModifierKeys.Control)
+        {
+            if (!string.IsNullOrWhiteSpace(SearchBox.Text))
+            {
+                e.Handled = true;
+                _debounceTimer.Stop();
+                _state.OnQueryTextChanged(SearchBox.Text);
+                await PerformTranslateAsync();
+            }
+        }
+        else if (e.Key == Key.S && modifiers == ModifierKeys.Control && _state.CanStar)
         {
             e.Handled = true;
             Star_Click(this, new RoutedEventArgs());
         }
-        else if (e.Key == Key.C && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && _state.CanCopy)
+        else if (e.Key == Key.C && modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && _state.CanCopy)
         {
             e.Handled = true;
             Copy_Click(this, new RoutedEventArgs());
