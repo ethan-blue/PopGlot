@@ -1,8 +1,47 @@
 <UserControl x:Class="PopGlot.Windows.Sections.ServicesSection"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:PopGlot.Windows">
+             xmlns:local="clr-namespace:PopGlot.Windows"
+             xmlns:sections="clr-namespace:PopGlot.Windows.Sections">
     <UserControl.Resources>
+        <!-- Native TabItems retain arrow-key navigation and selection automation. -->
+        <Style x:Key="ServicesTab" TargetType="TabItem">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Padding" Value="12,8" />
+            <Setter Property="Margin" Value="0,0,4,0" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="TabBorder" Padding="{TemplateBinding Padding}" CornerRadius="6,6,0,0"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="Transparent" BorderThickness="0,0,0,2">
+                            <ContentPresenter ContentSource="Header" RecognizesAccessKey="True"
+                                              HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="TabBorder" Property="Background" Value="{DynamicResource SurfaceHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                                <Setter TargetName="TabBorder" Property="Background" Value="{DynamicResource AccentSoftBrush}" />
+                                <Setter TargetName="TabBorder" Property="BorderBrush" Value="{DynamicResource AccentBorderBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ServicesTabs" TargetType="TabControl">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0,10,0,0" />
+            <Setter Property="ItemContainerStyle" Value="{StaticResource ServicesTab}" />
+            <Setter Property="KeyboardNavigation.TabNavigation" Value="Local" />
+        </Style>
         <Style x:Key="ProviderPresetButton" TargetType="Button" BasedOn="{StaticResource GhostButton}">
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Setter Property="Padding" Value="10,8" />
@@ -176,7 +215,7 @@
                     <Button x:Name="BackToListHeaderButton" Content="← 返回引擎列表" Visibility="Collapsed"
                             Style="{StaticResource GhostButton}" Padding="10,5" Margin="0,0,8,4"
                             Click="BackToServices_Click" />
-                    <Button x:Name="AddEngineHeaderButton" Content="添加引擎"
+                    <Button x:Name="AddEngineHeaderButton" Content="添加 AI 引擎" Visibility="Collapsed"
                             Style="{StaticResource PrimaryButton}" Padding="16,8" Margin="0,0,0,4"
                             Click="AddProfile_Click" />
                 </WrapPanel>
@@ -251,12 +290,14 @@
         </Grid>
 
 
-        <!-- 引擎与免费路线中心：免费线路、本机/环境变量一键发现、已配置引擎 -->
+        <!-- Public routes and AI configuration have independent scroll positions. -->
         <Grid x:Name="DetailGrid" Grid.Row="1" SizeChanged="DetailGrid_SizeChanged">
-            <!-- Service overview. Editing is explicit and replaces this list. -->
             <Border x:Name="EditorEmpty" Padding="0" Background="Transparent" BorderThickness="0">
-                <ScrollViewer x:Name="OverviewScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,6,8">
-                    <StackPanel>
+                <TabControl x:Name="ServicesTabs" Style="{StaticResource ServicesTabs}" SelectedIndex="0"
+                            SelectionChanged="ServicesTabs_SelectionChanged" AutomationProperties.Name="翻译服务分类">
+                    <TabItem x:Name="PublicServicesTab" Header="公共翻译" AutomationProperties.Name="公共与传统翻译 API">
+                        <ScrollViewer x:Name="PublicRoutesScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,6,8">
+                            <StackPanel>
                         <!-- 1. Built-in Free Routes Panel -->
                         <Border x:Name="FreeRoutesPanel" Style="{StaticResource EditorSectionCard}" Margin="0,0,0,12">
                             <StackPanel>
@@ -389,6 +430,27 @@
                             </StackPanel>
                         </Border>
 
+                                <Border x:Name="TraditionalApiNotice" Style="{StaticResource EditorSectionCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="传统翻译 API" Style="{StaticResource EditorSectionTitle}" />
+                                        <TextBlock Text="自建 JSON 翻译服务请切换到「自定义 API」页，支持 LibreTranslate / DeepLX 模板和自定义请求、响应字段。百度、腾讯等动态签名协议需要专用适配器。"
+                                                   Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                                        <TextBlock Text="自建或中转的 AI 接口请在「AI 与账号」中添加自定义兼容引擎；支持修改 Base URL、模型、请求头及生成参数。"
+                                                   Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabItem>
+                    <TabItem x:Name="CustomApiTab" Header="自定义 API" AutomationProperties.Name="自定义传统翻译 API">
+                        <sections:CustomTranslationApiEditor x:Name="CustomApiEditor"/>
+                    </TabItem>
+                    <TabItem x:Name="AiServicesTab" Header="AI 与账号" AutomationProperties.Name="AI API 模型与本机账号">
+                        <ScrollViewer x:Name="OverviewScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,6,8">
+                            <StackPanel>
+                                <TextBlock Text="AI API、模型与本机账号" Style="{StaticResource SectionTitle}" Margin="2,0,0,4" />
+                                <TextBlock Text="添加云端 API、自定义兼容接口、本机模型或账号连接。公共线路的选择与测速请切换到「公共翻译」。"
+                                           Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="2,0,0,12" />
                         <!-- 2. One-Click Auto-Discovery & Free Model Addition -->
                         <Border x:Name="DiscoveryPanel" Style="{StaticResource EditorSectionCard}" Margin="0,0,0,12">
                             <StackPanel>
@@ -557,8 +619,10 @@
                                 </ListBox.ItemTemplate>
                             </ListBox>
                         </Grid>
-                    </StackPanel>
-                </ScrollViewer>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabItem>
+                </TabControl>
             </Border>
 
             <!-- Full-width focused editor. -->
@@ -813,6 +877,9 @@
                                     </StackPanel>
                                 </Grid>
 
+                                <TabControl x:Name="ApiEditorTabs" Style="{StaticResource ServicesTabs}" SelectedIndex="0"
+                                            SelectionChanged="ApiEditorTabs_SelectionChanged" AutomationProperties.Name="AI 接口详情">
+                                    <TabItem x:Name="ApiConnectionTab" Header="连接" AutomationProperties.Name="接口连接与密钥">
                                 <Border x:Name="ConnectionCard" Style="{StaticResource EditorSectionCard}">
                                     <StackPanel>
                                         <TextBlock Text="连接信息" Style="{StaticResource EditorSectionTitle}" Margin="0,0,0,10" />
@@ -870,6 +937,8 @@
                                     </StackPanel>
                                 </Border>
 
+                                    </TabItem>
+                                    <TabItem x:Name="ApiModelsTab" Header="模型" AutomationProperties.Name="模型与能力">
                                 <Border x:Name="ModelCard" Style="{StaticResource EditorSectionCard}">
                                     <StackPanel>
                                         <Grid>
@@ -931,6 +1000,8 @@
                                     </StackPanel>
                                 </Border>
 
+                                    </TabItem>
+                                    <TabItem x:Name="ApiAdvancedTab" Header="高级与性能" AutomationProperties.Name="自定义请求与生成参数">
                                 <Border x:Name="AdvancedGroup" Margin="0,0,0,14">
 
                                     <Expander x:Name="AdvancedExpander" Header="高级设置" Expanded="AdvancedExpander_Expanded">
@@ -1013,6 +1084,8 @@
                                         </StackPanel>
                                     </Expander>
                                 </Border>
+                                    </TabItem>
+                                </TabControl>
                             </StackPanel>
                         </StackPanel>
                     </ScrollViewer>

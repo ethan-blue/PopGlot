@@ -1,0 +1,55 @@
+<UserControl x:Class="PopGlot.Windows.Sections.CustomTranslationApiEditor"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ xmlns:local="clr-namespace:PopGlot.Windows">
+ <Grid>
+  <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="2,0,8,8">
+   <StackPanel>
+    <TextBlock Text="自定义翻译 API" Style="{StaticResource SectionTitle}"/>
+    <TextBlock Text="适用于 LibreTranslate、DeepLX 或自建 JSON 翻译接口。与 AI 聊天接口分开配置，不会自动猜测或跨站转发。"
+     Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,5,0,14"/>
+    <WrapPanel Margin="0,0,0,10">
+     <Button Content="LibreTranslate 模板" Style="{StaticResource GhostButton}" Click="LibreTemplate_Click" Margin="0,0,8,4"/>
+     <Button Content="DeepLX 模板" Style="{StaticResource GhostButton}" Click="DeepLxTemplate_Click" Margin="0,0,8,4"/>
+     <Button x:Name="DeepLApiTemplateButton" Content="DeepL API（需 Key）" Style="{StaticResource GhostButton}" Click="DeepLApiTemplate_Click" Margin="0,0,8,4"/>
+     <Button x:Name="CaiyunTemplateButton" Content="彩云 API（需 Token）" Style="{StaticResource GhostButton}" Click="CaiyunTemplate_Click" Margin="0,0,0,4"/>
+    </WrapPanel>
+    <TextBlock Text="显示名称" Style="{StaticResource FieldLabel}"/>
+    <TextBox x:Name="NameInput" Style="{StaticResource FormTextBox}" MaxLength="80" Margin="0,0,0,10"/>
+    <TextBlock Text="完整请求地址（JSON POST）" Style="{StaticResource FieldLabel}"/>
+    <TextBox x:Name="EndpointInput" Style="{StaticResource FormTextBox}" MaxLength="2048" FontFamily="{StaticResource MonoFontFamily}"
+     local:Ui.Placeholder="https://your-service.example/translate" Margin="0,0,0,10"/>
+    <TextBlock Text="请求 JSON 模板" Style="{StaticResource FieldLabel}"/>
+    <TextBox x:Name="TemplateInput" Style="{StaticResource FormTextArea}" Height="110" MaxLength="32768" FontFamily="{StaticResource MonoFontFamily}"/>
+    <TextBlock Text="{}{text} = 原文；{source} / {target} = 完整语言代码；Base 后缀去除地区，Upper 后缀转大写；{apiKey} 从凭据管理器注入。按 JSON 字符串安全编码。"
+     Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,5,0,10"/>
+    <TextBlock Text="译文字段（JSON Pointer）" Style="{StaticResource FieldLabel}"/>
+    <TextBox x:Name="ResponseInput" Style="{StaticResource FormTextBox}" MaxLength="1024" FontFamily="{StaticResource MonoFontFamily}" Margin="0,0,0,10"/>
+    <TextBlock Text="例如 /translatedText、/data 或 /translations/0/text；字段必须为非空字符串。"
+     Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,12"/>
+    <Expander Header="认证与密钥（可选）">
+     <StackPanel Margin="0,10,0,0">
+      <TextBlock Text="API Key（留空保留当前地址的密钥）" Style="{StaticResource FieldLabel}"/>
+      <PasswordBox x:Name="KeyInput" Style="{StaticResource FormPasswordBox}" Margin="0,0,0,10"/>
+      <TextBlock Text="密钥请求头（留空则仅在模板中使用）" Style="{StaticResource FieldLabel}"/>
+      <TextBox x:Name="HeaderInput" Style="{StaticResource FormTextBox}" MaxLength="128" Margin="0,0,0,10"/>
+      <TextBlock Text="密钥前缀（Bearer 后需要一个空格）" Style="{StaticResource FieldLabel}"/>
+      <TextBox x:Name="PrefixInput" Style="{StaticResource FormTextBox}" MaxLength="80" Margin="0,0,0,8"/>
+      <Button x:Name="ClearApiKeyButton" Content="清除此地址的密钥" Style="{StaticResource GhostButton}" HorizontalAlignment="Left"/>
+     </StackPanel>
+    </Expander>
+    <TextBlock Text="只支持 JSON POST，无需模型 ID。带动态签名的百度、腾讯等官方接口需要专用适配器，不能直接套用。密钥仅存 Windows 凭据管理器，修改地址不会把旧地址的密钥自动发给新地址。此接口可能收费，默认只手动翻译。"
+     Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,12,0,0"/>
+   </StackPanel>
+  </ScrollViewer>
+  <StackPanel Grid.Row="1" Margin="0,8,0,0">
+   <TextBlock x:Name="StatusText" TextWrapping="Wrap" Style="{StaticResource Caption}" Margin="0,0,0,8"/>
+   <WrapPanel HorizontalAlignment="Right">
+    <Button x:Name="TestButton" Content="测试翻译" Style="{StaticResource GhostButton}" Click="Test_Click" Margin="0,0,8,4"/>
+    <Button Content="保存" Style="{StaticResource GhostButton}" Click="Save_Click" Margin="0,0,8,4"/>
+    <Button Content="保存并使用" Style="{StaticResource PrimaryButton}" Click="SaveUse_Click" Margin="0,0,0,4"/>
+   </WrapPanel>
+  </StackPanel>
+ </Grid>
+</UserControl>

@@ -170,6 +170,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     public ServicesSection()
     {
         InitializeComponent();
+        CustomApiEditor.RouteChanged += () => { RefreshProfilesList(); ProfileChanged?.Invoke(); };
         HookEditorDirtyTracking();
         // 模型输入每次按键都重建推荐 chips 会造成持续 GC 压力；合并为
         // 停顿 250ms 后的一次刷新，预设/协议切换仍走立即刷新。
@@ -224,6 +225,10 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         };
         RefreshFreeRoutesPanel();
         RefreshProxyStatusPill();
+        var activeConfig = ProfileManager.Load();
+        ServicesTabs.SelectedItem = activeConfig.PreferFreeEngine
+            ? ShellSettingsStore.Load().FreeEngineProvider == FreeEngineProvider.Custom ? CustomApiTab : PublicServicesTab
+            : AiServicesTab;
     }
 
     private void CancelListTests()
@@ -416,10 +421,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             return;
         }
         e.Handled = true;
-        OverviewScroll.RaiseEvent(new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
+        var scroll = ServicesTabs.SelectedItem == PublicServicesTab ? PublicRoutesScroll : OverviewScroll;
+        scroll.RaiseEvent(new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
         {
             RoutedEvent = Mouse.MouseWheelEvent,
-            Source = OverviewScroll,
+            Source = scroll,
         });
     }
 
@@ -1388,10 +1394,27 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         ProfilesListBox.SelectedIndex = index >= 0 ? index : -1;
     }
 
+    private void ServicesTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (e.Source != ServicesTabs || AddEngineHeaderButton is null) return;
+        AddEngineHeaderButton.Visibility = !IsEditorOpen && ServicesTabs.SelectedItem == AiServicesTab
+            ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ApiEditorTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (e.Source != ApiEditorTabs || EditorScroll is null) return;
+        EditorScroll.ScrollToTop();
+        if (ApiEditorTabs.SelectedItem == ApiAdvancedTab && AdvancedExpander is not null)
+            AdvancedExpander.IsExpanded = true;
+    }
+
     // ================= Editor state =================
 
     private void ShowEditorForm(bool addMode)
     {
+        ServicesTabs.SelectedItem = AiServicesTab;
+        ApiEditorTabs.SelectedItem = ApiConnectionTab;
         DisarmAllConfirms();
         _catalogOperation?.Cancel();
         CancelCliOperation();
@@ -1430,7 +1453,8 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         _catalogOperation?.Cancel();
         if (AddEngineHeaderButton is not null)
         {
-            AddEngineHeaderButton.Visibility = Visibility.Visible;
+            AddEngineHeaderButton.Visibility = ServicesTabs.SelectedItem == AiServicesTab
+                ? Visibility.Visible : Visibility.Collapsed;
         }
         BackToListHeaderButton.Visibility = Visibility.Collapsed;
         ChooseAnotherProviderButton.Visibility = Visibility.Collapsed;
@@ -3323,11 +3347,12 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
         var specs = new (FreeEngineProvider Provider, string Name, string Desc, string[] Tags)[]
         {
-            (FreeEngineProvider.Auto, "自动优选", "短词走有道，长句走 Bing / Google（每次只发给单条线路）", ["按文本择优", "免 Key"]),
-            (FreeEngineProvider.Bing, "Bing 翻译", "cn.bing.com · 国内直连，适合长句与段落", ["国内直连", "长句"]),
+            (FreeEngineProvider.Auto, "自动优选", "按输入与实测健康度选择；Bing 仅测速成功后参与，每次只发给一条", ["按文本择优", "免 Key"]),
+            (FreeEngineProvider.Bing, "Bing 翻译（实验性）", "匿名接口可能返回 401；请先测速，成功后才参与自动优选", ["实验性", "先测速"]),
             (FreeEngineProvider.Youdao, "有道词典", "dict.youdao.com · 单词与短语释义准确", ["国内直连", "词典级"]),
             (FreeEngineProvider.MyMemory, "MyMemory", "api.mymemory.translated.net · 单次不超过 500 字节", ["500字节限制", "直连"]),
-            (FreeEngineProvider.Google, "Google 翻译", "translate.googleapis.com · 多语种长句支持好", ["需代理", "长句"]),
+            (FreeEngineProvider.Yandex, "Yandex 翻译", "translate.yandex.net · 免密钥句子翻译；手动选择，不区分中文简繁", ["免 Key", "手动选用"]),
+            (FreeEngineProvider.Google, "Google 翻译", "translate.google.com · 同提供商多节点与长文 POST", ["需代理", "长句"]),
         };
 
         var rows = new List<FreeRouteRow>(specs.Length);
@@ -3490,6 +3515,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             FreeEngineProvider.Bing,
             FreeEngineProvider.Youdao,
             FreeEngineProvider.MyMemory,
+            FreeEngineProvider.Yandex,
             FreeEngineProvider.Google,
         ]);
     }

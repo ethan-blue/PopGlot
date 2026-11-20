@@ -975,6 +975,9 @@ impl ProviderClient {
                     return Err(error);
                 }
                 Err(error) => {
+                    if is_certificate_failure(&error) {
+                        return Err(certificate_configuration_error());
+                    }
                     let retryable = error.is_connect() || error.is_timeout();
                     if attempt <= self.limits.max_retries && retryable {
                         self.wait_before_retry(None, cancellation).await?;
@@ -2268,7 +2271,34 @@ fn is_sse_content_type(response: &reqwest::Response) -> bool {
         })
 }
 
+// TLS identity/trust failures are configuration errors. Retrying the same
+// certificate only delays recovery; never surface the raw URL/error chain.
+fn is_certificate_failure(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(cause) = current {
+        let detail = cause.to_string().to_lowercase();
+        if ["certificate", "certnotvalid", "unknownissuer", "证书"]
+            .iter()
+            .any(|marker| detail.contains(marker))
+        {
+            return true;
+        }
+        current = cause.source();
+    }
+    false
+}
+
+fn certificate_configuration_error() -> ProviderError {
+    ProviderError::new(
+        ProviderErrorKind::Configuration,
+        "模型服务证书校验失败。请使用与证书域名一致的 Base URL，并检查证书有效期与信任链；未关闭 TLS 校验，也不会重试同一张无效证书。",
+    )
+}
+
 fn stream_send_error(error: &reqwest::Error) -> ProviderError {
+    if is_certificate_failure(error) {
+        return certificate_configuration_error();
+    }
     let retryable = error.is_connect() || error.is_timeout();
     ProviderError {
         kind: if error.is_timeout() {
@@ -3514,6 +3544,22 @@ mod tests {
                 Some("模型输出达到长度上限，译文可能被截断。"),
             )
         );
+    }
+
+    #[test]
+    fn certificate_failures_are_non_retryable_configuration_without_raw_details() {
+        let invalid_cert = std::io::Error::other(
+            "invalid peer certificate: CertNotValidForName https://secret.invalid/?token=private",
+        );
+        assert!(is_certificate_failure(&invalid_cert));
+        assert!(!is_certificate_failure(&std::io::Error::other(
+            "connection refused"
+        )));
+        let error = certificate_configuration_error();
+        assert_eq!(error.kind, ProviderErrorKind::Configuration);
+        assert!(!error.retryable);
+        assert!(!error.message.contains("secret.invalid"));
+        assert!(!error.message.contains("private"));
     }
 
     #[test]

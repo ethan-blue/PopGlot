@@ -9,7 +9,7 @@ internal static class QuickSearchLivePolicy
     public const int MinAutoQuotaRemaining = 30;
     public const string LowQuotaHint = "剩余自动配额不足，按 Enter 手动翻译";
     public const string MyMemoryTooLongHint = "内容较长，按 Enter 使用分段翻译";
-    public const string YoudaoTooLongHint = "有道词典适合单词和短语，长句可按 Enter 或切换 Bing";
+    public const string YoudaoTooLongHint = "有道词典适合单词和短语，长句请切换 Bing";
 
     public static bool ContainsCjk(string text)
     {
@@ -41,14 +41,24 @@ internal static class QuickSearchLivePolicy
         string sourceLang = LanguageCatalog.Auto,
         string targetLang = "zh-CN")
     {
-        if (quotaRemaining < MinAutoQuotaRemaining)
+        if (provider != FreeEngineProvider.Custom && quotaRemaining < MinAutoQuotaRemaining)
         {
             return new LiveTranslateGuardResult(false, LowQuotaHint);
         }
 
-        var effective = provider == FreeEngineProvider.Auto
-            ? FreeTranslateService.SelectAutoProvider(trimmed, sourceLang, targetLang)
-            : provider;
+        FreeEngineProvider effective;
+        try
+        {
+            effective = provider == FreeEngineProvider.Auto
+                ? FreeTranslateService.SelectAutoProvider(trimmed, sourceLang, targetLang)
+                : provider;
+        }
+        catch (FreeTranslateException exception)
+        {
+            // No eligible route is a local business refusal, not an unhandled
+            // DispatcherTimer failure that should trip the application's fuse.
+            return new LiveTranslateGuardResult(false, exception.Message);
+        }
 
         if (effective == FreeEngineProvider.MyMemory &&
             Encoding.UTF8.GetByteCount(trimmed) > FreeTranslateService.MyMemoryMaxQueryBytes)
@@ -84,6 +94,11 @@ internal sealed class QuickSearchState
 
     public long CurrentEpoch { get; private set; }
     public string CurrentQuery { get; private set; } = string.Empty;
+    // Visible text may belong to the previous query while the user edits.
+    // Never infer its ownership from the current TextBox contents.
+    public string ResultQuery { get; private set; } = string.Empty;
+    public bool IsResultForCurrentQuery => !IsDimmingPreviousResult &&
+        string.Equals(ResultQuery, CurrentQuery, StringComparison.Ordinal);
     public bool IsClosed { get; private set; }
     public QuickSearchUiStage Stage { get; private set; } = QuickSearchUiStage.Idle;
 
@@ -167,7 +182,7 @@ internal sealed class QuickSearchState
     {
         var hasPreviousResult = preservePreviousResultForLive &&
             IsResultVisible &&
-            Stage is QuickSearchUiStage.Completed or QuickSearchUiStage.Partial &&
+            (IsDimmingPreviousResult || Stage is QuickSearchUiStage.Completed or QuickSearchUiStage.Partial) &&
             (!string.IsNullOrWhiteSpace(FinalRenderedText) || !string.IsNullOrWhiteSpace(AccumulatedText));
 
         CurrentEpoch++;
@@ -193,6 +208,7 @@ internal sealed class QuickSearchState
         }
         else
         {
+            ResultQuery = CurrentQuery;
             IsDimmingPreviousResult = false;
             AccumulatedText = string.Empty;
             FinalRenderedText = string.Empty;
@@ -216,6 +232,7 @@ internal sealed class QuickSearchState
             return false;
         }
 
+        ResultQuery = CurrentQuery;
         // A live stream update is a real state update: any pending notice
         // yields to the progress copy.
         PendingNotice = null;
@@ -290,6 +307,7 @@ internal sealed class QuickSearchState
             return false;
         }
 
+        ResultQuery = CurrentQuery;
         var wasDimming = IsDimmingPreviousResult;
         IsDimmingPreviousResult = false;
         IsProgressVisible = false;
@@ -518,11 +536,33 @@ internal sealed class QuickSearchState
         return true;
     }
 
-    public void OnQueryTextChanged(string newQuery)
+    public void OnQueryTextChanged(string newQuery, bool preservePreviousResult = false)
     {
         var trimmed = newQuery.Trim();
         if (trimmed == CurrentQuery)
         {
+            return;
+        }
+
+        if (preservePreviousResult && trimmed.Length > 0 && IsResultVisible &&
+            (!string.IsNullOrWhiteSpace(FinalRenderedText) || !string.IsNullOrWhiteSpace(AccumulatedText)))
+        {
+            CurrentEpoch++;
+            CurrentQuery = trimmed;
+            Stage = QuickSearchUiStage.Idle;
+            PendingNotice = null;
+            IsProgressVisible = false;
+            IsStreamIndicatorVisible = false;
+            IsIncompleteBadgeVisible = false;
+            IsDimmingPreviousResult = true;
+            RouteLatencyText = null;
+            RouteStagesTooltip = null;
+            ErrorMessage = null;
+            CanCopy = false;
+            CanSpeak = false;
+            CanStar = false;
+            StatusText = "输入已更改，显示上次结果 · 按 Enter 翻译";
+            RefreshHints();
             return;
         }
 

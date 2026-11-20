@@ -114,6 +114,14 @@ jobs:
             throw 'popglot_ffi.dll is missing from the publish output.'
           }
 
+      # Exercise the actual self-contained package before anything is public.
+      # The manifest lets downloaded assets be checked against this tag/commit.
+      - name: Verify packaged version, native core, tray and hotkeys
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          ./scripts/verify-packaged-build.ps1 -Version $version -PublishDir 'dist/release' -EvidenceDir 'dist/release-verification' -SourceCommit $env:GITHUB_SHA
+
       - name: Zip portable build
         shell: pwsh
         run: |

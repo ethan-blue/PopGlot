@@ -3537,6 +3537,11 @@ internal static class WaveRegressionTests
         True(section.TestSummaryText.Text.Contains("API Key", StringComparison.Ordinal),
             "the inline validation result must name the missing credential");
 
+        // Models are an independent editor page; exercise the actual visible page.
+        ((TabControl)section.FindName("ApiEditorTabs")).SelectedItem = section.FindName("ApiModelsTab");
+        hostWindow.UpdateLayout();
+        section.UpdateLayout();
+        PumpIdle();
         var textCombo = section.TextModelCombo;
         ArgumentNullException.ThrowIfNull(textCombo);
         Equal(true, ScrollViewer.GetCanContentScroll(textCombo), "ComboBox must enable CanContentScroll for virtualized scrolling");

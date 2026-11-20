@@ -447,6 +447,7 @@ internal static partial class Program
 
     private static async Task AutoProviderSelectionStickinessCooldownAndPrivacyAsync()
     {
+        FreeTranslateService.ResetHealthCacheForTest();
         var originalSender = FreeTranslateService.HttpSenderOverride;
         var originalLoader = OutboundPolicy.SettingsLoader;
         FreeTranslateService.ResetRateLimitStateForTest();
@@ -515,10 +516,14 @@ internal static partial class Program
             // 1. Short word selects Youdao
             Equal(FreeEngineProvider.Youdao, FreeTranslateService.SelectAutoProvider("apple", "en", "zh-CN"),
                 "short EN->ZH word selects Youdao");
-            // 2. Long sentence selects Bing
+            // 2. Unverified anonymous Bing must not receive a first Auto sentence.
+            Equal(FreeEngineProvider.Google,
+                FreeTranslateService.SelectAutoProvider("This is a complete sentence that needs full translation.", "en", "zh-CN"),
+                "unverified Bing stays out of Auto");
+            await FreeTranslateService.GetHealthAsync(FreeEngineProvider.Bing, true, auth);
             Equal(FreeEngineProvider.Bing,
                 FreeTranslateService.SelectAutoProvider("This is a complete sentence that needs full translation.", "en", "zh-CN"),
-                "sentence selects Bing when untried");
+                "Bing may participate after a successful real translation probe");
 
             // 3. When Bing fails on transport, Auto sends ONLY to Bing (never double-sends to Google!)
             //    and cools Bing down so the NEXT request picks Google!
@@ -537,7 +542,7 @@ internal static partial class Program
                 $"Another complete sentence {Guid.NewGuid():N}.", "en", "zh-CN", auth, provider: FreeEngineProvider.Auto);
             Equal("自动-Google", next.Result.TranslatedText, "next request switches to healthy Google");
             True(next.EngineLabel.Contains("Google", StringComparison.Ordinal), $"label shows chosen route: {next.EngineLabel}");
-            True(contactedHosts.All(h => h == "translate.googleapis.com"),
+            True(contactedHosts.All(h => h == "translate.google.com"),
                 "next request contacts only the chosen healthy provider");
         }
         finally

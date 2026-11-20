@@ -857,7 +857,7 @@ internal static partial class Program
             host = null;
             var google = await FreeTranslateService.TranslateAsync(
                 "hello", "en", "zh-CN", auth, provider: FreeEngineProvider.Google);
-            True(host is "translate.googleapis.com" or "clients5.google.com",
+            True(host is "translate.google.com" or "translate.googleapis.com" or "clients5.google.com",
                 $"the Google choice stays on Google, got {host}");
             Equal("google-translation", google.Result.TranslatedText, "the Google parser still runs");
             Equal("zh-CN", FreeTranslateService.ResolveMyMemorySource("auto", "你好世界"),
@@ -1090,14 +1090,14 @@ internal static partial class Program
                 FreeTranslateService.TranslateAsync("a4-fail", "auto", "zh-CN", failing!));
             FreeTranslateService.HttpSenderOverride = originalForFailure;
             FreeTranslateService.ResetTransportStateForTest();
-            Equal(3L, Interlocked.Read(ref sends), "each fallback endpoint is one real send");
+            Equal(4L, Interlocked.Read(ref sends), "each fallback endpoint is one real send");
 
             // 3. An explicit denial after issuance refuses: zero sends.
             True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var revoked), "a fresh token");
             ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Denied }, consentPath);
             await ThrowsAsync<InvalidOperationException>(() =>
                 FreeTranslateService.TranslateAsync("a4-denied", "auto", "zh-CN", revoked!));
-            Equal(3L, Interlocked.Read(ref sends), "a denied token sends nothing");
+            Equal(4L, Interlocked.Read(ref sends), "a denied token sends nothing");
 
             // 4. An offline flip refuses at the send boundary.
             ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed }, consentPath);
@@ -1106,7 +1106,7 @@ internal static partial class Program
             await ThrowsAsync<InvalidOperationException>(() =>
                 FreeTranslateService.TranslateAsync("a4-offline", "auto", "zh-CN", offline!));
             OutboundPolicy.LiveSettingsLoader = null;
-            Equal(3L, Interlocked.Read(ref sends), "an offline send goes nowhere");
+            Equal(4L, Interlocked.Read(ref sends), "an offline send goes nowhere");
 
             // 5. A construction failure never reaches transport; the same
             //    authorization still works once the endpoints are healthy.
@@ -1121,14 +1121,14 @@ internal static partial class Program
             await ThrowsAsync<InvalidOperationException>(() =>
                 FreeTranslateService.TranslateAsync("a4-build", "auto", "zh-CN", construction!));
             FreeTranslateService.EndpointsOverride = null;
-            Equal(3L, Interlocked.Read(ref sends), "a construction failure never reaches transport");
+            Equal(4L, Interlocked.Read(ref sends), "a construction failure never reaches transport");
             await FreeTranslateService.TranslateAsync("a4-build-recovered", "auto", "zh-CN", construction!);
-            Equal(4L, Interlocked.Read(ref sends), "the recovered send goes out");
+            Equal(5L, Interlocked.Read(ref sends), "the recovered send goes out");
 
             // 6. A cache hit: no send.
             True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var cached), "a fresh token");
             await FreeTranslateService.TranslateAsync("a4-first", "auto", "zh-CN", cached!);
-            Equal(4L, Interlocked.Read(ref sends), "a cache hit sends nothing");
+            Equal(5L, Interlocked.Read(ref sends), "a cache hit sends nothing");
 
             // 7. MyMemory's documented 500-byte q budget is enforced locally.
             True(OutboundPolicy.AllowsFreeEngine(settings, out _, out var myMemoryLong), "a fresh token");
@@ -1139,7 +1139,7 @@ internal static partial class Program
                     "zh-CN",
                     myMemoryLong!,
                     provider: FreeEngineProvider.MyMemory));
-            Equal(4L, Interlocked.Read(ref sends), "MyMemory byte overflow sends nothing");
+            Equal(5L, Interlocked.Read(ref sends), "MyMemory byte overflow sends nothing");
 
             // 8. A revocation between fallback endpoints stops the rest.
             ShellSettingsStore.Save(ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Allowed }, consentPath);
@@ -1147,7 +1147,7 @@ internal static partial class Program
             FreeTranslateService.HttpSenderOverride = (_, _) =>
             {
                 var sent = Interlocked.Increment(ref sends);
-                if (sent == 5)
+                if (sent == 6)
                 {
                     ShellSettingsStore.Save(
                         ShellSettings.Default with { FreeEngineConsent = FreeEngineConsent.Denied }, consentPath);
@@ -1159,7 +1159,7 @@ internal static partial class Program
             };
             await ThrowsAsync<InvalidOperationException>(() =>
                 FreeTranslateService.TranslateAsync("a4-fallback", "auto", "zh-CN", fallback!));
-            Equal(5L, Interlocked.Read(ref sends), "the fallback loop stops after the first send");
+            Equal(6L, Interlocked.Read(ref sends), "the fallback loop stops after the first send");
 
             // 9. With the consent revoked, no new authorization exists at all.
             Equal(false, OutboundPolicy.AllowsFreeEngine(settings, out var finalDenial, out var finalAuth),
@@ -1168,7 +1168,7 @@ internal static partial class Program
             True(finalDenial is not null, "the refusal must explain itself");
             await ThrowsAsync<InvalidOperationException>(() =>
                 FreeTranslateService.TranslateAsync("a4-no-auth", "auto", "zh-CN", null!));
-            Equal(5L, Interlocked.Read(ref sends), "an unauthorized send goes nowhere");
+            Equal(6L, Interlocked.Read(ref sends), "an unauthorized send goes nowhere");
         }
         finally
         {
@@ -1227,9 +1227,11 @@ internal static partial class Program
     private static void FreeEndpointCatalogRevealsAtRuntimeOnly()
     {
         var urls = FreeEndpointCatalog.AllUrls;
-        Equal(6, urls.Length, "six built-in endpoints must be catalogued");
+        Equal(8, urls.Length, "eight built-in endpoints must be catalogued");
         var expectedHosts = new[]
         {
+            "translate.google.com",
+            "translate.yandex.net",
             "translate.googleapis.com",
             "clients5.google.com",
             "api.mymemory.translated.net",
@@ -1275,7 +1277,7 @@ internal static partial class Program
             True(value.Length > 0 && FreeEndpointCatalog.Reveal(value).StartsWith("https://", StringComparison.Ordinal),
                 $"the constant {field.Name} must decode to a usable url");
         }
-        Equal(6, encodedCount, "every endpoint must be stored obfuscated");
+        Equal(urls.Length, encodedCount, "every endpoint must be stored obfuscated");
     }
 
     /// <summary>

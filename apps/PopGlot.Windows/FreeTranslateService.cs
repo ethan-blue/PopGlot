@@ -60,6 +60,8 @@ internal enum FreeEngineProvider
     Youdao,
     Bing,
     Auto,
+    Custom,
+    Yandex,
 }
 
 /// <summary>
@@ -88,7 +90,7 @@ internal static class FreeTranslateService
 
     private static readonly TimeSpan WarmupTimeout = TimeSpan.FromSeconds(2.5);
 
-    private static HttpClient GetActiveHttpClient() =>
+    internal static HttpClient GetActiveHttpClient() =>
         HttpClientOverrideForTest ??
         ProxyHttpClientFactory.GetClient(ProxyConfig.FromCurrentSettings(), ConnectTimeout, WholeRequestTimeout);
 
@@ -242,15 +244,19 @@ internal static class FreeTranslateService
     /// engine's per-request limit (5,000 chars total) yet exceeds a single
     /// GET URL / query byte budget, so callers can send it in ordered batches.
     /// </summary>
-    internal static bool NeedsBatching(string text, out int recommendedChunkChars)
+    internal static bool NeedsBatching(string text, out int recommendedChunkChars) =>
+        NeedsBatching(text, ReadSelectedProvider(), out recommendedChunkChars);
+
+    internal static bool NeedsBatching(string text, FreeEngineProvider provider, out int recommendedChunkChars)
     {
-        var provider = ReadSelectedProvider();
+        if (provider == FreeEngineProvider.Auto)
+            provider = SelectAutoProvider(text);
         if (string.IsNullOrWhiteSpace(text) || text.Length > MaxSourceCharacters)
         {
             recommendedChunkChars = 0;
             return false;
         }
-        if (provider == FreeEngineProvider.Youdao)
+        if (provider is FreeEngineProvider.Google or FreeEngineProvider.Youdao or FreeEngineProvider.Custom or FreeEngineProvider.Yandex)
         {
             recommendedChunkChars = 0;
             return false;
@@ -293,6 +299,17 @@ internal static class FreeTranslateService
     // 详见该文件的诚实边界说明：提高扒取门槛，不等于加密。
     private static readonly FreeEndpoint[] DefaultEndpoints =
     [
+        new FreeEndpoint(
+            FreeEndpointCatalog.HostOf(FreeEndpointCatalog.GoogleWebsiteUrl),
+            static (sl, tl, q) => FreeEndpointCatalog.GoogleWebsiteUrl
+                .Replace("{sl}", sl).Replace("{tl}", tl).Replace("{q}", HttpUtility.UrlEncode(q)),
+            ParseGtxSingle),
+        new FreeEndpoint(
+            FreeEndpointCatalog.HostOf(FreeEndpointCatalog.YandexTranslateUrl),
+            static (_, _, _) => FreeEndpointCatalog.YandexTranslateUrl,
+            YandexPublicTranslation.ParseResponse,
+            FreeEngineProvider.Yandex,
+            YandexPublicTranslation.BuildRequest),
         new FreeEndpoint(
             FreeEndpointCatalog.HostOf(FreeEndpointCatalog.GtxSingleUrl),
             static (sl, tl, q) => FreeEndpointCatalog.GtxSingleUrl
@@ -353,9 +370,11 @@ internal static class FreeTranslateService
             tl = "zh-CN";
         }
 
-        var selected = provider ?? ReadSelectedProvider();
-        var isAuto = selected == FreeEngineProvider.Auto;
-        var effective = isAuto ? SelectAutoProvider(trimmed, sl, tl) : selected;
+        var selected = provider ?? authorization.ResolvedProvider ?? ReadSelectedProvider();
+        var isAuto = selected == FreeEngineProvider.Auto || authorization.WasAutoSelected;
+        var effective = selected == FreeEngineProvider.Auto ? SelectAutoProvider(trimmed, sl, tl) : selected;
+        using var requestBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        requestBudget.CancelAfter(WholeRequestTimeout);
 
         try
         {
@@ -365,7 +384,7 @@ internal static class FreeTranslateService
                 sl,
                 tl,
                 authorization,
-                cancellationToken);
+                requestBudget.Token);
 
             if (isAuto)
             {
@@ -374,14 +393,20 @@ internal static class FreeTranslateService
                     OverrideEngineLabel = $"{EngineWording.AutoEngineName} · {EngineWording.NameFor(effective)}",
                 };
             }
-            if (effective == FreeEngineProvider.Youdao && string.IsNullOrEmpty(response.OverrideEngineLabel))
+            if (effective is FreeEngineProvider.Youdao or FreeEngineProvider.Yandex && string.IsNullOrEmpty(response.OverrideEngineLabel))
             {
                 return response with
                 {
-                    OverrideEngineLabel = EngineWording.YoudaoDisplayName,
+                    OverrideEngineLabel = EngineWording.DisplayNameFor(effective),
                 };
             }
             return response;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && requestBudget.IsCancellationRequested)
+        {
+            foreach (var host in HostsForProvider(effective)) MarkHostTransportCooldown(host);
+            throw new FreeTranslateException(FreeTranslateFailureKind.NetworkOrTimeout,
+                "公共翻译请求超过 30 秒预算，已取消；请检查网络、代理或切换线路。");
         }
         catch (FreeTranslateException ex) when (isAuto && ex.Kind is FreeTranslateFailureKind.NetworkOrTimeout or FreeTranslateFailureKind.RateLimited)
         {
@@ -399,6 +424,9 @@ internal static class FreeTranslateService
         FreeEngineAuthorization authorization,
         CancellationToken cancellationToken)
     {
+        if (selected == FreeEngineProvider.Custom)
+            return await CustomTranslationApi.TranslateAsync(trimmed, sl, tl, authorization, cancellationToken).ConfigureAwait(false);
+
         if (selected == FreeEngineProvider.MyMemory &&
             Encoding.UTF8.GetByteCount(trimmed) > MyMemoryMaxQueryBytes)
         {
@@ -435,7 +463,24 @@ internal static class FreeTranslateService
 
         var started = Stopwatch.GetTimestamp();
         Exception? lastError = null;
-        var endpoints = OrderEndpoints(EndpointsOverride ?? EndpointsFor(selected), selected);
+        var endpoints = EndpointsOverride ?? EndpointsFor(selected);
+        if (EndpointsOverride is null && selected == FreeEngineProvider.Google &&
+            Uri.EscapeDataString(trimmed).Length > MaxRequestUrlLength - 220)
+        {
+            // The live GTX service accepts form POST. Keep long text in one request
+            // instead of serializing dozens of 160-character GET chunks.
+            // GET fallbacks remain bounded and never switch recipient/provider.
+            static FreeEndpoint FormEndpoint(string template, Func<string, (string, string)> parse) => new(
+                FreeEndpointCatalog.HostOf(template), (_, _, _) => template, parse,
+                BuildRequest: (source, target, text) => new HttpRequestMessage(HttpMethod.Post,
+                    template.Replace("&q={q}", string.Empty, StringComparison.Ordinal)
+                        .Replace("{sl}", source, StringComparison.Ordinal).Replace("{tl}", target, StringComparison.Ordinal))
+                { Content = new FormUrlEncodedContent(new Dictionary<string, string> { ["q"] = text }) });
+            endpoints = [FormEndpoint(FreeEndpointCatalog.GoogleWebsiteUrl, ParseGtxSingle),
+                FormEndpoint(FreeEndpointCatalog.GtxSingleUrl, ParseGtxSingle),
+                FormEndpoint(FreeEndpointCatalog.DictChromeExUrl, ParseDictChromeEx), .. endpoints];
+        }
+        endpoints = OrderEndpoints(endpoints, selected);
         var sendable = 0;       // endpoints attempted (past cooldown and URL budget)
         var rateCoolingDown = 0;
         var transportCoolingDown = 0;
@@ -617,7 +662,7 @@ internal static class FreeTranslateService
                 MarkHostTransportCooldown(endpoint.Host);
                 lastError = new FreeTranslateException(
                     FreeTranslateFailureKind.NetworkOrTimeout,
-                    $"免费翻译服务暂时无法访问（{exception.Message}）；请检查本机网络后重试。");
+                    "免费翻译服务暂时无法访问（连接、代理、DNS 或超时）；请检查本机网络后重试。");
             }
         }
 
@@ -701,7 +746,11 @@ internal static class FreeTranslateService
         {
             candidates.Add(FreeEngineProvider.Youdao);
         }
-        candidates.Add(FreeEngineProvider.Bing);
+        // The anonymous Bing web protocol may return 401 even with a fresh token.
+        // Do not route an unsuspecting first Auto query there without positive evidence.
+        if (ProviderLastSuccessOrder(FreeEngineProvider.Bing) > 0 ||
+            (TryGetValidHealth(FreeEngineProvider.Bing, out var bingHealth) && bingHealth.Ok))
+            candidates.Add(FreeEngineProvider.Bing);
         candidates.Add(FreeEngineProvider.Google);
         if (Encoding.UTF8.GetByteCount(trimmed) <= MyMemoryMaxQueryBytes &&
             (sl != LanguageCatalog.Auto || LanguageCatalog.DetectScript(trimmed) is not null))
@@ -766,9 +815,11 @@ internal static class FreeTranslateService
     {
         FreeEngineProvider.Google =>
         [
+            FreeEndpointCatalog.HostOf(FreeEndpointCatalog.GoogleWebsiteUrl),
             FreeEndpointCatalog.HostOf(FreeEndpointCatalog.GtxSingleUrl),
             FreeEndpointCatalog.HostOf(FreeEndpointCatalog.DictChromeExUrl),
         ],
+        FreeEngineProvider.Yandex => [FreeEndpointCatalog.HostOf(FreeEndpointCatalog.YandexTranslateUrl)],
         FreeEngineProvider.MyMemory => [FreeEndpointCatalog.HostOf(FreeEndpointCatalog.MyMemoryUrl)],
         FreeEngineProvider.Youdao => [FreeEndpointCatalog.HostOf(FreeEndpointCatalog.YoudaoDictUrl)],
         FreeEngineProvider.Bing => [FreeEndpointCatalog.HostOf(FreeEndpointCatalog.BingTranslateV3Url)],
@@ -836,13 +887,13 @@ internal static class FreeTranslateService
             {
                 FreeEndpointCatalog.HostOf(FreeEndpointCatalog.BingTranslateV3Url),
                 FreeEndpointCatalog.HostOf(FreeEndpointCatalog.YoudaoDictUrl),
-                FreeEndpointCatalog.HostOf(FreeEndpointCatalog.GtxSingleUrl),
+                FreeEndpointCatalog.HostOf(FreeEndpointCatalog.GoogleWebsiteUrl),
             },
             var specific => HostsForProvider(specific).Take(1).ToArray(),
         };
 
         var client = HttpClientOverrideForTest ??
-            ProxyHttpClientFactory.GetClient(ProxyConfig.FromShellSettings(settings), ConnectTimeout, WarmupTimeout);
+            ProxyHttpClientFactory.GetClient(ProxyConfig.FromShellSettings(settings), ConnectTimeout, WholeRequestTimeout);
 
         foreach (var host in hosts)
         {
@@ -1432,6 +1483,7 @@ internal static class FreeTranslateService
                     {
                         continue;
                     }
+                    MarkHostTransportCooldown(bingHost);
                     throw lastError;
                 }
 
@@ -1532,7 +1584,7 @@ internal static class FreeTranslateService
                 MarkHostTransportCooldown(bingHost);
                 throw new FreeTranslateException(
                     FreeTranslateFailureKind.NetworkOrTimeout,
-                    $"Bing 翻译暂时无法访问（{exception.Message}）；请检查本机网络后重试。");
+                    "Bing 翻译暂时无法访问（连接、代理、DNS 或超时）；请检查本机网络后重试。");
             }
         }
 
@@ -1623,7 +1675,7 @@ internal static class FreeTranslateService
                 MarkHostTransportCooldown(bingHost);
                 throw new FreeTranslateException(
                     FreeTranslateFailureKind.NetworkOrTimeout,
-                    $"Bing 翻译暂时无法访问（{exception.Message}）；请检查本机网络后重试。");
+                    "Bing 翻译暂时无法访问（连接、代理、DNS 或超时）；请检查本机网络后重试。");
             }
         }
         finally
@@ -1844,6 +1896,12 @@ internal static class FreeTranslateService
         var builder = new StringBuilder();
         foreach (var element in root.EnumerateArray())
         {
+            // The live endpoint also returns a flat string array, not only pairs.
+            if (element.ValueKind == JsonValueKind.String)
+            {
+                builder.Append(element.GetString());
+                continue;
+            }
             if (element.ValueKind == JsonValueKind.Array &&
                 element.GetArrayLength() > 0 &&
                 element[0].ValueKind == JsonValueKind.String)

@@ -93,7 +93,7 @@ internal static class TextRouteMenu
         else if (!config.PreferFreeEngine && settings.TargetsLocalRuntime)
             return ("本机模型", settings.TextModel, null, false,
                 settings.TextIsConfigured ? StatusTone.Info : StatusTone.Warning);
-        var allowed = shell.FreeEngineConsent == FreeEngineConsent.Allowed && settings.NetworkEnabled && !settings.SafeDevMode;
+        var allowed = shell.FreeEngineConsent != FreeEngineConsent.Denied && settings.NetworkEnabled && !settings.SafeDevMode;
         var selected = config.PreferFreeEngine || allowed;
         if (!selected || !allowed)
         {
@@ -212,6 +212,8 @@ internal static class TextRouteMenu
             FreeEngineProvider.Bing,
             FreeEngineProvider.Youdao,
             FreeEngineProvider.MyMemory,
+            FreeEngineProvider.Yandex,
+            FreeEngineProvider.Custom,
         };
         foreach (var provider in providers)
         {
@@ -369,18 +371,22 @@ internal static class TextRouteMenu
     private static string? FreeMenuHint(FreeEngineProvider provider) => provider switch
     {
         FreeEngineProvider.Youdao => "词句最佳",
-        FreeEngineProvider.Bing => "国内直连",
+        FreeEngineProvider.Bing => "实验性 · 先测速",
         FreeEngineProvider.Auto => "单次择一",
         FreeEngineProvider.MyMemory => "≤500字节",
+        FreeEngineProvider.Yandex => "免 Key · 手动选用",
+        FreeEngineProvider.Custom => "JSON POST",
         _ => null,
     };
 
     private static string FreeDetail(FreeEngineProvider provider) => provider switch
     {
+        FreeEngineProvider.Yandex => "免配置 · 仅文字；发送至 translate.yandex.net；需手动选择，不参与自动优选；不区分中文简繁，繁体目标不可用。",
+        FreeEngineProvider.Custom => "自定义 JSON 翻译接口 · 仅文字\n仅发给你配置的地址，不参与自动优选。可在设置中修改请求模板与译文字段。",
         FreeEngineProvider.Auto => "免配置 · 仅文字\n按健康度与输入形态择一路由（Google / Bing / 有道 / MyMemory）；每次只发给一条。",
-        FreeEngineProvider.Bing => "免配置 · 仅文字\n发送至 cn.bing.com（国内可直连）；需先授权。",
+        FreeEngineProvider.Bing => "免配置 · 仅文字\n发送至 cn.bing.com；匿名接口可能拒绝访问，仅测速成功后参与自动优选。",
         FreeEngineProvider.Youdao => "有道词典（词句最佳）· 免配置 · 仅文字\n发送至 dict.youdao.com（国内可直连，仅支持中英单词与短语）。",
         FreeEngineProvider.MyMemory => "免配置 · 仅文字\n发送至 api.mymemory.translated.net（单次 ≤500 字节）；需先授权。",
-        _ => "免配置 · 仅文字\n发送至 translate.googleapis.com / clients5.google.com；需先授权。",
+        _ => "免配置 · 仅文字\n发送至 translate.google.com / translate.googleapis.com / clients5.google.com；需先授权。",
     };
 }

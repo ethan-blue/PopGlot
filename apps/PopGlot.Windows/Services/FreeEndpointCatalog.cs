@@ -17,6 +17,12 @@ internal static class FreeEndpointCatalog
 {
     private const byte ObfuscationMask = 0x5A;
 
+    private const string GoogleWebsiteEncoded =
+        "Mi4uKilgdXUuKDs0KTY7Lj90PTU1PTY/dDk1N3UuKDs0KTY7Lj8FO3UpMzQ9Nj9lOTYzPzQuZz0uInwpNmchKTYnfC42ZyEuNid8Pi5nLnw+Lmc4Pnw+LmcoN3wzP2cPDhx3Ynw1P2cPDhx3YnwrZyErJw==";
+
+    private const string YandexTranslateEncoded =
+        "Mi4uKilgdXUuKDs0KTY7Lj90Izs0Pj8idDQ/LnU7KjN1LGt1Lih0MCk1NHUuKDs0KTY7Lj8=";
+
     private const string GtxSingleEncoded =
         "Mi4uKilgdXUuKDs0KTY7Lj90PTU1PTY/OyozKXQ5NTd1Lig7NCk2Oy4/BTt1KTM0PTY/ZTk2Mz80Lmc9LiJ8KTZnISk2J3wuNmchLjYnfD4uZy58Pi5nOD58Pi5nKDd8K2chKyc=";
 
@@ -49,6 +55,10 @@ internal static class FreeEndpointCatalog
         return System.Text.Encoding.UTF8.GetString(bytes);
     }
 
+    public static string GoogleWebsiteUrl => Reveal(GoogleWebsiteEncoded);
+
+    public static string YandexTranslateUrl => Reveal(YandexTranslateEncoded);
+
     public static string GtxSingleUrl => Reveal(GtxSingleEncoded);
 
     public static string DictChromeExUrl => Reveal(DictChromeExEncoded);
@@ -67,6 +77,8 @@ internal static class FreeEndpointCatalog
     /// </summary>
     internal static string[] AllUrls =>
     [
+        GoogleWebsiteUrl,
+        YandexTranslateUrl,
         GtxSingleUrl,
         DictChromeExUrl,
         MyMemoryUrl,

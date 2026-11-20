@@ -47,6 +47,17 @@ public partial class QuickSearchWindow : Window
     {
         Interval = TimeSpan.FromMilliseconds(140),
     };
+    // Only injected test stores need polling. Production uses the persistence event,
+    // avoiding ten settings-file reads per second while the window is idle.
+    private readonly DispatcherTimer _liveSettingsTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(100),
+    };
+    private sealed record LiveSettingsKey(bool Enabled, int DelayMs, LiveTranslateScope Scope,
+        FreeEngineConsent Consent, FreeEngineProvider Provider, bool IsFreeRoute, bool OutboundAllowed);
+    private LiveSettingsKey? _liveSettingsKey;
+    private bool _liveQueryPending;
+    private long _liveQueryDueMs;
     private CancellationTokenSource? _cts;
     private bool _isClosed;
     private string? _sessionSourceLanguage;
@@ -221,6 +232,7 @@ public partial class QuickSearchWindow : Window
         InterfaceKeys.RefreshHints(this);
         PreviewKeyDown += Window_PreviewShortcutKeyDown;
         _debounceTimer.Tick += DebounceTimer_Tick;
+        _liveSettingsTimer.Tick += LiveSettingsTimer_Tick;
         _streamFlushTimer.Tick += StreamFlushTimer_Tick;
         _clampThrottleTimer.Tick += ClampThrottleTimer_Tick;
         _expandedSizeSaveTimer.Tick += ExpandedSizeSaveTimer_Tick;
@@ -274,6 +286,10 @@ public partial class QuickSearchWindow : Window
         {
             if (IsVisible)
             {
+                _liveSettingsKey = ReadLiveSettingsKey();
+                ShellSettingsStore.Changed -= OnShellSettingsChanged;
+                ShellSettingsStore.Changed += OnShellSettingsChanged;
+                if (_shellSettingsLoader is not null) _liveSettingsTimer.Start();
                 SyncWindowModeFromSettings();
                 CenterOnCurrentMonitor();
                 FocusSearchBox();
@@ -288,6 +304,9 @@ public partial class QuickSearchWindow : Window
             }
             else
             {
+                _liveSettingsTimer.Stop();
+                ShellSettingsStore.Changed -= OnShellSettingsChanged;
+                CancelRunningRequest();
                 FlushExpandedSizeSaveIfDirty();
                 StoreSessionSnapshot();
             }
@@ -548,6 +567,9 @@ public partial class QuickSearchWindow : Window
         return _currentSessionId;
     }
 
+    private bool HasCurrentResultIdentity => _state.IsResultForCurrentQuery &&
+        string.Equals(SearchBox.Text.Trim(), _state.ResultQuery, StringComparison.Ordinal);
+
     internal QuickSearchState State => _state;
     internal TextBox StreamBox => ResultStreamBox;
     internal RichTextBox RichBox => ResultRichBox;
@@ -612,20 +634,85 @@ public partial class QuickSearchWindow : Window
             return;
         }
 
-        // One timer handler serves every edit. Stopping a timer must not leave
-        // an unbounded set of obsolete per-keystroke closures subscribed.
+        // Invalidate actions synchronously, before any debounce or queued key
+        // event can pair this input with the previous result. Keep it visual only.
         CancelRunningRequest();
+        _state.OnQueryTextChanged(text, preservePreviousResult: true);
+        SyncUiWithState();
+        ScheduleLiveQuery(ReadLiveSettingsKey());
+    }
+
+    private LiveSettingsKey ReadLiveSettingsKey()
+    {
         var shell = LoadShellSettings();
-        _debounceTimer.Interval = shell.LiveTranslateEnabled
-            ? TimeSpan.FromMilliseconds(ShellSettings.NormalizeLiveTranslateDelayMs(shell.LiveTranslateDelayMs))
-            : TimeSpan.FromMilliseconds(150);
+        var core = TryGetCoreSettingsSafely();
+        return new LiveSettingsKey(shell.LiveTranslateEnabled,
+            ShellSettings.NormalizeLiveTranslateDelayMs(shell.LiveTranslateDelayMs),
+            shell.LiveTranslateScope, shell.FreeEngineConsent, shell.FreeEngineProvider,
+            ResolveIsActiveRouteFree(core) && shell.FreeEngineProvider != FreeEngineProvider.Custom,
+            IsFreeRouteOutboundAllowed(shell, core));
+    }
+
+    private static bool AllowsLiveQuery(LiveSettingsKey key) => key.Enabled &&
+        RuntimeGate.NewWorkAllowed &&
+        (key.Scope != LiveTranslateScope.FreeEngineOnly || key.IsFreeRoute) &&
+        (!key.IsFreeRoute || key.OutboundAllowed);
+
+    private void ScheduleLiveQuery(LiveSettingsKey key)
+    {
+        _liveSettingsKey = key;
+        if (_isClosed || !IsVisible || !AllowsLiveQuery(key) ||
+            !QuickSearchLivePolicy.MeetsMinimumLength(SearchBox.Text.Trim())) return;
+        _liveQueryPending = true;
+        _liveQueryDueMs = Environment.TickCount64 + key.DelayMs;
+        _debounceTimer.Interval = TimeSpan.FromMilliseconds(key.DelayMs);
         _debounceTimer.Start();
+    }
+
+    private void OnShellSettingsChanged()
+    {
+        if (_isClosed || Dispatcher.HasShutdownStarted) return;
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.Background,
+            new Action(() => LiveSettingsTimer_Tick(this, EventArgs.Empty)));
+    }
+
+    private void LiveSettingsTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_isClosed || !IsVisible) return;
+        var key = ReadLiveSettingsKey();
+        if (key == _liveSettingsKey) return;
+        _liveSettingsKey = key;
+        StopPendingLiveQuery();
+        if (_currentResultAutoTriggered && _cts is { IsCancellationRequested: false })
+        {
+            CancelRunningRequest();
+        }
+        // Settings govern automatic work, not a manual request already in flight.
+        if (AllowsLiveQuery(key) && (_cts is null || _currentResultAutoTriggered))
+        {
+            _lastLiveQuery = null;
+            ScheduleLiveQuery(key);
+        }
+    }
+
+    private void StopPendingLiveQuery()
+    {
+        _liveQueryPending = false;
+        _debounceTimer.Stop();
     }
 
     private void DebounceTimer_Tick(object? sender, EventArgs e)
     {
+        if (_isClosed || !IsVisible || !_liveQueryPending)
+        {
+            StopPendingLiveQuery();
+            return;
+        }
+        LiveSettingsTimer_Tick(sender, e);
+        if (!_liveQueryPending) return;
+        // A previously queued Tick cannot submit a newer edit before its delay.
+        if (Environment.TickCount64 - _liveQueryDueMs < 0) return;
         _debounceTimer.Stop();
-        if (_isClosed) return;
         if (Ui.GetIsComposing(SearchBox))
         {
             // Reschedule while IME is actively composing; when composition finishes,
@@ -634,6 +721,7 @@ public partial class QuickSearchWindow : Window
             return;
         }
 
+        _liveQueryPending = false;
         var text = SearchBox.Text;
         var trimmed = text.Trim();
         if (string.IsNullOrEmpty(trimmed))
@@ -679,7 +767,8 @@ public partial class QuickSearchWindow : Window
 
         var coreSettings = TryGetCoreSettingsSafely();
         var isFreeRoute = ResolveIsActiveRouteFree(coreSettings);
-        if (shell.LiveTranslateScope == LiveTranslateScope.FreeEngineOnly && !isFreeRoute)
+        if (shell.LiveTranslateScope == LiveTranslateScope.FreeEngineOnly &&
+            (!isFreeRoute || shell.FreeEngineProvider == FreeEngineProvider.Custom))
         {
             _lastLiveQuery = null;
             if (trimmed != _state.CurrentQuery)
@@ -768,7 +857,7 @@ public partial class QuickSearchWindow : Window
 
     private static bool IsFreeRouteOutboundAllowed(ShellSettings shell, ProviderSettings? coreSettings)
     {
-        if (!RuntimeGate.NewWorkAllowed || shell.FreeEngineConsent != FreeEngineConsent.Allowed)
+        if (!RuntimeGate.NewWorkAllowed || shell.FreeEngineConsent == FreeEngineConsent.Denied)
         {
             return false;
         }
@@ -835,7 +924,8 @@ public partial class QuickSearchWindow : Window
 
     private async Task ExecuteTranslateAsync(bool autoTriggered)
     {
-        if (_isClosed) return;
+        if (_isClosed || (autoTriggered && !IsVisible)) return;
+        StopPendingLiveQuery();
 
         var text = SearchBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(text))
@@ -1116,9 +1206,10 @@ public partial class QuickSearchWindow : Window
         IncompleteBadge.Visibility = _state.IsIncompleteBadgeVisible ? Visibility.Visible : Visibility.Collapsed;
         SearchProgress.Visibility = _state.IsProgressVisible ? Visibility.Visible : Visibility.Collapsed;
 
-        CopyButton.IsEnabled = _state.CanCopy;
-        SpeakButton.IsEnabled = _state.CanSpeak;
-        StarButton.IsEnabled = _state.CanStar;
+        CopyButton.IsEnabled = _state.CanCopy && HasCurrentResultIdentity;
+        SpeakButton.IsEnabled = _state.CanSpeak && HasCurrentResultIdentity;
+        StarButton.IsEnabled = _state.CanStar && HasCurrentResultIdentity;
+        ResultRichBox.IsDocumentEnabled = HasCurrentResultIdentity;
 
         // 免费引擎预提示在其待决期间压过「正在生成…」这类准备态：一旦真实
         // 文本开始到达或终态（完成/失败/取消）落地，立即让位给真实状态。
@@ -1561,9 +1652,9 @@ public partial class QuickSearchWindow : Window
     {
         if (_isClosed) return;
         var text = SearchBox.Text.Trim();
-        var translation = !string.IsNullOrWhiteSpace(_state.FinalRenderedText)
-            ? _state.FinalRenderedText
-            : _state.AccumulatedText;
+        var translation = HasCurrentResultIdentity
+            ? (!string.IsNullOrWhiteSpace(_state.FinalRenderedText) ? _state.FinalRenderedText : _state.AccumulatedText)
+            : string.Empty;
         if (string.IsNullOrWhiteSpace(text) && string.IsNullOrWhiteSpace(translation))
         {
             if (Application.Current is App emptyApp)
@@ -1577,7 +1668,7 @@ public partial class QuickSearchWindow : Window
         var settings = TryGetCoreSettingsSafely();
         var sourceLang = _sessionSourceLanguage ?? settings?.SourceLanguage ?? LanguageCatalog.Auto;
         var targetLang = _sessionTargetLanguage ?? settings?.TargetLanguage ?? "zh-CN";
-        var sessionState = _state.Stage switch
+        var sessionState = (HasCurrentResultIdentity ? _state.Stage : QuickSearchUiStage.Idle) switch
         {
             QuickSearchUiStage.Completed => TranslationSessionState.Completed,
             QuickSearchUiStage.Failed => TranslationSessionState.Failed,
@@ -1586,10 +1677,15 @@ public partial class QuickSearchWindow : Window
 
         if (Application.Current is App app)
         {
-            app.NavigateFromShortcut(InterfaceAction.Workbench);
+            // Use the app-owned main window, not the first (possibly stale/hidden)
+            // MainWindow in WPF's collection.
+            app.OpenInMainWindow(text, targetLang, sourceLang, translation, sessionState);
         }
-        var mainWindow = Application.Current?.Windows.OfType<MainWindow>().FirstOrDefault();
-        mainWindow?.FocusTranslate(text, targetLang, sourceLang, translation, sessionState);
+        else
+        {
+            var mainWindow = Application.Current?.Windows.OfType<MainWindow>().FirstOrDefault(w => w.IsVisible);
+            mainWindow?.FocusTranslate(text, targetLang, sourceLang, translation, sessionState);
+        }
         Hide();
     }
 
@@ -1925,7 +2021,7 @@ public partial class QuickSearchWindow : Window
 
     {
 
-        if (_isClosed || !_state.CanSpeak) return;
+        if (_isClosed || !_state.CanSpeak || !HasCurrentResultIdentity) return;
 
 
 
@@ -1977,7 +2073,7 @@ public partial class QuickSearchWindow : Window
 
     {
 
-        if (_isClosed || !_state.CanCopy) return;
+        if (_isClosed || !_state.CanCopy || !HasCurrentResultIdentity) return;
         _currentResultAutoTriggered = false;
 
 
@@ -2027,7 +2123,7 @@ public partial class QuickSearchWindow : Window
 
     {
 
-        if (_isClosed || !_state.CanStar) return;
+        if (_isClosed || !_state.CanStar || !HasCurrentResultIdentity) return;
         _currentResultAutoTriggered = false;
 
 
@@ -2140,6 +2236,7 @@ public partial class QuickSearchWindow : Window
     /// </summary>
     private void CancelRunningRequest()
     {
+        StopPendingLiveQuery();
         try
         {
             _cts?.Cancel();
@@ -2326,7 +2423,7 @@ public partial class QuickSearchWindow : Window
 
     internal void StoreSessionSnapshot()
     {
-        if (_isClosed || _currentResultAutoTriggered) return;
+        if (_isClosed || _currentResultAutoTriggered || !_state.IsResultForCurrentQuery) return;
 
         var query = !string.IsNullOrWhiteSpace(_state.CurrentQuery)
             ? _state.CurrentQuery.Trim()
@@ -2416,6 +2513,9 @@ public partial class QuickSearchWindow : Window
         _isClosed = true;
         _debounceTimer.Stop();
         _debounceTimer.Tick -= DebounceTimer_Tick;
+        _liveSettingsTimer.Stop();
+        _liveSettingsTimer.Tick -= LiveSettingsTimer_Tick;
+        ShellSettingsStore.Changed -= OnShellSettingsChanged;
         _streamFlushTimer.Stop();
         _streamFlushTimer.Tick -= StreamFlushTimer_Tick;
         _clampThrottleTimer.Stop();

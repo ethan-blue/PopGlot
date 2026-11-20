@@ -92,6 +92,15 @@ internal static partial class Program
         Run("test isolation is active", TestIsolation.AssertActive);
         Run("no real PopGlot instance conflicts with the suite", TestIsolation.AssertNoConflictingAppInstance);
         Run("default stores honor the active data root", DefaultStoresHonorActiveDataRoot);
+        await RunAsync("pot source Yandex wire protocol and non-translation rejection", PotSourceAdapterTests.YandexProtocolPreservesTextAndRejectsNonTranslations);
+        await RunAsync("pot source Yandex pipeline consent cache and Auto receiver boundary", PotSourceAdapterTests.YandexPipelineHonorsConsentCacheAndAutoBoundary);
+        RunSta("pot source official JSON templates require own credentials and never send on selection", PotSourceAdapterTests.OfficialJsonTemplatesAreExplicitKeyOnlyAndDoNotSendOnSelection);
+        Run("system proxy null decision stays direct instead of self CONNECT", CustomTranslationApiTests.SystemProxyNullResultRemainsDirect);
+        Run("custom translation templates preserve JSON and bind credentials to recipient", CustomTranslationApiTests.TemplatesAreEscapedAndSecretsStayBoundToEndpoint);
+        await RunAsync("Google long translation sends exactly one POST without URL source", CustomTranslationApiTests.GoogleLongTextUsesOneBodyRequestWithoutUrlText);
+        await RunAsync("custom translation API real HTTP roundtrip honors policy and configuration", CustomTranslationApiTests.RealHttpRoundTripHonorsPolicyAndConfiguration);
+        Run("auto translation batches against resolved route and freezes recipient", CustomTranslationApiTests.AutoBatchingUsesResolvedRouteAndAuthorizationStaysFrozen);
+        RunSta("service tabs separate public custom API and AI editor at narrow width", CustomTranslationApiTests.ServiceTabsAndApiEditorAreSeparateAndNarrowLayoutWorks);
 
         await RunAsync("clipboard restores after selection", ClipboardRestoresAfterSelectionAsync);
         await RunAsync("clipboard stays untouched when copy fails", ClipboardUntouchedOnCopyFailureAsync);
@@ -548,7 +557,12 @@ internal static partial class Program
             ("quick search live translate debounce collapses typing skips history and manual enter writes history", QuickSearchLiveAndCompactTests.LiveTranslateDebounceCollapsesTypingSkipsHistoryAndManualEnterWritesHistory),
             ("quick search live translate ime composing quota and length guards suppress cleanly", QuickSearchLiveAndCompactTests.ImeComposingAndQuotaAndLengthGuardsSuppressLiveTranslateCleanly),
             ("quick search escape cancels live request and compact expanded mode persists", QuickSearchLiveAndCompactTests.EscapeCancelsInFlightLiveRequestAndCompactExpandedModePersists),
-            ("quick search show suppresses warmup under test suppression or custom route", QuickSearchLiveAndCompactTests.ShowSuppressesWarmupWhenTestSuppressionOrCustomRouteIsActive));
+            ("quick search show suppresses warmup under test suppression or custom route", QuickSearchLiveAndCompactTests.ShowSuppressesWarmupWhenTestSuppressionOrCustomRouteIsActive),
+            ("quick search real timer allows unset and allowed but blocks denied", QuickSearchLiveAndCompactTests.LiveConsentUsesRealWindowTimerAndOnlyDeniedBlocks),
+            ("quick search auto all cooldowns stay local without degrading runtime", QuickSearchLiveAndCompactTests.AutoAllCooldownsStayLocalAndRuntimeGateRemainsUsable),
+            ("quick search hide before debounce sends nothing even after reopen", QuickSearchLiveAndCompactTests.HidingBeforeDebounceSendsNothingAndReopeningDoesNotReviveIt),
+            ("quick search editing immediately revokes actions and prevents mixed transfers", QuickSearchLiveAndCompactTests.EditingImmediatelyRevokesActionsAndNeverTransfersOldResult),
+            ("quick search existing window reevaluates live settings and cancels automatic work", QuickSearchLiveAndCompactTests.ExistingWindowReevaluatesLiveSettingsAndCancelsAutomaticWork));
 
         Run("screen capture validate and clamp handles multi-monitor negative origin", ShortcutCaptureAndOnboardingTests.ValidateAndClampRegionMultiMonitorAndBounds);
         await RunStaAsync("frozen snapshot crops PNG bytes and disposes on overlay close", ShortcutCaptureAndOnboardingTests.FrozenSnapshotCropPngAndOverlayDisposalAsync);
@@ -991,8 +1005,8 @@ internal static partial class Program
         Equal(doc25k, string.Concat(plan.Segments!), "planned segments must reconstruct 25k document losslessly");
 
         var longFreeInput = string.Join("\n\n", Enumerable.Range(1, 5).Select(i => $"第{i}段：" + new string('翻', 320)));
-        True(FreeTranslateService.NeedsBatching(longFreeInput, out var chunkChars) && chunkChars > 0,
-            "1600+ CJK input should trigger batched free translation");
+        True(FreeTranslateService.NeedsBatching(longFreeInput, FreeEngineProvider.MyMemory, out var chunkChars) && chunkChars > 0,
+            "1600+ CJK input must still batch on MyMemory's 500-byte contract; Google now uses one POST");
 
         var prevLoader = OutboundPolicy.SettingsLoader;
         try
@@ -1001,6 +1015,7 @@ internal static partial class Program
             {
                 FreeEngineConsent = FreeEngineConsent.Allowed,
                 HistoryEnabled = true,
+                FreeEngineProvider = FreeEngineProvider.MyMemory,
             };
             var history = new FakeHistoryRepository();
             var executor = new FakeTranslationExecutor
@@ -2581,6 +2596,7 @@ internal static partial class Program
                 SourceText = "demo query",
                 TranslatedText = raw,
             };
+            quickSearch.SearchBox.Text = "demo query";
             quickSearch.State.StartNewSearch("demo query");
             True(quickSearch.State.OnSessionCompleted(session, quickSearch.State.CurrentEpoch, "demo query"),
                 "the quick search state machine must accept the completed session");
@@ -4460,7 +4476,7 @@ internal static partial class Program
         {
             Interlocked.Increment(ref sends);
             var host = request.RequestUri?.Host ?? string.Empty;
-            True(host is "translate.googleapis.com" or "clients5.google.com",
+            True(host is "translate.google.com" or "translate.googleapis.com" or "clients5.google.com",
                 $"the free engine must only target its documented endpoints, got {host}");
             return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
@@ -11240,6 +11256,8 @@ internal static partial class Program
         typeof(ServicesSection)
             .GetMethod("ShowEditorForm", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
             .Invoke(section, new object[] { false });
+        if (textModel is not null)
+            ((TabControl)section.FindName("ApiEditorTabs")).SelectedItem = section.FindName("ApiModelsTab");
         var host = new System.Windows.Controls.Border
         {
             Child = section,
@@ -11305,6 +11323,7 @@ internal static partial class Program
         typeof(ServicesSection)
             .GetMethod("ShowEditorForm", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
             .Invoke(section, new object[] { false });
+        ((TabControl)section.FindName("ApiEditorTabs")).SelectedItem = section.FindName("ApiAdvancedTab");
         section.AdvancedExpander.IsExpanded = true;
         var host = new System.Windows.Controls.Border
         {
@@ -11415,6 +11434,9 @@ internal static partial class Program
         var barBottom = barTop + bar.ActualHeight;
         True(barBottom <= section.ActualHeight + 0.5,
             "editor actions must stay inside the available viewport");
+        ((TabControl)section.FindName("ApiEditorTabs")).SelectedItem = section.FindName("ApiModelsTab");
+        section.UpdateLayout();
+        FlushDispatcher();
         var radiosTop = radios.TransformToVisual(scroll).Transform(new Point()).Y;
         scroll.ScrollToVerticalOffset(scroll.VerticalOffset + radiosTop - 4);
         section.UpdateLayout();

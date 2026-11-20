@@ -41,6 +41,11 @@ internal enum FreeEngineConsent
 internal sealed class FreeEngineAuthorization
 {
     public ProviderSettings Settings { get; }
+    // One recipient per translation session, including every ordered segment.
+    internal FreeEngineProvider? ResolvedProvider { get; private init; }
+    internal bool WasAutoSelected { get; private init; }
+    internal FreeEngineAuthorization ForProvider(FreeEngineProvider provider, bool wasAutoSelected = false) =>
+        new(Settings) { ResolvedProvider = provider, WasAutoSelected = wasAutoSelected || WasAutoSelected };
 
     public FreeEngineAuthorization(ProviderSettings settings)
     {
@@ -63,7 +68,7 @@ internal sealed class FreeEngineAuthorization
 internal static class OutboundPolicy
 {
     public const string FreeEngineDestination =
-        "你选中的公共翻译（Google translate.googleapis.com / clients5.google.com、Bing cn.bing.com、有道词典 dict.youdao.com，或 MyMemory api.mymemory.translated.net；选择「自动优选」时每次仅发送给当前选中的那一条）";
+        "你选中的公共翻译（Google translate.google.com / translate.googleapis.com / clients5.google.com、Bing cn.bing.com、有道词典 dict.youdao.com、MyMemory api.mymemory.translated.net，或手动选择的 Yandex translate.yandex.net（不加入自动优选）；选择「自动优选」时每次仅发送给当前选中的那一条）";
 
     /// <summary>Test seam: where consent is persisted. Production uses the real store.</summary>
     internal static Func<ShellSettings> SettingsLoader { get; set; } = () => ShellSettingsStore.Load();

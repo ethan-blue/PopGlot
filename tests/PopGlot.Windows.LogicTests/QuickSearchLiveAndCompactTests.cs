@@ -43,6 +43,17 @@ internal static class QuickSearchLiveAndCompactTests
         True(condition(), message);
     }
 
+    private static void PumpFor(int milliseconds)
+    {
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        while (started.ElapsedMilliseconds < milliseconds)
+        {
+            PumpOnce();
+            Thread.Sleep(10);
+        }
+        PumpOnce();
+    }
+
     private static void InvokePrivate(object target, string method, params object?[] args) =>
         target.GetType().GetMethod(method, NonPublicInstance)!.Invoke(target, args);
 
@@ -120,14 +131,14 @@ internal static class QuickSearchLiveAndCompactTests
             // Zero-flicker dimming check: restore "hello" result so previous result is visible,
             // then trigger a new live query "猫" with a paused completion.
             window.SearchBox.Text = "hello";
-            InvokePrivate(window, "DebounceTimer_Tick", window, EventArgs.Empty);
+            PumpFor(550);
             PumpUntilCondition(() => window.State.Stage == QuickSearchUiStage.Completed && window.State.FinalRenderedText == "译:hello",
                 "restored hello query must complete before dimming check");
 
             var gate = new TaskCompletionSource<TranslationResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
             executor.NextFreeResponseTask = gate.Task;
             window.SearchBox.Text = "猫";
-            InvokePrivate(window, "DebounceTimer_Tick", window, EventArgs.Empty);
+            PumpFor(550);
             PumpOnce();
 
             True(window.State.IsResultVisible, "ResultContainer must stay visible during zero-flicker live loading");
@@ -213,13 +224,13 @@ internal static class QuickSearchLiveAndCompactTests
             // 1. IME composing suppresses live translate until composition finishes
             Ui.SetIsComposing(window.SearchBox, true);
             window.SearchBox.Text = "nihao";
-            InvokePrivate(window, "DebounceTimer_Tick", window, EventArgs.Empty);
+            PumpFor(550);
             PumpOnce();
             Equal(0, executor.FreeCalls.Count, "active IME composition must suppress live translate on debounce tick");
 
             // Finish composition -> next tick translates
             Ui.SetIsComposing(window.SearchBox, false);
-            InvokePrivate(window, "DebounceTimer_Tick", window, EventArgs.Empty);
+            PumpFor(550);
             PumpUntilCondition(() => executor.FreeCalls.Count == 1,
                 "finishing IME composition must allow debounce tick to translate");
 
@@ -240,7 +251,7 @@ internal static class QuickSearchLiveAndCompactTests
             quotaField.SetValue(null, FreeTranslateService.HourlySendBudget - 15); // 15 remaining (< 30)
 
             window.SearchBox.Text = "quota blocked query";
-            InvokePrivate(window, "DebounceTimer_Tick", window, EventArgs.Empty);
+            PumpFor(550);
             PumpOnce();
             Equal(1, executor.FreeCalls.Count, "low quota must prevent auto-send");
             Equal("剩余自动配额不足，按 Enter 手动翻译", window.FooterStatusBlock.Text,
@@ -251,7 +262,7 @@ internal static class QuickSearchLiveAndCompactTests
             // 3. MyMemory > 500 UTF-8 bytes guard
             shell = shell with { FreeEngineProvider = FreeEngineProvider.MyMemory };
             window.SearchBox.Text = new string('中', 200); // 600 UTF-8 bytes > 500
-            InvokePrivate(window, "DebounceTimer_Tick", window, EventArgs.Empty);
+            PumpFor(550);
             PumpOnce();
             Equal(1, executor.FreeCalls.Count, "MyMemory over 500 bytes must not auto-send");
             Equal("内容较长，按 Enter 使用分段翻译", window.FooterStatusBlock.Text,
@@ -260,10 +271,10 @@ internal static class QuickSearchLiveAndCompactTests
             // 4. Youdao multi-sentence / > 120 chars guard
             shell = shell with { FreeEngineProvider = FreeEngineProvider.Youdao };
             window.SearchBox.Text = "第一句测试内容。第二句测试内容。";
-            InvokePrivate(window, "DebounceTimer_Tick", window, EventArgs.Empty);
+            PumpFor(550);
             PumpOnce();
             Equal(1, executor.FreeCalls.Count, "Youdao multi-sentence must not auto-send");
-            Equal("有道词典适合单词和短语，长句可按 Enter 或切换 Bing", window.FooterStatusBlock.Text,
+            Equal("有道词典适合单词和短语，长句请切换 Bing", window.FooterStatusBlock.Text,
                 "footer must show Youdao dict hint");
         }
         finally
@@ -336,7 +347,7 @@ internal static class QuickSearchLiveAndCompactTests
             var pending = new TaskCompletionSource<TranslationResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
             executor.NextFreeResponseTask = pending.Task;
             window.SearchBox.Text = "inflight cancel test";
-            InvokePrivate(window, "DebounceTimer_Tick", window, EventArgs.Empty);
+            PumpFor(550);
             PumpUntilCondition(() => window.State.Stage == QuickSearchUiStage.Streaming,
                 "live request must enter Streaming stage");
 
@@ -356,7 +367,7 @@ internal static class QuickSearchLiveAndCompactTests
             executor.NextFreeResponseTask = null;
             executor.NextExplanation = "n. 核心词义；详细释义说明";
             window.SearchBox.Text = "explanation word";
-            InvokePrivate(window, "DebounceTimer_Tick", window, EventArgs.Empty);
+            PumpFor(550);
             PumpUntilCondition(() => window.State.Stage == QuickSearchUiStage.Completed,
                 "query with explanation must complete");
 
@@ -717,9 +728,276 @@ internal static class QuickSearchLiveAndCompactTests
         }
     }
 
+    public static void LiveConsentUsesRealWindowTimerAndOnlyDeniedBlocks()
+    {
+        foreach (var consent in new[] { FreeEngineConsent.Unset, FreeEngineConsent.Allowed, FreeEngineConsent.Denied })
+        {
+            using var fixture = new LiveWindowFixture();
+            fixture.Save(fixture.Shell with { FreeEngineConsent = consent });
+            fixture.Window.SearchBox.Text = "consent query";
+            PumpFor(650);
+            Equal(consent == FreeEngineConsent.Denied ? 0 : 1, fixture.Executor.FreeCalls.Count,
+                $"real debounce send count for {consent}");
+            True(RuntimeGate.NewWorkAllowed, "consent refusal must not degrade the application");
+        }
+    }
+
+    public static void AutoAllCooldownsStayLocalAndRuntimeGateRemainsUsable()
+    {
+        foreach (var marker in new[] { "MarkHostRateLimited", "MarkHostTransportCooldown" })
+        {
+            using var fixture = new LiveWindowFixture();
+            fixture.Save(fixture.Shell with { FreeEngineProvider = FreeEngineProvider.Auto });
+            var mark = typeof(FreeTranslateService).GetMethod(marker,
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            foreach (var host in new[] { "cn.bing.com", "dict.youdao.com", "translate.google.com", "translate.googleapis.com",
+                         "clients5.google.com", "api.mymemory.translated.net" })
+            {
+                mark.Invoke(null, [host]);
+            }
+            var unhandled = 0;
+            System.Windows.Threading.DispatcherUnhandledExceptionEventHandler handler = (_, e) =>
+            {
+                unhandled++;
+                e.Handled = true;
+            };
+            fixture.Window.Dispatcher.UnhandledException += handler;
+            try
+            {
+                fixture.Window.SearchBox.Text = "apple";
+                PumpFor(650);
+                Equal(0, fixture.Executor.FreeCalls.Count, "all-cooling Auto must not reach the executor");
+                Equal(0, unhandled, "business cooldown must not escape the real DispatcherTimer");
+                True(!string.IsNullOrWhiteSpace(fixture.Window.State.PendingNotice), "cooldown must have a local hint");
+                True(RuntimeGate.NewWorkAllowed, "all-cooling Auto must not trip the global fuse");
+
+                FreeTranslateService.ResetRateLimitStateForTest();
+                fixture.Window.SearchBox.Text = "available again";
+                PumpUntilCondition(() => fixture.Window.State.Stage == QuickSearchUiStage.Completed,
+                    "new work must still complete after cooldown refusal");
+                Equal(1, fixture.Executor.FreeCalls.Count, "recovered window must send exactly once");
+            }
+            finally
+            {
+                fixture.Window.Dispatcher.UnhandledException -= handler;
+            }
+        }
+    }
+
+    public static void HidingBeforeDebounceSendsNothingAndReopeningDoesNotReviveIt()
+    {
+        foreach (var closePath in new[] { "Hide", "BaseHide", "X", "Close", "Esc" })
+        {
+            using var fixture = new LiveWindowFixture();
+            var window = fixture.Window;
+            window.ForceClose = false;
+            window.SearchBox.Text = "must never leave";
+            switch (closePath)
+            {
+                case "Hide": window.Hide(); break;
+                case "BaseHide": ((Window)window).Hide(); break;
+                case "X": ((Button)window.FindName("CloseButton")!).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent)); break;
+                case "Close": window.Close(); break; // Same OnClosing path as Alt+F4.
+                default: fixture.Key(Key.Escape); break;
+            }
+            True(!window.IsVisible, $"{closePath} must hide the reusable window");
+            // Reopen before the old deadline; a visibility-only check would fail this case.
+            window.Show();
+            PumpFor(650);
+            Equal(0, fixture.Executor.FreeCalls.Count, $"{closePath}: reopening must not revive the old timer");
+            window.Hide();
+            window.SearchBox.Text = "hidden programmatic edit";
+            PumpFor(650);
+            Equal(0, fixture.Executor.FreeCalls.Count, $"{closePath}: hidden editing must not arm a request");
+            window.Show();
+            PumpFor(400);
+            Equal(0, fixture.Executor.FreeCalls.Count, $"{closePath}: hidden edit must not revive on Show");
+            window.SearchBox.Text = "fresh visible query";
+            PumpUntilCondition(() => fixture.Executor.FreeCalls.Count == 1,
+                $"{closePath}: a fresh visible edit must still translate");
+        }
+    }
+
+    public static void EditingImmediatelyRevokesActionsAndNeverTransfersOldResult()
+    {
+        foreach (var partial in new[] { false, true })
+        {
+            using var fixture = new LiveWindowFixture();
+            var window = fixture.Window;
+            fixture.Executor.NextIsPartial = partial;
+            window.SearchBox.Text = "apple";
+            window.EnterKeycapButton.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            PumpUntilCondition(() => window.State.Stage == (partial ? QuickSearchUiStage.Partial : QuickSearchUiStage.Completed),
+                "manual apple result must finish before editing");
+            window.StoreSessionSnapshot();
+            Equal("apple", App.SharedSessionStore.PeekRecent()!.SourceText, "baseline snapshot owns apple");
+            App.SharedSessionStore.Clear();
+
+            window.SearchBox.Text = "banana";
+            True(!window.State.CanStar && !window.State.CanSpeak && !window.State.CanCopy,
+                "actions must be revoked in TextChanged, without pumping the debounce");
+            Equal("apple", window.State.ResultQuery, "visual result must retain its original owner");
+            True(window.State.IsResultVisible && window.State.IsDimmingPreviousResult,
+                "editing must preserve the previous result visually only");
+            fixture.Key(Key.S, ModifierKeys.Control);
+            ((Button)window.FindName("StarButton")!).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            Equal(0, fixture.Vocabulary.GetAll().Count, "neither shortcut nor direct click may star banana with apple's result");
+            window.StoreSessionSnapshot();
+            True(App.SharedSessionStore.PeekRecent() is null, "neither completed nor partial old text may be stored under banana");
+
+            var main = new MainWindow(fixture.Shell, fixture.History, fixture.Vocabulary)
+            {
+                AllowClose = true, ShowActivated = false,
+            };
+            var mainField = typeof(App).GetField("_mainWindow", NonPublicInstance)!;
+            var app = Application.Current as App;
+            var originalMain = app is null ? null : mainField.GetValue(app);
+            if (app is not null) mainField.SetValue(app, main);
+            try
+            {
+                ((Button)window.FindName("OpenInMainButton")!).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                Equal("banana", main.TranslateSection.InputBox.Text, "workbench must receive the new query");
+                Equal(string.Empty, main.TranslateSection.ResultBox.Text, "workbench must not receive apple's final result");
+                Equal(string.Empty, main.TranslateSection.StreamResultBox.Text, "workbench must not receive apple's partial result");
+                True(App.SharedSessionStore.PeekRecent() is null, "transfer/hide must not persist a mixed snapshot");
+            }
+            finally
+            {
+                if (app is not null) mainField.SetValue(app, originalMain);
+                main.Close();
+            }
+        }
+    }
+
+    public static void ExistingWindowReevaluatesLiveSettingsAndCancelsAutomaticWork()
+    {
+        using var fixture = new LiveWindowFixture();
+        var window = fixture.Window;
+        fixture.Save(fixture.Shell with { LiveTranslateEnabled = false });
+        window.SearchBox.Text = "settings query";
+        PumpFor(500);
+        Equal(0, fixture.Executor.FreeCalls.Count, "disabled live translation must not send");
+
+        fixture.Save(fixture.Shell with { LiveTranslateEnabled = true, LiveTranslateDelayMs = 800 });
+        PumpFor(250);
+        fixture.Save(fixture.Shell with { LiveTranslateDelayMs = 300 });
+        PumpUntilCondition(() => fixture.Executor.FreeCalls.Count == 1 && window.State.Stage == QuickSearchUiStage.Completed,
+            "enabling and changing delay must apply without another edit", maxAttempts: 65);
+
+        fixture.Save(fixture.Shell with { LiveTranslateDelayMs = 800 });
+        window.SearchBox.Text = "longer delay";
+        PumpFor(450);
+        Equal(1, fixture.Executor.FreeCalls.Count, "increasing delay must not use the previous 300ms timer");
+        fixture.Save(fixture.Shell with { LiveTranslateEnabled = false });
+        PumpFor(900);
+        Equal(1, fixture.Executor.FreeCalls.Count, "disabling must discard the scheduled automatic query");
+
+        var pending = new TaskCompletionSource<TranslationResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Executor.NextFreeResponseTask = pending.Task;
+        fixture.Save(fixture.Shell with { LiveTranslateEnabled = true, LiveTranslateDelayMs = 300 });
+        PumpUntilCondition(() => fixture.Executor.FreeCalls.Count == 2, "reenabling must schedule the current visible draft");
+        var automaticToken = fixture.Executor.FreeTokens.Last();
+        fixture.Save(fixture.Shell with { LiveTranslateEnabled = false });
+        PumpUntilCondition(() => automaticToken.IsCancellationRequested, "disabling must cancel in-flight automatic work");
+        pending.TrySetResult(fixture.Executor.BuildResponse("longer delay"));
+        PumpFor(400);
+        True(window.State.Stage != QuickSearchUiStage.Completed, "late automatic completion must not restore actions");
+
+        fixture.Executor.NextFreeResponseTask = null;
+        window.IsFreeRouteResolverForTest = () => false;
+        fixture.Save(fixture.Shell with { LiveTranslateEnabled = true, LiveTranslateScope = LiveTranslateScope.FreeEngineOnly });
+        window.SearchBox.Text = "scope query";
+        PumpFor(650);
+        Equal(2, fixture.Executor.FreeCalls.Count, "free-only scope must not auto-trigger a non-free route");
+        fixture.Save(fixture.Shell with { LiveTranslateScope = LiveTranslateScope.AllEngines });
+        PumpUntilCondition(() => fixture.Executor.FreeCalls.Count == 3, "scope change must reevaluate the existing draft");
+    }
+
+    private sealed class LiveWindowFixture : IDisposable
+    {
+        private readonly string _directory = Path.Combine(TestIsolation.Root, $"qs-regression-{Guid.NewGuid():N}");
+        private readonly ShellSettings _originalShell;
+        private readonly ProviderSettings _originalCore;
+        private readonly bool _originalGate = RuntimeGate.NewWorkAllowed;
+        private readonly bool _originalSuppression = App.SuppressStartupForTests;
+        private readonly Func<ShellSettings> _originalPolicyLoader = OutboundPolicy.SettingsLoader;
+        private readonly Func<ProviderSettings>? _originalLiveLoader = OutboundPolicy.LiveSettingsLoader;
+        public ShellSettings Shell { get; private set; }
+        public HistoryStore History { get; }
+        public VocabularyStore Vocabulary { get; }
+        public FakeLiveExecutor Executor { get; } = new();
+        public QuickSearchWindow Window { get; }
+
+        public LiveWindowFixture()
+        {
+            EnsureApp();
+            _originalShell = ShellSettingsStore.Load();
+            _originalCore = CoreBridge.GetSettings();
+            Directory.CreateDirectory(_directory);
+            History = new HistoryStore(Path.Combine(_directory, "history.json"));
+            Vocabulary = new VocabularyStore(Path.Combine(_directory, "vocabulary.json"));
+            Shell = _originalShell with
+            {
+                LiveTranslateEnabled = true, LiveTranslateDelayMs = 300,
+                LiveTranslateScope = LiveTranslateScope.FreeEngineOnly,
+                FreeEngineConsent = FreeEngineConsent.Allowed, FreeEngineProvider = FreeEngineProvider.Bing,
+            };
+            Save(Shell);
+            CoreBridge.SaveSettings(_originalCore with { NetworkEnabled = true, SafeDevMode = false });
+            RuntimeGate.NewWorkAllowed = true;
+            App.SuppressStartupForTests = true;
+            OutboundPolicy.SettingsLoader = () => ShellSettingsStore.Load();
+            OutboundPolicy.LiveSettingsLoader = () => CoreBridge.GetSettings();
+            FreeTranslateService.ResetQuotaForTest();
+            FreeTranslateService.ResetRateLimitStateForTest();
+            App.SharedSessionStore.Clear();
+            Window = new QuickSearchWindow(History, Vocabulary,
+                coordinator: new TranslationCoordinator(History, Vocabulary, executor: Executor))
+            {
+                ForceClose = true, IsFreeRouteResolverForTest = () => true,
+            };
+            Window.Show();
+            PumpOnce();
+        }
+
+        public void Save(ShellSettings shell)
+        {
+            Shell = shell;
+            ShellSettingsStore.Save(shell);
+        }
+
+        public void Key(Key key, ModifierKeys modifiers = ModifierKeys.None)
+        {
+            Window.ModifiersOverrideForTest = modifiers;
+            Window.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(Window)!, 0, key)
+            {
+                RoutedEvent = Keyboard.KeyDownEvent,
+            });
+        }
+
+        public void Dispose()
+        {
+            Window.ForceClose = true;
+            Window.Close();
+            PumpOnce();
+            ShellSettingsStore.Save(_originalShell);
+            CoreBridge.SaveSettings(_originalCore);
+            RuntimeGate.NewWorkAllowed = _originalGate;
+            App.SuppressStartupForTests = _originalSuppression;
+            OutboundPolicy.SettingsLoader = _originalPolicyLoader;
+            OutboundPolicy.LiveSettingsLoader = _originalLiveLoader;
+            FreeTranslateService.ResetQuotaForTest();
+            FreeTranslateService.ResetRateLimitStateForTest();
+            App.SharedSessionStore.Clear();
+            try { Directory.Delete(_directory, true); } catch (IOException) { }
+        }
+    }
+
     private sealed class FakeLiveExecutor : ITranslationExecutor
     {
         public List<string> FreeCalls { get; } = [];
+        public List<CancellationToken> FreeTokens { get; } = [];
+        public bool NextIsPartial { get; set; }
         public Task<TranslationResponse>? NextFreeResponseTask { get; set; }
         public string NextExplanation { get; set; } = string.Empty;
 
@@ -766,6 +1044,7 @@ internal static class QuickSearchLiveAndCompactTests
             CancellationToken cancellationToken)
         {
             FreeCalls.Add(source);
+            FreeTokens.Add(cancellationToken);
             if (NextFreeResponseTask is { } customTask)
             {
                 return await customTask.WaitAsync(cancellationToken);
@@ -775,7 +1054,7 @@ internal static class QuickSearchLiveAndCompactTests
 
         public TranslationResponse BuildResponse(string source) =>
             new(
-                new TranslationResult($"译:{source}", "yin", NextExplanation, [], []),
+                new TranslationResult($"译:{source}", "yin", NextExplanation, [], [], IsPartial: NextIsPartial),
                 new ProviderDiagnostics("free-test", ProviderType.OpenAiCompatible, "https://cn.bing.com", 1, 200, 85),
                 OverrideEngineLabel: "Bing 翻译");
     }

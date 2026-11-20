@@ -2062,7 +2062,7 @@ public partial class App : Application
     /// the session's REAL state — an unfinished result must never be
     /// upgraded to Completed by the expansion.
     /// </summary>
-    private void OpenInMainWindow(
+    internal void OpenInMainWindow(
         string source, string? targetLang, string? sourceLang, string? translation,
         TranslationSessionState sessionState)
     {

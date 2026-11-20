@@ -455,7 +455,13 @@ internal sealed class TranslationCoordinator
         long startTimestampTicks = 0)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (FreeTranslateService.NeedsBatching(source, out var chunkChars))
+        var selected = authorization.ResolvedProvider ?? FreeTranslateService.CurrentProvider();
+        var resolved = selected == FreeEngineProvider.Auto
+            ? FreeTranslateService.SelectAutoProvider(source, sourceLang, targetLang) : selected;
+        authorization = authorization.ForProvider(resolved, selected == FreeEngineProvider.Auto);
+        // Plan against the actual recipient, not Google's URL budget when Auto chose Bing.
+        // Freeze that recipient for all segments; configuration changes cannot reroute a tail.
+        if (FreeTranslateService.NeedsBatching(source, resolved, out var chunkChars))
         {
             var plan = CoreBridge.PlanSegments(source, chunkChars, maxSegments: 36);
             if (plan.Mode == "segments" && plan.Segments is { Count: > 1 } batches)
@@ -613,7 +619,7 @@ internal sealed class TranslationCoordinator
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var activeFreeProvider = FreeTranslateService.CurrentProvider();
+        var activeFreeProvider = authorization.ResolvedProvider ?? FreeTranslateService.CurrentProvider();
         var bypassTokenProtection = !settings.ProtectCodeTokens ||
             activeFreeProvider == FreeEngineProvider.Youdao ||
             (activeFreeProvider == FreeEngineProvider.Auto &&

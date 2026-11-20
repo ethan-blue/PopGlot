@@ -68,18 +68,23 @@ internal static class ServicesAndProxyUiTests
             window.Show();
             Pump();
 
-            // 1. Free routes panel displays all 5 routes with honest tags
+            // Public routes are a separate page; select it as a user would.
+            ((TabControl)section.FindName("ServicesTabs")).SelectedItem = section.FindName("PublicServicesTab");
+            Pump(); window.UpdateLayout();
+            // 1. Free routes panel displays all 6 routes with honest tags
             var freeList = (ItemsControl)section.FindName("FreeRoutesList");
             var freeRows = freeList.ItemsSource!.Cast<FreeRouteRow>().ToList();
-            Program.Assert(freeRows.Count == 5, $"expected 5 built-in free routes, got {freeRows.Count}");
+            Program.Assert(freeRows.Count == 6, $"expected 6 built-in free routes, got {freeRows.Count}");
             Program.Assert(freeRows.Any(r => r.Provider == FreeEngineProvider.Auto && r.Tags.Contains("按文本择优")),
                 "Auto free route must be rendered with tag");
-            Program.Assert(freeRows.Any(r => r.Provider == FreeEngineProvider.Bing && r.Tags.Contains("国内直连")),
-                "Bing free route must be rendered with 国内直连 badge");
+            Program.Assert(freeRows.Any(r => r.Provider == FreeEngineProvider.Bing && r.Tags.Contains("实验性")),
+                "Bing must disclose its experimental upstream instead of implying verified reachability");
             Program.Assert(freeRows.Any(r => r.Provider == FreeEngineProvider.Youdao && r.Tags.Contains("词典级")),
                 "Youdao free route must be rendered with 词典级 badge");
             Program.Assert(freeRows.Any(r => r.Provider == FreeEngineProvider.MyMemory && r.Tags.Contains("500字节限制")),
                 "MyMemory free route must disclose 500-byte limit");
+            Program.Assert(freeRows.Any(r => r.Provider == FreeEngineProvider.Yandex && r.Tags.Contains("手动选用")),
+                "Yandex must be selectable without quietly extending Auto recipients");
             Program.Assert(freeRows.Any(r => r.Provider == FreeEngineProvider.Google && r.Tags.Contains("需代理")),
                 "Google free route must be rendered with 需代理 badge");
 
@@ -123,7 +128,12 @@ internal static class ServicesAndProxyUiTests
             Program.Assert(probedRows.Single(r => r.Provider == FreeEngineProvider.Google).LatencyText == "超时",
                 "Google timeout must display 超时");
 
-            // 4. Grouped presets include SiliconFlow, Groq, OpenRouter, Ollama, LM Studio, Zhipu
+            // 4. AI sources have their own page, not a second section below public routes.
+            ((TabControl)section.FindName("ServicesTabs")).SelectedItem = section.FindName("AiServicesTab");
+            Pump();
+            Program.Assert(((Button)section.FindName("AddEngineHeaderButton")).IsVisible,
+                "adding AI must be available on the AI page");
+            // Grouped presets include SiliconFlow, Groq, OpenRouter, Ollama, LM Studio, Zhipu
             ((Button)section.FindName("AddEngineHeaderButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Pump();
             window.UpdateLayout();
@@ -238,7 +248,8 @@ internal static class ServicesAndProxyUiTests
             cfg.PreferFreeEngine = false;
             ProfileManager.Save(cfg);
             section.RefreshProfilesList();
-            Pump();
+            ((TabControl)section.FindName("ServicesTabs")).SelectedItem = section.FindName("PublicServicesTab");
+            Pump(); window.UpdateLayout();
             var inactiveFreeRows = freeList.ItemsSource!.Cast<FreeRouteRow>().ToList();
             Program.Assert(inactiveFreeRows.All(r => r.ActiveBadgeVisibility == Visibility.Collapsed && r.SelectVisibility == Visibility.Visible && !r.IsActive),
                 "when a user profile is active, no free route may show 当前线路 or hide 设为当前");
@@ -420,6 +431,7 @@ internal static class ServicesAndProxyUiTests
                          FreeEngineProvider.Bing,
                          FreeEngineProvider.Auto,
                          FreeEngineProvider.MyMemory,
+                         FreeEngineProvider.Yandex,
                          FreeEngineProvider.Google,
                      })
             {

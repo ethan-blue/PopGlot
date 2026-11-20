@@ -999,12 +999,16 @@ internal static class ShellSettingsStore
         return bytes;
     }
 
+    // Raised only after persistence, outside the store lock: UI callbacks may read settings.
+    internal static event Action? Changed;
+
     public static void Save(ShellSettings settings, string? settingsPath = null)
     {
         lock (CacheLock)
         {
             _ = SaveUnlocked(settings, settingsPath);
         }
+        Changed?.Invoke();
     }
 
     /// <summary>Merges a field edit into the latest disk snapshot under the
@@ -1012,11 +1016,14 @@ internal static class ShellSettingsStore
     public static ShellSettings Update(Func<ShellSettings, ShellSettings> update, string? settingsPath = null)
     {
         ArgumentNullException.ThrowIfNull(update);
+        ShellSettings saved;
         lock (CacheLock)
         {
             var settings = update(LoadUnlocked(settingsPath, throwOnFailure: true));
-            return SaveUnlocked(settings, settingsPath);
+            saved = SaveUnlocked(settings, settingsPath);
         }
+        Changed?.Invoke();
+        return saved;
     }
 
     private static ShellSettings SaveUnlocked(ShellSettings settings, string? settingsPath)
@@ -1433,7 +1440,9 @@ internal static class ProxyHttpClientFactory
             {
                 return destination;
             }
-            return inner?.GetProxy(destination) ?? destination;
+            // Null means DIRECT for modern system/PAC proxies. Substituting the
+            // destination here turns the translation server into its own CONNECT proxy.
+            return inner?.GetProxy(destination);
         }
 
         public bool IsBypassed(Uri host)
