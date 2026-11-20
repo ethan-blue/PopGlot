@@ -46,7 +46,9 @@ Idle → Connecting → Streaming → Finalizing → Completed
 - 互换语言（swap）三端一致：交换语言对并把上一轮译文回填输入框后，输入框非空即自动重译；查词重译的是译文而非原查询。源或目标下拉变化且输入框有原文时同样自动重译，先取消在途请求再发新请求，不产生并发双请求。
 - 往返缓存：A→B 译完再 B→A 命中同一会话缓存，状态显示「已复用上次译文」，零网络、不重复写历史；缓存命中按缓存事实呈现，不伪装成新请求。浮窗 Ctrl+R 重试强制出网一次，工作台同文本再译走缓存。
 - 极速查词边输边译（`QuickSearchWindow`）：开启 `LiveTranslateEnabled` 后，停止输入等待防抖延迟（`LiveTranslateDelayMs`，可选 `300 ms` / `500 ms`（默认）/ `800 ms`）自动翻译；`LiveTranslateScope` 默认仅对内置免费线路启用，避免误耗自定义模型额度，可在「设置 → 通用 → 查词窗口」改为「所有已选引擎」。输入法组词期间不触发自动翻译；中文至少 1 字、外文至少 2 个有效字符才触发；剩余每小时免费配额低于 30 或超出单次长度预算（MyMemory 500 字节、有道词典单词/短语范围）时跳过自动请求并提示按 `Enter` 手动翻译。边输边译自动触发的中间查询不写入本地历史、不写入往返缓存，也不覆盖查词会话快照。
-- 极速查词窗口形态与节流：提供「紧凑小窗」（`Compact`，固定 430 DIP 宽、最大高度 380 DIP，解释区默认折叠、可通过「释义详情 ▾」按钮展开）与「完整大窗」（`Expanded`，最小 480×360 DIP，可拖拽边缘调整尺寸并持久化 `QuickSearchExpandedWidth`/`Height`）；顶栏提供形态切换按钮（`ModeToggleButton`）与「在主窗口中打开」（`OpenInMainButton`）。流式增量渲染与 Compact 模式工作区夹紧按 60 ms 节流，底栏显示线路与阶段耗时徽标（`RouteLatencyBadge`）。
+- 极速查词窗口形态与节流：提供「紧凑小窗」（`Compact`，固定 430 DIP 宽、最大高度 380 DIP，解释区默认折叠、可通过「释义详情 ▾」按钮展开）与「完整大窗」（`Expanded`，最小 480×360 DIP，可拖拽边缘调整尺寸并持久化 `QuickSearchExpandedWidth`/`Height`）；顶栏提供形态切换按钮（`ModeToggleButton`）与「在主窗口中打开」（`OpenInMainButton`）。流式增量渲染与 Compact 模式工作区夹紧按 60 ms 节流，底栏显示线路与阶段耗时徽标（`RouteLatencyBadge`）。`SearchBox` 通过 `PreviewKeyDown` 拦截 `Enter`：输入法未组词时 `Enter` 与 `Ctrl+Enter` 提交翻译，`Shift+Enter` 插入换行；支持 `Ctrl+T` 切换风格、`Ctrl+R` 重试，扩展模式下展示空态快捷键引导。
+- 固定区域截图翻译（`Ctrl+Shift+G` 默认）：支持保存最多 8 个物理像素坐标预设（`FixedCaptureRegions`），跨显示器与不同 DPI 缩放零漂移映射并支持单边越界夹紧提示；触发时弹出非激活鼠标穿透高亮边框闪现（`RegionHighlightWindow`，不抢占前景窗口焦点）。普通截图框选覆盖层按 `Ctrl` 或 `F` 可切换「存为固定区」，重选时用虚线标出原区域；翻译浮窗显示 `FixedRegionBar`（「重译此区」/「重选区域」），「设置 → 快捷键」提供第 4 条常用行与「框选固定区域 / 预览区域 / 清除 / 预设切换」即时管理卡，托盘提供对应子菜单。
+- 动态快捷键提示与布局一致性：工作台与浮窗合并换行及引导提示读取 `InterfaceKeys.TranslateKeyName`，资料库与工作台朗读提示读取 `InterfaceKeys.SpeakHotkey` 并随朗读状态切换「停止朗读」；引擎总览的「当前使用」徽标仅随实际激活线路显示、免费线路卡片窄宽响应式双行排版，常规设置窄窗下垂直堆叠且下拉框等宽，首次向导支持垂直滚动、`Esc` 关闭、`Enter` 前进且重开时不覆盖已保存选择。
 
 
 ## 模型推荐体系
@@ -95,7 +97,7 @@ Idle → Connecting → Streaming → Finalizing → Completed
 - `Auto / LocalOcr / VisionDirect / VisionOcr`
 - 自动模式是否允许上传截图
 - 安全离线模式（总开关，覆盖内置免费引擎）
-- 划词（`Ctrl+Alt+W`）、截图（`Ctrl+Alt+Space`）、关闭浮窗（`Ctrl+Alt+X`）、主窗口（`Ctrl+Alt+O`）、查词（`Ctrl+Alt+Q`）五组独立全局快捷键
+- 划词（`Ctrl+Alt+W`）、截图（`Ctrl+Alt+Space`）、固定区域截图（`Ctrl+Shift+G`）、关闭浮窗（`Ctrl+Alt+X`）、主窗口（`Ctrl+Alt+O`）、查词（`Ctrl+Alt+Q`）六组独立全局快捷键
 - 深色/浅色/跟随系统
 - 本地历史开关与清除
 - 内置免费线路（5 条）：`Google`、`MyMemory`、`有道词典`、`Bing 翻译`、`自动优选`（`Auto`）。支持每主机独立冷却（429 冷却 1 分钟、网络/超时冷却 90 秒），只屏蔽出错主机，单次请求绝不把失败原文静默转发给另一家提供商；「自动优选」按健康探测状态、最近成功粘性与文本形态选出**单条**可用线路（单词/短语优先有道词典，长句优先 Bing / Google）。
@@ -148,7 +150,7 @@ Vision Direct 提示词要求先准确转录，并禁止翻译或改写代码元
 ## 隐私与回退
 
 - 默认本地 OCR；历史默认开启，可随时关闭、搜索、逐条删除或清空。
-- 截图只在内存处理，默认不落盘。
+- 截图只在内存处理，默认不落盘。固定区域截图仅保存物理像素坐标与尺寸预设于本机 `windows-shell.json`，不后台轮询屏幕，位图不落盘、不写入历史与日志，并严格遵守 `OutboundPolicy`、`LocalOcr`/`VisionDirect` 与安全离线模式。
 - Auto 上传必须获得单独授权。
 - 日志不含截图、原文、Key 或请求正文。
 - 视觉直译在零可见 Delta 时失败可回退；已有 Delta 时保留 Partial 不二次出网。

@@ -12,18 +12,18 @@ Select text, press `Ctrl+Alt+W`, read the translation next to the cursor. Built 
 
 两个包都自带 .NET 10 运行时，装完即用。Windows 10 / 11 x64。
 
-[![下载安装包](docs/badges/download-setup.svg)](https://github.com/ethan-blue/PopGlot/releases/download/v0.2.0/PopGlot-v0.2.0-win-x64-setup.exe)
-[![下载便携包](docs/badges/download-portable.svg)](https://github.com/ethan-blue/PopGlot/releases/download/v0.2.0/PopGlot-v0.2.0-win-x64.zip)
+[![下载安装包](docs/badges/download-setup.svg)](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.43/PopGlot-v0.1.43-win-x64-setup.exe)
+[![下载便携包](docs/badges/download-portable.svg)](https://github.com/ethan-blue/PopGlot/releases/download/v0.1.43/PopGlot-v0.1.43-win-x64.zip)
 
 | 形态 | 文件 | 说明 |
 | --- | --- | --- |
-| 安装包 | `PopGlot-v0.2.0-win-x64-setup.exe`（约 57 MB） | 向导安装、开始菜单、卸载入口。升级直接跑新安装包，原地覆盖。 |
-| 便携 zip | `PopGlot-v0.2.0-win-x64.zip`（约 84 MB） | 解压运行 `PopGlot.exe`，不写注册表。 |
+| 安装包 | `PopGlot-v0.1.43-win-x64-setup.exe`（约 57 MB） | 向导安装、开始菜单、卸载入口。升级直接跑新安装包，原地覆盖。 |
+| 便携 zip | `PopGlot-v0.1.43-win-x64.zip`（约 84 MB） | 解压运行 `PopGlot.exe`，不写注册表。 |
 
 安装包未签名，首次运行会有 SmartScreen 提示：点「更多信息」→「仍要运行」。校验文件完整性：
 
 ```powershell
-(Get-FileHash .\PopGlot-v0.2.0-win-x64-setup.exe -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash .\PopGlot-v0.1.43-win-x64-setup.exe -Algorithm SHA256).Hash.ToLower()
 ```
 
 和发布页同名附件的 `.sha256` 比对。全部版本见 [Releases](https://github.com/ethan-blue/PopGlot/releases)。
@@ -34,6 +34,7 @@ Select text, press `Ctrl+Alt+W`, read the translation next to the cursor. Built 
 | --- | --- |
 | 划词 | 任意程序里 `Ctrl+Alt+W`。原剪贴板按序列号恢复。 |
 | 截图 | `Ctrl+Alt+Space` 框选。默认本机 OCR，图片不出本机。 |
+| 固定区域 | `Ctrl+Shift+G` 一键截取已选固定区域并翻译（最多 8 个预设）。 |
 | 工作台 | `Ctrl+Alt+O`。左原文右译文，说明在译文下，「要点」是独立视图。 |
 | 查词 | `Ctrl+Alt+Q`。支持边输边译、紧凑小窗与完整大窗切换。 |
 | 引擎 | OpenAI 兼容、OpenAI Responses、Anthropic、Gemini、Ollama、LM Studio，支持一键扫描本机服务与环境变量。 |

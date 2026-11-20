@@ -3,9 +3,10 @@
 本文件从 **0.0.1** 开始维护。更早的开发过程没有正式版本号；
 曾被误打的 `v0.3.0` tag 已撤回（见 `docs/VERSIONING.md` 历史修正），编号不复用。
 
-## 0.2.0 - 2026-11-19
+## 0.1.43 - 2026-11-20
 
 ### 新增
+- **固定区域截图翻译（默认 `Ctrl+Shift+G`）**：支持按物理像素坐标保存屏幕固定区域预设（最多 8 个），跨显示器与不同 DPI 缩放零漂移映射，单边部分越界自动夹紧、完全脱离当前虚拟屏幕时在设置页标出提示。首次未设置时触发先进入框选并保存，之后按快捷键直接单次截取该区域并翻译；按快捷键时仅弹出非激活、鼠标穿透的高亮边框闪现（`RegionHighlightWindow`），不抢占前景窗口焦点。普通截图覆盖层支持按 `Ctrl` 或 `F` 切换「存为固定区」，重选时用虚线标出原区域；翻译浮窗顶部提供区域信息条（「重译此区」/「重选区域」），「设置 → 快捷键」新增第 4 条常用行与固定区域管理卡（框选固定区域、预览区域、清除、预设切换，即时生效），托盘菜单同步提供「固定区域翻译」与预设子菜单。
 - **内置免费线路扩展为 5 条**：在原有 `Google`、`MyMemory` 基础上新增 `有道词典`（`dict.youdao.com`，120 字符内单词/短语词典查询与音标解析）、`Bing 翻译`（`cn.bing.com`，支持 IG/IID 令牌缓存与续期）以及 `自动优选`（按健康探测、最近成功记录与输入长度选择单条可用线路：单词/短语优先有道词典，长句优先 Bing / Google）。
 - **极速查词边输边译**：`QuickSearchWindow` 新增输入停顿自动翻译，在「设置 → 通用 → 查词窗口」提供「边输边译」开关、「停顿延迟」（`300 ms` / `500 ms` 默认 / `800 ms`）与「自动翻译范围」（默认「仅内置免费线路」，避免误耗自定义模型额度）。输入法组词期间不触发自动翻译；中文至少 1 字、外文至少 2 字符起译；剩余每小时配额低于 30 或超出当前免费线路单次上限时跳过自动请求并提示按 Enter 手动翻译。自动触发的中间查询不写入本地历史与往返缓存，也不覆盖会话快照。
 - **查词窗口形态切换与用时展示**：`QuickSearchWindow` 顶栏新增形态切换按钮（`ModeToggleButton`）和「在主窗口中打开」（`OpenInMainButton`）；支持「紧凑小窗」（430 DIP 宽、最大高度 380 DIP，说明默认折叠为「释义详情 ▾」按钮）与「完整大窗」（最小 480×360 DIP，可拖拽边框调整并持久化宽高）；底栏新增路线与阶段用时徽标（`RouteLatencyBadge`），悬停显示各阶段耗时明细，翻译浮窗底部同步展示。
@@ -15,19 +16,23 @@
 ### 变更
 - **免费引擎连接与冷却策略**：连接超时收紧至 2.5 秒（整请求 30 秒），新增按主机隔离的冷却机制（HTTP 429 冷却 1 分钟、网络或超时冷却 90 秒），只屏蔽出错主机；跳过冷却中与超 URL 长度预算的端点时不消耗每小时 400 次配额；单次请求失败后绝不跨提供商静默转发失败原文。
 - **零荷载连接预热**：当安全离线模式关闭、网络许可开启、内置免费引擎允许且当前激活线路为内置免费线路时，应用启动后台与打开极速查词窗口时向活跃免费线路主机发出零荷载 `HEAD` 预热请求（不携带用户正文、不消耗每小时配额）；启用自定义引擎、禁用免费引擎或测试抑制时不发出预热。
-- **查词流式渲染节流**：`QuickSearchWindow` 流式增量渲染与紧凑模式工作区夹紧按 60 ms 节流，并在边输边译新请求期间淡化保留上一条结果与状态点动画，减少连续输入时的高度跳变。
+- **查词流式渲染节流与交互调整**：`QuickSearchWindow` 流式增量渲染与紧凑模式工作区夹紧按 60 ms 节流，边输边译新请求期间淡化保留上一条结果与状态点动画；紧凑模式保留「立即翻译」`Enter` 键帽，完整模式展示空态快捷键引导，并支持 `Ctrl+T` 切换风格、`Ctrl+R` 重试与窗口内边距微调。
+- **设置页与工作台布局细节统一**：引擎总览页免费线路卡片改为窄宽响应式双行布局与省略截断、滚轮交由外层滚动条接管，快捷代理输入框增加即时格式校验与回车应用；通用页窄窗改用垂直堆叠、对齐下拉框宽度并允许清空自定义代理；隐私页移除重复细线、本机 OCR 语言包列表改为可滚动；工作台左右分隔线贯通底栏、窄窗展示独立堆叠互换按钮；资料库采用圆角卡片与窄窗响应式搜索工具栏；设置页底栏补齐顶边框且切页时刷新状态；首次配置向导增加 `ScrollViewer`、`Esc` 关闭、`Enter` 前进并限制最大高度不超出工作区；同步更新 `docs/help/*.md` 帮助说明。
 
 ### 修复
+- **极速查词按 `Enter` 插入换行而非提交翻译**：`QuickSearchWindow` 输入框开启 `AcceptsReturn="True"` 后此前 `KeyDown` 无法拦住 `Enter` 默认换行；现改为 `PreviewKeyDown` 拦截——输入法未组词时 `Enter` 与 `Ctrl+Enter` 均触发翻译，`Shift+Enter` 插入换行。
+- **界面快捷键提示与朗读状态不同步**：工作台（`TranslateSection`）演示/引导提示与翻译浮窗（`TranslationPanelWindow`）合并换行提示改为读取 `InterfaceKeys.TranslateKeyName`；资料库（`LibrarySection`）朗读按钮改为读取 `InterfaceKeys.SpeakHotkey` 并在朗读中切换为「停止朗读」；快捷键页（`ShortcutsSection`）统一实心 `IconClose` 停用图标与 `HotkeyRecorder` 样式，极速查词顶栏统一实心 `IconCollapse` 图标。
+- **引擎总览免费线路「当前使用」徽标多处误亮与向导重开覆盖**：免费线路卡片不再在已配置自定义引擎时同时标出「当前使用」，仅实际激活对应免费线路时显示；从「设置 → 通用 → 重新显示引导」重开 `FirstRunWindow` 时保留已保存开关，不再覆盖用户原有配置；清理 `ServicesSection` 与帮助文案中旧的「内置免费」混用表述，统一为「公共翻译」。
 - **查词窗口在非免费/测试抑制下误发预热**：`QuickSearchWindow.Show()` 不再与 `IsVisibleChanged` 重复触发预热，且仅在非测试抑制状态及当前激活线路为内置免费线路时才执行 `HEAD` 预热。
 - **有道词典请求误做代码占位保护**：通过有道词典查询单词或短语时跳过本地 Token 占位替换，避免英文词条被改写为占位符后再送往词典接口。
 
 ### 迁移
-- 无破坏性变更。既有 `windows-shell.json` 缺少新字段时自动使用默认值（`LiveTranslateEnabled=true`、`LiveTranslateDelayMs=500`、`LiveTranslateScope=FreeEngineOnly`、`QuickSearchWindowMode=Compact`、`NetworkProxyMode=System`、`ProxyBypassLocal=true`、`ProxyBypassDomesticRoutes=true`）。
+- 无破坏性变更。既有 `windows-shell.json` 缺少新字段时自动使用默认值（`LiveTranslateEnabled=true`、`LiveTranslateDelayMs=500`、`LiveTranslateScope=FreeEngineOnly`、`QuickSearchWindowMode=Compact`、`NetworkProxyMode=System`、`ProxyBypassLocal=true`、`ProxyBypassDomesticRoutes=true`、`FixedRegionHotkey=Ctrl+Shift+G`、`FixedCaptureRegions=[]`）。
 
 ### 验证与边界
 - Rust 检查通过：`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`（0 警告）、`cargo test --workspace --locked` 共 285 项全部通过（`popglot-core` 194 项、`popglot-domain` 75 项、`popglot-ffi` 16 项）。
-- Release 构建与自动化测试：`dotnet build apps/PopGlot.Windows/PopGlot.Windows.csproj --configuration Release` 通过（0 警告 0 错误）；`PureTests` 75 项全部通过（0 未授权外发）；`CliTests --ui` 32 项全部通过；`LogicTests` 421 项通过、3 项在非交互桌面/后台会话中失败（`flat text surfaces are quiet under mouse focus keyboard`、`panel ctrl s stars completed but not partial`、`real desktop capture regression covers BitBlt SRCCOPY|CAPTUREBLT paths`，均为需要解锁前台桌面的 Win32 光标/按键/抓屏用例）。
-- 边界说明：公共免费线路接口未提供商业 SLA，无固定可用性保证；真实网络代理连通性与各家服务实际译文质量需在真实环境人工复核，回环 mock 与隔离宿主测试不能替代真机多屏高分屏与物理输入验收。
+- Release 构建与自动化测试：`dotnet build apps/PopGlot.Windows/PopGlot.Windows.csproj --configuration Release` 通过（0 警告 0 错误）；`PureTests` 78 项全部通过（0 未授权外发）；`CliTests --ui` 32 项全部通过；`LogicTests` 427 项通过（真实用户配置未改动、0 未授权公共网络发送），4 项在非交互桌面会话中失败（`flat text surfaces are quiet under mouse focus keyboard`、`panel ctrl s stars completed but not partial`、`real desktop capture regression covers BitBlt SRCCOPY|CAPTUREBLT paths`、`fixed-region live BitBlt end-to-end pixel capture regression`，均为需要解锁前台桌面的 Win32 光标/按键/抓屏用例）。
+- 边界说明：公共免费线路接口未提供商业 SLA，无固定可用性保证；固定区域跨屏多 DPI 实机截图、真实网络代理连通性与各家服务实际译文质量需在真实环境人工复核，回环 mock 与隔离宿主测试不能替代真机多屏高分屏与物理输入验收。
 
 ## 0.1.42 - 2026-11-17
 
