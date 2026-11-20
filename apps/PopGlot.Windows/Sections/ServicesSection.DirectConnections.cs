@@ -110,14 +110,14 @@ public partial class ServicesSection
         _cliCommitInProgress = committing;
         var status = ChatGptConnectionPanel.Visibility == Visibility.Visible ? ChatGptStatus : CliConnectionStatus;
         status.Text = starting;
-        status.Foreground = TryFindResource("TextSecondaryBrush") as Brush ?? status.Foreground;
+        status.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
         UpdateCliButtons();
         try
         {
             var message = await work(operation.Token);
             if (!ReferenceEquals(_cliOperation, operation)) return false;
             status.Text = message;
-            status.Foreground = TryFindResource("SuccessBrush") as Brush ?? status.Foreground;
+            status.SetResourceReference(TextBlock.ForegroundProperty, "SuccessBrush");
             return true;
         }
         catch (OperationCanceledException)
@@ -129,7 +129,7 @@ public partial class ServicesSection
             if (ReferenceEquals(_cliOperation, operation))
             {
                 status.Text = CliFailureText(ex);
-                status.Foreground = TryFindResource("DangerBrush") as Brush ?? status.Foreground;
+                status.SetResourceReference(TextBlock.ForegroundProperty, "DangerBrush");
             }
             return false;
         }

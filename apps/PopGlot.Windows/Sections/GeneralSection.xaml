@@ -1,7 +1,8 @@
 <UserControl x:Class="PopGlot.Windows.Sections.GeneralSection"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:PopGlot.Windows">
+             xmlns:local="clr-namespace:PopGlot.Windows"
+             SizeChanged="GeneralSection_SizeChanged">
     <UserControl.Resources>
         <Style x:Key="ThemeSwatch" TargetType="RadioButton" BasedOn="{StaticResource {x:Type RadioButton}}">
             <Setter Property="Margin" Value="0,0,14,0" />
@@ -75,6 +76,7 @@
                         <TextBlock Text="开机自动启动" Style="{StaticResource RowTitle}" />
                         <TextBlock x:Name="StartupStateHint"
                                    Style="{StaticResource RowHint}"
+                                   Visibility="Collapsed"
                                    AutomationProperties.LiveSetting="Polite" />
                     </StackPanel>
                     <StackPanel x:Name="StartupControlsPanel" Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Orientation="Horizontal">
@@ -217,17 +219,21 @@
 
                 <Border Style="{StaticResource SettingsDivider}" Margin="0,8" />
 
-                <Grid>
+                <Grid x:Name="LiveTranslateDelayRowGrid">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="停顿延迟" Style="{StaticResource RowTitle}" />
                         <TextBlock Text="停止输入后等待多久开始自动翻译" Style="{StaticResource RowHint}" />
                     </StackPanel>
-                    <ComboBox x:Name="LiveTranslateDelayCombo" Grid.Column="1" MinWidth="150"
-                              VerticalAlignment="Center"
+                    <ComboBox x:Name="LiveTranslateDelayCombo" Grid.Column="1" Grid.Row="0" Width="188"
+                              VerticalAlignment="Center" HorizontalAlignment="Right"
                               AutomationProperties.Name="停顿延迟"
                               SelectionChanged="LiveTranslateSettings_Changed">
                         <ComboBoxItem Tag="300">300 ms</ComboBoxItem>
@@ -238,17 +244,21 @@
 
                 <Border Style="{StaticResource SettingsDivider}" Margin="0,8" />
 
-                <Grid>
+                <Grid x:Name="LiveTranslateScopeRowGrid">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="自动翻译范围" Style="{StaticResource RowTitle}" />
-                        <TextBlock Text="默认仅对内置免费线路启用边输边译，避免消耗模型额度" Style="{StaticResource RowHint}" />
+                        <TextBlock Text="默认仅对公共翻译线路启用边输边译，避免消耗模型额度" Style="{StaticResource RowHint}" />
                     </StackPanel>
-                    <ComboBox x:Name="LiveTranslateScopeCombo" Grid.Column="1" MinWidth="180"
-                              VerticalAlignment="Center"
+                    <ComboBox x:Name="LiveTranslateScopeCombo" Grid.Column="1" Grid.Row="0" Width="188"
+                              VerticalAlignment="Center" HorizontalAlignment="Right"
                               AutomationProperties.Name="自动翻译范围"
                               SelectionChanged="LiveTranslateSettings_Changed">
                         <ComboBoxItem Tag="FreeEngineOnly">仅内置免费线路 (默认)</ComboBoxItem>
@@ -258,17 +268,21 @@
 
                 <Border Style="{StaticResource SettingsDivider}" Margin="0,8" />
 
-                <Grid>
+                <Grid x:Name="QuickSearchModeRowGrid">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="查词窗口形态" Style="{StaticResource RowTitle}" />
                         <TextBlock Text="打开极速查词时的默认窗口大小与布局" Style="{StaticResource RowHint}" />
                     </StackPanel>
-                    <ComboBox x:Name="QuickSearchModeCombo" Grid.Column="1" MinWidth="150"
-                              VerticalAlignment="Center"
+                    <ComboBox x:Name="QuickSearchModeCombo" Grid.Column="1" Grid.Row="0" Width="188"
+                              VerticalAlignment="Center" HorizontalAlignment="Right"
                               AutomationProperties.Name="查词窗口形态"
                               SelectionChanged="LiveTranslateSettings_Changed">
                         <ComboBoxItem Tag="Compact">紧凑小窗</ComboBoxItem>
@@ -325,30 +339,34 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="代理模式" Style="{StaticResource RowTitle}" />
                         <TextBlock Text="选择 PopGlot 联网请求如何走网络代理" Style="{StaticResource RowHint}" />
                     </StackPanel>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <WrapPanel x:Name="ProxyModeChoicePanel" Grid.Column="1" Grid.Row="0" VerticalAlignment="Center">
                         <RadioButton x:Name="ProxySystemRadio" GroupName="NetworkProxyMode" Tag="System"
-                                     Style="{StaticResource ThemeSwatch}"
+                                     Style="{StaticResource ThemeSwatch}" Margin="0,2,14,2"
                                      AutomationProperties.Name="跟随系统代理"
                                      Click="ProxyModeRadio_Click">
                             <TextBlock Text="跟随系统代理" />
                         </RadioButton>
                         <RadioButton x:Name="ProxyDirectRadio" GroupName="NetworkProxyMode" Tag="Direct"
-                                     Style="{StaticResource ThemeSwatch}"
+                                     Style="{StaticResource ThemeSwatch}" Margin="0,2,14,2"
                                      AutomationProperties.Name="直连"
                                      Click="ProxyModeRadio_Click">
                             <TextBlock Text="直连" />
                         </RadioButton>
                         <RadioButton x:Name="ProxyCustomRadio" GroupName="NetworkProxyMode" Tag="Custom"
-                                     Style="{StaticResource ThemeSwatch}" Margin="0"
+                                     Style="{StaticResource ThemeSwatch}" Margin="0,2,0,2"
                                      AutomationProperties.Name="自定义代理"
                                      Click="ProxyModeRadio_Click">
                             <TextBlock Text="自定义代理" />
                         </RadioButton>
-                    </StackPanel>
+                    </WrapPanel>
                 </Grid>
 
                 <StackPanel x:Name="CustomProxyRow" Visibility="Collapsed" Margin="0,10,0,0">
@@ -436,17 +454,21 @@
              只给版本号与下载页，下载与安装完全由用户决定。 -->
         <Border Style="{StaticResource SettingsDivider}" Margin="0,6,0,10" />
 
-        <Grid Style="{StaticResource SettingsRow}" Margin="0,0,0,4">
+        <Grid x:Name="UpdateRowGrid" Style="{StaticResource SettingsRow}" Margin="0,0,0,4">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="启动时检查更新" Style="{StaticResource RowTitle}" />
                 <TextBlock x:Name="UpdateStatusText" Style="{StaticResource Caption}" TextWrapping="Wrap"
                            Text="启动时检查一次新版，有更新会提醒你，不会自动下载。" />
             </StackPanel>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+            <StackPanel x:Name="UpdateControlsPanel" Grid.Column="1" Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Center">
                 <ToggleButton x:Name="AutoUpdateCheckToggle" VerticalAlignment="Center"
                               Style="{StaticResource ToggleSwitch}"
                               AutomationProperties.Name="启动时检查更新"

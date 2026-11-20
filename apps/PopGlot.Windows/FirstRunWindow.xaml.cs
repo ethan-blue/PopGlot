@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Input;
 using PopGlot.Windows.Services;
 
 namespace PopGlot.Windows;
@@ -24,8 +25,43 @@ public partial class FirstRunWindow : Window
     {
         InitializeComponent();
         ThemeService.ApplyWindowChrome(this);
+        // 窗口高度不能超过当前工作区，否则固定高度的向导在小屏/高缩放下会被裁掉。
+        MaxHeight = SystemParameters.WorkArea.Height;
         LoadCurrentState();
         ApplyStep();
+    }
+
+    /// <summary>
+    /// Esc 关闭、Enter 前进。按钮和开关自己处理 Enter/Space，这里只接住
+    /// 没有被控件消费的 Enter，避免在开关上按 Enter 时误跳到下一步。
+    /// </summary>
+    private void Window_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Handled)
+        {
+            return;
+        }
+
+        if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            CloseButton_Click(this, new RoutedEventArgs());
+            return;
+        }
+
+        if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.None
+            && e.OriginalSource is not System.Windows.Controls.Primitives.ButtonBase)
+        {
+            e.Handled = true;
+            if (_step < StepCount - 1)
+            {
+                Next_Click(this, new RoutedEventArgs());
+            }
+            else
+            {
+                Finish_Click(this, new RoutedEventArgs());
+            }
+        }
     }
 
     private void LoadCurrentState()
@@ -39,6 +75,7 @@ public partial class FirstRunWindow : Window
             QuickSearchShortcutText.Text = $"极速查词　{shell.QuickSearchHotkey.DisplayName}";
             if (shell.HasCompletedOnboarding)
             {
+                // 从「设置 → 通用 → 重新显示引导」再次打开：展示的永远是已保存的真实选择。
                 FreeEngineToggle.IsChecked = shell.FreeEngineConsent != FreeEngineConsent.Denied;
                 HistoryToggle.IsChecked = shell.HistoryEnabled;
                 StartupToggle.IsChecked = shell.StartWithWindows;
@@ -79,6 +116,12 @@ public partial class FirstRunWindow : Window
         {
             DoneSummary.Text = BuildSummary();
         }
+
+        StepScroller.ScrollToTop();
+        // 每一步都把焦点放到主按钮上，键盘用户直接按 Enter 就能继续。
+        Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Input,
+            new Action(() => (_step == StepCount - 1 ? FinishButton : NextButton).Focus()));
     }
 
     private string BuildSummary()
@@ -88,8 +131,8 @@ public partial class FirstRunWindow : Window
             ? "已允许连接云端翻译服务"
             : "已关闭云端翻译（只使用本机模型）");
         parts.Add(FreeEngineToggle.IsChecked == true
-            ? "已开启内置免费线路（Bing / 有道词典 / MyMemory / Google），查词边输边译的中间过程不存历史"
-            : "内置免费线路已关闭，不会发送任何文本");
+            ? "已开启公共翻译（Google / Bing / 有道词典 / MyMemory），边输边译的中间结果不存历史"
+            : "公共翻译已关闭，不会发送任何文本");
         parts.Add(HistoryToggle.IsChecked == true ? "翻译历史会保存在本机" : "不保存翻译历史");
         parts.Add(StartupToggle.IsChecked == true ? "开机自动启动" : "开机不自动启动");
         parts.Add(DiagnosticsToggle.IsChecked == true ? "允许上报脱敏诊断" : "不上报任何诊断");
@@ -121,7 +164,7 @@ public partial class FirstRunWindow : Window
             // 初次使用直接关闭：按当前展示的默认推荐值落盘，以后不再打扰。
             Persist();
         }
-        DialogResult = false;
+        TrySetDialogResult(false);
         Close();
     }
 
@@ -129,15 +172,27 @@ public partial class FirstRunWindow : Window
     {
         OpenServicesRequested = true;
         Persist();
-        DialogResult = true;
+        TrySetDialogResult(true);
         Close();
     }
 
     private void Finish_Click(object sender, RoutedEventArgs e)
     {
         Persist();
-        DialogResult = true;
+        TrySetDialogResult(true);
         Close();
+    }
+
+    private void TrySetDialogResult(bool result)
+    {
+        try
+        {
+            DialogResult = result;
+        }
+        catch (InvalidOperationException)
+        {
+            // Show()（非模态测试或独立预览）不允许设置 DialogResult。
+        }
     }
 
     /// <summary>
