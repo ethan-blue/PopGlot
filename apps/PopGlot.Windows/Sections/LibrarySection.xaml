@@ -16,8 +16,8 @@
         <Grid Grid.Row="0" Margin="0,0,0,10">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="240" />
+                <ColumnDefinition Width="1*" MinWidth="8" />
+                <ColumnDefinition Width="100*" MaxWidth="248" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -29,7 +29,7 @@
                              Checked="Mode_Checked" Tag="Vocabulary" />
             </StackPanel>
 
-            <Grid x:Name="LibrarySearchHost" Grid.Column="2" Margin="0,0,8,0">
+            <Grid x:Name="LibrarySearchHost" Grid.Column="2" HorizontalAlignment="Stretch" Margin="0,0,8,0">
                 <TextBox x:Name="LibrarySearchBox"
                          Height="28" MinHeight="28" VerticalAlignment="Center" VerticalContentAlignment="Center"
                          Style="{StaticResource FormTextBox}" local:Ui.ContentPadding="28,0,8,0"
@@ -191,9 +191,9 @@
                     </ListBox>
 
                     <!-- Master bottom summary line -->
-                    <Border Grid.Row="1" Background="{DynamicResource SurfaceMutedBrush}"
+                    <Border x:Name="MasterSummaryBorder" Grid.Row="1" Background="{DynamicResource SurfaceMutedBrush}"
                             BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
-                            Padding="12,6">
+                            CornerRadius="0,0,0,9" Padding="12,6">
                         <TextBlock x:Name="LibraryCountText" Style="{StaticResource Metadata}"
                                    Foreground="{DynamicResource TextTertiaryBrush}"
                                    VerticalAlignment="Center" />
@@ -224,7 +224,9 @@
                 </GridSplitter>
 
                 <!-- ==================== Detail Column: Property List Inspector ==================== -->
-                <Grid x:Name="DetailPane" Grid.Column="2" Background="{DynamicResource CanvasBrush}">
+                <Border x:Name="DetailPane" Grid.Column="2" Background="{DynamicResource CanvasBrush}"
+                        CornerRadius="0,9,9,0">
+                    <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
@@ -237,11 +239,11 @@
                             Click="LibraryBack_Click" />
                     <Grid Grid.Row="1">
                     <!-- Nothing selected placeholder -->
-                    <StackPanel x:Name="DetailPlaceholder" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <StackPanel x:Name="DetailPlaceholder" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="16">
                         <TextBlock Text="未选择条目" Style="{StaticResource SectionTitle}"
                                    Foreground="{DynamicResource TextSecondaryBrush}"
                                    HorizontalAlignment="Center" Margin="0,0,0,4" />
-                        <TextBlock Style="{StaticResource Caption}" MaxWidth="320" TextAlignment="Center"
+                        <TextBlock x:Name="DetailPlaceholderHints" Style="{StaticResource Caption}" MaxWidth="380" TextAlignment="Center"
                                    HorizontalAlignment="Center" Foreground="{DynamicResource TextTertiaryBrush}"
                                    Text="方向键切换 · Enter 载入工作台 · Ctrl+P 朗读 · Ctrl+Shift+C 复制译文 · Delete 删除" />
                     </StackPanel>
@@ -358,21 +360,32 @@
                         </ScrollViewer>
 
                         <!-- Pinned bottom action bar -->
-                        <Border Grid.Row="1" Background="{DynamicResource SurfaceMutedBrush}"
+                        <Border x:Name="DetailFooterBorder" Grid.Row="1" Background="{DynamicResource SurfaceMutedBrush}"
                                 BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"
-                                Padding="12,8">
+                                CornerRadius="0,0,9,0" Padding="12,5">
                             <WrapPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                <Button Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconSpeaker}"
-                                        ToolTip="朗读 (Ctrl+P)" AutomationProperties.Name="朗读所选记录" Click="CardSpeak_Click" />
-                                <Button Style="{StaticResource IconButton}" Margin="6,0,0,0"
-                                        local:Ui.Icon="{StaticResource IconCopy}" ToolTip="复制原文"
-                                        AutomationProperties.Name="复制所选原文" Click="CardCopySource_Click" />
-                                <Button Style="{StaticResource IconButton}" Margin="6,0,0,0"
-                                        local:Ui.Icon="{StaticResource IconCopy}" ToolTip="复制译文 (Ctrl+Shift+C)"
-                                        AutomationProperties.Name="复制所选译文" Click="CardCopy_Click" />
-                                <Button Style="{StaticResource GhostButton}" Margin="6,0,0,0"
+                                <Button x:Name="CardSpeakButton" Style="{StaticResource IconButton}" Margin="0,3,0,3"
+                                        ToolTip="朗读" AutomationProperties.Name="朗读所选记录" Click="CardSpeak_Click">
+                                    <Path x:Name="CardSpeakIcon" Width="12" Height="12" Stretch="Uniform"
+                                          Fill="{DynamicResource TextSecondaryBrush}"
+                                          Data="{StaticResource IconSpeaker}" />
+                                </Button>
+                                <Button x:Name="CardCopyButton" Style="{StaticResource IconButton}"
+                                        Width="Auto" MinWidth="32" Height="32" Padding="8,0" Margin="6,3,0,3"
+                                        ToolTip="复制译文 (Ctrl+Shift+C)"
+                                        AutomationProperties.Name="复制所选译文" Click="CardCopy_Click">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Path Width="12" Height="12" Stretch="Uniform"
+                                              Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                              Data="{StaticResource IconCopy}" VerticalAlignment="Center" />
+                                        <TextBlock Text="复制译文" FontSize="12" Margin="4,0,0,0"
+                                                   Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                                   VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource GhostButton}" Margin="6,3,0,3"
                                         Content="载入工作台" Padding="12,4" ToolTip="载入工作台 (Enter)" Click="CardLoad_Click" />
-                                <Button x:Name="CardDeleteButton" Style="{StaticResource DangerButton}" Margin="6,0,0,0"
+                                <Button x:Name="CardDeleteButton" Style="{StaticResource DangerButton}" Margin="6,3,0,3"
                                         Content="删除" Padding="12,4" Click="CardDelete_Click"
                                         ToolTip="删除此条记录 (Delete)"
                                         AutomationProperties.Name="删除此条记录" />
@@ -380,7 +393,8 @@
                         </Border>
                     </Grid>
                     </Grid>
-                </Grid>
+                    </Grid>
+                </Border>
             </Grid>
         </Border>
     </Grid>

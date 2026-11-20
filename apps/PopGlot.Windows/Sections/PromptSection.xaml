@@ -238,7 +238,7 @@
             <!-- 读取失败的内联错误态：模板列表内容不可信，绝不与「还没有
                  自定义模板」的正常空态混用；重试成功后由代码恢复列表。 -->
             <Border x:Name="LoadErrorPanel" Visibility="Collapsed" Padding="24,20"
-                    CornerRadius="{DynamicResource CardRadius}" Margin="8"
+                    CornerRadius="{StaticResource CardRadius}" Margin="8"
                     HorizontalAlignment="Center" VerticalAlignment="Center"
                     Background="{DynamicResource SurfaceMutedBrush}"
                     BorderBrush="{DynamicResource DangerBrush}" BorderThickness="1">
@@ -470,7 +470,7 @@
 
                     <!-- 脏草稿导航守卫：返回列表/切页/关窗前在这里解决草稿 -->
                     <Border x:Name="DraftGuardBar" Grid.Row="2" Visibility="Collapsed" Margin="0,10,0,0"
-                            Padding="12,10" CornerRadius="{DynamicResource CardRadius}"
+                            Padding="12,10" CornerRadius="{StaticResource CardRadius}"
                             Background="{DynamicResource WarningSoftBrush}"
                             BorderBrush="{DynamicResource WarningBrush}" BorderThickness="1.5">
                         <StackPanel>

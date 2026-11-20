@@ -63,6 +63,7 @@
     <Geometry x:Key="IconDelete">M 9,4.5 H 15 V 3 H 9 Z M 4,5.5 H 20 V 7.2 H 4 Z M 5.8,8.5 H 18.2 L 16.8,20.2 C 16.7,21 16,21.5 15.2,21.5 H 8.8 C 8,21.5 7.3,21 7.2,20.2 Z M 7.4,10.1 L 8.6,19.9 H 15.4 L 16.6,10.1 Z M 9.5,11.5 H 11 V 18.5 H 9.5 Z M 13,11.5 H 14.5 V 18.5 H 13 Z</Geometry>
     <Geometry x:Key="IconOpenExternal">M 19,19 H 5 V 5 H 12 V 3.4 H 5 C 4.1,3.4 3.4,4.1 3.4,5 V 19 C 3.4,19.9 4.1,20.6 5,20.6 H 19 C 19.9,20.6 20.6,19.9 20.6,19 V 12 H 19 Z M 14,3.4 V 5 H 17.9 L 8.4,14.5 L 9.5,15.6 L 19,6.1 V 10 H 20.6 V 3.4 Z</Geometry>
     <Geometry x:Key="IconExpand">M 3,3 H 9 V 4.75 H 4.75 V 9 H 3 Z M 21,3 V 9 H 19.25 V 4.75 H 15 V 3 Z M 3,21 V 15 H 4.75 V 19.25 H 9 V 21 Z M 21,21 H 15 V 19.25 H 19.25 V 15 H 21 Z</Geometry>
+    <Geometry x:Key="IconCollapse">M 7.25,3 H 9 V 9 H 3 V 7.25 H 7.25 Z M 15,3 H 16.75 V 7.25 H 21 V 9 H 15 Z M 3,15 H 9 V 21 H 7.25 V 16.75 H 3 Z M 15,15 H 21 V 16.75 H 16.75 V 21 H 15 Z</Geometry>
     <!-- Text lines: a writing preference, not a decorative mark. -->
     <Geometry x:Key="IconStyle">M 4,6.2 H 20 V 7.8 H 4 Z M 4,11.2 H 15.5 V 12.8 H 4 Z M 4,16.2 H 11 V 17.8 H 4 Z</Geometry>
     <Geometry x:Key="IconSearch">M 15.5,14 H 14.7 L 14.4,13.7 C 15.4,12.6 16,11.1 16,9.5 C 16,5.9 13.1,3 9.5,3 C 5.9,3 3,5.9 3,9.5 C 3,13.1 5.9,16 9.5,16 C 11.1,16 12.6,15.4 13.7,14.4 L 14,14.7 V 15.5 L 19,20.5 L 20.5,19 Z M 9.5,14.4 C 6.8,14.4 4.6,12.2 4.6,9.5 C 4.6,6.8 6.8,4.6 9.5,4.6 C 12.2,4.6 14.4,6.8 14.4,9.5 C 14.4,12.2 12.2,14.4 9.5,14.4 Z</Geometry>

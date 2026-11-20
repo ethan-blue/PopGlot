@@ -623,8 +623,13 @@ public partial class MainWindow : Window
             : $"未检测：{denial.Message}");
     }
 
-    private static string EngineSwitcherHint(string? detail) =>
-        $"{detail}\n切换模型 ({InterfaceKeys.ModelHotkey.DisplayName})";
+    private static string EngineSwitcherHint(string? detail)
+    {
+        var switchLine = InterfaceKeys.ModelHotkey.IsValid
+            ? $"切换模型 ({InterfaceKeys.ModelHotkey.DisplayName})"
+            : "切换模型";
+        return string.IsNullOrWhiteSpace(detail) ? switchLine : $"{detail}\n{switchLine}";
+    }
 
     private bool IsActiveRouteFreeEngine()
     {
