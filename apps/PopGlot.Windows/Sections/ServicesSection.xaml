@@ -51,7 +51,7 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="10">
+                                CornerRadius="{StaticResource CardRadius}">
                             <ContentPresenter />
                         </Border>
                         <ControlTemplate.Triggers>
@@ -78,7 +78,7 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ListBoxItem">
-                        <Border Background="{TemplateBinding Background}" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1" CornerRadius="{DynamicResource CardRadius}">
+                        <Border Background="{TemplateBinding Background}" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1" CornerRadius="{StaticResource CardRadius}">
                             <ContentPresenter HorizontalAlignment="Stretch"/>
                         </Border>
                     </ControlTemplate>
@@ -93,7 +93,7 @@
             <Setter Property="Padding" Value="12" />
             <Setter Property="Margin" Value="0,0,0,8" />
             <Setter Property="CornerRadius" Value="{StaticResource CardRadius}" />
-            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Background" Value="{DynamicResource SurfaceMutedBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
         </Style>
@@ -171,15 +171,17 @@
                 </Grid.ColumnDefinitions>
                 <WrapPanel Grid.Column="0" HorizontalAlignment="Left" VerticalAlignment="Center">
                     <Button x:Name="ChooseAnotherProviderButton" Content="← 选择来源" Visibility="Collapsed"
-                            Style="{StaticResource GhostButton}" Padding="10,5" Margin="0,0,8,0"
+                            Style="{StaticResource GhostButton}" Padding="10,5" Margin="0,0,8,4"
                             Click="ChooseAnotherProvider_Click" />
                     <Button x:Name="BackToListHeaderButton" Content="← 返回引擎列表" Visibility="Collapsed"
-                            Style="{StaticResource GhostButton}" Padding="10,5" Click="BackToServices_Click" />
+                            Style="{StaticResource GhostButton}" Padding="10,5" Margin="0,0,8,4"
+                            Click="BackToServices_Click" />
                     <Button x:Name="AddEngineHeaderButton" Content="添加引擎"
-                            Style="{StaticResource PrimaryButton}" Padding="16,8" Click="AddProfile_Click" />
+                            Style="{StaticResource PrimaryButton}" Padding="16,8" Margin="0,0,0,4"
+                            Click="AddProfile_Click" />
                 </WrapPanel>
                 <Button x:Name="ProxyStatusButton" Grid.Column="1" VerticalAlignment="Center"
-                        Style="{StaticResource GhostButton}" Padding="10,5"
+                        Style="{StaticResource GhostButton}" Padding="10,5" Margin="8,0,0,4"
                         AutomationProperties.Name="网络与代理状态"
                         ToolTip="查看或快速切换网络代理模式"
                         Click="ProxyStatusButton_Click">
@@ -192,7 +194,7 @@
             </Grid>
 
             <Border x:Name="QuickProxyPanel" Grid.Row="1" Visibility="Collapsed" Margin="0,0,0,10" Padding="12,10"
-                    CornerRadius="{DynamicResource CardRadius}" Background="{DynamicResource SurfaceMutedBrush}"
+                    CornerRadius="{StaticResource CardRadius}" Background="{DynamicResource SurfaceMutedBrush}"
                     BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
                 <StackPanel>
                     <Grid Margin="0,0,0,8">
@@ -222,7 +224,9 @@
                         <TextBox x:Name="QuickProxyUrlTextBox" Style="{StaticResource FormTextBox}" Height="32"
                                  FontFamily="{StaticResource MonoFontFamily}"
                                  local:Ui.Placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:7891"
-                                 AutomationProperties.Name="快捷代理地址" />
+                                 AutomationProperties.Name="快捷代理地址"
+                                 TextChanged="QuickProxyUrlTextBox_TextChanged"
+                                 KeyDown="QuickProxyUrlTextBox_KeyDown" />
                         <Button x:Name="QuickProxyApplyButton" Grid.Column="1" Content="应用"
                                 Style="{StaticResource GhostButton}" Height="32" Padding="12,0" Margin="8,0,0,0"
                                 Click="QuickProxyApply_Click" />
@@ -232,7 +236,7 @@
                 </StackPanel>
             </Border>
 
-            <Border x:Name="DraftGuardBar" Grid.Row="2" Visibility="Collapsed" Margin="0,0,0,10" Padding="12,10" CornerRadius="{DynamicResource CardRadius}"
+            <Border x:Name="DraftGuardBar" Grid.Row="2" Visibility="Collapsed" Margin="0,0,0,10" Padding="12,10" CornerRadius="{StaticResource CardRadius}"
                     Background="{DynamicResource WarningSoftBrush}" BorderBrush="{DynamicResource WarningBrush}" BorderThickness="1.5">
                 <StackPanel>
                     <TextBlock x:Name="DraftGuardText" FontWeight="SemiBold" TextWrapping="Wrap"
@@ -251,7 +255,7 @@
         <Grid x:Name="DetailGrid" Grid.Row="1" SizeChanged="DetailGrid_SizeChanged">
             <!-- Service overview. Editing is explicit and replaces this list. -->
             <Border x:Name="EditorEmpty" Padding="0" Background="Transparent" BorderThickness="0">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,6,8">
+                <ScrollViewer x:Name="OverviewScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,6,8">
                     <StackPanel>
                         <!-- 1. Built-in Free Routes Panel -->
                         <Border x:Name="FreeRoutesPanel" Style="{StaticResource EditorSectionCard}" Margin="0,0,0,12">
@@ -261,20 +265,21 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <StackPanel VerticalAlignment="Center">
+                                    <StackPanel VerticalAlignment="Center" Margin="0,0,8,0">
                                         <WrapPanel VerticalAlignment="Center">
                                             <TextBlock Text="内置免费线路" Style="{StaticResource EditorSectionTitle}" VerticalAlignment="Center" />
-                                            <Border x:Name="FreeRoutesConsentBadge" Background="{DynamicResource SurfaceMutedBrush}"
+                                            <Border x:Name="FreeRoutesConsentBadge" Background="{DynamicResource InputBrush}"
+                                                    BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1"
                                                     CornerRadius="4" Padding="6,2" Margin="8,0,0,0" VerticalAlignment="Center">
                                                 <TextBlock x:Name="FreeRoutesConsentText" Text="已启用" FontSize="11"
                                                            Foreground="{DynamicResource TextSecondaryBrush}" />
                                             </Border>
-                                            <Button x:Name="EnableFreeRoutesInlineButton" Content="开启免费线路"
+                                            <Button x:Name="EnableFreeRoutesInlineButton" Content="开启公共翻译"
                                                     Visibility="Collapsed" Style="{StaticResource GhostButton}"
                                                     Padding="8,2" Margin="8,0,0,0" FontSize="11.5"
                                                     Click="EnableFreeRoutesInline_Click" />
                                         </WrapPanel>
-                                        <TextBlock Text="免 API Key 直接可用；点击右侧按钮可切换当前线路或手动测速"
+                                        <TextBlock Text="公共翻译免 API Key；可切换当前线路或手动测速"
                                                    Style="{StaticResource Caption}" Margin="0,2,0,0" TextWrapping="Wrap" />
                                     </StackPanel>
                                     <Button x:Name="TestAllFreeRoutesButton" Grid.Column="1" Content="一键测速"
@@ -291,12 +296,16 @@
                                                     Background="{DynamicResource InputBrush}"
                                                     BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
                                                 <Grid>
+                                                    <Grid.RowDefinitions>
+                                                        <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="Auto" />
+                                                    </Grid.RowDefinitions>
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="*" />
                                                         <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="Auto" />
                                                     </Grid.ColumnDefinitions>
-                                                    <StackPanel Grid.Column="0" Margin="0,0,8,0" VerticalAlignment="Center">
+                                                    <StackPanel x:Name="RouteInfoPanel" Grid.Row="0" Grid.Column="0" Margin="0,0,8,0" VerticalAlignment="Center">
                                                         <WrapPanel VerticalAlignment="Center">
                                                             <Ellipse Width="7" Height="7" Fill="{Binding StateBrush}"
                                                                      VerticalAlignment="Center" Margin="0,0,6,0" />
@@ -317,12 +326,12 @@
                                                             </ItemsControl>
                                                         </WrapPanel>
                                                         <TextBlock Text="{Binding Description}" Style="{StaticResource Caption}"
-                                                                   Margin="13,2,0,0" TextTrimming="CharacterEllipsis" />
+                                                                   Margin="13,2,0,0" TextWrapping="Wrap" />
                                                     </StackPanel>
-                                                    <TextBlock Grid.Column="1" Text="{Binding LatencyText}" FontSize="11.5"
+                                                    <TextBlock x:Name="RouteLatencyText" Grid.Row="0" Grid.Column="1" Text="{Binding LatencyText}" FontSize="11.5"
                                                                Foreground="{Binding LatencyBrush}" VerticalAlignment="Center"
                                                                Margin="0,0,10,0" MinWidth="46" TextAlignment="Right" />
-                                                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <StackPanel x:Name="RouteActionsPanel" Grid.Row="0" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                                                         <Button Content="测速" Style="{StaticResource GhostButton}"
                                                                 Padding="8,3" FontSize="11.5" Margin="0,0,6,0"
                                                                 Tag="{Binding Provider}"
@@ -343,6 +352,21 @@
                                                     </StackPanel>
                                                 </Grid>
                                             </Border>
+                                            <DataTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding IsCompactOverview, RelativeSource={RelativeSource AncestorType=UserControl}}" Value="True">
+                                                    <Setter TargetName="RouteInfoPanel" Property="Grid.ColumnSpan" Value="3" />
+                                                    <Setter TargetName="RouteInfoPanel" Property="Margin" Value="0,0,0,6" />
+                                                    <Setter TargetName="RouteLatencyText" Property="Grid.Row" Value="1" />
+                                                    <Setter TargetName="RouteLatencyText" Property="Grid.Column" Value="0" />
+                                                    <Setter TargetName="RouteLatencyText" Property="HorizontalAlignment" Value="Left" />
+                                                    <Setter TargetName="RouteLatencyText" Property="TextAlignment" Value="Left" />
+                                                    <Setter TargetName="RouteLatencyText" Property="Margin" Value="13,0,8,0" />
+                                                    <Setter TargetName="RouteActionsPanel" Property="Grid.Row" Value="1" />
+                                                    <Setter TargetName="RouteActionsPanel" Property="Grid.Column" Value="1" />
+                                                    <Setter TargetName="RouteActionsPanel" Property="Grid.ColumnSpan" Value="2" />
+                                                    <Setter TargetName="RouteActionsPanel" Property="HorizontalAlignment" Value="Right" />
+                                                </DataTrigger>
+                                            </DataTemplate.Triggers>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
@@ -430,49 +454,62 @@
                                            TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" />
                             </StackPanel>
                             <ListBox x:Name="ProfilesListBox" ItemContainerStyle="{StaticResource ServiceListItem}"
-                                     ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                                     Background="Transparent" BorderThickness="0"
+                                     ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     PreviewMouseWheel="ForwardOverviewWheel">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Padding="12,9" CornerRadius="{DynamicResource CardRadius}" Background="{DynamicResource InputBrush}"
+                                        <Border Padding="12,9" CornerRadius="{StaticResource CardRadius}" Background="{DynamicResource InputBrush}"
                                                 BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
                                             <Grid>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                </Grid.RowDefinitions>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="36"/><ColumnDefinition Width="*"/>
                                                     <ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/>
                                                 </Grid.ColumnDefinitions>
-                                                <Border Width="30" Height="30" CornerRadius="10" Background="{DynamicResource AccentSoftBrush}">
+                                                <Border Grid.Row="0" Grid.Column="0" Width="30" Height="30" CornerRadius="10"
+                                                        Background="{DynamicResource AccentSoftBrush}" VerticalAlignment="Center">
                                                     <Path Data="{StaticResource IconProvider}" Width="16" Height="16" Stretch="Uniform"
                                                           Fill="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                                 </Border>
-                                                <StackPanel Grid.Column="1" Margin="9,0,10,0" VerticalAlignment="Center">
-                                                    <WrapPanel VerticalAlignment="Center">
-                                                        <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
+                                                <StackPanel x:Name="ProfileInfoPanel" Grid.Row="0" Grid.Column="1" Margin="9,0,10,0" VerticalAlignment="Center">
+                                                    <Grid HorizontalAlignment="Left">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
                                                                    VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
                                                                    ToolTip="{Binding Name}" />
-                                                        <Border Visibility="{Binding IsDefaultBadge}"
+                                                        <Border Grid.Column="1" Visibility="{Binding IsDefaultBadge}"
                                                                 Background="{DynamicResource SuccessSoftBrush}" CornerRadius="4"
                                                                 Padding="6,1" Margin="8,0,0,0" VerticalAlignment="Center">
                                                             <TextBlock Text="当前引擎" FontSize="11" FontWeight="SemiBold"
                                                                        Foreground="{DynamicResource SuccessBrush}" />
                                                         </Border>
-                                                        <ItemsControl ItemsSource="{Binding CapabilityBadges}" Margin="6,0,0,0" VerticalAlignment="Center">
-                                                            <ItemsControl.ItemsPanel>
-                                                                <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
-                                                            </ItemsControl.ItemsPanel>
-                                                            <ItemsControl.ItemTemplate>
-                                                                <DataTemplate>
-                                                                    <Border Style="{StaticResource CapabilityPillBorder}">
-                                                                        <TextBlock Text="{Binding}" FontSize="10.5"
-                                                                                   Foreground="{DynamicResource TextSecondaryBrush}" />
-                                                                    </Border>
-                                                                </DataTemplate>
-                                                            </ItemsControl.ItemTemplate>
-                                                        </ItemsControl>
-                                                    </WrapPanel>
+                                                    </Grid>
+                                                    <ItemsControl ItemsSource="{Binding CapabilityBadges}" Margin="0,4,0,0">
+                                                        <ItemsControl.ItemsPanel>
+                                                            <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                                                        </ItemsControl.ItemsPanel>
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <Border Style="{StaticResource CapabilityPillBorder}" Margin="0,0,4,2">
+                                                                    <TextBlock Text="{Binding}" FontSize="10.5"
+                                                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                                </Border>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
                                                     <TextBlock Text="{Binding Summary}" Style="{StaticResource Caption}"
-                                                                Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
+                                                               Margin="0,2,0,0" TextTrimming="CharacterEllipsis"
+                                                               ToolTip="{Binding Summary}" />
                                                 </StackPanel>
-                                                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,0">
+                                                <StackPanel x:Name="ProfileStatePanel" Grid.Row="0" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,0">
                                                     <Ellipse Width="6" Height="6" Fill="{Binding StateBrush}" />
                                                     <TextBlock Text="{Binding StateText}" Margin="7,0,0,0"
                                                                Foreground="{Binding StateTextBrush}" FontSize="12" />
@@ -482,7 +519,7 @@
                                                                    Foreground="{DynamicResource TextSecondaryBrush}" />
                                                     </Border>
                                                 </StackPanel>
-                                                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                                                <StackPanel x:Name="ProfileActionsPanel" Grid.Row="0" Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
                                                     <Button Style="{StaticResource IconButton}" local:Ui.Icon="{StaticResource IconCheck}"
                                                             Visibility="{Binding SetDefaultVisibility}" Tag="{Binding Id}"
                                                             AutomationProperties.Name="设为当前引擎" ToolTip="设为当前引擎"
@@ -502,6 +539,20 @@
                                                 </StackPanel>
                                             </Grid>
                                         </Border>
+                                        <DataTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding IsCompactOverview, RelativeSource={RelativeSource AncestorType=UserControl}}" Value="True">
+                                                <Setter TargetName="ProfileInfoPanel" Property="Grid.ColumnSpan" Value="3" />
+                                                <Setter TargetName="ProfileInfoPanel" Property="Margin" Value="9,0,0,8" />
+                                                <Setter TargetName="ProfileStatePanel" Property="Grid.Row" Value="1" />
+                                                <Setter TargetName="ProfileStatePanel" Property="Grid.Column" Value="1" />
+                                                <Setter TargetName="ProfileStatePanel" Property="HorizontalAlignment" Value="Left" />
+                                                <Setter TargetName="ProfileStatePanel" Property="Margin" Value="9,0,8,0" />
+                                                <Setter TargetName="ProfileActionsPanel" Property="Grid.Row" Value="1" />
+                                                <Setter TargetName="ProfileActionsPanel" Property="Grid.Column" Value="2" />
+                                                <Setter TargetName="ProfileActionsPanel" Property="Grid.ColumnSpan" Value="2" />
+                                                <Setter TargetName="ProfileActionsPanel" Property="HorizontalAlignment" Value="Right" />
+                                            </DataTrigger>
+                                        </DataTemplate.Triggers>
                                     </DataTemplate>
                                 </ListBox.ItemTemplate>
                             </ListBox>
@@ -927,7 +978,8 @@
                                                        Text="决定整篇翻译的分段预算与思考程度；留空使用保守默认，仅在超出预算后才安全分段" />
                                             <Grid x:Name="GenerationParamsGrid">
                                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                                <StackPanel>
+                                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                                <StackPanel x:Name="ReasoningParamPanel">
                                                     <TextBlock Text="思考程度" Style="{StaticResource FieldLabel}"/>
                                                     <ComboBox x:Name="ReasoningLevelCombo" Style="{StaticResource EditorComboField}"
                                                               AutomationProperties.Name="思考程度">
@@ -940,7 +992,7 @@
                                                     <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" Foreground="{DynamicResource TextTertiaryBrush}"
                                                                Text="默认跟随服务；不支持所选思考级别的模型会明确提示"/>
                                                 </StackPanel>
-                                                <StackPanel Grid.Column="2">
+                                                <StackPanel x:Name="TokenBudgetParamPanel" Grid.Column="2">
                                                     <Grid>
                                                         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                                         <StackPanel>
@@ -968,10 +1020,10 @@
 
                     <Border x:Name="EditorActionBar" Grid.Row="1" Margin="0,10,0,0" Padding="0,10,0,0" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0">
                         <WrapPanel HorizontalAlignment="Right">
-                            <Button x:Name="DeleteServiceButton" Content="删除引擎" Margin="0,0,8,6" Style="{StaticResource DangerButton}" Padding="12,6" Click="DeleteProfile_Click"/>
-                            <Button x:Name="CancelEditButton" Content="取消" Style="{StaticResource GhostButton}" Padding="12,6" Click="CancelEdit_Click"/>
-                            <Button x:Name="TestAndSaveButton" Content="测试并保存" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Padding="12,6" Click="TestAndSave_Click"/>
-                            <Button x:Name="SaveServiceButton" Content="保存" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}" Padding="16,6" Click="SaveService_Click"/>
+                            <Button x:Name="DeleteServiceButton" Content="删除引擎" Margin="0,0,8,0" Style="{StaticResource DangerButton}" Padding="12,6" VerticalAlignment="Center" Click="DeleteProfile_Click"/>
+                            <Button x:Name="CancelEditButton" Content="取消" Style="{StaticResource GhostButton}" Padding="12,6" VerticalAlignment="Center" Click="CancelEdit_Click"/>
+                            <Button x:Name="TestAndSaveButton" Content="测试并保存" Margin="8,0,0,0" Style="{StaticResource GhostButton}" Padding="12,6" VerticalAlignment="Center" Click="TestAndSave_Click"/>
+                            <Button x:Name="SaveServiceButton" Content="保存" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}" Padding="16,6" VerticalAlignment="Center" Click="SaveService_Click"/>
                         </WrapPanel>
                     </Border>
                 </Grid>

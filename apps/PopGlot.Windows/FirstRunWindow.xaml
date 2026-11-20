@@ -8,7 +8,8 @@
         Background="{DynamicResource CanvasBrush}" Foreground="{DynamicResource TextPrimaryBrush}"
         UseLayoutRounding="True" SnapsToDevicePixels="True"
         TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType"
-        RenderOptions.ClearTypeHint="Enabled">
+        RenderOptions.ClearTypeHint="Enabled"
+        KeyDown="Window_KeyDown">
 
     <WindowChrome.WindowChrome>
         <WindowChrome CaptionHeight="38" CornerRadius="0" GlassFrameThickness="0"
@@ -37,12 +38,17 @@
                 </StackPanel>
             </Grid>
 
+            <!-- 125%~150% 缩放或系统字体放大时内容可能超出窗口高度：步骤区可滚动，底部按钮永远可见。 -->
+            <ScrollViewer x:Name="StepScroller" Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                          Focusable="False">
+            <Grid>
             <!-- ==================== Step 1: welcome ==================== -->
-            <StackPanel x:Name="WelcomeStep" Grid.Row="1" Margin="32,12,32,0">
+            <StackPanel x:Name="WelcomeStep" Margin="32,12,32,16">
                 <TextBlock Text="欢迎使用 PopGlot" Style="{StaticResource PageTitle}"
                            FontSize="22" FontWeight="SemiBold" />
                 <TextBlock Margin="0,10,0,0" TextWrapping="Wrap" FontSize="13.5"
-                           Text="选中文字、框选屏幕或打开极速查词（支持边输边译）就能翻译，自带 Bing、有道词典、MyMemory、Google 等公共翻译线路，打开就能用。" />
+                           Text="选中文字、框选屏幕或打开极速查词（支持边输边译）就能翻译，自带 Google、Bing、有道词典、MyMemory 等公共翻译线路，打开就能用。" />
                 <TextBlock Margin="0,18,0,6" Text="常用快捷键" Style="{StaticResource SectionTitle}" />
                 <Border Style="{StaticResource Card}" Padding="14,10">
                     <StackPanel>
@@ -57,7 +63,7 @@
             </StackPanel>
 
             <!-- ==================== Step 2: privacy ==================== -->
-            <StackPanel x:Name="PrivacyStep" Grid.Row="1" Margin="32,12,32,0" Visibility="Collapsed">
+            <StackPanel x:Name="PrivacyStep" Margin="32,12,32,16" Visibility="Collapsed">
                 <TextBlock Text="联网与隐私" Style="{StaticResource PageTitle}"
                            FontSize="22" FontWeight="SemiBold" />
                 <TextBlock Margin="0,8,0,14" TextWrapping="Wrap" FontSize="13"
@@ -91,7 +97,7 @@
                             <StackPanel VerticalAlignment="Center">
                                 <TextBlock Text="开启免配置公共翻译" Style="{StaticResource RowTitle}" />
                                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
-                                           Text="不用填 API Key，直接把待翻译文字发给所选公共服务（Bing、有道词典、MyMemory 或 Google；「自动优选」每次也只发给单条线路）" />
+                                           Text="不用填 API Key，待翻译的文字会发给你选定的公共线路（Google、Bing、有道词典、MyMemory；「自动优选」每次也只选其中一条）" />
                             </StackPanel>
                             <ToggleButton x:Name="FreeEngineToggle" Grid.Column="1" VerticalAlignment="Center"
                                           Style="{StaticResource ToggleSwitch}" IsChecked="True"
@@ -129,7 +135,7 @@
                                            Text="开机后留在系统托盘里，按快捷键随时就能用" />
                             </StackPanel>
                             <ToggleButton x:Name="StartupToggle" Grid.Column="1" VerticalAlignment="Center"
-                                          Style="{StaticResource ToggleSwitch}" IsChecked="True"
+                                          Style="{StaticResource ToggleSwitch}" IsChecked="False"
                                           AutomationProperties.Name="开机自动启动" />
                         </Grid>
 
@@ -154,7 +160,7 @@
             </StackPanel>
 
             <!-- ==================== Step 3: done ==================== -->
-            <StackPanel x:Name="DoneStep" Grid.Row="1" Margin="32,12,32,0" Visibility="Collapsed">
+            <StackPanel x:Name="DoneStep" Margin="32,12,32,16" Visibility="Collapsed">
                 <TextBlock Text="一切就绪" Style="{StaticResource PageTitle}"
                            FontSize="22" FontWeight="SemiBold" />
                 <TextBlock x:Name="DoneSummary" Margin="0,12,0,0" TextWrapping="Wrap" FontSize="13.5" />
@@ -164,6 +170,9 @@
                         Style="{StaticResource GhostButton}" Padding="12,6"
                         Content="打开设置 → 引擎" Click="OpenServices_Click" />
             </StackPanel>
+
+            </Grid>
+            </ScrollViewer>
 
             <!-- ==================== Footer ==================== -->
             <Border Grid.Row="2" BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,0"

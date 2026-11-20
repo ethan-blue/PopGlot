@@ -161,12 +161,19 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
             }
             else
             {
+                if (string.IsNullOrWhiteSpace(CustomProxyTextBox.Text))
+                {
+                    SaveProxySettings(null, null, clearCustomUrl: true);
+                }
                 CustomProxyTextBox.Focus();
             }
             return;
         }
 
-        SaveProxySettings(selectedMode, ShellSettings.NormalizeCustomProxyUrl(CustomProxyTextBox.Text));
+        SaveProxySettings(
+            selectedMode,
+            ShellSettings.NormalizeCustomProxyUrl(CustomProxyTextBox.Text),
+            clearCustomUrl: string.IsNullOrWhiteSpace(CustomProxyTextBox.Text));
     }
 
     private void ProxyBypass_Changed(object sender, RoutedEventArgs e)
@@ -177,17 +184,16 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
         }
 
         var selectedMode = ReadSelectedProxyMode();
-        if (selectedMode == NetworkProxyMode.Custom && !ValidateCustomProxyUrl(out var validUrl))
+        if (selectedMode == NetworkProxyMode.Custom && !ValidateCustomProxyUrl(out _))
         {
-            SaveProxySettings(null, null);
+            SaveProxySettings(null, null, clearCustomUrl: string.IsNullOrWhiteSpace(CustomProxyTextBox.Text));
             return;
         }
 
         SaveProxySettings(
             selectedMode,
-            selectedMode == NetworkProxyMode.Custom
-                ? ShellSettings.NormalizeCustomProxyUrl(CustomProxyTextBox.Text)
-                : ShellSettings.NormalizeCustomProxyUrl(CustomProxyTextBox.Text));
+            ShellSettings.NormalizeCustomProxyUrl(CustomProxyTextBox.Text),
+            clearCustomUrl: string.IsNullOrWhiteSpace(CustomProxyTextBox.Text));
     }
 
     private void CustomProxyTextBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -213,6 +219,12 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
     {
         if (_loading || _loadingExtended || ProxyCustomRadio.IsChecked != true)
         {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(CustomProxyTextBox.Text))
+        {
+            SaveProxySettings(null, null, clearCustomUrl: true);
             return;
         }
 
@@ -347,7 +359,7 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
         ProxyValidationText.Visibility = Visibility.Visible;
     }
 
-    private void SaveProxySettings(NetworkProxyMode? modeOverride, string? customUrlOverride)
+    private void SaveProxySettings(NetworkProxyMode? modeOverride, string? customUrlOverride, bool clearCustomUrl = false)
     {
         var bypassLocal = ProxyBypassLocalToggle.IsChecked == true;
         var bypassDomestic = ProxyBypassDomesticToggle.IsChecked == true;
@@ -356,7 +368,7 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
             var updated = ShellSettingsStore.Update(current => current with
             {
                 NetworkProxyMode = modeOverride ?? current.NetworkProxyMode,
-                CustomProxyUrl = customUrlOverride ?? current.CustomProxyUrl,
+                CustomProxyUrl = clearCustomUrl ? null : (customUrlOverride ?? current.CustomProxyUrl),
                 ProxyBypassLocal = bypassLocal,
                 ProxyBypassDomesticRoutes = bypassDomestic,
             });
@@ -433,14 +445,36 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
     }
 
     private bool _compact;
+    private bool _compactProxy;
+
+    private void GeneralSection_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (e.NewSize.Width <= 0)
+        {
+            return;
+        }
+        ApplyResponsiveLayout();
+    }
 
     /// <summary>
-    /// Stacks theme and startup controls only when less than 400 DIP is available.
+    /// Stacks narrow-row controls below 400 DIP, and stacks the wider proxy
+    /// radio group below 480 DIP so 640px SettingsWindow never squeezes labels.
     /// </summary>
     internal void SetCompact(bool compact)
     {
-        if (_compact == compact) return;
+        if (_compact == compact && _compactProxy == (compact || (ActualWidth > 0 && ActualWidth < 480)))
+        {
+            return;
+        }
         _compact = compact;
+        ApplyResponsiveLayout();
+    }
+
+    private void ApplyResponsiveLayout()
+    {
+        var compact = _compact || (ActualWidth > 0 && ActualWidth < 400);
+        var compactProxy = compact || (ActualWidth > 0 && ActualWidth < 480);
+        _compactProxy = compactProxy;
 
         if (ThemeComboBox is not null && ThemeRowGrid?.ColumnDefinitions.Count > 1)
         {
@@ -456,24 +490,35 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
             }
         }
 
-        if (StartupControlsPanel is not null && StartupRowGrid?.ColumnDefinitions.Count > 1)
+        PlaceRowControl(StartupRowGrid, StartupControlsPanel, compact);
+        PlaceRowControl(LiveTranslateDelayRowGrid, LiveTranslateDelayCombo, compact);
+        PlaceRowControl(LiveTranslateScopeRowGrid, LiveTranslateScopeCombo, compact);
+        PlaceRowControl(QuickSearchModeRowGrid, QuickSearchModeCombo, compact);
+        PlaceRowControl(ProxyModeRowGrid, ProxyModeChoicePanel, compactProxy);
+        PlaceRowControl(UpdateRowGrid, UpdateControlsPanel, compact);
+    }
+
+    private static void PlaceRowControl(Grid? rowGrid, FrameworkElement? control, bool stacked)
+    {
+        if (rowGrid is null || control is null || rowGrid.ColumnDefinitions.Count < 2)
         {
-            if (compact)
-            {
-                StartupRowGrid.ColumnDefinitions[1].Width = new GridLength(0);
-                Grid.SetColumn(StartupControlsPanel, 0);
-                Grid.SetRow(StartupControlsPanel, 1);
-                StartupControlsPanel.Margin = new Thickness(0, 8, 0, 0);
-                StartupControlsPanel.HorizontalAlignment = HorizontalAlignment.Left;
-            }
-            else
-            {
-                StartupRowGrid.ColumnDefinitions[1].Width = GridLength.Auto;
-                Grid.SetColumn(StartupControlsPanel, 1);
-                Grid.SetRow(StartupControlsPanel, 0);
-                StartupControlsPanel.Margin = new Thickness(0);
-                StartupControlsPanel.HorizontalAlignment = HorizontalAlignment.Right;
-            }
+            return;
+        }
+        if (stacked)
+        {
+            rowGrid.ColumnDefinitions[1].Width = new GridLength(0);
+            Grid.SetColumn(control, 0);
+            Grid.SetRow(control, 1);
+            control.Margin = new Thickness(0, 8, 0, 0);
+            control.HorizontalAlignment = HorizontalAlignment.Left;
+        }
+        else
+        {
+            rowGrid.ColumnDefinitions[1].Width = GridLength.Auto;
+            Grid.SetColumn(control, 1);
+            Grid.SetRow(control, 0);
+            control.Margin = new Thickness(0);
+            control.HorizontalAlignment = HorizontalAlignment.Right;
         }
     }
 
@@ -484,7 +529,11 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
     /// </summary>
     internal void UpdateStartupState(StartupState state)
     {
-        StartupStateHint.Text = state.DescribeZh();
+        var description = state.DescribeZh();
+        StartupStateHint.Text = description;
+        StartupStateHint.Visibility = string.IsNullOrWhiteSpace(description)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
         StartupStateHint.Opacity = state.EffectiveEnabled || state.LastError is not null ? 1.0 : 0.85;
         StartupRepair.Visibility =
             state.DesiredEnabled && !state.EffectiveEnabled
@@ -592,25 +641,24 @@ public partial class GeneralSection : System.Windows.Controls.UserControl
     }
 
     /// <summary>
-    /// 「重新显示引导」入口：0.1.35 起直接打开首次配置向导——隐私选择
-    /// （含内置免费引擎开关）就住在那里，这是关掉免费引擎后唯一的回头路。
-    /// 写盘失败只损失"下次启动再出现"，不影响本次展示。
+    /// 「重新显示引导」入口：打开首次配置向导并保留当前已保存的选择，
+    /// 直接关闭时不覆盖现有设置；点击「打开设置 → 引擎」时跳转到引擎页。
     /// </summary>
     private void RestartOnboarding_Click(object sender, RoutedEventArgs e)
     {
-        try
-        {
-            ShellSettingsStore.Update(current => current with { HasCompletedOnboarding = false });
-        }
-        catch (System.Exception)
-        {
-            // 展示引导本身不依赖这次写盘成功。
-        }
         var owner = Window.GetWindow(this)
             ?? System.Windows.Application.Current?.MainWindow;
         var wizard = new FirstRunWindow { Owner = owner };
         WindowPositioner.ConvergeFirstShow(wizard);
-        wizard.ShowDialog();
+        var committed = wizard.ShowDialog() == true;
+        if (committed)
+        {
+            LoadExtendedSettings();
+        }
+        if (wizard.OpenServicesRequested && owner is SettingsWindow settingsWindow)
+        {
+            settingsWindow.ShowPage("Provider");
+        }
     }
 
     // C25：离线帮助查看器。纯本机渲染，FindProjectRoot 式回退保证开发与

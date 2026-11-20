@@ -78,11 +78,8 @@
                           Checked="CloudSpeech_ToggleChanged" Unchecked="CloudSpeech_ToggleChanged" />
         </Grid>
 
-        <Border Style="{StaticResource SettingsDivider}" Margin="0,0,0,12" />
-
-
         <!-- Route status card -->
-        <Border x:Name="RouteCard" Visibility="Collapsed" Margin="0,0,0,12" Padding="0,8"
+        <Border x:Name="RouteCard" Visibility="Collapsed" Margin="0,4,0,12" Padding="0,10"
                 BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="0,1,0,1">
             <StackPanel>
                 <WrapPanel Margin="0,0,0,6">
@@ -176,8 +173,26 @@
                 <TextBlock x:Name="OcrStatusText" Margin="0,0,0,8" TextWrapping="Wrap"
                            Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" />
                 <ListBox x:Name="OcrLanguagesListBox" MaxHeight="120" Margin="0,0,0,8"
-                         BorderThickness="0" Background="Transparent" IsHitTestVisible="False"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
+                         BorderThickness="0" Background="Transparent"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Focusable" Value="False" />
+                            <Setter Property="Padding" Value="0,2" />
+                            <Setter Property="Background" Value="Transparent" />
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <Border Padding="{TemplateBinding Padding}" Background="Transparent">
+                                            <ContentPresenter />
+                                        </Border>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                </ListBox>
                 <TextBlock Style="{StaticResource Caption}">
                     <Run Text='缺少语言包：Windows 设置 → 时间和语言 → 语言和区域 → 语言选项 → 光学字符识别' />
                 </TextBlock>

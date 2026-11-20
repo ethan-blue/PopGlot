@@ -3,6 +3,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using PopGlot.Windows;
@@ -19,6 +20,7 @@ internal static class ServicesAndProxyUiTests
         TestServicesSectionHubAndDiscovery();
         TestGeneralSectionProxyAndLiveTranslate(root);
         TestTranslateSectionFreeProvidersAndDomesticTips();
+        TestPrivacyAndFirstRunUiRegressions();
     }
 
     private static void EnsureWpfApplication()
@@ -228,6 +230,42 @@ internal static class ServicesAndProxyUiTests
             Program.Assert(addedRow.LatencyVisibility == Visibility.Visible &&
                            !string.IsNullOrWhiteSpace(addedRow.LatencyText),
                 "verified 1-click profile must show latency pill in ProfilesListBox");
+
+            // 6. P0 #7: When a user engine is active (PreferFreeEngine == false), previously selected
+            // free route must NOT show 当前线路 badge and MUST allow clicking 设为当前 to switch back.
+            var cfg = ProfileManager.Load();
+            cfg.ActiveProfileId = addedRow.Id;
+            cfg.PreferFreeEngine = false;
+            ProfileManager.Save(cfg);
+            section.RefreshProfilesList();
+            Pump();
+            var inactiveFreeRows = freeList.ItemsSource!.Cast<FreeRouteRow>().ToList();
+            Program.Assert(inactiveFreeRows.All(r => r.ActiveBadgeVisibility == Visibility.Collapsed && r.SelectVisibility == Visibility.Visible && !r.IsActive),
+                "when a user profile is active, no free route may show 当前线路 or hide 设为当前");
+            var switchBackYoudao = FindVisualChildren<Button>(freeList)
+                .FirstOrDefault(b => b.Tag is FreeEngineProvider p && p == FreeEngineProvider.Youdao && Equals(b.Content, "设为当前"))
+                ?? throw new InvalidOperationException("Youdao switch-back button must be visible while user engine is active");
+            switchBackYoudao.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump();
+            Program.Assert(ProfileManager.Load().PreferFreeEngine && ShellSettingsStore.Load().FreeEngineProvider == FreeEngineProvider.Youdao,
+                "clicking 设为当前 on previously selected Youdao must switch back from user profile to Youdao");
+
+            // 7. QuickProxyUrlTextBox Enter submits custom proxy
+            ((Button)section.FindName("ProxyStatusButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump();
+            var quickCustomRadio = (RadioButton)section.FindName("QuickProxyCustomRadio");
+            quickCustomRadio.IsChecked = true;
+            quickCustomRadio.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            Pump();
+            var quickProxyInput = (TextBox)section.FindName("QuickProxyUrlTextBox");
+            quickProxyInput.Text = "http://127.0.0.1:7899";
+            quickProxyInput.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(quickProxyInput)!, 0, Key.Enter)
+            {
+                RoutedEvent = UIElement.KeyDownEvent,
+            });
+            Pump();
+            Program.Assert(ShellSettingsStore.Load().CustomProxyUrl == "http://127.0.0.1:7899",
+                "pressing Enter in QuickProxyUrlTextBox must apply custom proxy");
         }
         finally
         {
@@ -319,6 +357,24 @@ internal static class ServicesAndProxyUiTests
             savedLive = ShellSettingsStore.Load();
             Program.Assert(!savedLive.LiveTranslateEnabled && savedLive.LiveTranslateDelayMs == 800,
                 "disabling LiveTranslate and choosing 800ms delay must persist");
+
+            // 5. Uniform width of stacked QuickSearch ComboBoxes & collapsed empty StartupStateHint
+            Program.Assert(
+                Math.Abs(section.LiveTranslateDelay.Width - section.LiveTranslateScope.Width) < 0.1 &&
+                Math.Abs(section.LiveTranslateScope.Width - section.QuickSearchMode.Width) < 0.1,
+                "QuickSearch ComboBoxes under 查词窗口 must share uniform width");
+            Program.Assert(section.StartupStateHintText.Visibility == Visibility.Collapsed,
+                "StartupStateHint must stay Collapsed when empty");
+
+            // 6. Clearing CustomProxyUrlInput clears persisted CustomProxyUrl
+            section.ProxyCustom.IsChecked = true;
+            section.ProxyCustom.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            Pump();
+            section.CustomProxyUrlInput.Text = string.Empty;
+            section.CustomProxyUrlInput.RaiseEvent(new RoutedEventArgs(UIElement.LostFocusEvent));
+            Pump();
+            Program.Assert(string.IsNullOrEmpty(ShellSettingsStore.Load().CustomProxyUrl),
+                "clearing CustomProxyUrlInput must clear stored CustomProxyUrl");
         }
         finally
         {
@@ -398,6 +454,61 @@ internal static class ServicesAndProxyUiTests
             Pump();
             ShellSettingsStore.Save(originalShell);
             ProfileManager.Save(originalConfig);
+        }
+    }
+
+    private static void TestPrivacyAndFirstRunUiRegressions()
+    {
+        var originalShell = ShellSettingsStore.Load();
+        try
+        {
+            var privacy = new PrivacySection();
+            var ocrList = (ListBox)privacy.FindName("OcrLanguagesListBox");
+            Program.Assert(ocrList.IsHitTestVisible,
+                "OcrLanguagesListBox must remain hit-test visible so users with >4 language packs can scroll");
+
+            ShellSettingsStore.Save(originalShell with
+            {
+                HasCompletedOnboarding = true,
+                StartWithWindows = false,
+                FreeEngineConsent = FreeEngineConsent.Denied,
+            });
+            var wizard = new FirstRunWindow
+            {
+                Left = -12000,
+                Top = -12000,
+                ShowInTaskbar = false,
+            };
+            try
+            {
+                wizard.Show();
+                Pump();
+                Program.Assert(wizard.FindName("StepScroller") is ScrollViewer,
+                    "FirstRunWindow must wrap steps in StepScroller");
+                var startupToggle = (ToggleButton)wizard.FindName("StartupToggle");
+                Program.Assert(startupToggle.IsChecked == false,
+                    "FirstRunWindow StartupToggle must match StartWithWindows=false");
+                wizard.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(wizard)!, 0, Key.Escape)
+                {
+                    RoutedEvent = UIElement.KeyDownEvent,
+                });
+                Pump();
+                var after = ShellSettingsStore.Load();
+                Program.Assert(after.FreeEngineConsent == FreeEngineConsent.Denied && !after.StartWithWindows,
+                    "pressing Esc on reopened FirstRunWindow must not overwrite existing settings");
+            }
+            finally
+            {
+                if (wizard.IsLoaded)
+                {
+                    wizard.Close();
+                    Pump();
+                }
+            }
+        }
+        finally
+        {
+            ShellSettingsStore.Save(originalShell);
         }
     }
 

@@ -261,7 +261,7 @@ public partial class ServicesSection
         var operation = new CancellationTokenSource(TimeSpan.FromMinutes(3));
         _cliOperation = operation; _cliTestedModel = null; _cliTestedAt = null;
         CliConnectionStatus.Text = "正在将测试句 Hello world 翻译为中文…";
-        CliConnectionStatus.Foreground = TryFindResource("TextSecondaryBrush") as System.Windows.Media.Brush ?? CliConnectionStatus.Foreground;
+        CliConnectionStatus.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
         UpdateCliButtons();
         try
         {
@@ -273,7 +273,7 @@ public partial class ServicesSection
                 throw new InvalidOperationException("工具返回了不完整的翻译，请重试。");
             _cliTestedModel = ModelIdentity(); _cliTestedAt = DateTime.UtcNow;
             CliConnectionStatus.Text = $"测试通过：{response.Result.TranslatedText}（{response.ElapsedMs / 1000.0:F1} 秒）。可保存并使用。";
-            CliConnectionStatus.Foreground = TryFindResource("SuccessBrush") as System.Windows.Media.Brush ?? CliConnectionStatus.Foreground;
+            CliConnectionStatus.SetResourceReference(TextBlock.ForegroundProperty, "SuccessBrush");
         }
         catch (OperationCanceledException)
         { if (ReferenceEquals(_cliOperation, operation)) CliConnectionStatus.Text = "测试已取消，未保存测试结果。"; }
@@ -282,7 +282,7 @@ public partial class ServicesSection
             if (ReferenceEquals(_cliOperation, operation))
             {
                 CliConnectionStatus.Text = CliFailureText(ex);
-                CliConnectionStatus.Foreground = TryFindResource("DangerBrush") as System.Windows.Media.Brush ?? CliConnectionStatus.Foreground;
+                CliConnectionStatus.SetResourceReference(TextBlock.ForegroundProperty, "DangerBrush");
             }
         }
         finally

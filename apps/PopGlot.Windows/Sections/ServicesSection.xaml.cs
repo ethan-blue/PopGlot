@@ -157,6 +157,16 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
     /// <summary>True while the service editor form is visible.</summary>
     internal bool IsEditorOpen => EditorForm?.Visibility == Visibility.Visible;
 
+    public static readonly DependencyProperty IsCompactOverviewProperty = DependencyProperty.Register(
+        nameof(IsCompactOverview), typeof(bool), typeof(ServicesSection), new PropertyMetadata(false));
+
+    /// <summary>True when the overview width is narrow enough to stack list row actions onto a second row.</summary>
+    public bool IsCompactOverview
+    {
+        get => (bool)GetValue(IsCompactOverviewProperty);
+        private set => SetValue(IsCompactOverviewProperty, value);
+    }
+
     public ServicesSection()
     {
         InitializeComponent();
@@ -253,6 +263,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             return;
         }
         SetCompact(windowWidth < 700);
+        IsCompactOverview = windowWidth < 740;
     }
 
     private void DetailGrid_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -263,6 +274,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         }
         _detailWidthReported = true;
         SetCompact(e.NewSize.Width < 680);
+        IsCompactOverview = e.NewSize.Width < 560;
         PlacePresetColumns(e.NewSize.Width < 440);
     }
 
@@ -279,6 +291,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
 
         PlacePair(EndpointFieldsGrid, TextEndpointPanel, VisionEndpointPanel, compact);
         PlacePair(AdvancedDetailsGrid, HeadersPanel, CapabilitiesPanel, compact);
+        PlacePair(GenerationParamsGrid, ReasoningParamPanel, TokenBudgetParamPanel, compact);
 
         EditorHeaderGrid.Margin = new Thickness(2, 0, 2, 8);
         ConnectionCard.Margin = new Thickness(0, 0, 0, 10);
@@ -393,6 +406,20 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         {
             RoutedEvent = Mouse.MouseWheelEvent,
             Source = EditorScroll,
+        });
+    }
+
+    private void ForwardOverviewWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (OverviewScroll is null)
+        {
+            return;
+        }
+        e.Handled = true;
+        OverviewScroll.RaiseEvent(new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
+        {
+            RoutedEvent = Mouse.MouseWheelEvent,
+            Source = OverviewScroll,
         });
     }
 
@@ -1460,7 +1487,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         var retainedAccount = accountManaged ? " 删除引擎不会删除账号登录。" : "";
         DeleteServiceButton.ToolTip = isTextDefault
             ? (nextDefault is null
-                ? "它是当前默认文字引擎；删除后没有其他可用引擎，翻译将回退到已授权的内置免费引擎。" + retainedAccount
+                ? "它是当前默认文字引擎；删除后没有其他可用引擎，翻译将回退到已开启的公共翻译线路。" + retainedAccount
                 : $"它是当前默认文字引擎；删除后默认路由将切换为「{nextDefault.Name}」。" + retainedAccount)
             : isVisionDefault
                 ? "它是当前默认视觉引擎；删除后视觉翻译将跟随默认文字引擎。" + retainedAccount
@@ -2887,7 +2914,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             ProfileChanged?.Invoke();
             if (config.Profiles.Count == 0)
             {
-                StatusChanged?.Invoke("引擎已删除。未配置翻译引擎时，翻译将使用已授权的内置免费引擎。", StatusTone.Info);
+                StatusChanged?.Invoke("引擎已删除。未配置翻译引擎时，将使用已开启的公共翻译线路。", StatusTone.Info);
             }
             else
             {
@@ -3307,7 +3334,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         var googleFailed = false;
         foreach (var spec in specs)
         {
-            var isSelected = shell.FreeEngineProvider == spec.Provider;
+            // 仅当当前确实处于公共翻译路线且选中的是此线路时，才标为「当前线路」并收起「设为当前」；
+            // 否则用户切到自定义引擎后将无法直接点回上次使用的公共线路。
+            var isCurrentActiveFreeRoute = !hasActiveUserEngine && shell.FreeEngineProvider == spec.Provider;
             var hasHealth = _freeRouteProbes.TryGetValue(spec.Provider, out var health) ||
                             FreeTranslateService.TryGetValidHealth(spec.Provider, out health);
 
@@ -3317,7 +3346,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             if (!hasHealth)
             {
                 latencyText = "未测速";
-                stateBrush = ToneBrush(isSelected ? StatusTone.Info : StatusTone.Info);
+                stateBrush = ToneBrush(StatusTone.Info);
                 latencyBrush = ToneTextBrush(StatusTone.Info);
             }
             else if (health.Ok)
@@ -3345,9 +3374,9 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
                 LatencyText: latencyText,
                 StateBrush: stateBrush,
                 LatencyBrush: latencyBrush,
-                ActiveBadgeVisibility: isSelected ? Visibility.Visible : Visibility.Collapsed,
-                SelectVisibility: isSelected ? Visibility.Collapsed : Visibility.Visible,
-                IsActive: isSelected,
+                ActiveBadgeVisibility: isCurrentActiveFreeRoute ? Visibility.Visible : Visibility.Collapsed,
+                SelectVisibility: isCurrentActiveFreeRoute ? Visibility.Collapsed : Visibility.Visible,
+                IsActive: isCurrentActiveFreeRoute,
                 ProbeButtonName: $"测速 {spec.Name}",
                 SelectButtonName: $"设为当前 {spec.Name}"));
         }
@@ -3390,11 +3419,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             ShellSettingsStore.Update(current => current with { FreeEngineConsent = FreeEngineConsent.Allowed });
             RefreshFreeRoutesPanel();
             ProfileChanged?.Invoke();
-            StatusChanged?.Invoke("已开启内置免费线路。", StatusTone.Success);
+            StatusChanged?.Invoke("已开启公共翻译。", StatusTone.Success);
         }
         catch (Exception ex)
         {
-            StatusChanged?.Invoke($"开启免费线路失败：{ex.Message}", StatusTone.Error);
+            StatusChanged?.Invoke($"开启公共翻译失败：{ex.Message}", StatusTone.Error);
         }
     }
 
@@ -3433,11 +3462,11 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             RefreshFreeRoutesPanel();
             RefreshProfilesList();
             ProfileChanged?.Invoke();
-            StatusChanged?.Invoke($"已切换到免费线路：{EngineWording.DisplayNameFor(provider)}", StatusTone.Success);
+            StatusChanged?.Invoke($"已切换到公共翻译线路：{EngineWording.DisplayNameFor(provider)}", StatusTone.Success);
         }
         catch (Exception ex)
         {
-            StatusChanged?.Invoke($"切换免费线路失败：{ex.Message}", StatusTone.Error);
+            StatusChanged?.Invoke($"切换公共翻译线路失败：{ex.Message}", StatusTone.Error);
         }
     }
 
@@ -3654,6 +3683,34 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
         ApplyQuickProxy(mode, null);
     }
 
+    private void QuickProxyUrlTextBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_loadingQuickProxy || QuickProxyCustomRadio.IsChecked != true)
+        {
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(QuickProxyUrlTextBox.Text))
+        {
+            QuickProxyValidationText.Text = "请输入代理地址，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7891";
+            QuickProxyValidationText.SetResourceReference(TextBlock.ForegroundProperty, "DangerBrush");
+            QuickProxyValidationText.Visibility = Visibility.Visible;
+            return;
+        }
+        if (App.TryValidateCustomProxyUrl(QuickProxyUrlTextBox.Text, out _))
+        {
+            QuickProxyValidationText.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void QuickProxyUrlTextBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && QuickProxyCustomRadio.IsChecked == true)
+        {
+            e.Handled = true;
+            QuickProxyApply_Click(sender, e);
+        }
+    }
+
     private void QuickProxyApply_Click(object sender, RoutedEventArgs e)
     {
         if (!App.TryValidateCustomProxyUrl(QuickProxyUrlTextBox.Text, out var normalized) || normalized is null)
@@ -3756,7 +3813,7 @@ public partial class ServicesSection : System.Windows.Controls.UserControl
             {
                 DiscoveredSourcesList.ItemsSource = null;
                 DiscoveredSourcesList.Visibility = Visibility.Collapsed;
-                DiscoveryStatusText.Text = "未发现运行中的本地模型（Ollama / LM Studio / LiteLLM）或环境变量密钥；可点击右上角「添加引擎」手动选择预设。";
+                DiscoveryStatusText.Text = "未发现运行中的本地模型（Ollama / LM Studio / LiteLLM）或环境变量密钥；可点击上方「添加引擎」手动选择预设。";
                 StatusChanged?.Invoke("扫描完成，暂未发现可自动添加的本地服务或环境变量密钥。", StatusTone.Info);
             }
             else
