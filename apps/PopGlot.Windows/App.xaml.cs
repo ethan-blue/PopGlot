@@ -48,7 +48,9 @@ public partial class App : Application
     private SettingsWindow? _settingsWindow;
     private TranslationPanelWindow? _activePanel;
     private CaptureOverlayWindow? _activeOverlay;
+    private RegionHighlightWindow? _activeHighlight;
     private QuickSearchWindow? _activeQuickSearch;
+    private bool _fixedRegionCaptureInFlight;
     internal static SessionStore SharedSessionStore { get; } = new();
     /// <summary>
     /// N01: a session-store rejection that no visible surface can report
@@ -998,6 +1000,7 @@ public partial class App : Application
         {
             DestroyActivePanel();
             CloseActiveOverlay();
+            DismissActiveHighlight();
             if (_activeQuickSearch is { } quickSearch)
             {
                 quickSearch.ForceClose = true;
@@ -1174,6 +1177,13 @@ public partial class App : Application
             ApplyShellSettings = s => TryApplyShellSettings(s, allowDisableOccupiedDefaults: false),
             SetHotkeysSuspended = suspended => _hotkeys?.SetSuspended(suspended),
             OwnedHotkeys = () => _hotkeys?.CurrentHotkeys.Values.ToArray() ?? [],
+            SelectFixedRegion = createNew => BeginFixedRegionSelection(
+                translateAfterSave: false,
+                createNewPreset: createNew,
+                restoreSettingsAfter: true),
+            PreviewFixedRegion = PreviewActiveFixedRegion,
+            ClearFixedRegion = ClearActiveFixedRegion,
+            SwitchFixedRegion = SwitchActiveFixedRegion,
         };
         window.LocalDataCleared += () => _mainWindow?.ReloadHistory();
         window.ProfileChanged += RefreshAllRouteSurfaces;
@@ -1196,6 +1206,7 @@ public partial class App : Application
         // so taskbar, activation and closing behaviour stay coherent.
         CloseActivePanel();
         CloseActiveOverlay();
+        DismissActiveHighlight();
         ShowMainWindow();
         var window = EnsureSettingsWindow();
         if (window.Owner is null && _mainWindow is not null)
@@ -1335,6 +1346,7 @@ public partial class App : Application
         {
             HotkeyAction.TranslateSelection => "selection",
             HotkeyAction.CaptureScreen => "screenshot",
+            HotkeyAction.CaptureFixedRegion => "fixed-region",
             HotkeyAction.ShowWindow => "wake-main",
             HotkeyAction.QuickSearch => "quicksearch",
             _ => "hotkey",
@@ -1348,11 +1360,15 @@ public partial class App : Application
             case HotkeyAction.CaptureScreen:
                 BeginCapture(trace: trace);
                 break;
+            case HotkeyAction.CaptureFixedRegion:
+                _ = BeginFixedRegionCaptureAsync(trace);
+                break;
             case HotkeyAction.ClosePanel:
                 // A05: the close hotkey is a user intent — cancel the
                 // request and hide, identical to X/Alt+F4.
                 _activePanel?.CloseAsUserIntent();
                 CloseActiveOverlay();
+                DismissActiveHighlight();
                 break;
             case HotkeyAction.ShowWindow:
                 ShowMainWindow(trace);
@@ -1526,9 +1542,11 @@ public partial class App : Application
             var hadOwnVisibleWindow =
                 (_activePanel is not null && _activePanel.IsVisible) ||
                 (_activeOverlay is not null && _activeOverlay.IsVisible) ||
+                (_activeHighlight is not null) ||
                 (_activeQuickSearch is not null && _activeQuickSearch.IsVisible);
             DestroyActivePanel();
             CloseActiveOverlay();
+            DismissActiveHighlight();
             if (_activeQuickSearch is { IsVisible: true } quickSearch)
             {
                 quickSearch.Hide();
@@ -1559,12 +1577,34 @@ public partial class App : Application
             };
             overlay.Captured += async (_, capture) =>
             {
+                FixedCaptureRegion? savedFixedRegion = null;
+                if (capture.SaveAsFixedRegion)
+                {
+                    try
+                    {
+                        savedFixedRegion = SaveFixedRegionSelection(capture.PixelBounds, createNewPreset: false);
+                    }
+                    catch (Exception ex)
+                    {
+                        DiagnosticsLog.Log(ex, DiagnosticsLog.DiagnosticsStage.Settings);
+                    }
+                }
+
                 var panel = CreatePanel(capture.PixelBounds, trace);
                 panel.Show();
                 trace?.Mark(TracePoint.ShowRequested);
                 if (capture.IsOcrOnly)
                 {
                     await panel.StartScreenshotOcrAsync(capture.Png, trace);
+                }
+                else if (savedFixedRegion is not null)
+                {
+                    await panel.StartFixedRegionScreenshotAsync(
+                        capture.Png,
+                        savedFixedRegion,
+                        wasClamped: false,
+                        stealFocus: true,
+                        trace: trace);
                 }
                 else
                 {
@@ -1581,6 +1621,403 @@ public partial class App : Application
             overlay.Show();
             overlay.Activate();
         });
+    }
+
+    private FixedCaptureRegion SaveFixedRegionSelection(Rect pixelBounds, bool createNewPreset)
+    {
+        var virtualBounds = ScreenGeometry.VirtualScreenPixels();
+        var center = new Point(
+            pixelBounds.X + (pixelBounds.Width / 2),
+            pixelBounds.Y + (pixelBounds.Height / 2));
+        var (deviceName, _, dpiScale) = ScreenGeometry.DescribeMonitorAtPixel(center);
+
+        var updated = ShellSettingsStore.Update(current =>
+        {
+            string? id = null;
+            string? name = null;
+            if (!createNewPreset && current.ActiveFixedRegion is { } active)
+            {
+                id = active.Id;
+                name = active.Name;
+            }
+            else
+            {
+                name = FixedRegionResolver.GenerateNextPresetName(current.FixedCaptureRegions);
+            }
+
+            var region = FixedRegionResolver.CreateFromSelection(
+                pixelBounds,
+                virtualBounds,
+                id: id,
+                name: name,
+                monitorDeviceName: deviceName,
+                monitorDpiScale: dpiScale);
+            var (regions, activeId) = FixedRegionResolver.Upsert(current.FixedCaptureRegions, region);
+            return current with
+            {
+                FixedCaptureRegions = regions,
+                ActiveFixedRegionId = activeId,
+            };
+        });
+
+        _shellSettings = updated;
+        _settingsWindow?.RefreshFixedRegionSummary(
+            updated,
+            statusMessage: updated.ActiveFixedRegion is { } saved
+                ? $"已保存固定区域「{saved.Name}」（{saved.FormatBoundsSummary()}）。"
+                : null,
+            tone: PopGlot.Windows.Sections.StatusTone.Success);
+        return updated.ActiveFixedRegion!;
+    }
+
+    private async Task BeginFixedRegionCaptureAsync(InteractionTrace? trace = null)
+    {
+        if (!RuntimeGate.NewWorkAllowed || _fixedRegionCaptureInFlight)
+        {
+            return;
+        }
+        _fixedRegionCaptureInFlight = true;
+        try
+        {
+            _shellSettings = ShellSettingsStore.Load();
+            if (_shellSettings.ActiveFixedRegion is not { } region)
+            {
+                BeginFixedRegionSelection(
+                    translateAfterSave: true,
+                    createNewPreset: false,
+                    customHint: "首次使用：框选固定翻译区域",
+                    trace: trace);
+                return;
+            }
+
+            var resolved = FixedRegionResolver.Resolve(region, ScreenGeometry.VirtualScreenPixels());
+            if (!resolved.CanCapture)
+            {
+                BeginFixedRegionSelection(
+                    translateAfterSave: true,
+                    createNewPreset: false,
+                    customHint: resolved.StatusHint ?? FixedRegionResolver.OutOfBoundsStatusHint,
+                    trace: trace);
+                return;
+            }
+
+            var hadTransientOverlay = (_activeHighlight is not null) || (_activeOverlay is { IsVisible: true });
+            DismissActiveHighlight();
+            CloseActiveOverlay();
+
+            var hidOverlappingPanel = false;
+            var hidOverlappingQuickSearch = false;
+            if (_activePanel is { IsVisible: true } openPanel &&
+                ScreenGeometry.TryGetWindowRectPixels(openPanel, out var panelRect) &&
+                FixedRegionResolver.OverlapsWindow(resolved.PixelRect, panelRect))
+            {
+                openPanel.Hide();
+                hidOverlappingPanel = true;
+            }
+            if (_activeQuickSearch is { IsVisible: true } openQuickSearch &&
+                ScreenGeometry.TryGetWindowRectPixels(openQuickSearch, out var quickSearchRect) &&
+                FixedRegionResolver.OverlapsWindow(resolved.PixelRect, quickSearchRect))
+            {
+                openQuickSearch.Hide();
+                hidOverlappingQuickSearch = true;
+            }
+
+            if (hadTransientOverlay || hidOverlappingPanel || hidOverlappingQuickSearch)
+            {
+                FlushCompositionFrameForCapture();
+            }
+
+            byte[] png;
+            try
+            {
+                png = await ScreenCaptureService.CapturePngAsync(resolved.PixelRect);
+            }
+            catch (Exception exception)
+            {
+                var errorPanel = CreatePanel(resolved.PixelRect, trace);
+                errorPanel.Show();
+                trace?.Mark(TracePoint.ShowRequested);
+                errorPanel.ShowImmediateFailure(exception.Message);
+                return;
+            }
+
+            ShowFixedRegionHighlight(resolved.PixelRect, previewLabel: null);
+
+            TranslationPanelWindow panel;
+            if (_activePanel is { IsLoaded: true, IsFixedRegionSession: true } reusablePanel)
+            {
+                panel = reusablePanel;
+                _panelLastUsedUtc = DateTime.UtcNow;
+                if (!panel.IsVisible)
+                {
+                    panel.Show();
+                }
+            }
+            else
+            {
+                panel = CreatePanel(resolved.PixelRect, trace);
+                panel.Show();
+            }
+
+            trace?.Mark(TracePoint.ShowRequested);
+            await panel.StartFixedRegionScreenshotAsync(
+                png,
+                region,
+                wasClamped: resolved.WasClamped,
+                stealFocus: false,
+                trace: trace);
+        }
+        finally
+        {
+            _fixedRegionCaptureInFlight = false;
+        }
+    }
+
+    internal void BeginFixedRegionSelection(
+        bool translateAfterSave,
+        bool createNewPreset = false,
+        string? customHint = null,
+        bool restoreSettingsAfter = false,
+        InteractionTrace? trace = null)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            _shellSettings = ShellSettingsStore.Load();
+            if (createNewPreset && _shellSettings.FixedCaptureRegions.Count >= FixedCaptureRegion.MaxPresetCount)
+            {
+                _settingsWindow?.RefreshFixedRegionSummary(
+                    _shellSettings,
+                    statusMessage: $"固定区域预设已达上限（最多 {FixedCaptureRegion.MaxPresetCount} 个）。",
+                    tone: PopGlot.Windows.Sections.StatusTone.Warning);
+                return;
+            }
+
+            var restoreSettings = restoreSettingsAfter && _settingsWindow is { IsVisible: true };
+            var restoreMain = restoreSettingsAfter && _mainWindow is { IsVisible: true };
+            var hadOwnVisibleWindow =
+                restoreSettings ||
+                restoreMain ||
+                (_activePanel is not null && _activePanel.IsVisible) ||
+                (_activeOverlay is not null && _activeOverlay.IsVisible) ||
+                (_activeHighlight is not null) ||
+                (_activeQuickSearch is not null && _activeQuickSearch.IsVisible);
+
+            DestroyActivePanel();
+            CloseActiveOverlay();
+            DismissActiveHighlight();
+            if (_activeQuickSearch is { IsVisible: true } quickSearch)
+            {
+                quickSearch.Hide();
+            }
+            if (restoreSettings)
+            {
+                _settingsWindow!.Hide();
+            }
+            if (restoreMain)
+            {
+                _mainWindow!.Hide();
+            }
+            if (hadOwnVisibleWindow)
+            {
+                FlushCompositionFrameForCapture();
+            }
+
+            var frozenSnapshot = ScreenCaptureService.TryCaptureVirtualDesktop();
+            var overlay = new CaptureOverlayWindow(frozenSnapshot);
+            var previousOutline = !createNewPreset ? _shellSettings.ActiveFixedRegion?.PixelRect : null;
+            overlay.ConfigureMode(
+                CaptureOverlayMode.SelectFixedRegion,
+                previousFixedRegionPixels: previousOutline,
+                customHint: customHint,
+                skipPngEncoding: !translateAfterSave);
+
+            var capturedSelection = false;
+            _activeOverlay = overlay;
+            overlay.Closed += (_, _) =>
+            {
+                if (ReferenceEquals(_activeOverlay, overlay))
+                {
+                    _activeOverlay = null;
+                }
+                if (!translateAfterSave || !capturedSelection)
+                {
+                    if (restoreMain && _mainWindow is not null)
+                    {
+                        _mainWindow.Show();
+                    }
+                    if (restoreSettings && _settingsWindow is { IsLoaded: true })
+                    {
+                        _settingsWindow.Show();
+                        _settingsWindow.Activate();
+                    }
+                }
+            };
+            overlay.Captured += async (_, capture) =>
+            {
+                capturedSelection = true;
+                FixedCaptureRegion saved;
+                try
+                {
+                    saved = SaveFixedRegionSelection(capture.PixelBounds, createNewPreset);
+                }
+                catch (Exception exception)
+                {
+                    if (translateAfterSave)
+                    {
+                        var errorPanel = CreatePanel(ScreenGeometry.WorkAreaForPixel(ScreenGeometry.CursorPixels()), trace);
+                        errorPanel.Show();
+                        trace?.Mark(TracePoint.ShowRequested);
+                        errorPanel.ShowImmediateFailure(exception.Message);
+                    }
+                    else
+                    {
+                        _settingsWindow?.RefreshFixedRegionSummary(
+                            _shellSettings,
+                            statusMessage: $"固定区域保存失败：{exception.Message}",
+                            tone: PopGlot.Windows.Sections.StatusTone.Error);
+                    }
+                    return;
+                }
+
+                if (translateAfterSave)
+                {
+                    ShowFixedRegionHighlight(saved.PixelRect, previewLabel: null);
+                    var panel = CreatePanel(saved.PixelRect, trace);
+                    panel.Show();
+                    trace?.Mark(TracePoint.ShowRequested);
+                    await panel.StartFixedRegionScreenshotAsync(
+                        capture.Png,
+                        saved,
+                        wasClamped: false,
+                        stealFocus: true,
+                        trace: trace);
+                }
+                else
+                {
+                    ShowFixedRegionHighlight(saved.PixelRect, $"{saved.Name} · {saved.Width}×{saved.Height} px");
+                }
+            };
+            overlay.Failed += (_, message) =>
+            {
+                if (translateAfterSave)
+                {
+                    var panel = CreatePanel(ScreenGeometry.WorkAreaForPixel(ScreenGeometry.CursorPixels()), trace);
+                    panel.Show();
+                    trace?.Mark(TracePoint.ShowRequested);
+                    panel.ShowImmediateFailure(message);
+                }
+                else
+                {
+                    _settingsWindow?.RefreshFixedRegionSummary(
+                        _shellSettings,
+                        statusMessage: $"框选固定区域失败：{message}",
+                        tone: PopGlot.Windows.Sections.StatusTone.Error);
+                }
+            };
+            overlay.Show();
+            overlay.Activate();
+        });
+    }
+
+    internal void PreviewActiveFixedRegion()
+    {
+        _shellSettings = ShellSettingsStore.Load();
+        if (_shellSettings.ActiveFixedRegion is not { } region)
+        {
+            return;
+        }
+        var resolved = FixedRegionResolver.Resolve(region, ScreenGeometry.VirtualScreenPixels());
+        if (!resolved.CanCapture)
+        {
+            _settingsWindow?.RefreshFixedRegionSummary(
+                _shellSettings,
+                statusMessage: FixedRegionResolver.OutOfBoundsStatusHint,
+                tone: PopGlot.Windows.Sections.StatusTone.Warning);
+            return;
+        }
+        var label = resolved.WasClamped
+            ? $"{region.Name} · { (int)resolved.PixelRect.Width }×{ (int)resolved.PixelRect.Height } px（已适配）"
+            : $"{region.Name} · {region.Width}×{region.Height} px";
+        ShowFixedRegionHighlight(resolved.PixelRect, label);
+    }
+
+    internal void ClearActiveFixedRegion()
+    {
+        _shellSettings = ShellSettingsStore.Load();
+        if (_shellSettings.ActiveFixedRegion is not { } active)
+        {
+            return;
+        }
+        DismissActiveHighlight();
+        _shellSettings = ShellSettingsStore.Update(current =>
+        {
+            var (regions, nextActiveId) = FixedRegionResolver.Remove(
+                current.FixedCaptureRegions,
+                active.Id,
+                current.ActiveFixedRegionId);
+            return current with
+            {
+                FixedCaptureRegions = regions,
+                ActiveFixedRegionId = nextActiveId,
+            };
+        });
+        _settingsWindow?.RefreshFixedRegionSummary(
+            _shellSettings,
+            statusMessage: _shellSettings.ActiveFixedRegion is { } next
+                ? $"已清除「{active.Name}」，当前固定区域已切换为「{next.Name}」。"
+                : "已清除固定区域。",
+            tone: PopGlot.Windows.Sections.StatusTone.Info);
+    }
+
+    internal void SwitchActiveFixedRegion(string regionId)
+    {
+        if (string.IsNullOrWhiteSpace(regionId))
+        {
+            return;
+        }
+        _shellSettings = ShellSettingsStore.Update(current =>
+        {
+            var nextActiveId = FixedRegionResolver.Select(current.FixedCaptureRegions, regionId);
+            return current with
+            {
+                ActiveFixedRegionId = nextActiveId,
+            };
+        });
+        _settingsWindow?.RefreshFixedRegionSummary(
+            _shellSettings,
+            statusMessage: _shellSettings.ActiveFixedRegion is { } active
+                ? $"已切换固定区域为「{active.Name}」（{active.FormatBoundsSummary()}）。"
+                : null,
+            tone: PopGlot.Windows.Sections.StatusTone.Info);
+    }
+
+    private void ShowFixedRegionHighlight(Rect pixelRect, string? previewLabel)
+    {
+        DismissActiveHighlight();
+        var highlight = new RegionHighlightWindow();
+        _activeHighlight = highlight;
+        highlight.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_activeHighlight, highlight))
+            {
+                _activeHighlight = null;
+            }
+        };
+        if (string.IsNullOrWhiteSpace(previewLabel))
+        {
+            highlight.ShowFlash(pixelRect);
+        }
+        else
+        {
+            highlight.ShowPreview(pixelRect, previewLabel);
+        }
+    }
+
+    private void DismissActiveHighlight()
+    {
+        var highlight = _activeHighlight;
+        _activeHighlight = null;
+        highlight?.DismissImmediately();
     }
 
     private void RefreshAllRouteSurfaces()
@@ -1604,6 +2041,8 @@ public partial class App : Application
             _vocabulary.Value)
         {
             RouteChanged = RefreshAllRouteSurfaces,
+            RecaptureFixedRegionRequested = () => _ = BeginFixedRegionCaptureAsync(new InteractionTrace("fixed-region")),
+            ReselectFixedRegionRequested = () => BeginFixedRegionSelection(translateAfterSave: true, createNewPreset: false),
         };
         trace?.Mark(TracePoint.WindowConstructionEnded);
         _activePanel = panel;
@@ -1987,6 +2426,9 @@ public partial class App : Application
         var selectionItem = _trayMenu.Items.Add("划词翻译", null, (_, _) => _ = BeginSelectionTranslationAsync(TrayActionTrace("selection")));
         var captureItem = _trayMenu.Items.Add("截图翻译", null, (_, _) => BeginCapture(ocrOnly: false, trace: TrayActionTrace("screenshot")));
         var ocrItem = _trayMenu.Items.Add("截图取字", null, (_, _) => BeginCapture(ocrOnly: true, trace: TrayActionTrace("screenshot-ocr")));
+        var fixedRegionItem = _trayMenu.Items.Add("固定区域翻译", null, (_, _) => _ = BeginFixedRegionCaptureAsync(TrayActionTrace("fixed-region")));
+        var fixedRegionSubMenu = new Forms.ToolStripMenuItem("固定区域设置");
+        _trayMenu.Items.Add(fixedRegionSubMenu);
         _trayMenu.Items.Add(new Forms.ToolStripSeparator());
         _trayMenu.Items.Add("设置", null, (_, _) => ShowSettings());
         _trayMenu.Items.Add("退出", null, (_, _) => ExitApplication());
@@ -2007,6 +2449,58 @@ public partial class App : Application
                 captureItem, "截图翻译", _shellSettings.ScreenshotHotkey, hotkeysUnavailable);
             ocrItem.Text = "截图取字";
             ocrItem.ToolTipText = "按住 Shift 使用截图取字";
+            ApplyTrayActionPresentation(
+                fixedRegionItem, "固定区域翻译", _shellSettings.FixedRegionHotkey, hotkeysUnavailable);
+            var activeFixedRegion = _shellSettings.ActiveFixedRegion;
+            if (activeFixedRegion is not null && !hotkeysUnavailable)
+            {
+                fixedRegionItem.ToolTipText =
+                    $"快捷键：{_shellSettings.FixedRegionHotkey.DisplayName} · {activeFixedRegion.Name} ({activeFixedRegion.FormatCompactDimensions()})";
+            }
+
+            fixedRegionSubMenu.DropDownItems.Clear();
+            var selectRegionItem = new Forms.ToolStripMenuItem(
+                activeFixedRegion is null ? "框选固定区域…" : "重新框选固定区域…");
+            selectRegionItem.Click += (_, _) => BeginFixedRegionSelection(translateAfterSave: false, createNewPreset: false);
+            fixedRegionSubMenu.DropDownItems.Add(selectRegionItem);
+
+            var previewRegionItem = new Forms.ToolStripMenuItem("预览当前区域")
+            {
+                Enabled = activeFixedRegion is not null,
+            };
+            previewRegionItem.Click += (_, _) => PreviewActiveFixedRegion();
+            fixedRegionSubMenu.DropDownItems.Add(previewRegionItem);
+
+            var clearRegionItem = new Forms.ToolStripMenuItem("清除当前区域")
+            {
+                Enabled = activeFixedRegion is not null,
+            };
+            clearRegionItem.Click += (_, _) => ClearActiveFixedRegion();
+            fixedRegionSubMenu.DropDownItems.Add(clearRegionItem);
+
+            if (_shellSettings.FixedCaptureRegions.Count > 1)
+            {
+                fixedRegionSubMenu.DropDownItems.Add(new Forms.ToolStripSeparator());
+                foreach (var preset in _shellSettings.FixedCaptureRegions)
+                {
+                    var presetItem = new Forms.ToolStripMenuItem($"{preset.Name} ({preset.FormatCompactDimensions()})")
+                    {
+                        Checked = string.Equals(preset.Id, activeFixedRegion?.Id, StringComparison.OrdinalIgnoreCase),
+                    };
+                    var presetId = preset.Id;
+                    presetItem.Click += (_, _) => SwitchActiveFixedRegion(presetId);
+                    fixedRegionSubMenu.DropDownItems.Add(presetItem);
+                }
+            }
+
+            if (_shellSettings.FixedCaptureRegions.Count >= 1 &&
+                _shellSettings.FixedCaptureRegions.Count < FixedCaptureRegion.MaxPresetCount)
+            {
+                fixedRegionSubMenu.DropDownItems.Add(new Forms.ToolStripSeparator());
+                var addPresetItem = new Forms.ToolStripMenuItem("新增固定区域预设…");
+                addPresetItem.Click += (_, _) => BeginFixedRegionSelection(translateAfterSave: false, createNewPreset: true);
+                fixedRegionSubMenu.DropDownItems.Add(addPresetItem);
+            }
 
             sessionsSubMenu.DropDownItems.Clear();
             var sessions = SharedSessionStore.GetAll();
@@ -2164,6 +2658,7 @@ public partial class App : Application
         // window can enqueue another history/vocabulary mutation.
         DestroyActivePanel();
         CloseActiveOverlay();
+        DismissActiveHighlight();
         if (_activeQuickSearch is { } quickSearch)
         {
             // A06: without ForceClose the quick search would CANCEL this

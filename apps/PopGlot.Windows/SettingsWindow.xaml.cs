@@ -72,6 +72,20 @@ public partial class SettingsWindow : Window
 
     private string _currentPage = string.Empty;
     private StatusTone _statusTone = StatusTone.Info;
+    private DateTime _lastShellDiskWriteUtc = ReadShellSettingsWriteUtc();
+
+    private static DateTime ReadShellSettingsWriteUtc()
+    {
+        try
+        {
+            var path = StoragePaths.ShellSettings;
+            return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : default;
+        }
+        catch
+        {
+            return default;
+        }
+    }
 
     /// <summary>True while the form differs from the saved baseline.</summary>
     internal bool IsDirty => _state == SettingsEditState.Dirty;
@@ -92,7 +106,7 @@ public partial class SettingsWindow : Window
         DataSection.Initialize(history, vocabulary, () => _shellSettings, s =>
         {
             _shellSettings = s;
-            CaptureSection.SetShellSettings(s);
+            LoadAll(reloadShellSettings: false);
         });
         CaptureSection.SetShellSettings(shellSettings);
 
@@ -146,6 +160,63 @@ public partial class SettingsWindow : Window
     /// <summary>Returns global hotkeys currently registered by this process so diagnostics won't flag self-owned bindings.</summary>
     internal Func<IReadOnlyCollection<HotkeyBinding>>? OwnedHotkeys { get; init; }
 
+    /// <summary>Fixed-region management callbacks wired by <see cref="App"/> (immediate-save, outside the form Save/Revert bar).</summary>
+    internal Action<bool>? SelectFixedRegion { get; init; }
+    internal Action? PreviewFixedRegion { get; init; }
+    internal Action? ClearFixedRegion { get; init; }
+    internal Action<string>? SwitchFixedRegion { get; init; }
+
+    /// <summary>Refreshes the fixed-region summary card from disk/updated settings without disturbing form drafts.</summary>
+    internal void RefreshFixedRegionSummary(ShellSettings? updatedSettings = null, string? statusMessage = null, StatusTone tone = StatusTone.Info)
+    {
+        var source = updatedSettings ?? _shellSettings;
+        if (updatedSettings is null)
+        {
+            var diskWriteUtc = ReadShellSettingsWriteUtc();
+            if (diskWriteUtc != default && diskWriteUtc != _lastShellDiskWriteUtc)
+            {
+                _lastShellDiskWriteUtc = diskWriteUtc;
+                source = ShellSettingsStore.Load();
+            }
+        }
+        else
+        {
+            _lastShellDiskWriteUtc = ReadShellSettingsWriteUtc();
+        }
+        _shellSettings = _shellSettings with
+        {
+            FixedCaptureRegions = source.FixedCaptureRegions,
+            ActiveFixedRegionId = source.ActiveFixedRegionId,
+        };
+        ShortcutsSection.RefreshFixedRegionState(_shellSettings);
+        if (!string.IsNullOrWhiteSpace(statusMessage))
+        {
+            SetStatus(statusMessage, tone);
+        }
+    }
+
+    private void SyncImmediateShellPreferencesFromDisk()
+    {
+        var diskWriteUtc = ReadShellSettingsWriteUtc();
+        if (diskWriteUtc == default || diskWriteUtc == _lastShellDiskWriteUtc)
+        {
+            return;
+        }
+        _lastShellDiskWriteUtc = diskWriteUtc;
+        var disk = ShellSettingsStore.Load();
+        _shellSettings = _shellSettings with
+        {
+            FreeEngineConsent = disk.FreeEngineConsent,
+            FreeEngineProvider = disk.FreeEngineProvider,
+            CloudSpeechEnabled = disk.CloudSpeechEnabled,
+            FixedCaptureRegions = disk.FixedCaptureRegions,
+            ActiveFixedRegionId = disk.ActiveFixedRegionId,
+        };
+        CaptureSection.SetShellSettings(_shellSettings);
+        CaptureSection.RefreshFreeEngineState();
+        CaptureSection.RefreshCloudSpeechState();
+    }
+
     /// <summary>Raised after history or vocabulary was wiped so open windows can refresh.</summary>
     internal event Action? LocalDataCleared;
     internal event Action? ProfileChanged;
@@ -177,8 +248,13 @@ public partial class SettingsWindow : Window
         };
         ShortcutsSection.ProbeRequested += (_, _) =>
             RefreshShortcutDiagnostics(forceSystemProbe: true, showCleanFeedback: true);
+        ShortcutsSection.SelectFixedRegionRequested += (_, createNew) => SelectFixedRegion?.Invoke(createNew);
+        ShortcutsSection.PreviewFixedRegionRequested += (_, _) => PreviewFixedRegion?.Invoke();
+        ShortcutsSection.ClearFixedRegionRequested += (_, _) => ClearFixedRegion?.Invoke();
+        ShortcutsSection.SwitchFixedRegionRequested += (_, regionId) => SwitchFixedRegion?.Invoke(regionId);
         ShortcutsSection.SelectionHotkey.Recorded += MarkDirtyHandler;
         ShortcutsSection.ScreenshotHotkey.Recorded += MarkDirtyHandler;
+        ShortcutsSection.FixedRegionHotkey.Recorded += MarkDirtyHandler;
         ShortcutsSection.QuickSearchHotkey.Recorded += MarkDirtyHandler;
         ShortcutsSection.CloseHotkey.Recorded += MarkDirtyHandler;
         ShortcutsSection.ShowWindowHotkey.Recorded += MarkDirtyHandler;
@@ -271,6 +347,7 @@ public partial class SettingsWindow : Window
             ShowWindowHotkey = ShortcutsSection.ShowWindowHotkey.BindingValue ?? _shellSettings.ShowWindowHotkey ?? HotkeyBinding.ShowWindowDefault,
             CloseMainWindowToTray = GeneralSection.CloseToTray.IsChecked == true,
             QuickSearchHotkey = ShortcutsSection.QuickSearchHotkey.BindingValue ?? _shellSettings.QuickSearchHotkey,
+            FixedRegionHotkey = ShortcutsSection.FixedRegionHotkey.BindingValue ?? _shellSettings.FixedRegionHotkey,
             InterfaceModelHotkey = ShortcutsSection.InterfaceModelHotkey.BindingValue ?? _shellSettings.InterfaceModelHotkey,
             InterfaceStyleHotkey = ShortcutsSection.InterfaceStyleHotkey.BindingValue ?? _shellSettings.InterfaceStyleHotkey,
             InterfaceSwapHotkey = ShortcutsSection.InterfaceSwapHotkey.BindingValue ?? _shellSettings.InterfaceSwapHotkey,
@@ -346,6 +423,7 @@ public partial class SettingsWindow : Window
     {
         yield return ShortcutsSection.SelectionHotkey;
         yield return ShortcutsSection.ScreenshotHotkey;
+        yield return ShortcutsSection.FixedRegionHotkey;
         yield return ShortcutsSection.QuickSearchHotkey;
         yield return ShortcutsSection.CloseHotkey;
         yield return ShortcutsSection.ShowWindowHotkey;
@@ -388,7 +466,8 @@ public partial class SettingsWindow : Window
             ShortcutsSection.InterfaceLibraryHotkey.BindingValue?.Serialize(),
             ShortcutsSection.InterfaceSettingsHotkey.BindingValue?.Serialize(),
             ShortcutsSection.InterfaceTranslateHotkey.BindingValue?.Serialize(),
-            ShortcutsSection.InterfaceSpeakHotkey.BindingValue?.Serialize());
+            ShortcutsSection.InterfaceSpeakHotkey.BindingValue?.Serialize(),
+            ShortcutsSection.FixedRegionHotkey.BindingValue?.Serialize());
 
     private RouteDraftSnapshot CaptureRouteDraftSnapshot() =>
         RouteDraftSnapshot.Create(
@@ -467,6 +546,7 @@ public partial class SettingsWindow : Window
     {
         ShortcutsSection.SelectionHotkey.BindingValue = settings.SelectionHotkey;
         ShortcutsSection.ScreenshotHotkey.BindingValue = settings.ScreenshotHotkey;
+        ShortcutsSection.FixedRegionHotkey.BindingValue = settings.FixedRegionHotkey;
         ShortcutsSection.QuickSearchHotkey.BindingValue = settings.QuickSearchHotkey ?? HotkeyBinding.QuickSearchDefault;
         ShortcutsSection.CloseHotkey.BindingValue = settings.CloseHotkey;
         ShortcutsSection.ShowWindowHotkey.BindingValue = settings.ShowWindowHotkey ?? HotkeyBinding.ShowWindowDefault;
@@ -480,6 +560,7 @@ public partial class SettingsWindow : Window
         ShortcutsSection.InterfaceSpeakHotkey.BindingValue = settings.InterfaceSpeakHotkey;
         ShortcutsSection.ClearLastEditedSlot();
         ShortcutsSection.SyncClearButtons();
+        ShortcutsSection.RefreshFixedRegionState(settings);
         DataSection.HistoryEnabled.IsChecked = settings.HistoryEnabled;
         GeneralSection.CloseOnFocusLoss.IsChecked = settings.ClosePanelOnFocusLoss;
         GeneralSection.AutoCopy.IsChecked = settings.CopyTranslationAutomatically;
@@ -690,10 +771,12 @@ public partial class SettingsWindow : Window
             case "Shortcuts":
                 SettingsScroll.Visibility = Visibility.Visible;
                 ShortcutsSection.Visibility = Visibility.Visible;
+                RefreshFixedRegionSummary();
                 RefreshShortcutDiagnostics();
                 break;
             case "Privacy":
                 SettingsScroll.Visibility = Visibility.Visible;
+                SyncImmediateShellPreferencesFromDisk();
                 CaptureSection.LoadOcrState();
                 CaptureSection.RefreshRoutePreview();
                 CaptureSection.UpdateSafeModeGating();
@@ -701,6 +784,7 @@ public partial class SettingsWindow : Window
                 break;
             default:
                 SettingsScroll.Visibility = Visibility.Visible;
+                GeneralSection.LoadExtendedSettings();
                 GeneralSection.Visibility = Visibility.Visible;
                 break;
         }
@@ -783,6 +867,7 @@ public partial class SettingsWindow : Window
                 ShowWindowHotkey = ShortcutsSection.ShowWindowHotkey.BindingValue ?? _shellSettings.ShowWindowHotkey ?? HotkeyBinding.ShowWindowDefault,
                 CloseMainWindowToTray = GeneralSection.CloseToTray.IsChecked == true,
                 QuickSearchHotkey = ShortcutsSection.QuickSearchHotkey.BindingValue ?? _shellSettings.QuickSearchHotkey,
+                FixedRegionHotkey = ShortcutsSection.FixedRegionHotkey.BindingValue ?? _shellSettings.FixedRegionHotkey,
                 InterfaceModelHotkey = ShortcutsSection.InterfaceModelHotkey.BindingValue ?? _shellSettings.InterfaceModelHotkey,
                 InterfaceStyleHotkey = ShortcutsSection.InterfaceStyleHotkey.BindingValue ?? _shellSettings.InterfaceStyleHotkey,
                 InterfaceSwapHotkey = ShortcutsSection.InterfaceSwapHotkey.BindingValue ?? _shellSettings.InterfaceSwapHotkey,
@@ -916,8 +1001,10 @@ public partial class SettingsWindow : Window
             RefreshStartupState();
 
             _shellSettings = shellSettings;
+            _lastShellDiskWriteUtc = ReadShellSettingsWriteUtc();
             CaptureSection.SetShellSettings(shellSettings);
             CaptureSection.RefreshRoutePreview();
+            ShortcutsSection.RefreshFixedRegionState(shellSettings);
             // The commit landed: rebuild the baselines from the saved form so
             // the state machine returns to Clean on evidence, not on trust.
             // V03: after a failed startup write the baseline is still the
@@ -1007,6 +1094,7 @@ public partial class SettingsWindow : Window
         SchemaVersion = ShellSettings.CurrentSchemaVersion,
         SelectionHotkey = draft.SelectionHotkey,
         ScreenshotHotkey = draft.ScreenshotHotkey,
+        FixedRegionHotkey = draft.FixedRegionHotkey,
         CloseHotkey = draft.CloseHotkey,
         ShowWindowHotkey = draft.ShowWindowHotkey,
         QuickSearchHotkey = draft.QuickSearchHotkey,

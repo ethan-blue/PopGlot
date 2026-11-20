@@ -34,6 +34,7 @@ internal static partial class Program
                     "InterfaceWorkbenchHotkey": "{{userCustomBinding.Serialize()}}",
                     "SelectionHotkey": "none",
                     "ScreenshotHotkey": "none",
+                    "FixedRegionHotkey": "none",
                     "CloseHotkey": "none",
                     "QuickSearchHotkey": "none"
                 }
@@ -180,6 +181,7 @@ internal static partial class Program
             {
                 SelectionHotkey = customCombination, // customized
                 ScreenshotHotkey = HotkeyBinding.UnsetBinding,
+                FixedRegionHotkey = HotkeyBinding.UnsetBinding,
                 CloseHotkey = HotkeyBinding.UnsetBinding,
                 ShowWindowHotkey = HotkeyBinding.UnsetBinding,
                 QuickSearchHotkey = HotkeyBinding.UnsetBinding,

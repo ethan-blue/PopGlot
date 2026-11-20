@@ -13,7 +13,7 @@
             <Setter Property="Margin" Value="0,0,10,0" />
             <Setter Property="TextTrimming" Value="CharacterEllipsis" />
         </Style>
-        <Style x:Key="ShortcutRecorder" TargetType="local:HotkeyRecorder" BasedOn="{StaticResource GhostButton}">
+        <Style x:Key="ShortcutRecorder" TargetType="local:HotkeyRecorder" BasedOn="{StaticResource {x:Type local:HotkeyRecorder}}">
             <Setter Property="Height" Value="28" />
             <Setter Property="MinHeight" Value="28" />
             <Setter Property="Width" Value="170" />
@@ -64,7 +64,7 @@
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="32"/></Grid.ColumnDefinitions>
             <TextBlock Text="划词翻译" Style="{StaticResource ShortcutLabel}"/>
             <local:HotkeyRecorder x:Name="SelectionHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}" AutomationProperties.Name="划词翻译"/>
-            <Button x:Name="ClearSelectionButton" Grid.Column="2" Style="{StaticResource ClearShortcutButton}" local:Ui.Icon="{StaticResource IconCaptionClose}" AutomationProperties.Name="停用划词翻译快捷键" Tag="Selection" Click="ClearShortcutButton_Click"/>
+            <Button x:Name="ClearSelectionButton" Grid.Column="2" Style="{StaticResource ClearShortcutButton}" local:Ui.Icon="{StaticResource IconClose}" AutomationProperties.Name="停用划词翻译快捷键" Tag="Selection" Click="ClearShortcutButton_Click"/>
         </Grid></Border>
         <Border Style="{StaticResource ShortcutRow}"><Grid>
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="32"/></Grid.ColumnDefinitions>
@@ -74,14 +74,100 @@
                                   AutomationProperties.HelpText="点击后按下组合键，也支持单按 F1–F12 或 PrintScreen；截悬停菜单或提示框时推荐 F1、PrintScreen 或不含 Alt 的组合；Esc 取消，退格或右键可停用"
                                   HelpTip="点击后按下组合键，也支持单按 F1–F12 或 PrintScreen；截悬停菜单或提示框时推荐 F1、PrintScreen 或不含 Alt 的组合；Esc 取消，退格或右键可停用"
                                   ToolTip="点击后按下组合键，也支持单按 F1–F12 或 PrintScreen；截悬停菜单或提示框时推荐 F1、PrintScreen 或不含 Alt 的组合；Esc 取消，退格或右键可停用"/>
-            <Button x:Name="ClearScreenshotButton" Grid.Column="2" Style="{StaticResource ClearShortcutButton}" local:Ui.Icon="{StaticResource IconCaptionClose}" AutomationProperties.Name="停用截图翻译快捷键" Tag="Screenshot" Click="ClearShortcutButton_Click"/>
+            <Button x:Name="ClearScreenshotButton" Grid.Column="2" Style="{StaticResource ClearShortcutButton}" local:Ui.Icon="{StaticResource IconClose}" AutomationProperties.Name="停用截图翻译快捷键" Tag="Screenshot" Click="ClearShortcutButton_Click"/>
+        </Grid></Border>
+        <Border Style="{StaticResource ShortcutRow}"><Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="32"/></Grid.ColumnDefinitions>
+            <TextBlock Text="固定区域翻译" Style="{StaticResource ShortcutLabel}"/>
+            <local:HotkeyRecorder x:Name="FixedRegionHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}"
+                                  AutomationProperties.Name="固定区域翻译"
+                                  AutomationProperties.HelpText="点击后按下组合键，也支持单按 F1–F12 或 PrintScreen；游戏或字幕场景推荐使用不含 Alt 的组合；Esc 取消，退格或右键可停用"
+                                  HelpTip="点击后按下组合键，也支持单按 F1–F12 或 PrintScreen；游戏或字幕场景推荐使用不含 Alt 的组合；Esc 取消，退格或右键可停用"
+                                  ToolTip="点击后按下组合键，也支持单按 F1–F12 或 PrintScreen；游戏或字幕场景推荐使用不含 Alt 的组合；Esc 取消，退格或右键可停用"/>
+            <Button x:Name="ClearFixedRegionButton" Grid.Column="2" Style="{StaticResource ClearShortcutButton}" local:Ui.Icon="{StaticResource IconClose}" AutomationProperties.Name="停用固定区域翻译快捷键" Tag="FixedRegion" Click="ClearShortcutButton_Click"/>
         </Grid></Border>
         <Border Style="{StaticResource ShortcutRow}"><Grid>
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="32"/></Grid.ColumnDefinitions>
             <TextBlock Text="极速查词" Style="{StaticResource ShortcutLabel}"/>
             <local:HotkeyRecorder x:Name="QuickSearchHotkeyRecorder" Grid.Column="1" Style="{StaticResource ShortcutRecorder}" AutomationProperties.Name="极速查词快捷键"/>
-            <Button x:Name="ClearQuickSearchButton" Grid.Column="2" Style="{StaticResource ClearShortcutButton}" local:Ui.Icon="{StaticResource IconCaptionClose}" AutomationProperties.Name="停用极速查词快捷键" Tag="QuickSearch" Click="ClearShortcutButton_Click"/>
+            <Button x:Name="ClearQuickSearchButton" Grid.Column="2" Style="{StaticResource ClearShortcutButton}" local:Ui.Icon="{StaticResource IconClose}" AutomationProperties.Name="停用极速查词快捷键" Tag="QuickSearch" Click="ClearShortcutButton_Click"/>
         </Grid></Border>
+
+        <!-- 固定区域管理卡：即时生效，不进底部保存条 -->
+        <Border x:Name="FixedRegionCard" Style="{StaticResource InlineCard}" Margin="0,10,0,0" Padding="10,8">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition x:Name="FixedRegionActionsColumn" Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <Grid Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border x:Name="FixedRegionStatusDot" Width="7" Height="7" CornerRadius="3.5"
+                            Background="{DynamicResource TextTertiaryBrush}" VerticalAlignment="Center" Margin="0,0,7,0" />
+                    <TextBlock x:Name="FixedRegionSummaryText" Grid.Column="1" Text="固定区域：未设置"
+                               Style="{StaticResource Metadata}" FontSize="12"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                               ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                </Grid>
+
+                <StackPanel x:Name="FixedRegionActionsPanel" Grid.Row="0" Grid.Column="1"
+                            Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="SelectFixedRegionButton" Content="框选固定区域"
+                            Style="{StaticResource GhostButton}"
+                            Height="26" MinHeight="26" Padding="9,0" FontSize="12"
+                            AutomationProperties.Name="框选固定区域"
+                            ToolTip="在屏幕上框选一个固定区域，按下快捷键即可一键截图翻译"
+                            Click="SelectFixedRegionButton_Click" />
+                    <Button x:Name="PreviewFixedRegionButton" Content="预览区域"
+                            Style="{StaticResource GhostButton}"
+                            Height="26" MinHeight="26" Padding="9,0" Margin="6,0,0,0" FontSize="12"
+                            IsEnabled="False" ToolTipService.ShowOnDisabled="True"
+                            AutomationProperties.Name="预览当前固定区域"
+                            ToolTip="在屏幕上高亮显示当前固定区域位置"
+                            Click="PreviewFixedRegionButton_Click" />
+                    <Button x:Name="ClearFixedRegionPresetButton" Content="清除"
+                            Style="{StaticResource GhostButton}"
+                            Height="26" MinHeight="26" Padding="9,0" Margin="6,0,0,0" FontSize="12"
+                            IsEnabled="False"
+                            AutomationProperties.Name="清除当前固定区域"
+                            ToolTip="移除当前选中的固定区域预设"
+                            Click="ClearFixedRegionPresetButton_Click" />
+                </StackPanel>
+
+                <Grid x:Name="FixedRegionPresetRow" Grid.Row="2" Grid.ColumnSpan="2"
+                      Margin="0,6,0,0" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="当前预设" Style="{StaticResource Metadata}"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <ComboBox x:Name="FixedRegionPresetCombo" Grid.Column="1"
+                              Height="26" MinHeight="26" MaxWidth="220" HorizontalAlignment="Left"
+                              FontSize="12" AutomationProperties.Name="切换固定区域预设"
+                              SelectionChanged="FixedRegionPresetCombo_SelectionChanged" />
+                    <Button x:Name="AddFixedRegionPresetButton" Grid.Column="2" Content="+ 新增预设"
+                            Style="{StaticResource GhostButton}"
+                            Height="26" MinHeight="26" Padding="9,0" Margin="8,0,0,0" FontSize="12"
+                            ToolTipService.ShowOnDisabled="True"
+                            AutomationProperties.Name="新增固定区域预设"
+                            ToolTip="新增一个固定区域预设（最多 8 个）"
+                            Click="AddFixedRegionPresetButton_Click" />
+                </Grid>
+            </Grid>
+        </Border>
 
         <!-- 实时冲突与一键建议条（仅在冲突、被占用或手动检测时显示） -->
         <Border x:Name="ShortcutDiagnosticBar" Visibility="Collapsed" Margin="0,10,0,0" Padding="10,7"

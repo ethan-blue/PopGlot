@@ -423,7 +423,8 @@ public sealed record SettingsFormSnapshot(
     string InterfaceLibraryHotkey = "",
     string InterfaceSettingsHotkey = "",
     string InterfaceTranslateHotkey = "",
-    string InterfaceSpeakHotkey = "")
+    string InterfaceSpeakHotkey = "",
+    string FixedRegionHotkey = "")
 {
     public static SettingsFormSnapshot Create(
         string? selectionHotkey,
@@ -447,7 +448,8 @@ public sealed record SettingsFormSnapshot(
         string? interfaceLibraryHotkey = null,
         string? interfaceSettingsHotkey = null,
         string? interfaceTranslateHotkey = null,
-        string? interfaceSpeakHotkey = null)
+        string? interfaceSpeakHotkey = null,
+        string? fixedRegionHotkey = null)
     {
         return new SettingsFormSnapshot(
             selectionHotkey ?? string.Empty,
@@ -471,7 +473,8 @@ public sealed record SettingsFormSnapshot(
             interfaceLibraryHotkey ?? string.Empty,
             interfaceSettingsHotkey ?? string.Empty,
             interfaceTranslateHotkey ?? string.Empty,
-            interfaceSpeakHotkey ?? string.Empty);
+            interfaceSpeakHotkey ?? string.Empty,
+            fixedRegionHotkey ?? string.Empty);
     }
 
     public string Serialize() => string.Join('\u001f',
@@ -496,5 +499,6 @@ public sealed record SettingsFormSnapshot(
         InterfaceLibraryHotkey,
         InterfaceSettingsHotkey,
         InterfaceTranslateHotkey,
-        InterfaceSpeakHotkey);
+        InterfaceSpeakHotkey,
+        FixedRegionHotkey);
 }

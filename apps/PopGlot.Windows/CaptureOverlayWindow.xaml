@@ -37,6 +37,11 @@
         <Rectangle x:Name="ShadeRight" Fill="{DynamicResource OverlayScrimBrush}" Visibility="Collapsed" />
         <Rectangle x:Name="ShadeBottom" Fill="{DynamicResource OverlayScrimBrush}" Visibility="Collapsed" />
 
+        <!-- Dashed outline of the previously saved fixed region when reselecting -->
+        <Rectangle x:Name="PreviousRegionOutline" Visibility="Collapsed" IsHitTestVisible="False"
+                   Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.5" StrokeDashArray="5 4"
+                   Fill="Transparent" Opacity="0.72" SnapsToDevicePixels="True" />
+
         <!-- Crosshair guides and optical reticle shown until the drag starts. -->
         <Line x:Name="CrossHorizontal" Stroke="{StaticResource CaptureCrosshairBrush}" StrokeThickness="1" StrokeDashArray="3 3" />
         <Line x:Name="CrossVertical" Stroke="{StaticResource CaptureCrosshairBrush}" StrokeThickness="1" StrokeDashArray="3 3" />
@@ -120,6 +125,16 @@
                                    Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
                     </Border>
                     <TextBlock Text="仅提取文本" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" />
+                </StackPanel>
+
+                <!-- Explicit keycaps: Ctrl / F save-as-fixed toggle -->
+                <StackPanel x:Name="SaveFixedHintGroup" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,0">
+                    <Border x:Name="SaveFixedKeycap" CornerRadius="{StaticResource ChipRadius}" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderSubtleBrush}"
+                            BorderThickness="1" Padding="5,1" Margin="0,0,5,0" VerticalAlignment="Center">
+                        <TextBlock x:Name="SaveFixedKeycapText" Text="Ctrl / F" FontFamily="{StaticResource MonoFontFamily}" FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock x:Name="SaveFixedHintText" Text="存为固定区" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" VerticalAlignment="Center" />
                 </StackPanel>
 
                 <!-- Explicit keycaps: Esc -->

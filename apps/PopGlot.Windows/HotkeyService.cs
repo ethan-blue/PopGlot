@@ -410,6 +410,21 @@ internal sealed partial class HotkeyService : IDisposable
         new(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x43), // Ctrl+Alt+C
     ];
 
+    private static readonly HotkeyBinding[] FixedRegionCandidates =
+    [
+        // Prefer Alt-free combinations first so games, subtitles, and hover
+        // overlays never lose focus or activate menu bars before capture.
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModShift, 0x45), // Ctrl+Shift+E
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModShift, 0x32), // Ctrl+Shift+2
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModShift, 0x33), // Ctrl+Shift+3
+        new(0, 0x76), // F7
+        new(0, 0x77), // F8
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModShift, 0x42), // Ctrl+Shift+B
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModShift, 0x4A), // Ctrl+Shift+J
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModShift, 0x4B), // Ctrl+Shift+K
+        new(HotkeyBinding.ModControl | HotkeyBinding.ModAlt, 0x47), // Ctrl+Alt+G
+    ];
+
     private static readonly HotkeyBinding[] QuickSearchCandidates =
     [
         new(HotkeyBinding.ModAlt, 0x20), // Alt+Space
@@ -526,6 +541,7 @@ internal sealed partial class HotkeyService : IDisposable
         {
             HotkeyAction.TranslateSelection => SelectionCandidates,
             HotkeyAction.CaptureScreen => ScreenshotCandidates,
+            HotkeyAction.CaptureFixedRegion => FixedRegionCandidates,
             HotkeyAction.QuickSearch => QuickSearchCandidates,
             HotkeyAction.ShowWindow => ShowWindowCandidates,
             HotkeyAction.ClosePanel => ClosePanelCandidates,
@@ -580,6 +596,7 @@ internal sealed partial class HotkeyService : IDisposable
         {
             ("Selection", ShellSettings.ActionName(HotkeyAction.TranslateSelection), HotkeyAction.TranslateSelection, draft.SelectionHotkey),
             ("Screenshot", ShellSettings.ActionName(HotkeyAction.CaptureScreen), HotkeyAction.CaptureScreen, draft.ScreenshotHotkey),
+            ("FixedRegion", ShellSettings.ActionName(HotkeyAction.CaptureFixedRegion), HotkeyAction.CaptureFixedRegion, draft.FixedRegionHotkey),
             ("QuickSearch", ShellSettings.ActionName(HotkeyAction.QuickSearch), HotkeyAction.QuickSearch, draft.QuickSearchHotkey),
             ("ShowWindow", ShellSettings.ActionName(HotkeyAction.ShowWindow), HotkeyAction.ShowWindow, draft.ShowWindowHotkey),
             ("Close", ShellSettings.ActionName(HotkeyAction.ClosePanel), HotkeyAction.ClosePanel, draft.CloseHotkey),
@@ -691,6 +708,7 @@ internal sealed partial class HotkeyService : IDisposable
         }
         Add(draft.SelectionHotkey);
         Add(draft.ScreenshotHotkey);
+        Add(draft.FixedRegionHotkey);
         Add(draft.QuickSearchHotkey);
         Add(draft.ShowWindowHotkey);
         Add(draft.CloseHotkey);

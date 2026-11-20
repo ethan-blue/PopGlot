@@ -454,6 +454,54 @@ internal static partial class ScreenGeometry
             SwpNoZOrder | SwpNoActivate);
     }
 
+    /// <summary>
+    /// Reads the live physical-pixel bounding rectangle of a visible window via Win32
+    /// <c>GetWindowRect</c>. Used to check whether PopGlot's own popups overlap a fixed
+    /// capture region before grabbing the screen.
+    /// </summary>
+    public static bool TryGetWindowRectPixels(Window? window, out Rect pixelRect)
+    {
+        pixelRect = Rect.Empty;
+        if (window is null || !window.IsLoaded || !window.IsVisible)
+        {
+            return false;
+        }
+        var handle = new WindowInteropHelper(window).Handle;
+        if (handle == 0)
+        {
+            return false;
+        }
+        if (!NativeMethods.GetWindowRect(handle, out var rect))
+        {
+            return false;
+        }
+        var width = rect.Right - rect.Left;
+        var height = rect.Bottom - rect.Top;
+        if (width <= 0 || height <= 0)
+        {
+            return false;
+        }
+        pixelRect = new Rect(rect.Left, rect.Top, width, height);
+        return true;
+    }
+
+    /// <summary>
+    /// Describes the monitor holding <paramref name="devicePoint"/> in physical pixels
+    /// together with its device name and effective DPI scale factor.
+    /// </summary>
+    public static (string DeviceName, Rect Bounds, double DpiScale) DescribeMonitorAtPixel(Point devicePoint)
+    {
+        var screen = Forms.Screen.FromPoint(
+            new Drawing.Point(SafeRound(devicePoint.X), SafeRound(devicePoint.Y)));
+        var bounds = screen.Bounds;
+        var scale = ScaleOfMonitorAtPixel(devicePoint);
+        var dpiScale = double.IsFinite(scale.X) && scale.X > 0 ? scale.X : 1.0;
+        return (
+            screen.DeviceName ?? string.Empty,
+            new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height),
+            dpiScale);
+    }
+
     private static int SafeRound(double value) =>
         double.IsFinite(value) ? (int)Math.Round(Math.Clamp(value, int.MinValue, int.MaxValue)) : 0;
 
@@ -483,6 +531,12 @@ internal static partial class ScreenGeometry
             int width,
             int height,
             uint flags);
+
+        [LibraryImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static partial bool GetWindowRect(
+            nint hWnd,
+            out NativeRectLiteral lpRect);
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -490,5 +544,14 @@ internal static partial class ScreenGeometry
     {
         public int X;
         public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRectLiteral
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
     }
 }

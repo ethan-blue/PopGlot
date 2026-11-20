@@ -137,6 +137,9 @@ internal static partial class Program
         await RunAsync("free engine local hourly budget stops sends", FreeEngineLocalHourlyBudget);
         await RunAsync("update service only reports a genuinely newer release", UpdateServiceReportsOnlyNewer);
         await RunAsync("net-engine: shell settings defaults, normalization, and proxy routing", () => RunNetEngineAndRoutingTestsAsync(root));
+        Run("fixed-region: default hotkey Ctrl+Shift+G is Alt-free and conflict-free", FixedRegionDefaultHotkeyPolicyAndNoConflicts);
+        Run("fixed-region: persistence round-trip, backup, legacy migration and normalization", () => FixedRegionPersistenceRoundTripAndBackwardCompat(root));
+        Run("fixed-region: multi-monitor DPI zero-drift resolution, clamping, overlap and presets", FixedRegionResolverMultiMonitorClampAndOutOfBounds);
 
         Console.WriteLine($"\nPopGlot pure tests: {_passed} passed, {_failed} failed, " +
                           $"{Interlocked.Read(ref refusedSends)} send attempts refused.");

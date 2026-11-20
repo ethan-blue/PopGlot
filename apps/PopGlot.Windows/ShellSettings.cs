@@ -19,6 +19,7 @@ internal enum HotkeyAction
     ClosePanel,
     ShowWindow,
     QuickSearch,
+    CaptureFixedRegion,
 }
 
 internal enum ThemePreference
@@ -97,6 +98,7 @@ internal sealed record HotkeyBinding(uint Modifiers, uint VirtualKey)
     public static HotkeyBinding InterfaceStyleDefault => new(ModControl, 0x54); // Ctrl+T
     public static HotkeyBinding InterfaceSwapDefault => new(ModControl, 0x4C);  // Ctrl+L
     public static HotkeyBinding QuickSearchDefault => new(ModControl | ModAlt, 0x51); // Ctrl+Alt+Q
+    public static HotkeyBinding FixedRegionDefault => new(ModControl | ModShift, 0x47); // Ctrl+Shift+G
 
     /// <summary>
     /// Explicitly unbound: the action keeps working from its UI entry, just
@@ -347,7 +349,10 @@ internal sealed record ShellSettings(
     NetworkProxyMode NetworkProxyMode = NetworkProxyMode.System,
     string? CustomProxyUrl = null,
     bool ProxyBypassLocal = true,
-    bool ProxyBypassDomesticRoutes = true)
+    bool ProxyBypassDomesticRoutes = true,
+    HotkeyBinding? FixedRegionHotkey = null,
+    FixedRegionPresetList? FixedCaptureRegions = null,
+    string? ActiveFixedRegionId = null)
 {
     public const int DefaultLiveTranslateDelayMs = 500;
     public const double DefaultQuickSearchExpandedWidth = 660;
@@ -368,8 +373,44 @@ internal sealed record ShellSettings(
 
     internal static string? NormalizeCustomProxyUrl(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    internal static (FixedRegionPresetList Regions, string? ActiveId) NormalizeFixedRegions(
+        IEnumerable<FixedCaptureRegion>? regions,
+        string? activeId) =>
+        FixedRegionResolver.Normalize(regions, activeId);
+
     public HotkeyBinding QuickSearchHotkey { get; init; } =
         QuickSearchHotkey ?? HotkeyBinding.QuickSearchDefault;
+
+    public HotkeyBinding FixedRegionHotkey { get; init; } =
+        FixedRegionHotkey ?? HotkeyBinding.FixedRegionDefault;
+
+    public FixedRegionPresetList FixedCaptureRegions { get; init; } =
+        FixedCaptureRegions ?? FixedRegionPresetList.Empty;
+
+    [JsonIgnore]
+    public FixedCaptureRegion? ActiveFixedRegion
+    {
+        get
+        {
+            var regions = FixedCaptureRegions;
+            if (regions is null || regions.Count == 0)
+            {
+                return null;
+            }
+            if (!string.IsNullOrWhiteSpace(ActiveFixedRegionId))
+            {
+                for (var i = 0; i < regions.Count; i++)
+                {
+                    if (string.Equals(regions[i].Id, ActiveFixedRegionId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return regions[i];
+                    }
+                }
+            }
+            return regions[0];
+        }
+    }
 
     public HotkeyBinding ShowWindowHotkey { get; init; } =
         ShowWindowHotkey ?? HotkeyBinding.ShowWindowDefault;
@@ -416,7 +457,10 @@ internal sealed record ShellSettings(
         QuickSearchHotkey: HotkeyBinding.QuickSearchDefault,
         InterfaceModelHotkey: HotkeyBinding.InterfaceModelDefault,
         InterfaceStyleHotkey: HotkeyBinding.InterfaceStyleDefault,
-        InterfaceSwapHotkey: HotkeyBinding.InterfaceSwapDefault);
+        InterfaceSwapHotkey: HotkeyBinding.InterfaceSwapDefault,
+        FixedRegionHotkey: HotkeyBinding.FixedRegionDefault,
+        FixedCaptureRegions: FixedRegionPresetList.Empty,
+        ActiveFixedRegionId: null);
 
     public static HotkeyBinding GetDefault(HotkeyAction action) => action switch
     {
@@ -425,6 +469,7 @@ internal sealed record ShellSettings(
         HotkeyAction.ClosePanel => HotkeyBinding.CloseDefault,
         HotkeyAction.ShowWindow => HotkeyBinding.ShowWindowDefault,
         HotkeyAction.QuickSearch => HotkeyBinding.QuickSearchDefault,
+        HotkeyAction.CaptureFixedRegion => HotkeyBinding.FixedRegionDefault,
         _ => HotkeyBinding.UnsetBinding,
     };
 
@@ -435,6 +480,7 @@ internal sealed record ShellSettings(
         HotkeyAction.ClosePanel => CloseHotkey,
         HotkeyAction.ShowWindow => ShowWindowHotkey,
         HotkeyAction.QuickSearch => QuickSearchHotkey,
+        HotkeyAction.CaptureFixedRegion => FixedRegionHotkey,
         _ => HotkeyBinding.UnsetBinding,
     };
 
@@ -448,6 +494,7 @@ internal sealed record ShellSettings(
         HotkeyAction.ClosePanel => this with { CloseHotkey = binding },
         HotkeyAction.ShowWindow => this with { ShowWindowHotkey = binding },
         HotkeyAction.QuickSearch => this with { QuickSearchHotkey = binding },
+        HotkeyAction.CaptureFixedRegion => this with { FixedRegionHotkey = binding },
         _ => this,
     };
 
@@ -481,6 +528,7 @@ internal sealed record ShellSettings(
             HotkeyAction.ClosePanel,
             HotkeyAction.ShowWindow,
             HotkeyAction.QuickSearch,
+            HotkeyAction.CaptureFixedRegion,
         };
 
         foreach (var action in allActions)
@@ -571,6 +619,7 @@ internal sealed record ShellSettings(
             Add(HotkeyAction.ClosePanel, CloseHotkey);
             Add(HotkeyAction.QuickSearch, QuickSearchHotkey);
             Add(HotkeyAction.ShowWindow, ShowWindowHotkey);
+            Add(HotkeyAction.CaptureFixedRegion, FixedRegionHotkey);
             return dict;
         }
     }
@@ -647,6 +696,7 @@ internal sealed record ShellSettings(
         HotkeyAction.ClosePanel => "关闭浮窗",
         HotkeyAction.ShowWindow => "打开主窗口",
         HotkeyAction.QuickSearch => "极速查词",
+        HotkeyAction.CaptureFixedRegion => "固定区域翻译",
         _ => action.ToString(),
     };
 }
@@ -806,6 +856,8 @@ internal static class ShellSettingsStore
             }
 
             var defaults = ShellSettings.Default;
+            var (normalizedFixedRegions, normalizedActiveFixedRegionId) =
+                ShellSettings.NormalizeFixedRegions(persisted.FixedCaptureRegions, persisted.ActiveFixedRegionId);
             var result = new ShellSettings(
                 ShellSettings.CurrentSchemaVersion,
                 // v1 had a single `ShortcutId`; v2 split it into three ids;
@@ -884,7 +936,12 @@ internal static class ShellSettingsStore
                 : defaults.NetworkProxyMode,
             ShellSettings.NormalizeCustomProxyUrl(persisted.CustomProxyUrl),
             persisted.ProxyBypassLocal ?? defaults.ProxyBypassLocal,
-            persisted.ProxyBypassDomesticRoutes ?? defaults.ProxyBypassDomesticRoutes);
+            persisted.ProxyBypassDomesticRoutes ?? defaults.ProxyBypassDomesticRoutes,
+            persisted.FixedRegionHotkey is not null
+                ? HotkeyBinding.Parse(persisted.FixedRegionHotkey, defaults.FixedRegionHotkey)
+                : defaults.FixedRegionHotkey,
+            normalizedFixedRegions,
+            normalizedActiveFixedRegionId);
 
             lock (CacheLock)
             {
@@ -946,7 +1003,7 @@ internal static class ShellSettingsStore
     {
         lock (CacheLock)
         {
-            SaveUnlocked(settings, settingsPath);
+            _ = SaveUnlocked(settings, settingsPath);
         }
     }
 
@@ -958,12 +1015,11 @@ internal static class ShellSettingsStore
         lock (CacheLock)
         {
             var settings = update(LoadUnlocked(settingsPath, throwOnFailure: true));
-            SaveUnlocked(settings, settingsPath);
-            return settings;
+            return SaveUnlocked(settings, settingsPath);
         }
     }
 
-    private static void SaveUnlocked(ShellSettings settings, string? settingsPath)
+    private static ShellSettings SaveUnlocked(ShellSettings settings, string? settingsPath)
     {
         ArgumentNullException.ThrowIfNull(settings);
         var validationError = settings.ValidateHotkeys();
@@ -972,12 +1028,16 @@ internal static class ShellSettingsStore
             throw new InvalidOperationException(validationError);
         }
 
+        var (normalizedFixedRegions, normalizedActiveFixedRegionId) =
+            ShellSettings.NormalizeFixedRegions(settings.FixedCaptureRegions, settings.ActiveFixedRegionId);
         settings = settings with
         {
             LiveTranslateDelayMs = ShellSettings.NormalizeLiveTranslateDelayMs(settings.LiveTranslateDelayMs),
             QuickSearchExpandedWidth = ShellSettings.NormalizeQuickSearchExpandedWidth(settings.QuickSearchExpandedWidth),
             QuickSearchExpandedHeight = ShellSettings.NormalizeQuickSearchExpandedHeight(settings.QuickSearchExpandedHeight),
             CustomProxyUrl = ShellSettings.NormalizeCustomProxyUrl(settings.CustomProxyUrl),
+            FixedCaptureRegions = normalizedFixedRegions,
+            ActiveFixedRegionId = normalizedActiveFixedRegionId,
         };
 
         var path = settingsPath ?? DefaultSettingsPath;
@@ -1028,7 +1088,10 @@ internal static class ShellSettingsStore
             settings.NetworkProxyMode.ToString(),
             settings.CustomProxyUrl,
             settings.ProxyBypassLocal,
-            settings.ProxyBypassDomesticRoutes);
+            settings.ProxyBypassDomesticRoutes,
+            settings.FixedRegionHotkey.Serialize(),
+            normalizedFixedRegions.Count > 0 ? normalizedFixedRegions.ToList() : null,
+            normalizedActiveFixedRegionId);
 
         // Write through a temporary file so a crash mid-write cannot leave the
         // user without settings on the next launch: exclusive-access write,
@@ -1053,6 +1116,7 @@ internal static class ShellSettingsStore
             _cachedLength = payload.LongLength;
             _cachedHash = hash;
         }
+        return settings;
     }
 
     private sealed record PersistedShellSettings(
@@ -1096,7 +1160,10 @@ internal static class ShellSettingsStore
         string? NetworkProxyMode = null,
         string? CustomProxyUrl = null,
         bool? ProxyBypassLocal = null,
-        bool? ProxyBypassDomesticRoutes = null);
+        bool? ProxyBypassDomesticRoutes = null,
+        string? FixedRegionHotkey = null,
+        List<FixedCaptureRegion>? FixedCaptureRegions = null,
+        string? ActiveFixedRegionId = null);
 }
 
 internal readonly record struct ProxyConfig(

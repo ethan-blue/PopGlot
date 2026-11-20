@@ -562,7 +562,14 @@ internal static partial class Program
             ("settings window revert clears stale shortcut conflict diagnostics", ShortcutCaptureAndOnboardingTests.SettingsWindowRevertClearsShortcutConflictDiagnostics),
             ("screenshot suggestions prefer Alt-free bindings ahead of Alt combos", ShortcutCaptureAndOnboardingTests.ScreenshotSuggestionsPreferAltFreeBindings),
             ("shortcuts section clear buttons preserve alignment and screenshot hover tip", ShortcutCaptureAndOnboardingTests.ShortcutsSectionClearButtonsPreserveAlignmentAndScreenshotHelpTip),
-            ("hotkey recorder invalid prompt fits inside 170px and DwmFlush handles fallback", ShortcutCaptureAndOnboardingTests.HotkeyRecorderInvalidPromptFitsAndDwmFlushFallbacksCleanly));
+            ("hotkey recorder invalid prompt fits inside 170px and DwmFlush handles fallback", ShortcutCaptureAndOnboardingTests.HotkeyRecorderInvalidPromptFitsAndDwmFlushFallbacksCleanly),
+            ("fixed-region diagnostics and Alt-free candidate suggestions", FixedRegionCaptureTests.FixedRegionDiagnosticsAndAltFreeSuggestions),
+            ("fixed-region shortcuts section UI alignment, presets and settings save integration", FixedRegionCaptureTests.ShortcutsSectionFixedRegionUiAlignmentAndSettingsIntegration),
+            ("fixed-region capture overlay mode, previous outline and Key.F toggle", FixedRegionCaptureTests.CaptureOverlayFixedRegionModeAndSaveToggle),
+            ("fixed-region highlight window non-activating and click-through Win32 styles", FixedRegionCaptureTests.RegionHighlightWindowNonActivatingAndClickThrough),
+            ("fixed-region snapshot crop and pixel readback regression", FixedRegionCaptureTests.FixedRegionSnapshotCropAndPixelReadback),
+            ("fixed-region live BitBlt end-to-end pixel capture regression", FixedRegionCaptureTests.FixedRegionLiveBitBltEndToEndRegression));
+        await RunStaAsync("fixed-region translation panel session bar, non-activating flow and outbound policy", FixedRegionCaptureTests.TranslationPanelFixedRegionSessionAndOutboundPolicyAsync);
 
 
         if (Environment.GetEnvironmentVariable("POPGLOT_SMOKE_FREE") == "1")
@@ -1134,6 +1141,7 @@ internal static partial class Program
         {
             SelectionHotkey = HotkeyBinding.UnsetBinding,
             ScreenshotHotkey = HotkeyBinding.UnsetBinding,
+            FixedRegionHotkey = HotkeyBinding.UnsetBinding,
             CloseHotkey = HotkeyBinding.UnsetBinding,
             QuickSearchHotkey = HotkeyBinding.UnsetBinding,
             ShowWindowHotkey = HotkeyBinding.UnsetBinding,
@@ -4179,7 +4187,9 @@ internal static partial class Program
         True(values.Contains(HotkeyAction.ClosePanel), "HotkeyAction.ClosePanel must exist");
         True(values.Contains(HotkeyAction.ShowWindow), "HotkeyAction.ShowWindow must exist");
         True(values.Contains(HotkeyAction.QuickSearch), "HotkeyAction.QuickSearch must exist");
+        True(values.Contains(HotkeyAction.CaptureFixedRegion), "HotkeyAction.CaptureFixedRegion must exist");
         Equal("极速查词", ShellSettings.ActionName(HotkeyAction.QuickSearch));
+        Equal("固定区域翻译", ShellSettings.ActionName(HotkeyAction.CaptureFixedRegion));
     }
 
     private static void QuickSearchHotkeyRegistrationSerializationAndDegradation()

@@ -644,6 +644,7 @@ internal static class ShortcutCaptureAndOnboardingTests
         var section = new ShortcutsSection();
         section.SelectionHotkey.BindingValue = HotkeyBinding.SelectionDefault;
         section.ScreenshotHotkey.BindingValue = HotkeyBinding.ScreenshotDefault;
+        section.FixedRegionHotkey.BindingValue = HotkeyBinding.FixedRegionDefault;
         section.QuickSearchHotkey.BindingValue = HotkeyBinding.QuickSearchDefault;
 
         // Unbind Selection only; its clear button must become Hidden (preserving the 32px slot)
@@ -656,11 +657,13 @@ internal static class ShortcutCaptureAndOnboardingTests
 
         var clearSelection = Field<Button>(section, "ClearSelectionButton");
         var clearScreenshot = Field<Button>(section, "ClearScreenshotButton");
+        var clearFixedRegion = Field<Button>(section, "ClearFixedRegionButton");
         var clearQuickSearch = Field<Button>(section, "ClearQuickSearchButton");
         Equal(Visibility.Hidden, clearSelection.Visibility,
             "unset primary shortcut row must keep Hidden clear button so column alignment does not shift");
         Equal(false, clearSelection.IsHitTestVisible, "hidden clear button must not intercept clicks");
         Equal(Visibility.Visible, clearScreenshot.Visibility, "set Screenshot row must show clear button");
+        Equal(Visibility.Visible, clearFixedRegion.Visibility, "set FixedRegion row must show clear button");
         Equal(Visibility.Visible, clearQuickSearch.Visibility, "set QuickSearch row must show clear button");
 
         section.Measure(new Size(520, 600));
@@ -669,9 +672,10 @@ internal static class ShortcutCaptureAndOnboardingTests
 
         var selX = section.SelectionHotkey.TranslatePoint(new Point(0, 0), section).X;
         var shotX = section.ScreenshotHotkey.TranslatePoint(new Point(0, 0), section).X;
+        var fixX = section.FixedRegionHotkey.TranslatePoint(new Point(0, 0), section).X;
         var qsX = section.QuickSearchHotkey.TranslatePoint(new Point(0, 0), section).X;
-        True(Math.Abs(selX - shotX) < 0.5 && Math.Abs(shotX - qsX) < 0.5,
-            $"all three primary HotkeyRecorders must stay vertically aligned (sel={selX}, shot={shotX}, qs={qsX})");
+        True(Math.Abs(selX - shotX) < 0.5 && Math.Abs(shotX - fixX) < 0.5 && Math.Abs(fixX - qsX) < 0.5,
+            $"all four primary HotkeyRecorders must stay vertically aligned (sel={selX}, shot={shotX}, fix={fixX}, qs={qsX})");
 
         var shotTip = section.ScreenshotHotkey.ToolTip?.ToString() ?? string.Empty;
         True(shotTip.Contains("F1", StringComparison.Ordinal) &&

@@ -147,13 +147,13 @@
                                   Data="{StaticResource IconClose}" />
                         </Button>
                     </StackPanel>
-
-                    <!-- Loading line overlays the title bar's bottom edge -->
-                    <ProgressBar x:Name="Progress" Grid.ColumnSpan="3" Grid.RowSpan="2" Height="2" IsIndeterminate="True"
-                                 VerticalAlignment="Bottom"
-                                 Foreground="{DynamicResource AccentBrush}" Background="Transparent" BorderThickness="0" />
                 </Grid>
             </Border>
+
+            <!-- Loading line sits flush along the header bottom divider without overlapping header buttons -->
+            <ProgressBar x:Name="Progress" Grid.Row="0" Height="2" IsIndeterminate="True"
+                         VerticalAlignment="Bottom" IsHitTestVisible="False"
+                         Foreground="{DynamicResource AccentBrush}" Background="Transparent" BorderThickness="0" />
 
             <!-- ==================== 2. Unified Reading Stream ==================== -->
             <Grid Grid.Row="1" Margin="14,10,14,8">
@@ -167,6 +167,7 @@
                 <!-- ── Upper Stream: Source text & actions ── -->
                 <Grid Grid.Row="0">
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
@@ -190,6 +191,7 @@
                                        FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}"
                                        VerticalAlignment="Center" />
                             <TextBlock x:Name="SourceKindLabel" Style="{StaticResource Metadata}"
+                                       Visibility="Collapsed"
                                        Margin="0,2,4,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
                                        Foreground="{DynamicResource TextTertiaryBrush}" />
                         </StackPanel>
@@ -232,6 +234,46 @@
                             </Button>
                         </StackPanel>
                     </Grid>
+
+                    <!-- Fixed-region quick action bar (visible only during fixed-region sessions) -->
+                    <Border x:Name="FixedRegionBar" Grid.Row="2" Visibility="Collapsed"
+                            Margin="0,6,0,0" Padding="8,4"
+                            CornerRadius="{StaticResource ControlRadius}"
+                            Background="{DynamicResource SurfaceMutedBrush}"
+                            BorderBrush="{DynamicResource BorderSubtleBrush}" BorderThickness="1">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Grid VerticalAlignment="Center" Margin="0,0,8,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Border x:Name="FixedRegionStatusDot" Width="6" Height="6" CornerRadius="3"
+                                        Background="{DynamicResource AccentBrush}" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                <TextBlock x:Name="FixedRegionMetaText" Grid.Column="1" Style="{StaticResource Metadata}"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                            </Grid>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button x:Name="RecaptureFixedRegionButton" Content="重译此区"
+                                        Style="{StaticResource GhostButton}"
+                                        Height="24" MinHeight="24" Padding="8,0" Margin="0,0,4,0" FontSize="11.5"
+                                        AutomationProperties.Name="重译此区"
+                                        ToolTip="重新截取当前固定区域的最新画面并翻译"
+                                        Click="RecaptureFixedRegion_Click" />
+                                <Button x:Name="ReselectFixedRegionButton" Content="重选区域"
+                                        Style="{StaticResource GhostButton}"
+                                        Height="24" MinHeight="24" Padding="8,0" FontSize="11.5"
+                                        AutomationProperties.Name="重选区域"
+                                        ToolTip="重新框选固定区域并翻译"
+                                        Click="ReselectFixedRegion_Click" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
                 </Grid>
 
                 <!-- Subtle hairline divider -->
@@ -461,12 +503,12 @@
                                AutomationProperties.LiveSetting="Polite"
                                AutomationProperties.Name="翻译状态" />
                     <TextBlock x:Name="RouteText" Grid.Column="2" Style="{StaticResource Metadata}" VerticalAlignment="Center"
-                               Margin="8,0,8,0" MaxWidth="165" TextTrimming="CharacterEllipsis"
+                               Margin="8,0,8,0" MaxWidth="210" TextTrimming="CharacterEllipsis"
                                HorizontalAlignment="Right"
                                Foreground="{DynamicResource TextTertiaryBrush}"
                                ToolTip="{Binding RelativeSource={RelativeSource Self}, Path=Text}" />
                     <Button x:Name="RouteSelectorButton" Grid.Column="3" Style="{StaticResource GhostButton}"
-                            Height="26" MinWidth="36" MaxWidth="116" Padding="7,0"
+                            Height="26" MinWidth="36" MaxWidth="136" Padding="7,0"
                             AutomationProperties.Name="文字翻译模型"
                             ToolTipService.ShowOnDisabled="True"
                             ToolTip="切换翻译模型"
@@ -476,7 +518,7 @@
                                   Fill="{DynamicResource AccentBrush}"
                                   Data="{StaticResource IconProvider}" VerticalAlignment="Center" />
                             <TextBlock x:Name="RouteSelectorLabel" Text="模型" FontSize="11.5"
-                                       Margin="4,0,0,0" VerticalAlignment="Center" MaxWidth="76"
+                                       Margin="4,0,0,0" VerticalAlignment="Center" MaxWidth="96"
                                        TextTrimming="CharacterEllipsis"
                                        Foreground="{DynamicResource TextPrimaryBrush}" />
                             <Path Width="8" Height="5" Stretch="Uniform" Margin="4,0,0,0"

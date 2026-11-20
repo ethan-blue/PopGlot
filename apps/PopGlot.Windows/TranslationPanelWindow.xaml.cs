@@ -93,8 +93,13 @@ public partial class TranslationPanelWindow : Window
     private bool _dpiRepositionPending;
     private bool _languageChangeSuspended = true;
     private bool _readyForKeyboard;
+    private bool _isFixedRegionSession;
 
     internal Action? RouteChanged { get; set; }
+    internal Action? RecaptureFixedRegionRequested { get; set; }
+    internal Action? ReselectFixedRegionRequested { get; set; }
+    internal bool IsFixedRegionSession => _isFixedRegionSession;
+    internal bool IsReadyForKeyboard => _readyForKeyboard;
     private bool _closing;
     private string _sessionId = Guid.NewGuid().ToString("N");
     private int _openDropDowns;
@@ -164,6 +169,7 @@ public partial class TranslationPanelWindow : Window
         ThemeService.ThemeChanged += _themeChangedHandler;
 
         SourceInitialized += (_, _) => PositionNearAnchor();
+        Activated += (_, _) => _readyForKeyboard = true;
         Loaded += OnLoaded;
         SizeChanged += (_, _) =>
         {
@@ -279,6 +285,43 @@ public partial class TranslationPanelWindow : Window
 
     // ================= Entry points =================
 
+    private void SetSourceKindLabel(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            SourceKindLabel.Text = string.Empty;
+            SourceKindLabel.Visibility = Visibility.Collapsed;
+            return;
+        }
+        SourceKindLabel.Text = text;
+        SourceKindLabel.Visibility = Visibility.Visible;
+    }
+
+    private void SetFixedRegionBanner(FixedCaptureRegion? region, bool wasClamped = false)
+    {
+        if (region is null)
+        {
+            _isFixedRegionSession = false;
+            FixedRegionBar.Visibility = Visibility.Collapsed;
+            FixedRegionMetaText.Text = string.Empty;
+            return;
+        }
+        _isFixedRegionSession = true;
+        FixedRegionMetaText.Text = wasClamped
+            ? $"{region.Name} · {region.Width}×{region.Height} · {FixedRegionResolver.ClampedStatusHint}"
+            : $"{region.Name} · {region.Width}×{region.Height}";
+        FixedRegionStatusDot.SetResourceReference(
+            Border.BackgroundProperty,
+            wasClamped ? "WarningBrush" : "AccentBrush");
+        FixedRegionBar.Visibility = Visibility.Visible;
+    }
+
+    private void RecaptureFixedRegion_Click(object sender, RoutedEventArgs e) =>
+        RecaptureFixedRegionRequested?.Invoke();
+
+    private void ReselectFixedRegion_Click(object sender, RoutedEventArgs e) =>
+        ReselectFixedRegionRequested?.Invoke();
+
     internal async Task StartSelectionAsync(
         ClipboardSelectionService selectionService,
         nint targetWindow = 0,
@@ -286,7 +329,8 @@ public partial class TranslationPanelWindow : Window
     {
         ArgumentNullException.ThrowIfNull(selectionService);
         _sourceKind = "划词";
-        SourceKindLabel.Text = "· 划词";
+        SetSourceKindLabel("· 划词");
+        SetFixedRegionBanner(null);
         _screenshot = null;
         await RunOperationAsync(async (cancellation, epoch) =>
         {
@@ -312,10 +356,33 @@ public partial class TranslationPanelWindow : Window
     {
         ArgumentNullException.ThrowIfNull(image);
         _sourceKind = "截图";
-        SourceKindLabel.Text = "· 截图";
+        SetSourceKindLabel("· 截图");
+        SetFixedRegionBanner(null);
         _screenshot = image;
         SourceLabel.Text = "画面文字";
         AllowKeyboardInteraction();
+        _retry = (token, ep) => TranslateScreenshotAsync(image, token, ep);
+        await RunOperationAsync((cancellation, epoch) => TranslateScreenshotAsync(image, cancellation, epoch, trace));
+    }
+
+    internal async Task StartFixedRegionScreenshotAsync(
+        byte[] image,
+        FixedCaptureRegion region,
+        bool wasClamped = false,
+        bool stealFocus = false,
+        Services.InteractionTrace? trace = null)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        ArgumentNullException.ThrowIfNull(region);
+        _sourceKind = "固定区域";
+        SetSourceKindLabel("· 固定区域");
+        SetFixedRegionBanner(region, wasClamped);
+        _screenshot = image;
+        SourceLabel.Text = "画面文字";
+        if (stealFocus)
+        {
+            AllowKeyboardInteraction();
+        }
         _retry = (token, ep) => TranslateScreenshotAsync(image, token, ep);
         await RunOperationAsync((cancellation, epoch) => TranslateScreenshotAsync(image, cancellation, epoch, trace));
     }
@@ -324,7 +391,8 @@ public partial class TranslationPanelWindow : Window
     {
         ArgumentNullException.ThrowIfNull(image);
         _sourceKind = "取字";
-        SourceKindLabel.Text = "· 截图取字";
+        SetSourceKindLabel("· 截图取字");
+        SetFixedRegionBanner(null);
         _screenshot = image;
         SourceLabel.Text = "画面提取文字";
         AllowKeyboardInteraction();
@@ -374,7 +442,8 @@ public partial class TranslationPanelWindow : Window
     {
         _inputAcquisitionMs = 0;
         _sourceKind = "输入";
-        SourceKindLabel.Text = "· 输入";
+        SetSourceKindLabel("· 输入");
+        SetFixedRegionBanner(null);
         SourceLabel.Text = "原文";
         WriteSourceText(text ?? string.Empty);
         FitInitialHeightToSource(text);
@@ -1897,7 +1966,7 @@ public partial class TranslationPanelWindow : Window
         }
         CancelOperation();
         WriteSourceText(merged);
-        StatusText.Text = "已合并断行，Enter 重译";
+        StatusText.Text = $"已合并断行，按 {Services.InterfaceKeys.TranslateKeyName} 重译";
         SourceInputBox.CaretIndex = merged.Length;
         SourceInputBox.Focus();
     }
@@ -2278,7 +2347,7 @@ public partial class TranslationPanelWindow : Window
         _gate.ResetToIdle();
         _screenshot = null;
         _sourceKind = "输入";
-        SourceKindLabel.Text = "· 输入";
+        SetSourceKindLabel("· 输入");
         RenderIdle();
         StatusText.Text = $"原文已修改，按 {Services.InterfaceKeys.TranslateKeyName} 翻译";
     }
@@ -2305,7 +2374,7 @@ public partial class TranslationPanelWindow : Window
         {
             return;
         }
-        _sourceKind = _sourceKind == "截图" ? "截图" : "输入";
+        _sourceKind = _sourceKind is "截图" or "固定区域" ? _sourceKind : "输入";
         _screenshot = null;
         _retry = (token, ep) => TranslateTextAsync(text, token, ep, forceRefresh: true);
         var styleNotice = NotifyStyleBeforeTranslate();
@@ -2945,7 +3014,7 @@ public partial class TranslationPanelWindow : Window
 
         var origin = _sourceKind switch
         {
-            "截图" => SessionOrigin.ScreenshotVision,
+            "截图" or "固定区域" => SessionOrigin.ScreenshotVision,
             "取字" => SessionOrigin.ScreenshotOcr,
             _ => SessionOrigin.TranslationPanel
         };
@@ -2997,6 +3066,7 @@ public partial class TranslationPanelWindow : Window
     {
         ArgumentNullException.ThrowIfNull(session);
         _sessionId = session.SessionId;
+        SetFixedRegionBanner(null);
 
         WriteSourceText(session.SourceText);
         _translation = session.ResultText ?? string.Empty;
